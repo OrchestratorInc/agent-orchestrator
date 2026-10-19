@@ -1092,6 +1092,34 @@ func TestHookPayloadHelpersTolerateUTF8BOM(t *testing.T) {
 	}
 }
 
+func TestHookAgentSessionIDPrefersClineDurableRootSession(t *testing.T) {
+	payload := []byte(`{"taskId":"conv_internal","conversationId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`)
+	if got := hookAgentSessionID(payload); got != "1792275014518_yyjbm" {
+		t.Fatalf("native resume ID = %q, want durable Cline CLI root session, not internal task ID", got)
+	}
+}
+
+func TestHooksClineReportsDurableRootSession(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.AgentSessionID != "1792275014518_yyjbm" {
+		t.Fatalf("reported native ID = %q", req.AgentSessionID)
+	}
+}
+
 func TestHookAgentSessionIDReadsClineTaskID(t *testing.T) {
 	if got := hookAgentSessionID([]byte(`{"taskId":"cline-task-abc123"}`)); got != "cline-task-abc123" {
 		t.Fatalf("hookAgentSessionID(taskId) = %q, want cline-task-abc123", got)

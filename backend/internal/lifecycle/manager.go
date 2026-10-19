@@ -1030,7 +1030,15 @@ retryProjection:
 	// no_signal display status). Hook deliveries are best-effort, so the
 	// first to ARRIVE may match the seeded state — e.g. a turn's "active"
 	// POST is lost and its Stop hook lands idle on the idle-seeded row.
-	if sameState && !rec.FirstSignalAt.IsZero() {
+	// Some native CLIs only emit a post-agent boundary for tool-free turns.
+	// A scoped, newer completion is fresh idle proof even when the durable
+	// state stayed idle; otherwise terminal input permanently outlives it.
+	// Keep ordinary same-state notifications and unowned callbacks deduplicated.
+	completedIdleTurn := s.State == domain.ActivityIdle && s.Event == "post-agent" &&
+		s.LaunchID != "" && s.LaunchID == rec.Metadata.RuntimeLaunchID &&
+		s.AgentSessionID != "" && s.AgentSessionID == rec.Metadata.AgentSessionID &&
+		act.LastActivityAt.After(rec.Activity.LastActivityAt)
+	if sameState && !rec.FirstSignalAt.IsZero() && !completedIdleTurn {
 		if metadataChanged || s.Event == "user-prompt-submit" {
 			rec.UpdatedAt = now
 			applied, retry, err := project(rec)
@@ -1093,6 +1101,16 @@ retryProjection:
 	resolutions := needsInputResolutions(rec, next, now)
 	waitingEvents := m.waitingInputEvents(next, prevState, prevAt, now)
 	m.mu.Unlock()
+	if prevState != domain.ActivityIdle && next.Activity.State == domain.ActivityIdle {
+		m.operationGateMu.RLock()
+		gate := m.operationGate
+		m.operationGateMu.RUnlock()
+		// A session manager that moves sessions to a new release hears of every
+		// turn that ends. It must not block.
+		if ender, ok := gate.(interface{ SessionTurnEnded(domain.SessionRecord) }); ok {
+			ender.SessionTurnEnded(next)
+		}
+	}
 	if err := m.acknowledgeAgentSwitchTarget(ctx, id, s, now); err != nil {
 		return err
 	}

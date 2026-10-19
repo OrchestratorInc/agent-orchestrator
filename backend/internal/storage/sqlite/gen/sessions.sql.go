@@ -144,6 +144,43 @@ func (q *Queries) CommitSessionControllerEpoch(ctx context.Context, arg CommitSe
 	return result.RowsAffected()
 }
 
+const countStaleBinarySessions = `-- name: CountStaleBinarySessions :many
+SELECT harness, COUNT(*) AS sessions FROM sessions
+WHERE is_terminated = 0 AND hibernated_at IS NULL AND activity_state <> 'exited'
+    AND stale_binary_since IS NOT NULL
+    AND stale_binary_launch = (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+GROUP BY harness
+`
+
+type CountStaleBinarySessionsRow struct {
+	Harness  domain.AgentHarness
+	Sessions int64
+}
+
+// Live launches still on a replaced release, per harness.
+func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBinarySessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, countStaleBinarySessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountStaleBinarySessionsRow{}
+	for rows.Next() {
+		var i CountStaleBinarySessionsRow
+		if err := rows.Scan(&i.Harness, &i.Sessions); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `
@@ -178,7 +215,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions WHERE id = ?
 `
@@ -252,6 +290,10 @@ type GetSessionRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
@@ -330,6 +372,10 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
+		&i.StaleBinarySince,
+		&i.StaleBinaryVersion,
+		&i.StaleBinaryLaunch,
+		&i.StaleBinarySwitchFailedAt,
 		&i.ClientRequestID,
 		&i.ClientRequestHash,
 		&i.ClientRequestCommitted,
@@ -355,7 +401,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions WHERE automation_run_id = ?
 `
@@ -429,6 +476,10 @@ type GetSessionByAutomationRunIDRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
@@ -507,6 +558,10 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
+		&i.StaleBinarySince,
+		&i.StaleBinaryVersion,
+		&i.StaleBinaryLaunch,
+		&i.StaleBinarySwitchFailedAt,
 		&i.ClientRequestID,
 		&i.ClientRequestHash,
 		&i.ClientRequestCommitted,
@@ -695,7 +750,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions ORDER BY project_id, num
 `
@@ -769,6 +825,10 @@ type ListAllSessionsRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
@@ -853,6 +913,10 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
+			&i.StaleBinarySince,
+			&i.StaleBinaryVersion,
+			&i.StaleBinaryLaunch,
+			&i.StaleBinarySwitchFailedAt,
 			&i.ClientRequestID,
 			&i.ClientRequestHash,
 			&i.ClientRequestCommitted,
@@ -921,7 +985,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
@@ -995,6 +1060,10 @@ type ListSessionsByProjectRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
@@ -1079,6 +1148,10 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
+			&i.StaleBinarySince,
+			&i.StaleBinaryVersion,
+			&i.StaleBinaryLaunch,
+			&i.StaleBinarySwitchFailedAt,
 			&i.ClientRequestID,
 			&i.ClientRequestHash,
 			&i.ClientRequestCommitted,
@@ -1095,6 +1168,107 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 		return nil, err
 	}
 	return items, nil
+}
+
+const listVersionRefreshChatCandidates = `-- name: ListVersionRefreshChatCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= ?1
+    AND trim(provider_conversation_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = controller_generation
+`
+
+// Idle Chat sessions whose current launch still runs a replaced release.
+func (q *Queries) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listVersionRefreshChatCandidates, idleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionRefreshTerminalCandidates = `-- name: ListVersionRefreshTerminalCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= ?1
+    AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = runtime_launch_id
+`
+
+// Idle terminal sessions whose current launch still runs a replaced release
+// and can be resumed natively.
+func (q *Queries) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listVersionRefreshTerminalCandidates, idleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markHarnessSessionsStale = `-- name: MarkHarnessSessionsStale :execrows
+UPDATE sessions
+SET stale_binary_since = CASE
+        WHEN stale_binary_since IS NOT NULL AND stale_binary_launch =
+            (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+        THEN stale_binary_since ELSE ?1 END,
+    stale_binary_version = ?2,
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END,
+    stale_binary_switch_failed_at = NULL
+WHERE harness = ?3 AND is_terminated = 0 AND is_task_preparation = 0
+    AND hibernated_at IS NULL AND activity_state <> 'exited'
+`
+
+type MarkHarnessSessionsStaleParams struct {
+	Since   sql.NullTime
+	Version string
+	Harness domain.AgentHarness
+}
+
+// Marks the live launches of a harness an update just replaced. A launch that
+// was already marked keeps when it first went stale; the version moves on.
+func (q *Queries) MarkHarnessSessionsStale(ctx context.Context, arg MarkHarnessSessionsStaleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markHarnessSessionsStale, arg.Since, arg.Version, arg.Harness)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const nextSessionNum = `-- name: NextSessionNum :one
@@ -1747,6 +1921,30 @@ type SetSessionTerminateOnPRMergeParams struct {
 
 func (q *Queries) SetSessionTerminateOnPRMerge(ctx context.Context, arg SetSessionTerminateOnPRMergeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionTerminateOnPRMerge, arg.TerminateOnPRMerge, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionVersionSwitchFailed = `-- name: SetSessionVersionSwitchFailed :execrows
+UPDATE sessions
+SET stale_binary_switch_failed_at = ?1,
+    stale_binary_since = COALESCE(stale_binary_since, ?1),
+    stale_binary_version = ?2,
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END
+WHERE id = ?3
+`
+
+type SetSessionVersionSwitchFailedParams struct {
+	FailedAt sql.NullTime
+	Version  string
+	ID       domain.SessionID
+}
+
+// Records that the move to the new release failed for the launch that tried it.
+func (q *Queries) SetSessionVersionSwitchFailed(ctx context.Context, arg SetSessionVersionSwitchFailedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionVersionSwitchFailed, arg.FailedAt, arg.Version, arg.ID)
 	if err != nil {
 		return 0, err
 	}

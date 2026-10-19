@@ -750,6 +750,20 @@ describe("CreateProjectFlow droppedPath", () => {
 		expect(await screen.findByLabelText("Clone URL")).toHaveValue("");
 	});
 
+	it("steps the clone dialog aside while Settings is open and keeps its details", async () => {
+		const user = userEvent.setup();
+		onTestFinished(() => useUiStore.setState({ settingsModal: null }));
+		renderChooseFlow();
+		await openSource(user, "Clone a repo");
+		fireEvent.change(await screen.findByLabelText("Clone URL"), { target: { value: "https://example.com/kept.git" } });
+
+		act(() => useUiStore.getState().openGlobalSettings("harness"));
+		await waitFor(() => expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument());
+
+		act(() => useUiStore.getState().closeSettings());
+		expect(await screen.findByLabelText("Clone URL")).toHaveValue("https://example.com/kept.git");
+	});
+
 	it("goes from clone agent setup directly to page loading without a progress modal", async () => {
 		const user = userEvent.setup();
 		let finishCreate!: () => void;

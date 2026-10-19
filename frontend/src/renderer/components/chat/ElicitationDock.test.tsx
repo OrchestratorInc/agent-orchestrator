@@ -46,6 +46,66 @@ describe("ElicitationDock", () => {
 		},
 	};
 
+	it("shows the full single-question message above the options instead of its topic label", () => {
+		const prompt = "Where should we move the untracked specification file before removing the old worktree? Keep it available as a reference for the test plan.\nChoose the location that works best for you.";
+		render(
+			<ElicitationDock
+				activity={activity({
+					inputMode: "form",
+					message: prompt,
+					schema: {
+						type: "object",
+						properties: {
+							question_0: {
+								type: "string",
+								title: "Spec file",
+								oneOf: [{ const: "Keep", title: "Move it here, untracked" }],
+							},
+						},
+					},
+				})}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		const question = screen.getByText(prompt, { exact: true, normalizer: (text) => text });
+		expect(question).toBeVisible();
+		expect(question.compareDocumentPosition(screen.getByRole("radio")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.getByRole("group", { name: /Where should we move/ })).toBeInTheDocument();
+	});
+
+	it("shows each full question description when navigating a multi-question form", async () => {
+		const user = userEvent.setup();
+		const firstPrompt = "Which implementation approach should we use for this project?";
+		const secondPrompt = "Which language should we use for the implementation?";
+		render(
+			<ElicitationDock
+				activity={activity({
+					inputMode: "form",
+					message: "Please answer the following questions.",
+					schema: {
+						...claudeQuestions,
+						properties: {
+							...claudeQuestions.properties,
+							question_0: { ...claudeQuestions.properties.question_0, description: firstPrompt },
+							question_1: { ...claudeQuestions.properties.question_1, description: secondPrompt },
+						},
+					},
+				})}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("group", { name: firstPrompt })).toBeVisible();
+		expect(screen.queryByText("Please answer the following questions.")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("radio", { name: /Native/ }));
+		await user.click(screen.getByRole("button", { name: "Next" }));
+		expect(screen.getByRole("group", { name: secondPrompt })).toBeVisible();
+		expect(screen.queryByText(firstPrompt)).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Back" }));
+		expect(screen.getByRole("group", { name: firstPrompt })).toBeVisible();
+	});
+
 	it("shows one Claude question and its Other field at a time", () => {
 		render(
 			<ElicitationDock
