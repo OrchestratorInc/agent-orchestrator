@@ -621,6 +621,8 @@ func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
 	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.13.7")
 	t.Setenv("AO_SENTRY_DSN", "https://k@o.ingest.sentry.io/1")
 	t.Setenv("AO_PORT", "3123")
+	// Desktop-only, documented opt-out the daemon never reads: must survive.
+	t.Setenv("AO_TELEMETRY_RENDERER", "off")
 
 	cfg, err := Load()
 	if err != nil {
@@ -636,14 +638,15 @@ func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
 			t.Fatalf("%s still set in process env after scrub", key)
 		}
 	}
-	// A child started from os.Environ() after the scrub sees no export settings.
+	// A child started from os.Environ() after the scrub sees none of the
+	// scrubbed keys, and still sees everything else.
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "AO_TELEMETRY_") || strings.HasPrefix(entry, "AO_SENTRY_DSN=") {
+		if isScrubbedTelemetryEntry(entry) {
 			t.Fatalf("child environment would inherit %q", entry)
 		}
 	}
-	if os.Getenv("AO_PORT") != "3123" {
-		t.Fatal("scrub must leave unrelated AO_ variables alone")
+	if os.Getenv("AO_PORT") != "3123" || os.Getenv("AO_TELEMETRY_RENDERER") != "off" {
+		t.Fatal("scrub must leave variables outside telemetryEnvKeys alone")
 	}
 	// The real check: a child process started the way the daemon starts every
 	// child (exec with the inherited environment) must not see the settings.
@@ -655,11 +658,21 @@ func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
 		t.Fatalf("env: %v", err)
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "AO_TELEMETRY_") || strings.HasPrefix(line, "AO_SENTRY_DSN=") {
+		if isScrubbedTelemetryEntry(line) {
 			t.Fatalf("child process inherited %q after scrub", line)
 		}
 	}
-	if !strings.Contains(string(out), "AO_PORT=3123") {
-		t.Fatal("child process should still inherit unrelated AO_ variables")
+	if !strings.Contains(string(out), "AO_PORT=3123\n") || !strings.Contains(string(out), "AO_TELEMETRY_RENDERER=off\n") {
+		t.Fatal("child process should still inherit variables outside telemetryEnvKeys")
 	}
+}
+
+func isScrubbedTelemetryEntry(entry string) bool {
+	key, _, _ := strings.Cut(entry, "=")
+	for _, scrubbed := range telemetryEnvKeys {
+		if key == scrubbed {
+			return true
+		}
+	}
+	return false
 }
