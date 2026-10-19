@@ -16,18 +16,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// livePID returns a PID that is guaranteed to be alive (the current process).
-// Using this as the fake pty-host PID means ptyregistry.List() will not prune
-// the entry during tests. Do NOT use this for the Destroy test: Destroy calls
-// Kill on the pid, so use deadPID() there instead.
+// livePID identifies the test process hosting the fake loopback listener.
+// Destruction fixtures must model host exit and intercept OS force kills.
 func livePID() int { return os.Getpid() }
-
-// deadPID returns a PID that is guaranteed to be dead (no process). This is
-// used in Destroy tests so the force-kill step is a safe no-op.
-// ponytail: PID 2147483647 (MaxInt32) is never a real process; signal-0 returns ESRCH.
-func deadPID() int { return 2147483647 }
 
 func TestProbeFencedRuntimeCompleteRegistryAbsentIsDead(t *testing.T) {
 	isolateRegistry(t)
@@ -97,8 +91,14 @@ func TestCreateAndDestroyPassCallerContextToRegistryMutations(t *testing.T) {
 	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, HostOptions) (string, int, error) {
 		return "127.0.0.1:1", livePID(), nil
 	}})
-	rt.killHost = func(string) error { return nil }
-	rt.pidIsAlive = func(int) bool { return false }
+	stopped := false
+	rt.killHost = func(string) error { stopped = true; return nil }
+	rt.checkOwnership = func(ctx context.Context, pid int, startID string) processalive.Ownership {
+		if stopped {
+			return processalive.OwnershipGone
+		}
+		return processalive.CheckOwnership(ctx, pid, startID)
+	}
 	registerCalls := 0
 	rt.registerHost = func(got context.Context, _ ptyregistry.Entry) error {
 		registerCalls++
@@ -107,7 +107,7 @@ func TestCreateAndDestroyPassCallerContextToRegistryMutations(t *testing.T) {
 		}
 		return nil
 	}
-	rt.unregisterHost = func(got context.Context, _ string) error {
+	rt.unregisterHost = func(got context.Context, _ ptyregistry.Entry) error {
 		if got.Value(contextKey{}) != "registry-mutation" {
 			t.Fatalf("Unregister context value = %v, want caller context", got.Value(contextKey{}))
 		}
@@ -149,7 +149,6 @@ func TestPartialCreateCleanupFailureReturnsRuntimeEffectEvidence(t *testing.T) {
 		return "127.0.0.1:1", livePID(), createErr
 	}})
 	rt.killHost = func(string) error { return errors.New("cleanup denied") }
-	rt.pidIsAlive = func(int) bool { return true }
 	rt.processFinder = func(int) (processKiller, error) { return nil, errors.New("permission denied") }
 	rt.destroyWait = 0
 
@@ -285,13 +284,14 @@ func TestRuntimeRejectsStyledOutputFromARecoveredLegacyHost(t *testing.T) {
 // listener and returns a fake spawner that returns that addr and a fake pid.
 // The caller must call cleanup() to shut down the host.
 type inProcHost struct {
-	addr   string
-	pid    int
-	pty    *fakePTY
-	ring   *Ring
-	cancel context.CancelFunc
-	done   chan error
-	ln     net.Listener
+	addr     string
+	pid      int
+	pty      *fakePTY
+	ring     *Ring
+	cancel   context.CancelFunc
+	done     chan error
+	finished chan struct{}
+	ln       net.Listener
 }
 
 func startInProcHost(t *testing.T, sessionID string, fakePID int) *inProcHost {
@@ -304,7 +304,9 @@ func startInProcHost(t *testing.T, sessionID string, fakePID int) *inProcHost {
 	ring := NewRing()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		done <- Serve(ctx, ServeConfig{
 			SessionID: sessionID,
 			Listener:  ln,
@@ -313,13 +315,14 @@ func startInProcHost(t *testing.T, sessionID string, fakePID int) *inProcHost {
 		})
 	}()
 	return &inProcHost{
-		addr:   ln.Addr().String(),
-		pid:    fakePID,
-		pty:    pty,
-		ring:   ring,
-		cancel: cancel,
-		done:   done,
-		ln:     ln,
+		addr:     ln.Addr().String(),
+		pid:      fakePID,
+		pty:      pty,
+		ring:     ring,
+		cancel:   cancel,
+		done:     done,
+		finished: finished,
+		ln:       ln,
 	}
 }
 
@@ -784,12 +787,11 @@ func TestIsAlive_FalseForUnknownSession(t *testing.T) {
 
 // TestDestroy_KillsHostAndCleansUp verifies Destroy triggers clientKill,
 // removes the map + registry entry, and is idempotent on second call.
-// Uses deadPID() so the force-kill step is a safe no-op (the fake pty-host
-// has no real OS process; clientKill already shut it down via the loopback).
+// The in-process host uses its real process identity; only its exit is modeled.
 func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
-	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, deadPID())})
+	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
 	ctx := context.Background()
 
 	handle, err := rt.Create(ctx, ports.RuntimeConfig{
@@ -801,6 +803,7 @@ func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	h := hosts["sess-destroy"]
+	modelInProcHostExit(t, rt, h)
 
 	// Destroy should succeed.
 	if err := rt.Destroy(ctx, handle); err != nil {
@@ -851,9 +854,8 @@ func (f processKillerFunc) Kill() error { return f() }
 func TestDestroyRetainsSessionWhenPIDCannotBeStopped(t *testing.T) {
 	isolateRegistry(t)
 	rt := New(Options{})
-	rt.sessions["sess-stuck"] = &hostSession{addr: "127.0.0.1:1", pid: 424242}
+	rt.sessions["sess-stuck"] = &hostSession{addr: "127.0.0.1:1", pid: livePID(), processStartID: testProcessStartID(t)}
 	rt.killHost = func(string) error { return errors.New("graceful transport failed") }
-	rt.pidIsAlive = func(int) bool { return true }
 	rt.processFinder = func(int) (processKiller, error) {
 		return processKillerFunc(func() error { return errors.New("access denied") }), nil
 	}

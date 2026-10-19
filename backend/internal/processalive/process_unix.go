@@ -6,6 +6,7 @@ package processalive
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strconv"
 	"syscall"
@@ -29,7 +30,11 @@ func Alive(pid int) bool {
 }
 
 func isZombie(pid int) bool {
-	out, err := aoprocess.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return isZombieContext(context.Background(), pid)
+}
+
+func isZombieContext(ctx context.Context, pid int) bool {
+	out, err := aoprocess.CommandContext(ctx, "ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return false
 	}

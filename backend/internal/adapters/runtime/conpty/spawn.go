@@ -16,6 +16,8 @@ type HostOptions struct {
 	StartOnAttach bool
 	// LazySurface builds the rendered surface only when it is first read.
 	LazySurface bool
+	// processStarted captures identity before the host can report READY or exit.
+	processStarted func(int)
 }
 
 // hostSpawner starts a detached pty-host for the session and returns its

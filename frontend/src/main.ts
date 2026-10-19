@@ -69,7 +69,7 @@ import {
 	type UiSettings,
 } from "./main/ui-settings";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -118,7 +118,7 @@ import {
 	resolveDaemonFromPort,
 	resolveDaemonFromRunFile,
 } from "./shared/daemon-attach";
-import { browserDaemonOwnershipDecision, shouldReplacePortHolder } from "./shared/daemon-takeover";
+import { browserDaemonOwnershipDecision, orphanDaemonTakeoverDecision } from "./shared/daemon-takeover";
 import {
 	buildDaemonEnv,
 	devDaemonAllowedOrigins,
@@ -1943,64 +1943,36 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		}
 	}
 
-	// Wedged-orphan kill+replace: both attach paths returned null, but a process
-	// may still be holding the port. The only reachable case here is a hung/wedged
-	// holder whose run-file PID is still alive but is not answering /healthz (e.g.
-	// our own daemon that bound the port and then deadlocked). Two cases are
-	// intentionally NOT handled: an identity-mismatched but healthy AO daemon is
-	// already surfaced as an error status upstream by resolveDaemonFromPort (not
-	// killed here), and a foreign non-AO process holding the port with a dead
-	// run-file PID is not replaced (out of scope). When no holder is detectable,
-	// skip straight to spawn.
+	// A saved PID is only a locator. The Go bootstrap helper checks its OS start
+	// identity and guards the exact owner record before reclaiming an orphan.
 	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
 	const runFilePath_ = runFilePath();
-	let runFilePid: number | null = null;
-	if (runFilePath_) {
-		try {
-			runFilePid = parseRunFile(await readFile(runFilePath_, "utf8"))?.pid ?? null;
-		} catch {
-			// run-file absent or unreadable; proceed without a PID.
-		}
-	}
-	// process.kill(pid, 0) does not kill; it throws iff the PID is not live.
-	let holderPidAlive = false;
-	if (runFilePid) {
-		try {
-			process.kill(runFilePid, 0);
-			holderPidAlive = true;
-		} catch {
-			holderPidAlive = false;
-		}
-	}
-	if (shouldReplacePortHolder(orphanProbe, holderPidAlive)) {
-		// Use the run-file PID when available; fall back to the probe's reported
-		// PID as a last resort (a wedged daemon may not have written a fresh run-file).
-		const pidToKill = runFilePid ?? orphanProbe?.pid ?? null;
-		if (pidToKill) {
+	try {
+		let contents: string | null = null;
+		if (runFilePath_) {
 			try {
-				process.kill(-pidToKill, "SIGTERM");
-			} catch {
-				try {
-					process.kill(pidToKill, "SIGTERM");
-				} catch {
-					// process already gone; proceed
-				}
+				contents = await readFile(runFilePath_, "utf8");
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
 			}
 		}
-		// Poll until the port is free (probe returns null) or 8 s elapses.
-		const TAKEOVER_TIMEOUT_MS = 8_000;
-		const TAKEOVER_POLL_MS = 200;
-		const deadline = Date.now() + TAKEOVER_TIMEOUT_MS;
-		while (Date.now() < deadline) {
-			const still = await readDaemonProbe(resolvedDaemonPort(), "healthz");
-			if (!still) break;
-			await new Promise<void>((r) => setTimeout(r, TAKEOVER_POLL_MS));
+		const takeover = orphanDaemonTakeoverDecision(contents, orphanProbe);
+		if (takeover === "blocked") throw new Error("The daemon owner changed or could not be read. Retry daemon startup.");
+		if (takeover === "check" && contents !== null && runFilePath_) {
+			if (launch.source === "configured") throw new Error("A configured daemon command cannot verify the saved process owner. Stop that daemon before retrying.");
+			const takeoverRunFile = path.resolve(runFilePath_);
+			await execFileAsync(launch.command, ["daemon-takeover", takeoverRunFile, "--expected-sha256", createHash("sha256").update(contents).digest("hex")], {
+				cwd: path.dirname(takeoverRunFile),
+				timeout: 12_000,
+				windowsHide: true,
+				maxBuffer: 64 * 1024,
+			});
 		}
-		// Remove the stale run-file so the new daemon can write a fresh one.
-		if (runFilePath_) {
-			await rm(runFilePath_, { force: true });
-		}
+	} catch (err) {
+		setDaemonStatus({ state: "error", code: "not_ready", message: `Could not verify the previous daemon owner: ${(err as Error).message}` });
+		return daemonStatus;
 	}
+	if (startEpoch !== daemonStartEpoch) return daemonStatus;
 
 	if (launch.source === "bundled" && !existsSync(launch.command)) {
 		setDaemonStatus({

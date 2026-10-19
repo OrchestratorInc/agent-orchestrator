@@ -6,11 +6,35 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
 )
+
+func TestPreviewProcessStartTimeKeepsLegacyFormat(t *testing.T) {
+	var creation, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(windows.CurrentProcess(), &creation, &exit, &kernel, &user); err != nil {
+		t.Fatalf("read legacy process start time: %v", err)
+	}
+	ticks := uint64(creation.HighDateTime)<<32 | uint64(creation.LowDateTime)
+	if ticks == 0 {
+		t.Fatal("GetProcessTimes returned no process start time")
+	}
+	want := strconv.FormatUint(ticks, 10)
+	if got := previewProcessStartTime(os.Getpid()); got != want {
+		t.Fatalf("process start time = %q, want legacy FILETIME %q", got, want)
+	}
+}
+
+func TestPreviewProcessStartTimeRejectsInvalidPID(t *testing.T) {
+	for _, pid := range []int{-1, 0} {
+		if got := previewProcessStartTime(pid); got != "" {
+			t.Fatalf("process start time for pid %d = %q, want empty identity", pid, got)
+		}
+	}
+}
 
 func TestPreviewCommandRunsWindowsBatchShim(t *testing.T) {
 	dir := t.TempDir()

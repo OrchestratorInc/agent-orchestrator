@@ -1,8 +1,8 @@
-// Unit tests for shouldReplacePortHolder. Run with:
+// Unit tests for desktop takeover decisions. Run with:
 //   cd frontend && npx vitest run src/shared/daemon-takeover.test.ts
 import { describe, expect, it } from "vitest";
 import { DAEMON_SERVICE_NAME, type DaemonProbe } from "./daemon-attach";
-import { browserDaemonOwnershipDecision, shouldReplacePortHolder } from "./daemon-takeover";
+import { browserDaemonOwnershipDecision, orphanDaemonTakeoverDecision } from "./daemon-takeover";
 
 // A minimal valid DaemonProbe (non-null means the AO daemon answered /healthz).
 const healthyProbe: DaemonProbe = {
@@ -11,18 +11,26 @@ const healthyProbe: DaemonProbe = {
 	pid: 1234,
 };
 
-describe("shouldReplacePortHolder", () => {
-	it("returns true when a probe answered (rejected responder, any holderPidAlive)", () => {
-		expect(shouldReplacePortHolder(healthyProbe, false)).toBe(true);
-		expect(shouldReplacePortHolder(healthyProbe, true)).toBe(true);
+describe("orphanDaemonTakeoverDecision", () => {
+	const runFile = JSON.stringify({ pid: 1234, port: 3001, processStartId: "darwin:123:456" });
+	it("blocks replacement when a new daemon responds after attach failed", () => {
+		expect(orphanDaemonTakeoverDecision(null, healthyProbe)).toBe("blocked");
+		expect(orphanDaemonTakeoverDecision(runFile, healthyProbe)).toBe("blocked");
 	});
 
-	it("returns true when probe is null but the run-file PID is still alive (hung holder)", () => {
-		expect(shouldReplacePortHolder(null, true)).toBe(true);
+	it("delegates saved owner checks, including legacy records, to Go", () => {
+		expect(orphanDaemonTakeoverDecision(runFile, null)).toBe("check");
+		expect(orphanDaemonTakeoverDecision(JSON.stringify({ pid: 1234, port: 3001 }), null)).toBe("check");
 	});
 
-	it("returns false when probe is null and no live holder PID (nothing to kill)", () => {
-		expect(shouldReplacePortHolder(null, false)).toBe(false);
+	it("permits startup when no daemon or owner record is present", () => {
+		expect(orphanDaemonTakeoverDecision(null, null)).toBe("none");
+	});
+
+	it("blocks malformed or nonpositive process owners", () => {
+		for (const contents of ["{bad", JSON.stringify({ port: 3001 }), JSON.stringify({ pid: -1, port: 3001 })]) {
+			expect(orphanDaemonTakeoverDecision(contents, null)).toBe("blocked");
+		}
 	});
 });
 

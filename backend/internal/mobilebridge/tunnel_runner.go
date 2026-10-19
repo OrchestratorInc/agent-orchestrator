@@ -11,6 +11,7 @@ import (
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 // TunnelRunner supervises one managed cloudflared connector: spawn, stream its
@@ -83,10 +84,13 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 	t.Runtime.Started()
 	pidOwner := newTunnelPIDOwner(t.PIDPath)
+	identityCtx, stopIdentity := context.WithTimeout(ctx, processProbeTimeout)
+	identity := tunnelPIDIdentity{PID: cmd.Process.Pid, ProcessStartID: processalive.Identify(identityCtx, cmd.Process.Pid).StartID}
+	stopIdentity()
 
 	// Record the pid before anything can go wrong, so a daemon that dies in the
 	// next instant still leaves a trail to clean up.
-	if err := pidOwner.claim(cmd.Process.Pid); err != nil {
+	if err := pidOwner.claim(identity); err != nil {
 		t.logger().Warn("could not record tunnel pid; a crash may orphan the connector", "error", err)
 	}
 
@@ -108,7 +112,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	t.Runtime.Exited(waitErr)
 	// Only if this runner still owns the record: a replacement started while
 	// this one was unwinding will already have written its own pid there.
-	_ = pidOwner.release(cmd.Process.Pid)
+	_ = pidOwner.release(identity)
 	if waitErr != nil && ctx.Err() == nil {
 		return waitErr
 	}

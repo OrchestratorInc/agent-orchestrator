@@ -62,6 +62,9 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 		_ = stderrFile.Close()
 		return "", 0, fmt.Errorf("%s pty spawn: start: %w", runtime.GOOS, err)
 	}
+	if opts.processStarted != nil {
+		opts.processStarted(cmd.Process.Pid)
+	}
 	_ = childStdout.Close()
 
 	type readyResult struct {

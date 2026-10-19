@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 func TestStripEnvAssignments(t *testing.T) {
@@ -86,7 +87,6 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 	if !strings.Contains(err.Error(), "kill access denied") {
 		t.Fatalf("Create error lost cleanup outcome: %v", err)
 	}
-	runtime.pidIsAlive = func(int) bool { return true }
 	runtime.destroyWait = 0
 	currentKillCalls := 0
 	runtime.processFinder = func(int) (processKiller, error) {
@@ -105,7 +105,6 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 	// The possible handle must remain fenceable even after a daemon restart.
 	// A live PID without a READY address is unknown, never exact absence.
 	recovered := New(Options{})
-	recovered.pidIsAlive = func(int) bool { return true }
 	ref := ports.FencedRuntimeRef{
 		Handle: effect.PossibleHandle(), SessionID: "sess-kill-failed", Generation: "launch-kill-failed",
 	}
@@ -126,11 +125,15 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 			return nil
 		}), nil
 	}
+	// Recovery now has the same captured OS identity as the original daemon.
+	// Model an unreadable identity rather than pretending a matching token is
+	// unverified; the host must remain fenced and untouched while unknown.
+	recovered.checkOwnership = func(context.Context, int, string) processalive.Ownership { return processalive.OwnershipUnknown }
 	if destroyErr := recovered.Destroy(context.Background(), effect.PossibleHandle()); destroyErr == nil || !errors.Is(destroyErr, ports.ErrRuntimeProbeInconclusive) {
-		t.Fatalf("Destroy recovered partial create = %v, want retained inconclusive error", destroyErr)
+		t.Fatalf("Destroy recovered unknown partial create = %v, want retained inconclusive error", destroyErr)
 	}
 	if recoveredKillCalls != 0 {
-		t.Fatalf("Destroy recovered partial create made %d unverified kill calls, want 0", recoveredKillCalls)
+		t.Fatalf("Destroy recovered unknown partial create made %d unverified kill calls, want 0", recoveredKillCalls)
 	}
 	probe = recovered.ProbeFencedRuntime(context.Background(), ref)
 	if probe.Liveness != ports.FencedUnknown {
@@ -173,7 +176,7 @@ func TestDefinitiveSpawnFailureRetainsCleanupAuthorityUntilUnregisterSucceeds(t 
 	}})
 	unregisterErr := errors.New("reservation cleanup denied")
 	unregisterCalls := 0
-	runtime.unregisterHost = func(context.Context, string) error {
+	runtime.unregisterHost = func(context.Context, ptyregistry.Entry) error {
 		unregisterCalls++
 		return unregisterErr
 	}
@@ -196,13 +199,13 @@ func TestDefinitiveSpawnFailureRetainsCleanupAuthorityUntilUnregisterSucceeds(t 
 		t.Fatalf("retained cleanup authority = %+v, want current-owner PID-zero reservation", retained)
 	}
 
-	runtime.unregisterHost = func(context.Context, string) error {
+	runtime.unregisterHost = func(context.Context, ptyregistry.Entry) error {
 		unregisterCalls++
 		return nil
 	}
-	runtime.pidIsAlive = func(int) bool {
+	runtime.checkOwnership = func(context.Context, int, string) processalive.Ownership {
 		t.Fatal("PID-zero reservation cleanup must not probe OS process liveness")
-		return false
+		return processalive.OwnershipUnknown
 	}
 	runtime.processFinder = func(int) (processKiller, error) {
 		t.Fatal("PID-zero reservation cleanup must not resolve or kill an OS process")
@@ -338,7 +341,7 @@ func TestCreatePassesHostOptionsToSpawner(t *testing.T) {
 	if !errors.Is(err, spawnErr) {
 		t.Fatalf("Create error = %v, want spawner error", err)
 	}
-	if want := (HostOptions{StartOnAttach: true, LazySurface: true}); got != want {
-		t.Fatalf("spawner options = %+v, want %+v", got, want)
+	if !got.StartOnAttach || !got.LazySurface || got.processStarted == nil {
+		t.Fatalf("spawner options = %+v, want deferred/lazy options and launch identity callback", got)
 	}
 }

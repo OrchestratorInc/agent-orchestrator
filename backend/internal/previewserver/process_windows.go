@@ -3,6 +3,7 @@
 package previewserver
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 func previewCommand(name string, args ...string) *exec.Cmd {
@@ -65,26 +67,9 @@ func quoteWindowsBatchArg(value string) string {
 // re-verified as the process AO launched, so nothing was killed.
 var errStalePreviewPID = errors.New("preview pid is stale or recycled; refusing to signal")
 
-// previewProcessStartTime returns pid's kernel creation time as an opaque
-// decimal string, or "" when the process does not exist or cannot be queried.
-// It is captured at launch and compared verbatim before any tree kill: a bare
-// PID stops identifying anything once the child is reaped, and Windows
-// recycles PIDs the same way, so `taskkill /T` on a recycled number would
-// kill an unrelated process tree (issue #3475).
+// Keep the legacy decimal FILETIME format so saved previews remain verifiable.
 func previewProcessStartTime(pid int) string {
-	if pid <= 0 {
-		return ""
-	}
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = windows.CloseHandle(handle) }()
-	var creation, exit, kernel, user windows.Filetime
-	if err := windows.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
-		return ""
-	}
-	return strconv.FormatUint(uint64(creation.HighDateTime)<<32|uint64(creation.LowDateTime), 10)
+	return processalive.StartTime(context.Background(), pid)
 }
 
 // killPreviewTree taskkills pid's tree only after re-verifying that the

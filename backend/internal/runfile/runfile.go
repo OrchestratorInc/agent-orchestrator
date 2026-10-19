@@ -20,6 +20,8 @@ import (
 type Info struct {
 	// PID is the daemon process id.
 	PID int `json:"pid"`
+	// ProcessStartID is the OS identity of this PID incarnation.
+	ProcessStartID string `json:"processStartId,omitempty"`
 	// Port is the loopback port the daemon bound.
 	Port int `json:"port"`
 	// StartedAt is when the daemon came up (RFC 3339).
@@ -51,6 +53,11 @@ func Write(path string, info Info) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create run-file dir: %w", err)
 	}
+	unlock, err := lock(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal run-file: %w", err)
@@ -97,24 +104,41 @@ func Read(path string) (*Info, error) {
 // Remove deletes running.json. A missing file is not an error — graceful
 // shutdown should be idempotent.
 func Remove(path string) error {
+	unlock, err := lock(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer unlock()
+	return remove(path)
+}
+
+func remove(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove run-file: %w", err)
 	}
 	return nil
 }
 
-// RemoveIfOwned deletes running.json only if it still belongs to ownerPID. This
+// RemoveIfOwned deletes running.json only if it still belongs to owner. This
 // prevents a shutting-down daemon from removing a successor's freshly written
 // handshake after an overlapping restart.
-func RemoveIfOwned(path string, ownerPID int) error {
+func RemoveIfOwned(path string, owner Info) error {
+	unlock, err := lock(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	info, err := Read(path)
 	if err != nil {
 		return err
 	}
-	if info == nil || info.PID != ownerPID {
+	if info == nil || *info != owner {
 		return nil
 	}
-	return Remove(path)
+	return remove(path)
 }
 
 // CheckStale inspects an existing run-file before the new daemon binds. It

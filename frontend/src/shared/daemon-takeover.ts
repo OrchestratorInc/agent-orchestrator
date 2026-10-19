@@ -1,40 +1,15 @@
-// Pure decision helper for the wedged-orphan kill+replace path.
-//
-// Context: on app launch, after both attach attempts fail (inspectExistingDaemon
-// and resolveDaemonFromPort both returned null/non-ready), a process may still
-// be holding the daemon port. Spawning a new daemon then makes the Go child
-// collide on the port and exit 1. This helper encodes the decision: kill the
-// holder when the run-file names a PID that is still alive (a hung/wedged holder
-// that bound the port but is not answering /healthz). The probe disjunct
-// (probe !== null) is kept as a defensive guard only: by the time this helper
-// is called, resolveDaemonFromPort already returned null, so a holder that
-// answers /healthz at this point is unexpected. If it does happen (e.g. a race),
-// we still replace it rather than colliding on spawn.
-//
-// Kept side-effect free and dependency-injected (no node:* or electron imports)
-// so it can be exercised in vitest without the Electron polyfill layer.
-
 import type { DaemonProbe } from "./daemon-attach";
+import { parseRunFile } from "./daemon-discovery";
 
-/**
- * Reports whether something is holding the daemon port that we must kill before
- * spawning. By the time it is called, both healthy-reuse attach paths have already
- * returned null. The primary trigger is holderPidAlive: the run-file names a PID
- * that is still alive but is not answering /healthz (a hung/wedged holder). The
- * probe disjunct is a defensive guard: a holder that answers at this point is
- * unexpected (resolveDaemonFromPort already returned null), but if it does appear,
- * we replace it rather than colliding on spawn.
- *
- * Returns true when the caller should kill the holder, wait for the port to
- * free, clear the stale run-file, then spawn a fresh daemon.
- *
- * Returns false when there is no detectable holder; spawn immediately.
- *
- * ponytail: two-condition OR covers the entire decision surface; the probe's
- * content (pid, executablePath) is for the caller's kill logic, not ours.
- */
-export function shouldReplacePortHolder(probe: DaemonProbe | null, holderPidAlive: boolean): boolean {
-	return probe !== null || holderPidAlive;
+/** Only the Go bootstrap helper may verify and signal a saved process owner. */
+export function orphanDaemonTakeoverDecision(runFileContents: string | null, probe: DaemonProbe | null): "none" | "check" | "blocked" {
+	// A new responder appeared since attach failed. Retry discovery rather than
+	// replacing a daemon whose ownership this launch has not established.
+	if (probe) return "blocked";
+	if (runFileContents === null) return "none";
+	const info = parseRunFile(runFileContents);
+	if (!info || !Number.isSafeInteger(info.pid) || info.pid <= 0) return "blocked";
+	return "check";
 }
 
 export type BrowserDaemonOwnershipDecision =

@@ -3,7 +3,7 @@
 package previewserver
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 func previewCommand(name string, args ...string) *exec.Cmd {
@@ -30,16 +31,6 @@ var errStalePreviewPID = errors.New("preview pid is stale or recycled; refusing 
 // since that boot.
 const bootTicksPrefix = "boot+"
 
-// bootID names the running Linux boot. Ticks since boot repeat from one boot to
-// the next, and the registry outlives a reboot: without the id, a record left
-// by a daemon that died before the reboot could match an unrelated process that
-// started at the same tick. It is read on every call, so one failed read
-// doesn't stick for the daemon's lifetime.
-func bootID() (string, error) {
-	id, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	return strings.TrimSpace(string(id)), err
-}
-
 // previewProcessStartTime returns the kernel-reported start time of pid as an
 // opaque string, or "" when it cannot be read (the process is gone, or ps
 // failed). It is captured at launch and compared verbatim before any group
@@ -54,51 +45,21 @@ func bootID() (string, error) {
 // step): a preview launched before the step stopped matching its own record,
 // and AO refused to stop it. A Linux host whose boot id can't be read falls
 // back to lstart, as before boot ticks.
+// macOS uses the same native start identity as Chat; old lstart records still
+// use the legacy reader when checked.
 func previewProcessStartTime(pid int) string {
 	if pid <= 0 {
 		return ""
 	}
 	if runtime.GOOS == "linux" {
-		if boot, err := bootID(); err == nil {
-			return bootTicksStartTime(boot, pid)
+		if start, err := processalive.BootStartTime(context.Background(), pid); err == nil {
+			return start
 		}
 	}
-	return psStartTime(pid)
-}
-
-// bootTicksStartTime formats pid's start as boot+<boot>+<ticks since boot>, or
-// returns "" when /proc has no well-formed entry for pid.
-func bootTicksStartTime(boot string, pid int) string {
-	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return ""
+	if runtime.GOOS == "darwin" {
+		return processalive.Identify(context.Background(), pid).StartID
 	}
-	// The command name sits in parentheses and may itself contain ") ". The
-	// fields after it start at field 3, so field 22 is fields[19].
-	end := bytes.LastIndexByte(stat, ')')
-	if end < 0 {
-		return ""
-	}
-	fields := strings.Fields(string(stat[end+1:]))
-	if len(fields) <= 19 {
-		return ""
-	}
-	if _, err := strconv.ParseUint(fields[19], 10, 64); err != nil {
-		return ""
-	}
-	return bootTicksPrefix + boot + "+" + fields[19]
-}
-
-// psStartTime is ps's lstart: the wall-clock start, formatted in the daemon's
-// time zone and locale. On macOS the kernel keeps that start, so a clock step
-// doesn't move it, but a time zone or locale change does. It is also what AO
-// recorded on Linux before boot ticks.
-func psStartTime(pid int) string {
-	out, err := aoprocess.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return processalive.StartTime(context.Background(), pid)
 }
 
 // previewGroupHasMembers reports whether any process still belongs to process
@@ -126,13 +87,18 @@ func signalPreviewGroup(pid int, recordedStart string, sig syscall.Signal) error
 	}
 	var current string
 	if strings.HasPrefix(recordedStart, bootTicksPrefix) {
-		boot, err := bootID()
+		var err error
+		current, err = processalive.BootStartTime(context.Background(), pid)
 		if err != nil {
 			return fmt.Errorf("%w: %w", errStalePreviewPID, err)
 		}
-		current = bootTicksStartTime(boot, pid)
+	} else if strings.HasPrefix(recordedStart, "darwin:") {
+		current = processalive.Identify(context.Background(), pid).StartID
+		if current == "" && processalive.Alive(pid) {
+			return errStalePreviewPID
+		}
 	} else {
-		current = psStartTime(pid) // macOS, or a Linux record from before boot ticks
+		current = processalive.StartTime(context.Background(), pid)
 	}
 	if current == "" {
 		return nil // leader gone: nothing provably AO's remains

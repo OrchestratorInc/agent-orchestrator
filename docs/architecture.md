@@ -18,6 +18,17 @@ Chat, but both controllers are never live at once. The daemon coordinates both
 modes through the same session, lifecycle, workspace, storage, and observation
 boundaries.
 
+Durable process owners use `processalive.CheckOwnership` to compare a saved PID
+and OS process-start identity. Chat hosts, native PTY hosts, desktop daemon
+takeover, and managed cloudflared cleanup share this check. Linux identities use
+the boot ID and kernel start ticks, so a wall-clock change does not change the
+owner. Only a matching owner can be signalled. A gone or reused PID permits
+reclaiming the old generation's metadata; an unknown owner preserves it and
+blocks destructive recovery or a replacement. Live legacy records without a
+start identity remain unknown, although native PTY attachment can still use its
+existing non-destructive probe. An unresolved tunnel owner blocks only the
+managed connector; a later retry can recover after the owner exits.
+
 ## Table of contents
 
 - [Mental model](#mental-model)

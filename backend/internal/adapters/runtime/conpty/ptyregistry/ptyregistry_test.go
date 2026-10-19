@@ -10,14 +10,22 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// withFakePidAlive replaces the pidAlive var for the duration of the test.
+// withFakePidAlive supplies the explicit liveness modeled by registry tests;
+// ownership regressions use the real OS identity probe instead.
 func withFakePidAlive(t *testing.T, fn func(pid int) bool) {
 	t.Helper()
-	orig := pidAlive
-	pidAlive = fn
-	t.Cleanup(func() { pidAlive = orig })
+	orig := checkOwnership
+	checkOwnership = func(_ context.Context, pid int, _ string) processalive.Ownership {
+		if fn(pid) {
+			return processalive.OwnershipUnknown
+		}
+		return processalive.OwnershipGone
+	}
+	t.Cleanup(func() { checkOwnership = orig })
 }
 
 func withRegistryRewrite(t *testing.T, fn func(context.Context, []Entry) error) {

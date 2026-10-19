@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
@@ -168,6 +169,9 @@ func TestServerLifecycle(t *testing.T) {
 	}
 	if info.Port == 0 {
 		t.Error("run-file recorded port 0; want the actual bound port")
+	}
+	if want := processalive.Identify(context.Background(), os.Getpid()).StartID; want == "" || info.ProcessStartID != want {
+		t.Fatalf("run-file process identity = %q, want current OS identity %q", info.ProcessStartID, want)
 	}
 
 	cancel()

@@ -907,12 +907,16 @@ func Run() error {
 	// stopping its connector leaves a public tunnel to this machine running
 	// with nobody watching it.
 	tunnelPID := mobilebridge.TunnelPIDPath(cfg.DataDir)
-	if reapErr := mobilebridge.ReapStaleTunnel(tunnelPID, mobilebridge.IsLiveCloudflared, mobilebridge.KillProcess); reapErr != nil {
-		log.Warn("could not reap a stale mobile tunnel", "error", reapErr)
-	}
+	canResolveTunnel := mobileTunnelReapGuard(func() error {
+		return mobilebridge.ReapStaleTunnel(tunnelPID, mobilebridge.IsLiveCloudflared, mobilebridge.KillProcess)
+	}, log)
+	canResolveTunnel()
 	// Looked up again whenever the bridge is enabled, so a cloudflared the user
 	// installs from Connect Mobile is picked up without restarting AO.
 	bs.ResolveTunnel = func() controllers.TunnelController {
+		if !canResolveTunnel() {
+			return nil
+		}
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
 		if res.NeedsInstall {
 			return nil
@@ -927,6 +931,9 @@ func Run() error {
 	// needs a connector, such as restoring an enabled bridge, wait for this
 	// lookup rather than racing it.
 	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
+		if !canResolveTunnel() {
+			return nil
+		}
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
 		if res.NeedsInstall {
 			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
