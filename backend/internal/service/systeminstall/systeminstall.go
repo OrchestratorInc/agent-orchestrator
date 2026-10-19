@@ -1798,7 +1798,7 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 		return [3]int{20, 0, 0}
 	case TargetClaudeCode, TargetQwen, TargetAutohand:
 		return [3]int{22, 0, 0}
-	case TargetPi:
+	case TargetPi, TargetMiniMaxCode:
 		return [3]int{22, 19, 0}
 	default:
 		return [3]int{16, 0, 0}

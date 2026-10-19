@@ -1,6 +1,8 @@
 package minimaxcode
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -56,11 +58,53 @@ func TestAuthPresenceIsNotAuthorization(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{
 		{`{"providers":[{"active":true,"enabled":true,"hasApiKey":true,"status":{"state":"available"}}]}`, "configured"},
 		{`{"providers":[{"active":false,"enabled":true,"hasApiKey":true}]}`, "unknown"},
+		{`{"providers":[{"kind":"minimax-api-key","active":true,"enabled":true,"hasApiKey":true}]}`, "configured"},
+		{`{"providers":[{"kind":"minimax-api-key","active":true,"enabled":true,"hasApiKey":false}]}`, "unauthorized"},
+		{`{"providers":[{"kind":"custom","active":true,"enabled":true,"hasApiKey":false}]}`, "unknown"},
 		{`not-json`, "unknown"},
 	} {
-		if got := providerAuthStatus([]byte(tc.input)); string(got) != tc.want {
-			t.Fatalf("status=%q want %q", got, tc.want)
+		if got := providerAuthStatus([]byte(tc.input), t.TempDir()); string(got) != tc.want {
+			t.Fatalf("%s: status=%q want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+// MiniMax lists its OAuth row without a key even when /login succeeded, so
+// the account state comes from the OAuth state file.
+func TestOAuthLoginStatusComesFromStateFile(t *testing.T) {
+	const oauthActive = `{"providers":[{"providerId":"minimax_oauth","kind":"minimax-oauth","active":true,"enabled":true,"hasApiKey":false,"models":[]},{"providerId":"minimax_api","kind":"minimax-api-key","active":false,"enabled":true,"hasApiKey":false}]}`
+	write := func(t *testing.T, dir, rel, body string) {
+		t.Helper()
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ name, rel, body, want string }{
+		{"signed out", "", "", "unauthorized"},
+		{"global account", "auth/prod/en/mcode-public/auth-state.json", `{"status":"authenticated"}`, "configured"},
+		{"china account refreshing", "auth/prod/cn/mcode-public/auth-state.json", `{"status":"refreshing"}`, "configured"},
+		{"legacy state", "auth/auth-state.json", `{"status":"authenticated"}`, "configured"},
+		{"expired", "auth/prod/en/mcode-public/auth-state.json", `{"status":"expired"}`, "unauthorized"},
+		{"logged out", "auth/prod/en/mcode-public/auth-state.json", `{"status":"anonymous"}`, "unauthorized"},
+		{"login in flight", "auth/prod/en/mcode-public/auth-state.json", `{"status":"authorizing"}`, "unknown"},
+		{"corrupt", "auth/prod/en/mcode-public/auth-state.json", `{`, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.rel != "" {
+				write(t, dir, tc.rel, tc.body)
+			}
+			if got := providerAuthStatus([]byte(oauthActive), dir); string(got) != tc.want {
+				t.Fatalf("status=%q want %q", got, tc.want)
+			}
+		})
+	}
+	if got := providerAuthStatus([]byte(oauthActive), ""); got != "unknown" {
+		t.Fatalf("missing data dir status=%q want unknown", got)
 	}
 }
 

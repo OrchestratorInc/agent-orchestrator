@@ -24,7 +24,7 @@ func versionProbeFixture(t *testing.T) string {
 
 func TestVersionMismatchIsCachedUntilInvalidation(t *testing.T) {
 	binary := versionProbeFixture(t)
-	version := "0.6.6"
+	version := "0.6.4"
 	calls := 0
 	runVersionProbe = func(context.Context, string) ([]byte, error) {
 		calls++
@@ -71,5 +71,16 @@ func TestTransientVersionProbeFailureIsNotCached(t *testing.T) {
 	}
 	if got, err := plugin.ResolveBinary(context.Background()); got != binary || err != nil || calls != 2 {
 		t.Fatalf("retry after transient failure = (%q, %v), probe calls = %d", got, err, calls)
+	}
+}
+
+func TestSupportsVersionAcceptsQualifiedAndNewerReleases(t *testing.T) {
+	for version, want := range map[string]bool{
+		"0.6.5": true, "0.6.5\n": true, "0.6.9": true, "0.7.0": true, "1.0.0": true, "v0.6.10": true,
+		"0.6.4": false, "0.5.9": false, "": false, "0.6": false, "0.6.9-beta.1": false, "mcode 0.6.9": false,
+	} {
+		if got := SupportsVersion(version); got != want {
+			t.Errorf("SupportsVersion(%q) = %t, want %t", version, got, want)
+		}
 	}
 }

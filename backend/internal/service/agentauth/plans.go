@@ -22,6 +22,9 @@ var plans = []Plan{
 	plan("opencode", ActionLogin, "Log in to OpenCode", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://github.com/anomalyco/opencode"),
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
+	// MiniMax's TUI /login offers both China and Global accounts; the bare
+	// `mcode login` subcommand defaults to the China region.
+	terminalInputPlan("minimax-code", ActionLogin, "Log in to MiniMax Code", []string{"mcode"}, "/login\r", "Select Open login after MiniMax Code finishes starting", "https://agent.minimax.io/docs/cli/quick-start"),
 	documentationPlan("memcode", ActionSetup, "Set up memcode", "Configure a native endpoint and provider credentials before launching AO", "https://github.com/memcode-ai/memcode"),
 	documentationPlan("aider", ActionSetup, "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
@@ -186,6 +189,8 @@ func logoutCommand(agentID string) []string {
 		return []string{"auggie", "logout"}
 	case "devin":
 		return []string{"devin", "auth", "logout"}
+	case "minimax-code":
+		return []string{"mcode", "logout"}
 	default:
 		return nil
 	}

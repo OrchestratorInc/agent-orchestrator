@@ -212,10 +212,18 @@ func TestInitializeRejectsUnqualifiedDistributionAndMissingLoad(t *testing.T) {
 	if err := validateInitialize(valid); err != nil {
 		t.Fatal(err)
 	}
+	newer := valid
+	newer.AgentInfo = &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.9"}
+	if err := validateInitialize(newer); err != nil {
+		t.Fatalf("rejected newer release: %v", err)
+	}
 	for _, mutate := range []func(*acpsdk.InitializeResponse){
 		func(r *acpsdk.InitializeResponse) { r.AgentInfo = nil },
 		func(r *acpsdk.InitializeResponse) {
-			r.AgentInfo = &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.9"}
+			r.AgentInfo = &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.4"}
+		},
+		func(r *acpsdk.InitializeResponse) {
+			r.AgentInfo = &acpsdk.Implementation{Name: "other-agent", Version: "0.6.9"}
 		},
 		func(r *acpsdk.InitializeResponse) { r.AgentCapabilities.LoadSession = false },
 	} {

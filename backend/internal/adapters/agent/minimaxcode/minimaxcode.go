@@ -1,4 +1,4 @@
-// Package minimaxcode adapts the source-correlated MiniMax Code TUI release.
+// Package minimaxcode adapts the MiniMax Code TUI (0.6.5 or newer).
 // MiniMax Code is distinct from the Xiaomi MiMo Code harness.
 package minimaxcode
 
@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -169,13 +170,49 @@ func (p *Plugin) EmitsSubmitActivity() bool { return true }
 // EmitsBlockedActivity reports native permission requests.
 func (p *Plugin) EmitsBlockedActivity() bool { return true }
 
-var binarySpec = binaryutil.BinarySpec{Label: "mcode", Names: []string{"mcode"}, WinNames: []string{"mcode.cmd", "mcode.exe", "mcode"}, UnixPaths: []string{"/usr/local/bin/mcode", "/opt/homebrew/bin/mcode"}, UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("mcode"), NodeManaged: true, WinPaths: []binaryutil.WinPath{{Base: binaryutil.WinAppData, Parts: []string{"npm", "mcode.cmd"}}}}
+var binarySpec = binaryutil.BinarySpec{Label: "mcode", Names: []string{"mcode"}, WinNames: []string{"mcode.cmd", "mcode.exe", "mcode"}, UnixPaths: []string{"/usr/local/bin/mcode", "/opt/homebrew/bin/mcode"}, UnixHomePaths: append([][]string{{".minimax-code", "bin", "mcode"}}, binaryutil.NodeManagedUnixHomePaths("mcode")...), NodeManaged: true, WinPaths: []binaryutil.WinPath{{Base: binaryutil.WinHome, Parts: []string{".minimax-code", "mcode.cmd"}}, {Base: binaryutil.WinAppData, Parts: []string{"npm", "mcode.cmd"}}}}
 
 var runVersionProbe = func(ctx context.Context, binary string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, binary, "--version").Output()
 }
 
-// ResolveBinary requires the source-correlated MiniMax release.
+// minimumVersion is the oldest MiniMax release whose native history, hooks and
+// ACP surface AO was qualified against. The official installers always install
+// npm latest, so newer releases are accepted.
+const minimumVersion = "0.6.5"
+
+// SupportsVersion reports whether a MiniMax Code release is minimumVersion or newer.
+func SupportsVersion(version string) bool {
+	got, ok := parseVersion(version)
+	if !ok {
+		return false
+	}
+	want, _ := parseVersion(minimumVersion)
+	for i := range got {
+		if got[i] != want[i] {
+			return got[i] > want[i]
+		}
+	}
+	return true
+}
+
+func parseVersion(version string) ([3]int, bool) {
+	var out [3]int
+	fields := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
+	if len(fields) != 3 {
+		return out, false
+	}
+	for i, field := range fields {
+		n, err := strconv.Atoi(field)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+// ResolveBinary requires a qualified MiniMax release.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	p.binaryMu.Lock()
 	defer p.binaryMu.Unlock()
@@ -196,10 +233,10 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		if versionErr != nil {
 			return "", fmt.Errorf("MiniMax Code version probe failed: %w", versionErr)
 		}
-		if strings.TrimSpace(string(version)) != "0.6.5" {
+		if !SupportsVersion(string(version)) {
 			// A confirmed mismatch stays unavailable until an explicit harness refresh.
 			// Probe failures and caller cancellation remain retryable above.
-			p.resolutionErr = errors.New("MiniMax Code TUI requires source-correlated version 0.6.5")
+			p.resolutionErr = errors.New("MiniMax Code TUI requires version " + minimumVersion + " or newer")
 			return "", p.resolutionErr
 		}
 		p.resolvedBinary = b

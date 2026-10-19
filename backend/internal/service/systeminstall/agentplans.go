@@ -46,7 +46,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetFX:          "https://fx.sh/docs",
 	TargetUnreal:      "https://github.com/unreallabsai/unreal-agent",
 	TargetMiMoCode:    "https://github.com/XiaomiMiMo/MiMo-Code",
-	TargetMiniMaxCode: "https://github.com/MiniMax-AI/minimax-code/releases/tag/v0.6.5",
+	TargetMiniMaxCode: "https://agent.minimax.io/docs/cli/quick-start",
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
@@ -255,7 +255,13 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			Reason: "Unreal Agent is built into AO; update AO to update the harness.",
 		}}
 	case TargetMiniMaxCode:
-		plans = []Plan{manualPlan(target, "Install the source-correlated MiniMax Code 0.6.5 GitHub release archive, then refresh harness status. npm latest is not the qualified release.", agentDocumentationURLs[target])}
+		// The official installers install npm latest into ~/.minimax-code
+		// (%USERPROFILE%\.minimax-code on Windows) with a private Node runtime
+		// when needed, so they work without a system Node.js.
+		plans = []Plan{
+			s.officialByOS(target, "https://filecdn.minimax.chat/public/install.sh", "bash", "https://filecdn.minimax.chat/public/install.ps1", agentDocumentationURLs[target]),
+			s.planNPM(target, "@minimax-ai/code"),
+		}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
 	case TargetDeepSeek:
@@ -502,7 +508,8 @@ var vendorUpdateEnv = map[Target][]string{
 // installs it does not manage, and on native installs only stages the new
 // binary for a later launch to swap in.
 var installerUpdateTargets = map[Target]bool{
-	TargetKimi: true,
+	TargetKimi:        true,
+	TargetMiniMaxCode: true,
 }
 
 func packageWithoutLatest(pkg string) string {

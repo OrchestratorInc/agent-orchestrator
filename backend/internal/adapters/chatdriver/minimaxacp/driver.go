@@ -1,4 +1,4 @@
-// Package minimaxacp binds MiniMax Code 0.6.5's native ACP server to the shared
+// Package minimaxacp binds MiniMax Code 0.6.5+'s native ACP server to the shared
 // AO Chat transport and renderer. It remains unregistered until native Chat
 // conformance is qualified independently of the TUI integration.
 // Cancellation is settled through its native delegation-stop receipt before
@@ -20,6 +20,7 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -137,9 +138,9 @@ func configure(plugin Plugin) nativeacp.Configure {
 }
 
 func validateInitialize(init acpsdk.InitializeResponse) error {
-	if init.AgentInfo == nil || init.AgentInfo.Name != "minimax-code" || init.AgentInfo.Version != "0.6.5" ||
+	if init.AgentInfo == nil || init.AgentInfo.Name != "minimax-code" || !minimaxcode.SupportsVersion(init.AgentInfo.Version) ||
 		init.ProtocolVersion != acpsdk.ProtocolVersionNumber || !init.AgentCapabilities.LoadSession {
-		return errors.New("MiniMax Chat requires MiniMax Code 0.6.5 ACP v1 with exact session/load")
+		return errors.New("MiniMax Chat requires MiniMax Code 0.6.5 or newer, ACP v1 with exact session/load")
 	}
 	return nil
 }

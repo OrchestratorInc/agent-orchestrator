@@ -267,6 +267,9 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 		{"windows", TargetAgy, []string{"pwsh"}, "https://antigravity.google/cli/install.ps1", "pwsh"},
 		{"linux", TargetKimchi, []string{"sh"}, "https://github.com/getkimchi/kimchi/releases/latest/download/install.sh", "sh"},
 		{"linux", TargetPrimeAgent, []string{"sh"}, "https://app.primeintellect.ai/prime-agent/install.sh", "sh"},
+		{"darwin", TargetMiniMaxCode, []string{"bash"}, "https://filecdn.minimax.chat/public/install.sh", "bash"},
+		{"linux", TargetMiniMaxCode, []string{"bash"}, "https://filecdn.minimax.chat/public/install.sh", "bash"},
+		{"windows", TargetMiniMaxCode, []string{"powershell.exe"}, "https://filecdn.minimax.chat/public/install.ps1", "powershell.exe"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.target)+"/"+tt.goos, func(t *testing.T) {
