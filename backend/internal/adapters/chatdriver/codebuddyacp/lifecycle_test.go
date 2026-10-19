@@ -73,6 +73,7 @@ func runSyntheticCodeBuddy() {
 			"sessionId": syntheticSession, "update": map[string]any{"sessionUpdate": kind, "messageId": id, "content": map[string]string{"type": "text", "text": text}},
 		}})
 	}
+	var parkedPrompt json.RawMessage
 	scan := bufio.NewScanner(os.Stdin)
 	for scan.Scan() {
 		var req struct {
@@ -80,12 +81,28 @@ func runSyntheticCodeBuddy() {
 			Method string          `json:"method"`
 			Params struct {
 				SessionID string `json:"sessionId"`
+				Prompt    []struct {
+					Text string `json:"text"`
+				} `json:"prompt"`
 			} `json:"params"`
+			Result json.RawMessage `json:"result"`
 		}
 		if json.Unmarshal(scan.Bytes(), &req) != nil {
 			continue
 		}
 		trace(req.Method, req.Params.SessionID)
+		if req.Method == "" && string(req.ID) == `"permission-1"` && len(parkedPrompt) > 0 {
+			trace("permission-response", string(req.Result))
+			update("agent_message_chunk", "synthetic decision settled", "00000000-0000-4000-8000-000000000003")
+			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": parkedPrompt, "result": map[string]string{"stopReason": "end_turn"}})
+			parkedPrompt = nil
+			continue
+		}
+		if req.Method == "session/cancel" && len(parkedPrompt) > 0 {
+			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": parkedPrompt, "result": map[string]string{"stopReason": "cancelled"}})
+			parkedPrompt = nil
+			continue
+		}
 		if len(req.ID) == 0 {
 			continue
 		}
@@ -114,6 +131,23 @@ func runSyntheticCodeBuddy() {
 				}
 			}
 		case "session/prompt":
+			text := ""
+			for _, part := range req.Params.Prompt {
+				text += part.Text
+			}
+			if strings.Contains(text, "permission") {
+				parkedPrompt = append(json.RawMessage(nil), req.ID...)
+				_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": "permission-1", "method": "session/request_permission", "params": map[string]any{
+					"sessionId": syntheticSession, "toolCall": map[string]any{"toolCallId": "synthetic-tool", "title": "Synthetic shell approval", "kind": "execute"},
+					"options": []any{map[string]string{"optionId": "allow", "name": "Allow once", "kind": "allow_once"}, map[string]string{"optionId": "reject", "name": "Reject once", "kind": "reject_once"}},
+				}})
+				continue
+			}
+			if strings.Contains(text, "hold") {
+				parkedPrompt = append(json.RawMessage(nil), req.ID...)
+				update("agent_message_chunk", "synthetic waiting", "00000000-0000-4000-8000-000000000004")
+				continue
+			}
 			update("agent_message_chunk", "synthetic answer", "00000000-0000-4000-8000-000000000002")
 			result = map[string]string{"stopReason": "end_turn"}
 		}
@@ -393,6 +427,120 @@ func TestCandidateRefusesUnownedNativeProfile(t *testing.T) {
 			}
 			if _, err := os.Stat(f.trace); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("unowned profile reached provider: %v", err)
+			}
+		})
+	}
+}
+
+func TestCandidateSyntheticPermissionAndInterruptPorts(t *testing.T) {
+	for _, choice := range []string{"allow", "reject", "cancel", "interrupt"} {
+		t.Run(choice, func(t *testing.T) {
+			f := newLifecycleFixture(t)
+			conv, err := f.binding.Start(f.ctx, f.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conv.(ports.ChatProviderTerminator).Terminate()
+			task := "ordinary permission task"
+			if choice == "interrupt" {
+				task = "hold until stopped"
+			}
+			ref, err := conv.SendTurn(f.ctx, ports.ChatUserMessage{Text: task})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatal(err)
+			}
+			ready, done, terminal := false, false, false
+			for !done {
+				select {
+				case e, ok := <-conv.Events():
+					if !ok {
+						t.Fatal("closed before settlement")
+					}
+					if !ready && choice != "interrupt" && e.Kind == ports.ChatEventApprovalRequested {
+						if err := conv.ResolveRequest(f.ctx, e.RequestID, ports.ChatDecision{ID: "unoffered"}); !errors.Is(err, ports.ErrChatDecisionNotOffered) {
+							t.Fatalf("invented decision accepted: %v", err)
+						}
+						if choice == "cancel" {
+							if err := conv.Interrupt(f.ctx, ref.ProviderTurnID); err != nil {
+								t.Fatal(err)
+							}
+						} else if err := conv.ResolveRequest(f.ctx, e.RequestID, ports.ChatDecision{ID: choice}); err != nil {
+							t.Fatal(err)
+						}
+						ready = true
+					}
+					if !ready && choice == "interrupt" && strings.Contains(e.Text, "synthetic waiting") {
+						if err := conv.Interrupt(f.ctx, ref.ProviderTurnID); err != nil {
+							t.Fatal(err)
+						}
+						ready = true
+					}
+					if e.Kind == ports.ChatEventTurnCompleted {
+						expected := domain.TurnStateCompleted
+						if choice == "interrupt" || choice == "cancel" {
+							expected = domain.TurnStateInterrupted
+						}
+						if !ready || e.TurnState != expected || e.ProviderEventID == "" {
+							t.Fatalf("unexpected settlement: %#v", e)
+						}
+						if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(f.ctx, e.ProviderEventID); err != nil {
+							t.Fatal(err)
+						}
+						terminal = true
+					}
+					if terminal && e.Kind == ports.ChatEventControllerState && e.ControllerState == ports.ChatControllerReady {
+						done = true
+					}
+				case <-f.ctx.Done():
+					t.Fatal(f.ctx.Err())
+				}
+			}
+			calls := traceCalls(t, f.trace)
+			if choice == "interrupt" || choice == "cancel" {
+				if callCount(calls, "session/cancel") != 1 {
+					t.Fatalf("cancel not sent: %#v", calls)
+				}
+			} else {
+				found := false
+				for _, call := range calls {
+					if call["method"] == "permission-response" && strings.Contains(call["detail"].(string), `"optionId":"`+choice+`"`) {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("native decision not preserved: %#v", calls)
+				}
+			}
+			// The cancelled synthetic prompt must release admission immediately.
+			next, err := conv.SendTurn(f.ctx, ports.ChatUserMessage{Text: "ordinary continuation"})
+			if err != nil {
+				t.Fatalf("next prompt not admitted: %v", err)
+			}
+			if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(next.ProviderTurnID); err != nil {
+				t.Fatal(err)
+			}
+			settled := false
+			for !settled {
+				select {
+				case e, ok := <-conv.Events():
+					if !ok {
+						t.Fatal("closed during continuation")
+					}
+					if e.Kind == ports.ChatEventTurnCompleted {
+						if e.TurnState != domain.TurnStateCompleted || e.ProviderEventID == "" {
+							t.Fatalf("continuation did not complete: %#v", e)
+						}
+						if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(f.ctx, e.ProviderEventID); err != nil {
+							t.Fatal(err)
+						}
+						settled = true
+					}
+				case <-f.ctx.Done():
+					t.Fatal(f.ctx.Err())
+				}
 			}
 		})
 	}
