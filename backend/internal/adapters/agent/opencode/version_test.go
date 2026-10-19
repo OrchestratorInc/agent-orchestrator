@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -263,5 +264,28 @@ func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want cancellation instead of earlier mismatch", err)
+	}
+}
+
+func TestResolveBinaryForMajorUsesDistinctManagedLaunchers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixtures")
+	}
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	binaryutil.SetManagedBinDir(dir)
+	t.Cleanup(func() { binaryutil.SetManagedBinDir("") })
+	for name, version := range map[string]string{"opencode": "1.2.27", "opencode-v2": "2.0.0"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\necho "+version+"\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for major, name := range map[int]string{1: "opencode", 2: "opencode-v2"} {
+		got, err := ResolveBinaryForMajor(context.Background(), major)
+		if err != nil || got != filepath.Join(dir, name) {
+			t.Fatalf("major %d=%q,%v", major, got, err)
+		}
 	}
 }

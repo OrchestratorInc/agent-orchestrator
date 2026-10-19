@@ -99,12 +99,8 @@ func TestGetLaunchCommandModelFlagComposesWithApprovalFlags(t *testing.T) {
 	}
 }
 
-// Mirrors the issue #2890 harness note: --model + --session composition is
-// unverified against a real kimi install, so appendModelFlag is intentionally
-// not wired into GetRestoreCommand. This test locks that decision in so a
-// future "just mirror Copilot/Codex" edit doesn't silently forward the model
-// override on restore without re-verifying first.
-func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
+// Kimi Code 2.2 accepts model overrides alongside exact session resume.
+func TestGetRestoreCommandPreservesModelOverride(t *testing.T) {
 	p := &Plugin{resolvedBinary: "kimi"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
@@ -118,9 +114,9 @@ func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
-	want := []string{"kimi", "--session", "01HZABC"}
+	want := []string{"kimi", "--model", "k2.5", "--session", "01HZABC"}
 	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("cmd = %#v, want %#v (model override must not be forwarded on restore)", cmd, want)
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
 
@@ -236,16 +232,18 @@ func TestGetRestoreCommand(t *testing.T) {
 				t.Fatal("ok=false, want true")
 			}
 
-			want := []string{"kimi", "--session", "01HZABC"}
+			want := []string{"kimi"}
+			switch mode {
+			case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
+				want = append(want, "--auto")
+			case ports.PermissionModeBypassPermissions:
+				want = append(want, "-y")
+			}
+			want = append(want, "--session", "01HZABC")
 			if !reflect.DeepEqual(cmd, want) {
 				t.Fatalf("cmd = %#v, want %#v", cmd, want)
 			}
-			for _, arg := range cmd {
-				switch arg {
-				case "--auto", "-y", "--yolo", "--yes", "--auto-approve", "--plan":
-					t.Fatalf("cmd = %#v unexpectedly contains approval/plan flag %q", cmd, arg)
-				}
-			}
+
 		})
 	}
 }

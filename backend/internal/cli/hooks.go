@@ -229,12 +229,20 @@ func hookAgentSessionID(payload []byte) string {
 		SessionIDCamel      string `json:"sessionId"`
 		ConversationID      string `json:"conversation_id"`
 		ConversationIDCamel string `json:"conversationId"`
-		// Cline exposes the resumable task handle as top-level taskId.
+		// Current Cline CLI hooks distinguish the durable CLI session from the
+		// SDK's process-local task/conversation ID. --id resumes the root.
+		SessionContext struct {
+			RootSessionID string `json:"rootSessionId"`
+		} `json:"sessionContext"`
+		// Legacy hook producers expose only the task ID.
 		TaskIDCamel string `json:"taskId"`
 		TaskIDSnake string `json:"task_id"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	id := strings.TrimSpace(p.SessionID)
+	id := strings.TrimSpace(p.SessionContext.RootSessionID)
+	if id == "" {
+		id = strings.TrimSpace(p.SessionID)
+	}
 	if id == "" {
 		id = strings.TrimSpace(p.SessionIDCamel)
 	}
