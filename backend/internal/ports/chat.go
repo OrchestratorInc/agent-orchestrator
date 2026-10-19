@@ -817,6 +817,14 @@ type ChatTurnRef struct {
 //
 // Drivers whose SendTurn already receives a provider acknowledgement (Codex's
 // app-server, for example) do not implement this interface.
+//
+// It is also the right choice for an ack-style protocol whose first turn
+// notification precedes the acknowledgement on the wire. ZCode's app-server
+// emits state.updated{reason:"prompt_started"} before it returns the {accepted}
+// result of session/send, and the ack carries no turn id; only a turn whose id
+// was minted and bound before the request was written can correlate that
+// notification, so the zcode driver implements this interface even though its
+// send is a quick request.
 type ChatDeferredTurnStarter interface {
 	StartDeferredTurn(providerTurnID string) error
 	// DiscardDeferredTurn releases a prepared turn when AO could not persist its
