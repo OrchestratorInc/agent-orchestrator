@@ -45,10 +45,27 @@ for (const mixed of [false, true]) {
 			await expect.poll(() => scroller.evaluate((node) => node.scrollHeight <= node.clientHeight)).toBe(true);
 			await review.getByRole("button", { name: "Expand all files", exact: true }).click();
 			await expect(images).toHaveCount(3);
+			await expect.poll(() => images.evaluateAll((nodes) => nodes.every((node) => (node as HTMLImageElement).naturalWidth > 0))).toBe(true);
+			await expect.poll(() => scroller.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
 			if (mixed) await expect(review.getByRole("button", { name: "Collapse example.ts", exact: true })).toHaveAttribute("aria-expanded", "true");
 			await scroller.hover();
 			await page.mouse.wheel(0, 3000);
 			await expect(lastImage).toBeInViewport({ ratio: 0.9 });
+
+			const firstHeader = review.getByRole("button", { name: "Collapse first.png", exact: true }).locator("..");
+			await expect(firstHeader).toHaveJSProperty("clientHeight", 36);
+			for (const file of ["first.png", "second.png", "last.png", ...(mixed ? ["example.ts"] : [])]) {
+				await review.getByRole("checkbox", { name: `Mark ${file} as viewed`, exact: true }).check();
+				await expect(review.getByRole("button", { name: `Expand ${file}`, exact: true })).toHaveAttribute("aria-expanded", "false");
+			}
+			const total = mixed ? 4 : 3;
+			await expect(review.getByText(`${total} of ${total} viewed`, { exact: true })).toBeVisible();
+			await expect(images).toHaveCount(0);
+			await page.reload();
+			await expect(review.getByText(`${total} of ${total} viewed`, { exact: true })).toBeVisible();
+			await review.getByRole("checkbox", { name: "Mark first.png as not viewed", exact: true }).uncheck();
+			await expect(review.getByText(`${total - 1} of ${total} viewed`, { exact: true })).toBeVisible();
+			await expect(review.getByRole("button", { name: "Expand first.png", exact: true })).toHaveAttribute("aria-expanded", "false");
 		});
 	}
 }

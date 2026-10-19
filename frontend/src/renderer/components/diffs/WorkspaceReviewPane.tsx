@@ -573,23 +573,35 @@ export function WorkspaceReviewPane({
 				const pending = pendingDiffPaths.has(file.path);
 				const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
 				const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
+				const isViewed = viewed.has(file.path);
 				return (
-					<div className="m-2 overflow-hidden rounded-md border border-border bg-surface" key={file.path}>
-						<div className="flex min-w-0 items-center gap-2 p-3">
+					<div className="bg-background" key={file.path}>
+						<div className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
 							<button
 								aria-expanded={!collapsed}
 								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
-								className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs focus-visible:underline"
+								className="flex h-full min-w-0 flex-1 items-center gap-2 text-left text-[length:var(--font-size-base)] focus-visible:underline"
 								onClick={() => toggleCollapsed(file)}
 								type="button"
 							>
 								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
+								<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 								<span className="truncate" title={file.path}>{file.path}</span>
 							</button>
 							{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
+							<HeaderActionTooltip label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}>
+								<span className="grid size-6 shrink-0 place-items-center">
+									<Checkbox
+										aria-label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}
+										checked={isViewed}
+										className="size-4 border border-muted-foreground/70 bg-transparent data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-on-foreground"
+										onCheckedChange={(checked) => markViewed(file, checked === true)}
+									/>
+								</span>
+							</HeaderActionTooltip>
 						</div>
 						{!collapsed ? (
-							<div className="min-w-0 p-3 pt-0">
+							<div className={cn("min-w-0", !image && "p-3")}>
 								{image ? (
 									<ImageDiffView path={file.path} sessionId={sessionId} hostId={hostId} split={split} status={file.status} version={workspaceVersion ?? ""} />
 								) : (

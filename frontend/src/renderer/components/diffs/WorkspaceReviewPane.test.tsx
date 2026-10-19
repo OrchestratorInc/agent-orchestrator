@@ -235,6 +235,30 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.queryByText("Binary file preview is not available.")).not.toBeInTheDocument();
 	});
 
+	it.each([false, true])("marks image and binary files viewed with saved progress (mixed: %s)", async (mixed) => {
+		const files: WorkspaceFilesResponse["files"] = ["sample.png", "archive.bin"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true, fileFingerprint: `v1:${path}` }));
+		if (mixed) files.unshift({ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false, fileFingerprint: "text-v1" });
+		const data = workspace(files);
+		const pane = () => <WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />;
+		const first = renderWithQuery(pane());
+		if (mixed) await screen.findByTestId("review-patch");
+		for (const file of files) {
+			await userEvent.click(await screen.findByRole("checkbox", { name: `Mark ${file.path} as viewed` }));
+			expect(screen.getByRole("button", { name: `Expand ${file.path}` })).toHaveAttribute("aria-expanded", "false");
+		}
+		expect(screen.getByText(`${files.length} of ${files.length} viewed`)).toBeInTheDocument();
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+		first.unmount();
+		renderWithQuery(pane());
+		expect(screen.getByText(`${files.length} of ${files.length} viewed`)).toBeInTheDocument();
+		for (const file of files) expect(await screen.findByRole("checkbox", { name: `Mark ${file.path} as not viewed` })).toBeChecked();
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark sample.png as not viewed" }));
+		expect(screen.getByText(`${files.length - 1} of ${files.length} viewed`)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Expand sample.png" })).toHaveAttribute("aria-expanded", "false");
+		await userEvent.click(screen.getByRole("button", { name: "Expand sample.png" }));
+		expect(screen.getByRole("img", { name: "After version of sample.png" })).toBeInTheDocument();
+	});
+
 	it.each([false, true])("collapses image bodies individually and together with text files (mixed: %s)", async (mixed) => {
 		const images: WorkspaceFilesResponse["files"] = ["one.png", "two.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true }));
 		const data = workspace(mixed ? [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }, ...images] : images);
@@ -500,13 +524,14 @@ describe("WorkspaceReviewPane", () => {
 		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
+		await screen.findByTestId("review-patch");
 		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
-		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "true"));
 		first.unmount();
 
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "true"));
 	});
 
 	it("collapses and expands file items through controlled CodeView state", async () => {
