@@ -86,6 +86,14 @@ type Config struct {
 	SessionMode func(ports.PermissionMode) string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// FixedAgentMode identifies a provider whose mode selector changes agents.
+	// Keep the launch-selected agent: switching away discards AO's standing
+	// instructions. Models, effort, and AO's permission policy remain separate.
+	FixedAgentMode bool
+	// EmptyTurnNotice is an optional provider-specific explanation for a normal
+	// turn that completes without visible output. It does not infer a failure or
+	// demand reauthentication from an ambiguous empty response.
+	EmptyTurnNotice string
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -622,6 +630,8 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.fixedAgentMode = d.cfg.FixedAgentMode
+	conv.emptyTurnNotice = d.cfg.EmptyTurnNotice
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice

@@ -23,7 +23,17 @@ func (c *conversation) ListConfigOptions(ctx context.Context) ([]ports.ChatConfi
 	if c.closed {
 		return nil, errConversationClosed
 	}
-	return cloneConfigOptions(c.configOptions), nil
+	options := cloneConfigOptions(c.configOptions)
+	if c.fixedAgentMode {
+		for i := range options {
+			if options[i].ID == "mode" {
+				// The composer already hides provider agent selectors. In
+				// particular, this must not replace AO's Approvals control.
+				options[i].Category = "agent"
+			}
+		}
+	}
+	return options, nil
 }
 
 // SetConfigOption applies exactly the type the provider advertised and replaces
@@ -43,6 +53,7 @@ func (c *conversation) SetConfigOption(
 	closed := c.closed
 	legacyModel := c.legacyModel
 	legacyMode := c.legacyMode
+	fixedAgentMode := c.fixedAgentMode
 	var option *ports.ChatConfigOption
 	for i := range c.configOptions {
 		if c.configOptions[i].ID == id {
@@ -61,6 +72,12 @@ func (c *conversation) SetConfigOption(
 	}
 	if option == nil {
 		return nil, fmt.Errorf("%w: unknown ACP session config option %q", ports.ErrChatConfigOptionInvalid, id)
+	}
+	if id == "mode" && fixedAgentMode {
+		if value.Boolean == nil && value.Select == option.Current.Select {
+			return c.ListConfigOptions(ctx)
+		}
+		return nil, fmt.Errorf("%w: changing the provider agent would discard AO's standing instructions; keep the launch-selected agent", ports.ErrChatConfigOptionInvalid)
 	}
 	if id == "model" && legacyModel {
 		if value.Boolean != nil || !choiceOffered(option.Choices, value.Select) {
