@@ -44,6 +44,15 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) *Driver {
 	}, log)}
 }
 
+// Start rejects safety guarantees Hermes ACP cannot enforce. A provider's
+// approval vocabulary is not a filesystem/network sandbox or ephemeral storage.
+func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if cfg.ReadOnly || cfg.DisableNetwork || cfg.Ephemeral {
+		return nil, fmt.Errorf("%w: Hermes candidate cannot enforce read-only, network-isolated or ephemeral sessions", ports.ErrChatDriverIncompatible)
+	}
+	return d.ChatDriver.Start(ctx, cfg)
+}
+
 func profilePath(data string, session domain.SessionID) (string, error) {
 	if !filepath.IsAbs(data) || session == "" {
 		return "", fmt.Errorf("hermes ACP: absolute AO data directory and session required")
@@ -94,6 +103,9 @@ func validateTurnSettings(_ ports.PermissionMode, s ports.ChatTurnSettings) erro
 // before shared transport launch; this is a guard, not replay completeness
 // proof. The candidate remains gated until native replay failures are qualified.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if cfg.ReadOnly {
+		return nil, fmt.Errorf("%w: Hermes cannot enforce read-only restore", ports.ErrChatResumeFailed)
+	}
 	home, err := profilePath(cfg.DataDir, cfg.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
@@ -108,6 +120,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 // Reconnect only adopts the surviving persistent host. It must not mutate
 // plugins or require settled disk history while an accepted turn is active.
 func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if cfg.ReadOnly {
+		return nil, fmt.Errorf("%w: Hermes cannot enforce read-only reconnect", ports.ErrChatRecoveryInconclusive)
+	}
 	reconnector, ok := d.ChatDriver.(ports.ChatDriverReconnector)
 	if !ok {
 		return nil, ports.ErrChatRecoveryInconclusive

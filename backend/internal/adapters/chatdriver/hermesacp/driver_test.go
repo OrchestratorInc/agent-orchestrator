@@ -3,8 +3,10 @@ package hermesacp
 import (
 	"context"
 	"errors"
+	acpsdk "github.com/coder/acp-go-sdk"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -102,5 +104,31 @@ func TestResumeMissingHistoryNeverDelegatesEvenWithFreshFallback(t *testing.T) {
 	_, err := d.Resume(context.Background(), ports.ChatResumeConfig{DataDir: data, SessionID: "session", WorkspacePath: t.TempDir(), ProviderConversationID: "missing", FreshIfMissing: true})
 	if !errors.Is(err, ports.ErrChatResumeFailed) || delegate.resumes != 0 {
 		t.Fatalf("missing history reached provider: %v", err)
+	}
+}
+
+func TestSafetyRequestsFailBeforeAnyProviderLaunch(t *testing.T) {
+	d := New(fixturePlugin{}, nil)
+	for _, cfg := range []ports.ChatStartConfig{{ReadOnly: true}, {DisableNetwork: true}, {Ephemeral: true}} {
+		if _, err := d.Start(context.Background(), cfg); !errors.Is(err, ports.ErrChatDriverIncompatible) {
+			t.Fatalf("unsupported guarantee accepted: %v", err)
+		}
+	}
+	if _, err := d.Resume(context.Background(), ports.ChatResumeConfig{ReadOnly: true}); !errors.Is(err, ports.ErrChatResumeFailed) || !strings.Contains(err.Error(), "read-only restore") {
+		t.Fatal(err)
+	}
+	if _, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{ReadOnly: true}); !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatal(err)
+	}
+}
+func TestInitializationRejectsOtherNativeContracts(t *testing.T) {
+	valid := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "hermes-agent", Version: "0.21.6"}, AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true}}
+	if err := validateInitialize(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []acpsdk.InitializeResponse{{}, {AgentInfo: &acpsdk.Implementation{Name: "hermes-agent", Version: "0.22.2"}, AgentCapabilities: valid.AgentCapabilities}, {AgentInfo: valid.AgentInfo}} {
+		if !errors.Is(validateInitialize(bad), ports.ErrChatDriverIncompatible) {
+			t.Fatal("unqualified contract admitted")
+		}
 	}
 }
