@@ -71,11 +71,12 @@ func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, std
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Dir = command.Dir
-	inherited := os.Environ()
+	env := os.Environ()
 	if command.Isolated {
-		inherited = installerSafeEnv(inherited)
+		env = installerSafeEnv(env)
 	}
-	cmd.Env = append(inherited, command.Env...)
+	env = append(env, command.Env...)
+	cmd.Env = env
 	if err := cmd.Run(); err != nil {
 		return err
 	}
