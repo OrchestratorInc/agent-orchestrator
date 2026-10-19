@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -413,5 +414,140 @@ func TestConstructorRejectsHistoryFromDifferentPreparedProfile(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(home, "protocol-calls")); !os.IsNotExist(err) {
 			t.Fatalf("native process started before actual profile admission: %v", err)
 		}
+	}
+}
+
+// Controlled transport coverage proves AO creates a new launch plugin on exact
+// cold restore and keeps context off the visible ACP prompt. It does not prove
+// stock Cortex consumes the hook or preserves native defaults at model time.
+func TestInstructionConstructorSeparatesContextAcrossColdRestoreAndLiveReconnect(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX instruction hooks are explicitly gated")
+	}
+	_, cfg := protocolDriver(t)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := NewInstructionCandidate(fixturePlugin{binary: binary}, nil)
+	cfg.SystemPrompt = "fresh private context"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conv, err := driver.Start(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeFixture(t, conv) })
+	send := func() {
+		ref, err := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "ordinary task", AuthoredByUser: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			t.Fatal(err)
+		}
+		request := eventUntil(t, conv.Events(), ports.ChatEventApprovalRequested)
+		if err := conv.ResolveRequest(ctx, request.RequestID, ports.ChatDecision{ID: "allow"}); err != nil {
+			t.Fatal(err)
+		}
+		done := eventUntil(t, conv.Events(), ports.ChatEventTurnCompleted)
+		if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(ctx, done.ProviderEventID); err != nil {
+			t.Fatal(err)
+		}
+		waitFixtureReady(t, conv.Events())
+	}
+	contexts := func() []string {
+		entries, err := filepath.Glob(filepath.Join(cfg.DataDir, ".cortex-acp-instructions-*", "context.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values []string
+		for _, name := range entries {
+			data, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				Output struct {
+					Context string `json:"additionalContext"`
+				} `json:"hookSpecificOutput"`
+			}
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			values = append(values, payload.Output.Context)
+		}
+		return values
+	}
+	send()
+	if got := contexts(); len(got) != 1 || got[0] != "fresh private context" {
+		t.Fatalf("fresh context: %v", got)
+	}
+	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: conv.ProviderConversationID(), DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true, SystemPrompt: cfg.SystemPrompt}
+	if err := conv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	conv, err = driver.(ports.ChatDriverReconnector).Reconnect(ctx, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !conv.(ports.ChatLiveReconnector).ReconnectedLive() {
+		t.Fatal("did not adopt surviving host")
+	}
+	if got := contexts(); len(got) != 1 {
+		t.Fatalf("live adoption rewrote context: %v", got)
+	}
+	if err := conv.(ports.ChatProviderTerminator).Terminate(); err != nil {
+		t.Fatal(err)
+	}
+	resume.SystemPrompt = "NEW post-Kill private context"
+	conv, err = driver.Resume(ctx, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.ProviderConversationID() != resume.ProviderConversationID {
+		t.Fatal("cold restore changed native ID")
+	}
+	got := contexts()
+	if len(got) != 2 || !(got[0] == "fresh private context" && got[1] == resume.SystemPrompt || got[1] == "fresh private context" && got[0] == resume.SystemPrompt) {
+		t.Fatalf("cold restore context: %v", got)
+	}
+	send()
+	calls, err := os.ReadFile(filepath.Join(cfg.Env["HOME"], "protocol-calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompts, loads, news int
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		var request struct {
+			Method string `json:"method"`
+			Params struct {
+				Prompt []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"prompt"`
+				SessionID string `json:"sessionId"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(line), &request); err != nil {
+			t.Fatal(err)
+		}
+		switch request.Method {
+		case "session/prompt":
+			prompts++
+			if len(request.Params.Prompt) != 1 || request.Params.Prompt[0].Type != "text" || request.Params.Prompt[0].Text != "ordinary task" {
+				t.Fatalf("private context changed visible task: %s", line)
+			}
+		case "session/load":
+			loads++
+			if request.Params.SessionID != "fixture-native-id" {
+				t.Fatalf("wrong native load: %s", line)
+			}
+		case "session/new":
+			news++
+		}
+	}
+	if prompts != 2 || loads != 1 || news != 1 {
+		t.Fatalf("prompt/load/new = %d/%d/%d", prompts, loads, news)
 	}
 }

@@ -24,8 +24,9 @@ import (
 const harness domain.AgentHarness = "cortex-code"
 
 type candidate struct {
-	driver    ports.ChatDriver
-	reconnect ports.ChatDriverReconnector
+	driver       ports.ChatDriver
+	reconnect    ports.ChatDriverReconnector
+	instructions bool
 }
 
 var _ ports.ChatDriver = (*candidate)(nil)
@@ -39,9 +40,25 @@ var _ ports.ChatDriverReconnector = (*candidate)(nil)
 // exercise Start/Resume using empty standing instructions; real AO instructions
 // fail closed until a supported additive ACP route has been qualified.
 func NewCandidate(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
+	return newCandidate(plugin, log, false)
+}
+
+// NewInstructionCandidate explicitly enables the experimental additive plugin
+// route for qualification in isolated state. It is not production admission:
+// Probe and registry remain closed until real fresh/restore consumption, native
+// default/project-rule preservation and the remaining lifecycle gates pass.
+// An adopted live host retains its original launch context; changed instructions
+// take effect on a cold exact restore after confirmed termination.
+func NewInstructionCandidate(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
+	return newCandidate(plugin, log, true)
+}
+
+func newCandidate(plugin nativeacp.Plugin, log *slog.Logger, instructions bool) ports.ChatDriver {
 	driver := nativeacp.New(plugin, nativeacp.Config{
-		Harness:        harness,
-		Configure:      configure,
+		Harness: harness,
+		Configure: func(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+			return configureInstructions(ctx, cfg, instructions)
+		},
 		SessionOptions: sessionOptions,
 		LaunchSessionOptions: func(cfg acpdriver.LaunchConfig) []acpdriver.SessionOption {
 			return sessionOptions(ports.ChatTurnSettings{Model: cfg.Model, Approval: cfg.Permissions})
@@ -60,7 +77,7 @@ func NewCandidate(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 			return "", false
 		},
 	}, log)
-	return &candidate{driver: driver, reconnect: driver.(ports.ChatDriverReconnector)}
+	return &candidate{driver: driver, reconnect: driver.(ports.ChatDriverReconnector), instructions: instructions}
 }
 
 func (d *candidate) Harness() domain.AgentHarness { return harness }
@@ -76,14 +93,14 @@ func (d *candidate) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports
 	if err := validateSettings(cfg.Permissions, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		return nil, err
 	}
-	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, cfg.SystemPrompt, cfg.Env); err != nil {
+	if err := d.validateLaunch(cfg.DataDir, cfg.WorkspacePath, cfg.SystemPrompt, cfg.Env); err != nil {
 		return nil, err
 	}
 	return guardConversation(d.driver.Start(ctx, cfg))
 }
 
 func (d *candidate) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
-	if err := validateResume(cfg); err != nil {
+	if err := d.validateResume(cfg); err != nil {
 		return nil, err
 	}
 	if err := validateNativeHistory(ctx, cfg); err != nil {
@@ -101,7 +118,7 @@ func (d *candidate) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (por
 			}
 			prepared := original
 			prepared.Env = env
-			if err := validateLaunch(prepared.DataDir, prepared.WorkspacePath, prepared.SystemPrompt, env); err != nil {
+			if err := d.validateLaunch(prepared.DataDir, prepared.WorkspacePath, prepared.SystemPrompt, env); err != nil {
 				return nil, err
 			}
 			if err := validateNativeHistory(prepareCtx, prepared); err != nil {
@@ -114,14 +131,14 @@ func (d *candidate) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (por
 }
 
 func (d *candidate) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
-	if err := validateResume(cfg); err != nil {
+	if err := d.validateResume(cfg); err != nil {
 		return nil, err
 	}
 	cfg.ReconnectOnly = true
 	return guardConversation(d.reconnect.Reconnect(ctx, cfg))
 }
 
-func validateResume(cfg ports.ChatResumeConfig) error {
+func (d *candidate) validateResume(cfg ports.ChatResumeConfig) error {
 	if strings.TrimSpace(cfg.ProviderConversationID) == "" || cfg.FreshIfMissing {
 		return fmt.Errorf("%w: Cortex requires exact native history without fresh fallback", ports.ErrChatResumeFailed)
 	}
@@ -131,7 +148,14 @@ func validateResume(cfg ports.ChatResumeConfig) error {
 	if err := validateSettings(cfg.Permissions, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		return err
 	}
-	return validateLaunch(cfg.DataDir, cfg.WorkspacePath, cfg.SystemPrompt, cfg.Env)
+	return d.validateLaunch(cfg.DataDir, cfg.WorkspacePath, cfg.SystemPrompt, cfg.Env)
+}
+
+func (d *candidate) validateLaunch(dataDir, workspace, prompt string, env map[string]string) error {
+	if err := validateInstructions(prompt, d.instructions); err != nil {
+		return err
+	}
+	return validateLaunch(dataDir, workspace, "", env)
 }
 
 func validateLaunch(dataDir, workspace, prompt string, env map[string]string) error {
@@ -160,13 +184,30 @@ func validateLaunch(dataDir, workspace, prompt string, env map[string]string) er
 	return nil
 }
 
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
-	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, cfg.SystemPrompt, cfg.Env); err != nil {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	return configureInstructions(ctx, cfg, false)
+}
+
+func configureInstructions(ctx context.Context, cfg acpdriver.LaunchConfig, instructions bool) ([]string, map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := validateInstructions(cfg.SystemPrompt, instructions); err != nil {
+		return nil, nil, err
+	}
+	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, "", cfg.Env); err != nil {
 		return nil, nil, err
 	}
 	args := []string{"acp", "serve", "--workdir", cfg.WorkspacePath}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
+	}
+	if cfg.SystemPrompt != "" {
+		pluginDir, err := instructionPlugin(ctx, cfg.DataDir, cfg.SystemPrompt)
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, "--plugin-dir", pluginDir)
 	}
 	// Do not set --bypass, replace the native prompt, or alter user/project
 	// plugins and safety defaults. Standard mode is required through the
