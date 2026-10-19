@@ -156,6 +156,7 @@ import {
 	type BrowserViewHost,
 	type BrowserRuntimeState,
 } from "./main/browser-view-host";
+import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
@@ -978,6 +979,7 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		onTabCloseFailure: createBrowserCloseDiagnostics(browserProfileStateDir(), app.getVersion()),
 		// Agent tabs: only a connected host's or a cloud session's own
 		// agent-browser viewer may report the remote page a Browser tab shows.
 		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
