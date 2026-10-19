@@ -113,10 +113,12 @@ func TestCandidateRejectsSourceOrSymlinkedHome(t *testing.T) {
 
 func TestNativeLaunchAndAdvertisedSettings(t *testing.T) {
 	cfg := isolatedConfig(t)
+	cfg.Env["USERPROFILE"] = t.TempDir()
+	cfg.Env["XDG_CONFIG_HOME"] = t.TempDir()
 	launch := acpdriver.LaunchConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: "provider-owned-model"}
 	args, env, err := configure(context.Background(), launch)
 	want := []string{"acp", "serve", "--workdir", cfg.WorkspacePath, "--model", "provider-owned-model"}
-	if err != nil || !reflect.DeepEqual(args, want) || !reflect.DeepEqual(env, map[string]string{"HOME": cfg.Env["HOME"]}) {
+	if err != nil || !reflect.DeepEqual(args, want) || !reflect.DeepEqual(env, map[string]string{"HOME": cfg.Env["HOME"], "USERPROFILE": cfg.Env["HOME"], "XDG_CONFIG_HOME": filepath.Join(cfg.Env["HOME"], ".config")}) {
 		t.Fatalf("configure = %v, %v, %v", args, env, err)
 	}
 	options := sessionOptions(ports.ChatTurnSettings{Model: launch.Model})

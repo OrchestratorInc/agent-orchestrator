@@ -147,7 +147,14 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	// Do not set --bypass, replace the native prompt, or alter user/project
 	// plugins and safety defaults. Standard mode is required through the
 	// advertised config option before the first turn, including after load.
-	return args, map[string]string{"HOME": cfg.Env["HOME"]}, nil
+	// Override all standard home/config selectors after plugin augmentation so
+	// an inherited XDG or Windows profile cannot redirect this isolated launch.
+	home := cfg.Env["HOME"]
+	return args, map[string]string{
+		"HOME":            home,
+		"USERPROFILE":     home,
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+	}, nil
 }
 
 func validateSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
