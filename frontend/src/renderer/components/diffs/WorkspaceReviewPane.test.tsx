@@ -35,7 +35,7 @@ vi.mock("../../lib/host-clients", async (importOriginal) => ({
 vi.mock("@pierre/diffs", () => ({
 	hydratePartialDiff: (_mode: string, fileDiff: object) => ({ ...fileDiff, isPartial: false }),
 	parsePatchFiles: (patch: string) => patch ? [{ files: [{
-		name: patch.includes("README.md") ? "README.md" : "src/App.tsx",
+		name: patch.includes("package-lock.json") ? "package-lock.json" : patch.includes("README.md") ? "README.md" : "src/App.tsx",
 		type: "change",
 		isPartial: true,
 		deletionLines: [],
@@ -238,7 +238,7 @@ describe("WorkspaceReviewPane", () => {
 	it.each([false, true])("collapses image bodies individually and together with text files (mixed: %s)", async (mixed) => {
 		const images: WorkspaceFilesResponse["files"] = ["one.png", "two.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true }));
 		const data = workspace(mixed ? [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }, ...images] : images);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		const firstImage = await screen.findByAltText("After version of one.png");
 		// Image-only reviews must mount CodeView too, so its footer owns scrolling.
@@ -740,16 +740,27 @@ describe("WorkspaceReviewPane", () => {
 		expect(onOpenFile).toHaveBeenCalledWith("beta/workspace-test.txt", expect.objectContaining({ mode: "file", scope: "combined" }));
 	});
 
-	it("defers lockfile patches until the user explicitly loads them", async () => {
-		const data = committedWorkspace([{ path: "package-lock.json", status: "modified", additions: 800, deletions: 700, size: 600_000, binary: false, fileFingerprint: "lock-1" }]);
+	it.each([
+		{ path: "package-lock.json", size: 20 },
+		{ path: "src/App.tsx", size: 600_000 },
+	])("loads deferred $path on individual expansion and reuses it on re-expansion", async ({ path, size }) => {
+		const data = committedWorkspace([{ path, status: "modified", additions: 800, deletions: 700, size, binary: false, fileFingerprint: "deferred-1" }]);
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: `diff --git a/${path} b/${path}\n`, truncated: false, includedPaths: [path], deferred: [] }] } });
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Expand package-lock.json" }));
-		expect(screen.getByText(/diff is deferred/i)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: `Expand ${path}` })).toHaveAttribute("aria-expanded", "false");
 		expect(postMock).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Load diff" }));
-		await waitFor(() => expect(postMock).toHaveBeenCalled());
-		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["package-lock.json"]);
+		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual([path]);
+		expect(await screen.findByRole("checkbox", { name: `Mark ${path} as viewed` })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Load diff" })).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: `Collapse ${path}` }));
+		expect(screen.getByRole("button", { name: `Expand ${path}` })).toHaveAttribute("aria-expanded", "false");
+		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
+		expect(screen.getByRole("button", { name: `Collapse ${path}` })).toHaveAttribute("aria-expanded", "true");
+		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("requests the target scope and view", async () => {

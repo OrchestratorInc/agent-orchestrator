@@ -459,14 +459,20 @@ export function WorkspaceReviewPane({
 			surface: "review",
 		});
 	}, [annotation, workspaceVersion, scope, summaryById]);
-	const toggleCollapsed = useCallback((path: string) => {
+	const toggleCollapsed = useCallback((file: WorkspaceFileSummary) => {
+		const path = file.path;
+		// An explicit expansion opts deferred files into loading, just like
+		// Expand all. Keep that choice when the file is collapsed again.
+		if (collapsedPaths.has(path) && isDeferredByDefault(file)) {
+			setLoadedDeferredPaths((current) => current.has(path) ? current : new Set(current).add(path));
+		}
 		setCollapsedPaths((current) => {
 			const next = new Set(current);
 			if (next.has(path)) next.delete(path);
 			else next.add(path);
 			return next;
 		});
-	}, []);
+	}, [collapsedPaths]);
 	const collapsePath = useCallback((path: string) => {
 		setCollapsedPaths((current) => {
 			if (current.has(path)) return current;
@@ -574,7 +580,7 @@ export function WorkspaceReviewPane({
 								aria-expanded={!collapsed}
 								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
 								className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs focus-visible:underline"
-								onClick={() => toggleCollapsed(file.path)}
+								onClick={() => toggleCollapsed(file)}
 								type="button"
 							>
 								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
@@ -701,7 +707,7 @@ export function WorkspaceReviewPane({
 										    name + stats on the left, every action grouped on the right
 										    with "viewed" pinned to the far edge. */}
 										<PopoverAnchor asChild>
-											<div className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file.path)}>
+											<div className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
 												<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/file-header:text-foreground", !isCollapsed && "rotate-90")} />
 												<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 												<div className="flex min-w-0 shrink items-baseline gap-3">
