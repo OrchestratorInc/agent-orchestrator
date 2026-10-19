@@ -134,6 +134,7 @@ type conversation struct {
 	ignorePromptResult bool
 	// onAuthRejected corrects cached auth state when the provider rejects the
 	// credential mid-turn. Nil when the binding does not supply one.
+	validateConfigOption  func(string, ports.ChatConfigOptionValue) error
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)

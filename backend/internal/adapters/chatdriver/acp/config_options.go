@@ -62,6 +62,11 @@ func (c *conversation) SetConfigOption(
 	if option == nil {
 		return nil, fmt.Errorf("%w: unknown ACP session config option %q", ports.ErrChatConfigOptionInvalid, id)
 	}
+	if c.validateConfigOption != nil {
+		if err := c.validateConfigOption(id, value); err != nil {
+			return nil, err
+		}
+	}
 	if id == "model" && legacyModel {
 		if value.Boolean != nil || !choiceOffered(option.Choices, value.Select) {
 			return nil, fmt.Errorf("%w: ACP session config option %q does not offer value %q", ports.ErrChatConfigOptionInvalid, id, value.Select)

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 var nativeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_:-]{0,255}$`)
@@ -120,4 +122,10 @@ func validateTranscript(ctx context.Context, path, cwd, id string) error {
 		return fmt.Errorf("codebuddy: native history has no completed conversation")
 	}
 	return nil
+}
+
+// ValidateChatHistory shares the native-owned transcript/workspace guard with
+// TUI restore. It never creates history or substitutes another conversation.
+func (*Plugin) ValidateChatHistory(ctx context.Context, cfg ports.ChatResumeConfig) error {
+	return validateHistory(ctx, cfg.WorkspacePath, cfg.ProviderConversationID, cfg.Env)
 }

@@ -112,6 +112,9 @@ type Config struct {
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
+	// ValidateConfigOption applies provider restrictions to direct picker changes,
+	// including legacy model/mode setters, before any native request is sent.
+	ValidateConfigOption func(string, ports.ChatConfigOptionValue) error
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
@@ -621,6 +624,7 @@ func (d *Driver) initialize(
 		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.cfg.ClientExtensionAliases,
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
+	conv.validateConfigOption = d.cfg.ValidateConfigOption
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
@@ -789,11 +793,9 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
 	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
 		supportsSessionRestore(init)
-	if extensionSupported(init.Meta, "steering") {
-		caps[ports.ChatCapabilitySteer] = true
-	}
-	caps[ports.ChatCapabilityImages] = init.AgentCapabilities.PromptCapabilities.Image
-	caps[ports.ChatCapabilityEmbeddedContext] = init.AgentCapabilities.PromptCapabilities.EmbeddedContext
+	caps[ports.ChatCapabilitySteer] = negotiatedPromptCapability(configured, ports.ChatCapabilitySteer, extensionSupported(init.Meta, "steering"))
+	caps[ports.ChatCapabilityImages] = negotiatedPromptCapability(configured, ports.ChatCapabilityImages, init.AgentCapabilities.PromptCapabilities.Image)
+	caps[ports.ChatCapabilityEmbeddedContext] = negotiatedPromptCapability(configured, ports.ChatCapabilityEmbeddedContext, init.AgentCapabilities.PromptCapabilities.EmbeddedContext)
 	// ResourceLink is a baseline ACP content block rather than an optional prompt
 	// capability. Every ACP conversation preserves it natively.
 	caps[ports.ChatCapabilityResourceLinks] = true
@@ -803,6 +805,11 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityNestedAgents] = true
 	caps[ports.ChatCapabilityTerminalOutput] = true
 	return caps
+}
+
+func negotiatedPromptCapability(configured ports.ChatCapabilities, capability ports.ChatCapability, advertised bool) bool {
+	enabled, explicit := configured[capability]
+	return advertised && (!explicit || enabled)
 }
 
 func supportsSessionRestore(init acpsdk.InitializeResponse) bool {
