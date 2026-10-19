@@ -88,6 +88,10 @@ func protocolFixture() {
 		case "session/new":
 			result = map[string]any{"sessionId": "native-id", "modes": map[string]any{"currentModeId": "default", "availableModes": []map[string]string{{"id": "default", "name": "Default"}}}}
 		case "session/load":
+			for _, role := range []string{"user_message_chunk", "agent_message_chunk"} {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "native-id", "update": map[string]any{"sessionUpdate": role, "content": map[string]string{"type": "text", "text": "native history"}}}})
+			}
+
 			result = map[string]any{"configOptions": []map[string]any{{"id": "mode", "name": "Approval", "type": "select", "currentValue": "default", "options": []map[string]string{{"value": "default", "name": "Default"}, {"value": "dont_ask", "name": "Do not ask"}}}}}
 			var p struct {
 				ID string `json:"sessionId"`
@@ -227,23 +231,7 @@ func TestConstructorStartSendDetachReconnectAndExactResume(t *testing.T) {
 	}
 	// Native history is seeded only for this controlled server. Production never
 	// writes or synthesizes native transcript identity/history.
-	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	meta, _ := json.Marshal(map[string]string{"cwd": workspace})
-	for _, q := range []string{`CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,cwd TEXT,model_config TEXT,parent_session_id TEXT)`, `CREATE TABLE messages(session_id TEXT,active INTEGER)`} {
-		if _, err := db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.Exec(`INSERT INTO sessions VALUES('native-id','acp',?,?,NULL)`, workspace, string(meta)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO messages VALUES('native-id',1)`); err != nil {
-		t.Fatal(err)
-	}
-	_ = db.Close()
+	seedNativeHistory(t, home, workspace)
 	if err := os.WriteFile(filepath.Join(home, "fixture-calls"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -269,4 +257,25 @@ func TestConstructorStartSendDetachReconnectAndExactResume(t *testing.T) {
 	if _, err := restored.(ports.ChatConfigOptionController).SetConfigOption(ctx, "mode", ports.ChatConfigOptionValue{Select: "dont_ask"}); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
 		t.Fatalf("direct policy bypass: %v", err)
 	}
+}
+
+func seedNativeHistory(t *testing.T, home, workspace string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := json.Marshal(map[string]string{"cwd": workspace})
+	for _, q := range []string{`CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,cwd TEXT,model_config TEXT,parent_session_id TEXT)`, `CREATE TABLE messages(session_id TEXT,active INTEGER)`} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO sessions VALUES('native-id','acp',?,?,NULL)`, workspace, string(meta)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO messages VALUES('native-id',1)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
 }

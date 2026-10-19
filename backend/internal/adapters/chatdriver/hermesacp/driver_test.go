@@ -90,12 +90,15 @@ func TestUnsupportedSettingsFailBeforeProvider(t *testing.T) {
 
 type recordingDriver struct {
 	ports.ChatDriver
-	resumes int
+	resumes      int
+	conversation ports.ChatConversation
+	fresh        bool
 }
 
-func (d *recordingDriver) Resume(context.Context, ports.ChatResumeConfig) (ports.ChatConversation, error) {
+func (d *recordingDriver) Resume(_ context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	d.resumes++
-	return nil, nil
+	d.fresh = cfg.FreshIfMissing
+	return d.conversation, nil
 }
 func TestResumeMissingHistoryNeverDelegatesEvenWithFreshFallback(t *testing.T) {
 	data := t.TempDir()
@@ -131,5 +134,53 @@ func TestInitializationRejectsOtherNativeContracts(t *testing.T) {
 		if !errors.Is(validateInitialize(bad), ports.ErrChatDriverIncompatible) {
 			t.Fatal("unqualified contract admitted")
 		}
+	}
+}
+
+type replayConversation struct {
+	ports.ChatConversation
+	id                 string
+	history            []ports.ChatEvent
+	readErr            error
+	closed, terminated bool
+}
+
+func (c *replayConversation) ProviderConversationID() string { return c.id }
+func (c *replayConversation) ReadHistory(context.Context) ([]ports.ChatEvent, error) {
+	return c.history, c.readErr
+}
+func (c *replayConversation) Close() error     { c.closed = true; return nil }
+func (c *replayConversation) Terminate() error { c.terminated = true; return nil }
+func TestResumeRejectsNativeSuccessfulButEmptyOrUnreadableReplay(t *testing.T) {
+	for _, kind := range []string{"empty", "metadata only", "unreadable", "wrong identity", "valid"} {
+		t.Run(kind, func(t *testing.T) {
+			data, workspace := t.TempDir(), t.TempDir()
+			home := provision(t, data, "session")
+			seedNativeHistory(t, home, workspace)
+			c := &replayConversation{id: "native-id", history: []ports.ChatEvent{{Kind: ports.ChatEventUserMessageCompleted, Text: "native history"}}}
+			switch kind {
+			case "empty":
+				c.history = nil
+			case "metadata only":
+				c.history = []ports.ChatEvent{{Kind: ports.ChatEventUsage}}
+			case "unreadable":
+				c.readErr = ports.ErrChatHistoryUnavailable
+			case "wrong identity":
+				c.id = "other"
+			}
+			delegate := &recordingDriver{conversation: c}
+			d := &Driver{ChatDriver: delegate}
+			got, err := d.Resume(context.Background(), ports.ChatResumeConfig{DataDir: data, SessionID: "session", WorkspacePath: workspace, ProviderConversationID: "native-id", FreshIfMissing: true})
+			if delegate.resumes != 1 || delegate.fresh {
+				t.Fatal("restore not exact")
+			}
+			if kind == "valid" {
+				if err != nil || got != c || c.closed || c.terminated {
+					t.Fatalf("valid replay refused: %v", err)
+				}
+			} else if !errors.Is(err, ports.ErrChatResumeFailed) || !c.closed || !c.terminated {
+				t.Fatalf("invalid native replay admitted or replacement leaked: %v", err)
+			}
+		})
 	}
 }

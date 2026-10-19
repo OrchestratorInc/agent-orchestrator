@@ -115,7 +115,37 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return nil, err
 	}
 	cfg.FreshIfMissing = false
-	return d.ChatDriver.Resume(ctx, cfg)
+	conv, err := d.ChatDriver.Resume(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if live, ok := conv.(ports.ChatLiveReconnector); ok && live.ReconnectedLive() {
+		return conv, nil
+	}
+	// Hermes can acknowledge session/load after swallowing a decode/replay
+	// failure. Never admit an empty successful load as an exact continuation.
+	// Require a replayed user message, not usage/config metadata alone.
+	// Partial replay still needs qualification.
+	history, ok := conv.(ports.ChatHistoryReader)
+	var events []ports.ChatEvent
+	if ok {
+		events, err = history.ReadHistory(ctx)
+	}
+	hasTranscript := false
+	for _, event := range events {
+		if event.Kind == ports.ChatEventUserMessageCompleted && event.Text != "" {
+			hasTranscript = true
+			break
+		}
+	}
+	if !ok || err != nil || !hasTranscript || conv.ProviderConversationID() != cfg.ProviderConversationID {
+		if terminator, ok := conv.(ports.ChatProviderTerminator); ok {
+			_ = terminator.Terminate()
+		}
+		_ = conv.Close()
+		return nil, fmt.Errorf("%w: Hermes native load did not provide readable exact history", ports.ErrChatResumeFailed)
+	}
+	return conv, nil
 }
 
 // Reconnect only adopts the surviving persistent host. It must not mutate
