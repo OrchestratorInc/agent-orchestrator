@@ -297,6 +297,9 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	if err := repairRenumberedCodeBuddyMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered CodeBuddy migration history: %w", err)
+	}
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
@@ -2229,7 +2232,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	}
 	if needsCodeBuddy {
 		// Append only AFTER every historical exact-shape repair above. Migration
-		// 0215 deliberately skips incomplete old lists to keep their recognizers intact.
+		// The CodeBuddy migration skips incomplete old lists to keep their recognizers intact.
 		repairs = append(repairs, replacement{"'fake'))", "'codebuddy', 'fake'))"})
 	}
 	for _, r := range repairs {

@@ -63,7 +63,11 @@ followed by a space:
    installs still contribute to DAU until they update.
 5. Keep low-volume reliability events such as `ao.session.spawned`,
    `ao.session.spawn_failed`, `ao.session.waiting_input_entered`,
-   `ao.session.waiting_input_exited`, `ao.http.5xx`, and `ao.daemon.panic`.
+   `ao.session.waiting_input_exited`, `ao.http.5xx`, and `ao.daemon.panic`,
+   and the harness-update rollout events `ao.harness.update`,
+   `ao.harness.update_idle_wait`, `ao.harness.version_switch` and
+   `ao.harness.stale_sessions` (the last is a gauge sent at most every 10
+   minutes, only for harnesses with stale sessions).
 6. Drop `$web_vitals` unless a time-boxed performance investigation needs it.
 7. Apply the same routine-command drop as a defensive backstop to
    `ao.v2.cli.invoked` and CLI-channel `ao.v2.app.active`, even though current

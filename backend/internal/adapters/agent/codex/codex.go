@@ -383,6 +383,9 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if managed, ok := binaryutil.ManagedBinary("codex"); ok {
+		return resolveNativeWindowsCodex(managed, runtime.GOOS), nil
+	}
 
 	if runtime.GOOS == "windows" {
 		candidates := []string{}
@@ -400,7 +403,7 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 		candidates = append(candidates, binaryutil.WindowsPackageManagerBinCandidates("codex")...)
 		for _, candidate := range candidates {
 			if fileExists(candidate) {
-				return resolveNativeWindowsCodex(candidate), nil
+				return resolveNativeWindowsCodex(candidate, runtime.GOOS), nil
 			}
 			if err := ctx.Err(); err != nil {
 				return "", err
@@ -413,7 +416,7 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 				if isWindowsAppsCodexExecutable(path) {
 					continue
 				}
-				return resolveNativeWindowsCodex(path), nil
+				return resolveNativeWindowsCodex(path, runtime.GOOS), nil
 			}
 			if err := ctx.Err(); err != nil {
 				return "", err
@@ -458,8 +461,11 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)
 }
 
-func resolveNativeWindowsCodex(path string) string {
-	if runtime.GOOS != "windows" || !strings.EqualFold(filepath.Ext(path), ".cmd") {
+// resolveNativeWindowsCodex unwraps an npm command shim, including AO's managed
+// launcher, to the native executable it starts. The Chat driver starts Codex
+// directly, which needs the executable rather than a batch file.
+func resolveNativeWindowsCodex(path, goos string) string {
+	if goos != "windows" || !strings.EqualFold(filepath.Ext(path), ".cmd") {
 		return path
 	}
 	for _, candidate := range windowsNativeCodexCandidatesForShim(path) {
@@ -471,7 +477,17 @@ func resolveNativeWindowsCodex(path string) string {
 }
 
 func windowsNativeCodexCandidatesForShim(shim string) []string {
-	dir := filepath.Dir(shim)
+	candidates := windowsNativeCodexCandidatesInPrefix(filepath.Dir(shim))
+	// AO's managed launcher lives apart from the npm prefix it starts; the
+	// native executable is in the current managed release, reached through
+	// current so a later update is picked up without resolving again.
+	if current, ok := binaryutil.ManagedCurrentDir(shim, "codex"); ok {
+		candidates = append(windowsNativeCodexCandidatesInPrefix(current), candidates...)
+	}
+	return candidates
+}
+
+func windowsNativeCodexCandidatesInPrefix(dir string) []string {
 	return []string{
 		filepath.Join(dir, "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"),
 		filepath.Join(dir, "node_modules", "@openai", "codex", "bin", "codex.exe"),
@@ -570,3 +586,10 @@ var fileExists = func(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
@@ -29,6 +30,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
@@ -187,6 +189,8 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	// Children inherit os.Environ(); the export settings stay in cfg only.
+	config.ScrubTelemetryEnv()
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}
@@ -272,9 +276,11 @@ func Run() error {
 		log.Warn("install using-ao skill", "err", err)
 	}
 
-	telemetryCfg := cfg
-	telemetryCfg.Telemetry.Events = policyCoordinator.EventsEnabled()
-	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
+	// Product telemetry answers to AO_TELEMETRY_EVENTS alone. The agent-switch
+	// consent (policyCoordinator) governs only the Sentry failure path above and
+	// the dispatcher below; wiring it in here turned the "Share error events"
+	// switch into a kill switch for every daemon product event.
+	telemetrySink := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
@@ -415,7 +421,10 @@ func Run() error {
 		DataDir:             cfg.DataDir,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
-		AppRunID:            cfg.AppRunID,
+		VersionRefresh: func() (time.Duration, bool) {
+			return cfg.VersionRefreshIdle, cfg.VersionRefresh && settingsSvc.VersionRefreshEnabled(ctx)
+		},
+		AppRunID: cfg.AppRunID,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
@@ -500,7 +509,8 @@ func Run() error {
 	if err := chatSvc.InitializeSideChats(ctx); err != nil {
 		log.Warn("side chat initialization failed", "error", err)
 	}
-	codexModelDriver := codexappserver.New(codexagent.New(), log)
+	codexModelPlugin := codexagent.New()
+	codexModelDriver := codexappserver.New(codexModelPlugin, log)
 	modelDiscoverer := modelcatalog.Discoverer{
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
 			return codexModelDriver.DiscoverModels(listCtx, request.WorkingDir, request.Env)
@@ -576,7 +586,16 @@ func Run() error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	reviewers, err := reviewer.NewResolver()
+	if err != nil {
+		stop()
+		lcStack.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
+		return fmt.Errorf("reviewer resolver: %w", err)
+	}
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, reviewers, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -704,12 +723,16 @@ func Run() error {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore:            store,
-		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
-		Sessions:            store,
-		Reviewers:           store,
-		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
-		PrivateNPMPrefixes:  privateNPMPrefixes,
+		JobStore:                  store,
+		Verifier:                  systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:                  store,
+		Reviewers:                 store,
+		DisableUpdateChecks:       !cfg.HarnessUpdateChecks,
+		DisableUpdateWhileRunning: !cfg.UpdateWhileRunning,
+		WindowsUpdateWhenIdle:     cfg.WindowsUpdateWhenIdle,
+		ManagedRoot:               managedHarnessRoot(cfg),
+		Releases:                  store,
+		PrivateNPMPrefixes:        privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -720,12 +743,33 @@ func Run() error {
 		return fmt.Errorf("recover harness install jobs: %w", err)
 	}
 	sessMgr.SetHarnessUseGate(systemInstall)
+	systemInstall.SetHarnessUpdateObserver(sessMgr)
+	systemInstall.SetIdleUpdateCoordinator(sessMgr)
+	// Harness resolvers prefer AO's managed launchers once an update created them.
+	binaryutil.SetManagedBinDir(systemInstall.ManagedBinDir())
+	binaryCaches := []harnessBinaryCache{
+		resolverBinaryCache{agents: agents},
+		chatDrivers,
+		reviewers,
+		pluginBinaryCache{harness: domain.HarnessCodex, plugin: codexModelPlugin},
+	}
+	systemInstall.SetBinaryInvalidator(func(target systeminstall.Target) {
+		if harness, ok := installedAgentHarness(target); ok {
+			invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
+		}
+	})
+	systemInstall.SetTelemetry(telemetrySink)
+	sessMgr.SetVersionTelemetry(telemetrySink)
+	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
+		return versionRefreshPolicy(ctx, cfg, settingsSvc)
+	})
+	chatSvc.SetVersionSwitchObserver(sessMgr.ObserveChatVersionSwitch)
 	systemInstall.SetOnSucceeded(func(target systeminstall.Target) {
 		harness, ok := installedAgentHarness(target)
 		if !ok {
 			return
 		}
-		agentSvc.InvalidateAgentInstallation(harness)
+		invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
 		agentSvc.RecheckAgent(harness)
 	})
 
@@ -1150,6 +1194,7 @@ func Run() error {
 				}
 			}
 		}()
+		go runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
@@ -1295,6 +1340,46 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 		return string(target), true
 	}
 	return "", false
+}
+
+// harnessBinaryCache holds agent plugins that cache the executable they resolved.
+type harnessBinaryCache interface {
+	InvalidateBinaryResolution(harness domain.AgentHarness)
+}
+
+// resolverBinaryCache is the plugins an AgentResolver hands out.
+type resolverBinaryCache struct{ agents ports.AgentResolver }
+
+func (c resolverBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if agent, ok := c.agents.Agent(harness); ok {
+		if invalidator, ok := agent.(ports.AgentBinaryResolutionInvalidator); ok {
+			invalidator.InvalidateBinaryResolution()
+		}
+	}
+}
+
+// pluginBinaryCache is one harness's plugin held outside any resolver.
+type pluginBinaryCache struct {
+	harness domain.AgentHarness
+	plugin  ports.AgentBinaryResolutionInvalidator
+}
+
+func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if harness == c.harness {
+		c.plugin.InvalidateBinaryResolution()
+	}
+}
+
+// invalidateHarnessBinary makes the harness's executable resolve again
+// everywhere. Launches and install verification, the agent service, Chat
+// drivers and model discovery each hold their own plugin instances, each
+// caching the path it found: missing one leaves it on the binary from before
+// the install.
+func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness string, caches ...harnessBinaryCache) {
+	readiness.InvalidateAgentInstallation(harness)
+	for _, cache := range caches {
+		cache.InvalidateBinaryResolution(domain.AgentHarness(harness))
+	}
 }
 
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
