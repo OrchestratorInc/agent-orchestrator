@@ -2024,11 +2024,24 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 	const plannedTurns = new Set(
 		snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id),
 	);
+	const pendingQuestionTurns = new Set(
+		snapshot.items
+			.filter((item) => item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending")
+			.map((item) => item.turnId),
+	);
 	return snapshot.items.filter((item) => {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "reasoning") return false;
+		// Claude emits both a tool call and an elicitation for the same question.
+		// The pending form already presents it above the composer.
+		if (
+			item.activityKind === "mcp_tool" &&
+			item.detail?.providerToolName === "AskUserQuestion" &&
+			(item.status === "pending" || item.status === "running") &&
+			item.turnId && pendingQuestionTurns.has(item.turnId)
+		) return false;
 		return true;
 	});
 }
