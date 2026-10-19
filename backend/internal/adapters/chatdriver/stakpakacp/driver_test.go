@@ -269,3 +269,17 @@ func TestConversationRetainsDurableTransportLifecycle(t *testing.T) {
 		t.Fatal("durable acknowledgement lost")
 	}
 }
+
+func TestUnknownPermissionValuesAreNotNormalizedIntoConsent(t *testing.T) {
+	for _, settings := range []struct {
+		initial ports.PermissionMode
+		turn    ports.ChatTurnSettings
+	}{
+		{initial: "unknown"}, {turn: ports.ChatTurnSettings{Approval: "unknown"}},
+		{initial: ports.PermissionModeAcceptEdits}, {initial: ports.PermissionModeBypassPermissions},
+	} {
+		if err := validateSettings(settings.initial, settings.turn); !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+			t.Fatalf("unsupported settings %+v accepted: %v", settings, err)
+		}
+	}
+}

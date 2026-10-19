@@ -123,7 +123,7 @@ func candidateCapabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityApprovals: false, ports.ChatCapabilityInterrupt: false, ports.ChatCapabilityResume: false}
 }
 func validateSettings(initial ports.PermissionMode, s ports.ChatTurnSettings) error {
-	if ports.NormalizePermissionMode(initial) != ports.PermissionModeDefault || (s.Approval != "" && ports.NormalizePermissionMode(s.Approval) != ports.PermissionModeDefault) {
+	if (initial != "" && initial != ports.PermissionModeDefault) || (s.Approval != "" && s.Approval != ports.PermissionModeDefault) {
 		return fmt.Errorf("%w: Stakpak candidate preserves native manual decisions only", ports.ErrChatPermissionModeUnsupported)
 	}
 	if s.Model != "" || s.Effort != "" {
