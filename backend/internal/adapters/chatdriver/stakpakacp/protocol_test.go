@@ -84,11 +84,6 @@ func runProtocolHelper() {
 
 func TestCandidateUsesRealSharedTransportForPermissionAndReconnect(t *testing.T) {
 	d, cfg := stagedProtocolCandidate(t)
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = persistenthost.Shutdown(cleanupCtx, cfg.DataDir, string(cfg.SessionID))
-	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	first, err := d.Start(ctx, cfg)
@@ -186,6 +181,11 @@ func helperVersion() string {
 func stagedProtocolCandidate(t *testing.T) (*Driver, ports.ChatStartConfig) {
 	t.Helper()
 	root, workspace := t.TempDir(), t.TempDir()
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = persistenthost.Shutdown(cleanupCtx, root, "stakpak-controlled")
+	})
 	home := filepath.Join(root, "profile")
 	if err := os.Mkdir(home, 0700); err != nil {
 		t.Fatal(err)
