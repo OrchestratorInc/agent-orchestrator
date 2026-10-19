@@ -1342,6 +1342,42 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("Choose a direction")).not.toBeInTheDocument();
 	});
 
+	it.each([false, true])("does not repeat a docked question in tool activity (other tools: %s)", async (withOtherTool) => {
+		const snapshot = withUserInput("pending");
+		snapshot.items = snapshot.items.filter((item) => item.kind === "activity" && item.activityKind === "user_input");
+		snapshot.items.unshift({
+			kind: "activity", id: "ask-tool", sequence: 99, revision: 0, turnId: "turn-1",
+			activityKind: "mcp_tool", status: "pending", summary: "Choose a direction",
+			detail: { providerToolName: "AskUserQuestion" }, createdAt: "2026-08-24T00:00:00Z",
+		});
+		if (withOtherTool) snapshot.items.unshift({
+			kind: "activity", id: "other-tool", sequence: 98, revision: 0, turnId: "turn-1",
+			activityKind: "mcp_tool", status: "completed", summary: "Inspect workspace metadata",
+			detail: { providerToolName: "InspectWorkspace" }, createdAt: "2026-08-24T00:00:00Z",
+		});
+		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+
+		expect(screen.getAllByText("Choose a direction")).toHaveLength(1);
+		expect(within(screen.getByTestId("elicitation-composer-dock")).getByText("Choose a direction")).toBeVisible();
+		expect(within(screen.getByRole("log", { name: "Conversation" })).queryByText("Choose a direction")).not.toBeInTheDocument();
+		if (withOtherTool) await waitFor(() => expect(screen.getByText("Inspect workspace metadata")).toBeVisible());
+	});
+
+	it.each(["no form", "failed tool", "other turn"])("keeps question tool activity visible for %s", async (scenario) => {
+		const snapshot = withUserInput("pending");
+		snapshot.items = snapshot.items.filter((item) => scenario !== "no form" && item.kind === "activity" && item.activityKind === "user_input");
+		snapshot.items.unshift({
+			kind: "activity", id: "ask-tool", sequence: 99, revision: 0,
+			turnId: scenario === "other turn" ? "turn-2" : "turn-1",
+			activityKind: "mcp_tool", status: scenario === "failed tool" ? "failed" : "pending",
+			summary: "Choose a direction", detail: { providerToolName: "AskUserQuestion" },
+			createdAt: "2026-08-24T00:00:00Z",
+		});
+		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+
+		await waitFor(() => expect(within(screen.getByRole("log", { name: "Conversation" })).getByText("Choose a direction")).toBeVisible());
+	});
+
 	it("does not interrupt while an elicitation is open", () => {
 		const onInterrupt = vi.fn();
 		const snapshot = structuredClone(chatFixture);

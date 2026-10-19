@@ -155,6 +155,51 @@ paths:
         harness
       tags:
       - agents
+  /api/v1/agents/{agent}/install/cancel:
+    post:
+      operationId: cancelAgentInstall
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallJob'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel an update that is waiting for the harness's sessions to be idle
+      tags:
+      - agents
   /api/v1/agents/{agent}/logout:
     post:
       operationId: logoutAgent
@@ -11398,6 +11443,43 @@ paths:
       summary: Choose the default interface for new sessions
       tags:
       - settings
+  /api/v1/settings/version-refresh:
+    patch:
+      operationId: updateVersionRefresh
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateVersionRefreshRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether idle open sessions move to newly installed harness releases
+      tags:
+      - settings
   /api/v1/shell-terminals:
     get:
       operationId: listShellTerminals
@@ -12805,6 +12887,8 @@ components:
           type: string
         currentVersion:
           type: string
+        inUse:
+          $ref: '#/components/schemas/AgentUpdateInUse'
         latestVersion:
           type: string
         maintenanceMethod:
@@ -12832,6 +12916,30 @@ components:
       - agentId
       - status
       - checkedAt
+      type: object
+    AgentUpdateInUse:
+      properties:
+        level:
+          description: 'Whether an update can run while they do: safe keeps the running
+            release, warn may disturb it, blocked requires them to end, idle waits
+            until they are idle and restarts them around the update.'
+          enum:
+          - safe
+          - warn
+          - blocked
+          - idle
+          type: string
+        liveSessions:
+          description: Sessions running this harness, directly or through their reviewer.
+          type: integer
+        sessionIds:
+          description: Sessions that run this harness or own a reviewer that does.
+          items:
+            type: string
+          type: array
+      required:
+      - liveSessions
+      - level
       type: object
     AppMemoryResponse:
       properties:
@@ -14543,6 +14651,8 @@ components:
           - mergeable
           - merged
           type: string
+        staleBinary:
+          $ref: '#/components/schemas/SessionStaleBinary'
         status:
           enum:
           - working
@@ -16205,10 +16315,12 @@ components:
           - "null"
           - string
         status:
-          description: Current lifecycle state of the job.
+          description: 'Current lifecycle state of the job. waiting_for_idle: the
+            update runs once every session using the harness is idle (Windows).'
           enum:
           - idle
           - running
+          - waiting_for_idle
           - installing
           - verifying
           - succeeded
@@ -16266,6 +16378,12 @@ components:
           type:
           - "null"
           - string
+        waitingOn:
+          description: While waiting_for_idle, the sessions the update still waits
+            for and why.
+          items:
+            $ref: '#/components/schemas/SessionWait'
+          type: array
       required:
       - target
       - status
@@ -18518,6 +18636,24 @@ components:
       required:
       - session
       type: object
+    SessionStaleBinary:
+      properties:
+        since:
+          format: date-time
+          type: string
+        switchFailedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        version:
+          description: Harness release now installed; the session moves to it on its
+            next launch.
+          type: string
+      required:
+      - version
+      - since
+      type: object
     SessionStepResponse:
       properties:
         endedAt:
@@ -18555,6 +18691,23 @@ components:
       - incomplete
       - totals
       - harnesses
+      type: object
+    SessionWait:
+      properties:
+        reason:
+          enum:
+          - working
+          - command
+          - approval
+          - starting
+          - reviewer
+          - resume
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - reason
       type: object
     SetActivityRequest:
       properties:
@@ -18874,6 +19027,10 @@ components:
           type: boolean
         trackerIntakeEnabled:
           type: boolean
+        versionRefresh:
+          description: After a harness update, idle open sessions restart on the new
+            release instead of running the old one until they happen to restart.
+          type: boolean
       required:
       - defaultSessionMode
       - chatHarnesses
@@ -18881,6 +19038,7 @@ components:
       - localEnabled
       - cloudOffering
       - chatHibernationEnabled
+      - versionRefresh
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -20119,6 +20277,15 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateVersionRefreshRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UpdateWorkspaceFileRequest:
       properties:

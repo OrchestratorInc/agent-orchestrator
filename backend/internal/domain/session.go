@@ -305,6 +305,11 @@ type SessionRecord struct {
 	// HibernatedAt records that the idle Chat controller was stopped while the
 	// session and conversation remain resumable. Nil means no recorded hibernation.
 	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// StaleBinary is set while the session's current launch still runs a
+	// harness release an update has since replaced. It is derived when the row
+	// is read: any later launch starts on the installed release and reads as
+	// current without a write.
+	StaleBinary *SessionStaleBinary `json:"staleBinary,omitempty"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
 	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
@@ -351,6 +356,43 @@ type SessionRecord struct {
 	// branch-state reconcile writes it only when a fact changes; nil until the first
 	// observation, and a failed git read keeps the last known value.
 	BranchState *SessionBranchState `json:"branchState,omitempty"`
+}
+
+// SessionStaleBinary describes a launch left on a replaced harness release.
+type SessionStaleBinary struct {
+	// Version is the release now installed, which the session moves to.
+	Version string `json:"version" description:"Harness release now installed; the session moves to it on its next launch."`
+	// Since is when an update first left this launch on an older release.
+	Since time.Time `json:"since"`
+	// SwitchFailedAt is set when an automatic move to Version failed. The
+	// session keeps its queued messages and waits for the user to resume it.
+	SwitchFailedAt *time.Time `json:"switchFailedAt,omitempty"`
+}
+
+// SessionWaitReason says why an update that runs when sessions are idle is
+// still waiting for a session.
+type SessionWaitReason string
+
+const (
+	// SessionWaitWorking means the agent is taking a turn.
+	SessionWaitWorking SessionWaitReason = "working"
+	// SessionWaitCommand means the agent runs a command, such as a dev server.
+	SessionWaitCommand SessionWaitReason = "command"
+	// SessionWaitApproval means the agent waits for the user's answer.
+	SessionWaitApproval SessionWaitReason = "approval"
+	// SessionWaitStarting means the session is still starting.
+	SessionWaitStarting SessionWaitReason = "starting"
+	// SessionWaitReviewer means a reviewer runs the harness.
+	SessionWaitReviewer SessionWaitReason = "reviewer"
+	// SessionWaitResume means a terminal could not be started again on its own
+	// conversation, so it is not stopped for the update; it waits until it ends.
+	SessionWaitResume SessionWaitReason = "resume"
+)
+
+// SessionWait is one session an update waits for.
+type SessionWait struct {
+	SessionID SessionID         `json:"sessionId"`
+	Reason    SessionWaitReason `json:"reason" enum:"working,command,approval,starting,reviewer,resume"`
 }
 
 // SessionBranchState is the session branch's commit and push facts.

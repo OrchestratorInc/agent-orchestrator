@@ -1155,6 +1155,7 @@ function setupTabHost(
 	const agentHost = { registered: true };
 	const addChildView = vi.fn();
 	const onNativeViewAdded = vi.fn();
+	const onTabCloseFailure = vi.fn();
 	const host = createBrowserViewHost({
 		mainWindow: {
 			contentView: { addChildView, removeChildView: () => undefined },
@@ -1192,6 +1193,7 @@ function setupTabHost(
 		browserHistoryStore,
 		clearBrowserProfileData,
 		onNativeViewAdded,
+		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
 		// this option to discover the daemon before calling net.fetch.
 		...({ getDaemonPort: () => 43123 } as Record<string, unknown>),
@@ -1215,6 +1217,7 @@ function setupTabHost(
 		agentHost,
 		addChildView,
 		onNativeViewAdded,
+		onTabCloseFailure,
 		constructorOptions,
 		debuggerCommands,
 		emit,
@@ -1252,6 +1255,42 @@ function fakeBrowserProfileStore(
 }
 
 describe("browser:closeTab automation-runtime fallback", () => {
+	it.each([1, 2])("accepts a repeated close with %i tabs initially", async (count) => {
+		const { invoke, onTabCloseFailure } = setupTabHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1") as BrowserNavState;
+		const tabId = count === 1 ? "t1" : (await invoke("browser:openTab", { viewId }) as BrowserTabsState).activeTabId;
+		await invoke("browser:closeTab", { viewId, tabId });
+		expect(await invoke("browser:closeTab", { viewId, tabId })).toMatchObject({ tabs: count === 1 ? [] : [{ id: "t1" }] });
+		expect(onTabCloseFailure).not.toHaveBeenCalled();
+	});
+
+	it("accepts a runtime error after the requested tab actually closed", async () => {
+		const { invoke, runtime, onTabCloseFailure } = setupTabHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1") as BrowserNavState;
+		await invoke("browser:openTab", { viewId });
+		vi.mocked(runtime.runAction).mockImplementation(async (_sessionId, action, _args, provider) => {
+			if (action === "tab-close") {
+				await provider.closeTarget("t2");
+				throw Object.assign(new Error("connection lost"), { code: "AGENT_BROWSER_START_FAILED" });
+			}
+			return {};
+		});
+		expect(await invoke("browser:closeTab", { viewId, tabId: "t2" })).toMatchObject({ tabs: [{ id: "t1" }] });
+		expect(onTabCloseFailure).toHaveBeenCalledWith(expect.objectContaining({ tabPresent: false, tabCount: 1, error: expect.objectContaining({ code: "AGENT_BROWSER_START_FAILED" }) }));
+	});
+
+	it("records a genuine close failure and preserves the error even if diagnostics fail", async () => {
+		const { invoke, runtime, onTabCloseFailure } = setupTabHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1") as BrowserNavState;
+		await invoke("browser:openTab", { viewId });
+		const error = Object.assign(new Error("private runtime output"), { code: "AGENT_BROWSER_START_FAILED" });
+		vi.mocked(runtime.runAction).mockRejectedValue(error);
+		onTabCloseFailure.mockImplementation(() => { throw new Error("disk full"); });
+		await expect(invoke("browser:closeTab", { viewId, tabId: "t2" })).rejects.toBe(error);
+		expect(onTabCloseFailure).toHaveBeenCalledWith({ error, sessionId: "sess-1", tabId: "t2", tabCount: 2, tabPresent: true, wasActive: true, agentTab: false });
+		expect(await invoke("browser:getTabs", viewId)).toMatchObject({ tabs: [{ id: "t1" }, { id: "t2" }] });
+	});
+
 	it("starts with zero tabs when the renderer requests an empty browser", async () => {
 		const { invoke, views } = setupTabHost();
 		const initial = await invoke("browser:ensure", "sess-1", false) as BrowserNavState;

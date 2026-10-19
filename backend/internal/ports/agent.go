@@ -217,6 +217,15 @@ type AgentRuntimeLaunchEnv interface {
 	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
 }
 
+// AgentTerminalVersionRefresher opts a terminal adapter into unattended upgrades.
+// GetRestoreCommand must name the exact captured conversation, preserve its
+// model/provider, instructions and permission options, and never silently fall
+// back to a fresh conversation when that identity cannot be resumed. This is
+// independent of TUI/Chat handoff support. Absence means not audited for refresh.
+type AgentTerminalVersionRefresher interface {
+	SupportsTerminalVersionRefresh() bool
+}
+
 // AgentNativeSessionResolver is an optional capability for adapters whose
 // lifecycle protocol reports a process-local correlation id rather than the
 // durable conversation id accepted by their resume command.

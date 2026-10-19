@@ -17,7 +17,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -56,6 +56,34 @@ function SessionInterfaceRow() {
 				disabled={isLoading || saving || !chatAvailable}
 			/>
 		</SettingsRow>
+	);
+}
+
+/**
+ * After a harness update, idle open sessions restart on the new release
+ * instead of running the old one until they happen to restart. Daemon-owned:
+ * the daemon does the moving.
+ */
+function VersionRefreshRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateVersionRefresh();
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow className="rounded-none" label={t("settings.versionRefresh.label")} description={t("settings.versionRefresh.description")}>
+				<Switch
+					aria-label={t("settings.versionRefresh.label")}
+					checked={settings?.versionRefresh ?? false}
+					disabled={isLoading || saving || !settings}
+					onCheckedChange={update}
+				/>
+			</SettingsRow>
+			{error ? (
+				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
+					{error}
+				</p>
+			) : null}
+		</div>
 	);
 }
 
@@ -212,6 +240,7 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<VersionRefreshRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch

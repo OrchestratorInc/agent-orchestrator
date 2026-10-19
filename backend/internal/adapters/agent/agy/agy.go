@@ -317,3 +317,11 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 		*cmd = append(*cmd, "--model", model)
 	}
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}

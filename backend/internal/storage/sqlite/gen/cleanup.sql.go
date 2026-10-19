@@ -35,6 +35,52 @@ func (q *Queries) GetSessionCleanupFacts(ctx context.Context, sessionID domain.S
 	return i, err
 }
 
+const listSessionCleanupFactsBySessions = `-- name: ListSessionCleanupFactsBySessions :many
+WITH wanted_session AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+)
+SELECT f.session_id, f.session_generation, f.runtime_released_at, f.workspace_disposition,
+    f.attempt_count, f.last_attempt_at, f.next_attempt_at, f.failure_code
+FROM session_cleanup_facts f
+JOIN wanted_session ON wanted_session.session_id = f.session_id
+`
+
+// Batch form of GetSessionCleanupFacts for session-list reads: the JSON array of
+// session ids replaces one lookup per archived session. Sessions with no facts
+// row are simply absent from the result.
+func (q *Queries) ListSessionCleanupFactsBySessions(ctx context.Context, jsonEach interface{}) ([]SessionCleanupFact, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionCleanupFactsBySessions, jsonEach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionCleanupFact{}
+	for rows.Next() {
+		var i SessionCleanupFact
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.SessionGeneration,
+			&i.RuntimeReleasedAt,
+			&i.WorkspaceDisposition,
+			&i.AttemptCount,
+			&i.LastAttemptAt,
+			&i.NextAttemptAt,
+			&i.FailureCode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertSessionCleanupFacts = `-- name: UpsertSessionCleanupFacts :exec
 INSERT INTO session_cleanup_facts (
     session_id, session_generation, runtime_released_at, workspace_disposition,

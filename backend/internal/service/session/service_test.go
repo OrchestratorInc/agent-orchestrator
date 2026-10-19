@@ -83,6 +83,12 @@ type fakeStore struct {
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+
+	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
+	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
+	getCleanupFactsCalls  int
+	listCleanupFactsCalls int
+	cleanupFactsRequested []domain.SessionID
 }
 
 func newFakeStore() *fakeStore {
@@ -5648,7 +5654,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5706,7 +5712,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5842,9 +5848,23 @@ func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
 }
 
 func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.getCleanupFactsCalls++
 	rec, ok := f.cleanupFacts[id]
 	return rec, ok, nil
 }
+
+func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	f.listCleanupFactsCalls++
+	f.cleanupFactsRequested = append(f.cleanupFactsRequested, ids...)
+	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
+	for _, id := range ids {
+		if rec, ok := f.cleanupFacts[id]; ok {
+			out[id] = rec
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
