@@ -4,6 +4,8 @@
 
 **Status of this document:** Tasks 1–3 (PR-1, backend) are implemented on branch `perf/pty-host-replay-bounds`; Tasks 4–5 remain. Implementation deltas from the plan below: the tail cap is applied by the host handlers via a shared `capTailBytes` helper (not inside `Ring.Tail`), and the classification timers are per-`host` fields (`firstFrameTimeout`, `legacyViewerGrace`, defaults `defaultFirstFrameTimeout`/`defaultLegacyViewerGrace`) instead of package vars, so tests configure them before `Serve` starts.
 
+**Update 2026-10-19 (PR review fixes, commits `79c45912b` + `0d3ae82be`):** two contract corrections. Input-first connections are input-only: their `MsgTerminalInput` bytes are dispatched to the PTY, they are never replayed and never broadcast to, and a later input never upgrades a connection — only `MsgResize` (plus the silent and `MsgStatusReq`-grace fallbacks) marks a viewer. Ring storage entries carry a logical-line-end flag, so `Tail(n)` counts completed logical lines and `Snapshot()` excludes the in-progress line including its chunks; `Replay()` stays byte-identical to the retained stream. The classification table and task steps below are updated to match.
+
 ## Diagnosis (already done, evidence from the live machine)
 
 The "app eating CPU" is dominated by a **terminal-history replay amplifier** between the daemon and each session's `ao pty-host`, not by the Electron UI.
@@ -41,7 +43,7 @@ Three layers, in order of value. Layer 1+2 are the real fix; layer 3 keeps the l
 ### Layer 1 — bounded ring, bounded tails (safety net)
 
 - Bound the ring by **bytes**, not just lines: `MaxRingBytes = 4 MiB` (env override later if anyone needs more scrollback).
-- Split oversized partial lines at `MaxRingLineBytes = 64 KiB` so line-based eviction actually bounds TUI repaint streams. Splitting only moves the partial line into `lines`; `Replay()`/`Snapshot()` join in order, so the byte stream is unchanged.
+- Split oversized partial lines at `MaxRingLineBytes = 64 KiB` so line-based eviction actually bounds TUI repaint streams. Splitting only moves the partial line into storage chunks (each entry carries whether it ends a logical line); `Replay()` joins every chunk plus the partial line, so the retained byte stream is unchanged, while `Tail(n)` counts completed logical lines and `Snapshot()` still excludes the in-progress line, including its chunks.
 - Cap probe/tail responses at the host: `MaxTailBytes = 128 KiB` suffix (keeps the most recent content, which is what prompt/activity patterns need). Applies to `MsgGetOutputRes` and `MsgGetStyledOutputRes`.
 - Send replays in `MaxReplayChunk = 256 KiB` frames instead of one potentially megabyte-scale iovec.
 
@@ -57,13 +59,15 @@ New protocol message `MsgAttach = 0x0b` (client → host), JSON `{cols, rows, re
   | First frame | Classification | Replay | Registered as viewer |
   | --- | --- | --- | --- |
   | `MsgAttach` | viewer | only if `replay:true` | yes |
-  | `MsgResize` / `MsgTerminalInput` (legacy viewer) | viewer | yes (today's behavior) | yes |
+  | `MsgResize` (legacy viewer) | viewer | yes (today's behavior) | yes |
+  | `MsgTerminalInput`-first | input-only | **no** | no (dispatched to the PTY; never broadcast to) |
   | `MsgGetOutputReq` / `MsgGetStyledOutputReq` / `MsgStatusReq` / `MsgKillReq` | probe | **no** | no (responses via `sendTo` only) |
   | nothing within `firstMsgTimeout` (2 s) | legacy silent viewer | yes | yes |
 
-- A non-viewer connection that later sends `MsgResize`/`MsgTerminalInput` is upgraded to viewer (register + replay): compatibility net for a legacy viewer that attached before any grid was known.
+- A non-viewer connection that later sends `MsgResize` is upgraded to viewer (register + replay): compatibility net for a legacy viewer that attached before any grid was known. A later `MsgTerminalInput` never upgrades a connection — it is dispatched to the PTY and the connection stays input-only.
+- Accepted compatibility boundary: a hypothetical third-party client that sends `MsgTerminalInput` first without any hello or `MsgResize` no longer receives a replay; every in-repo client sends the hello (new attach) or `MsgResize`/`MsgStatusReq` first (pre-hello attach) before any input.
 - `MsgStatusReq`-first connections get a `legacyViewerGrace` (~1 s): if the connection is **still open** after the status response, upgrade to viewer. Real probes (reaper, CLI) close within milliseconds; a legacy `rows==0` viewer stays open and self-heals.
-- `record()`/`broadcast()` (`enqueueAllLocked`) skip non-viewer clients — probes stop receiving live output entirely.
+- `record()`/`broadcast()` (`enqueueAllLocked`) skip non-viewer clients — probes and input-only connections stop receiving live output entirely.
 - Probe connections are still added to `h.clients` (so `sendTo` works) but never count for `applyLargestLocked` sizing.
 - `MsgAttach` with `cols/rows > 0` must feed the same path as `MsgResize` (`applyLargestLocked`), because `--start=attach` deferred PTYs start on the first grid report.
 - Bump `conPTYHostProtocolVersion` 2 → 3 (reported in `StatusRes`).
@@ -98,10 +102,10 @@ No speculative UI edits. First measure with a CDP performance trace (chrome-devt
 
 1. Add `MaxRingBytes`, `MaxRingLineBytes`, `MaxTailBytes`, `MaxReplayChunk` constants; track total bytes in `Ring` (including newlines).
 2. `Append`: flush `partialLine` into `lines` when it exceeds `MaxRingLineBytes`; evict whole lines from the front while total > `MaxRingBytes`.
-3. `Tail(n)`: return the last `MaxTailBytes` of the joined result.
+3. `Tail(n)`: return the last n completed logical lines, reassembling entries split at `MaxRingLineBytes` and excluding the in-progress line's chunks. The host handlers cap the joined result at `MaxTailBytes` (see the status note above).
 4. `handleConn`: encode the (mode-prefixed) replay into ≤`MaxReplayChunk` frames under the **same single `h.mu` hold** used today (bounded work, ~4 MB worst case; keeps the no-drop snapshot/register invariant from #5445). Verify `clientState.out` capacity (256 entries) comfortably fits the chunk count (~16).
 5. Apply `MaxTailBytes` to `MsgGetOutputRes` and `MsgGetStyledOutputRes` payloads.
-6. Tests: eviction by bytes; oversized partial split; join byte-identity across split; tail suffix cap; existing replay/mode-prefix tests stay green.
+6. Tests: eviction by bytes; oversized partial split; `Replay()` byte-identity across the split; `Tail`/`Snapshot` completed-logical-line semantics (chunked lines reassembled, in-progress chunks excluded); tail suffix cap; existing replay/mode-prefix tests stay green.
 
 ### Task 2 — Attach hello + host classification
 
@@ -113,7 +117,7 @@ No speculative UI edits. First measure with a CDP performance trace (chrome-devt
 2. `handleConn`: read the first frame with a `firstMsgTimeout` deadline (configurable for tests); classify per the table above; clear the deadline afterwards.
 3. Viewer path: register as viewer, size the client if given (same path as `MsgResize`, including deferred-PTY start), queue the bounded replay only when wanted.
 4. Probe path: register as non-viewer, dispatch the message; skip in `enqueueAllLocked`; never size.
-5. Grace upgrade rules: later `MsgResize`/`MsgTerminalInput` on a non-viewer conn → viewer; `MsgStatusReq`-first conn still open after `legacyViewerGrace` → viewer.
+5. Grace upgrade rules: a later `MsgResize` on a non-viewer conn → viewer; a later `MsgTerminalInput` is dispatched to the PTY but never upgrades the connection; `MsgStatusReq`-first conn still open after `legacyViewerGrace` → viewer.
 6. Tests (with a shortened `firstMsgTimeout` in the fixture): probe against a multi-MB ring receives exactly the response frame (no `MsgTerminalData`) and bytes-written ≈ response size; hello `replay:false` skips; hello `replay:true` replays; legacy Resize-first replays; silent connection replays after timeout; deferred PTY starts from hello grid; upgrade paths. Update `newTestClient` to send hello for viewer tests; add a probe helper.
 
 ### Task 3 — Client side + compatibility
