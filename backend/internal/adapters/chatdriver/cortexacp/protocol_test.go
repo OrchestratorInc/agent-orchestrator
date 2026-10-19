@@ -200,6 +200,7 @@ func TestConstructorRunsNativeACPApprovalAndReconnectLifecycle(t *testing.T) {
 		if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(ctx, completed.ProviderEventID); err != nil {
 			t.Fatal(err)
 		}
+		waitFixtureReady(t, conv.Events())
 	}
 	ref, err := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "cancel pending tool", AuthoredByUser: true})
 	if err != nil {
@@ -219,6 +220,7 @@ func TestConstructorRunsNativeACPApprovalAndReconnectLifecycle(t *testing.T) {
 	if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(ctx, completed.ProviderEventID); err != nil {
 		t.Fatal(err)
 	}
+	waitFixtureReady(t, conv.Events())
 	assertProtocolChoices(t, cfg)
 	if err := conv.Close(); err != nil {
 		t.Fatal(err)
@@ -357,5 +359,17 @@ func TestConstructorLoadsExactHistoryAndRejectsWrongWorkspace(t *testing.T) {
 			closeFixture(t, other)
 		}
 		t.Fatalf("native wrong-workspace error = %v", err)
+	}
+}
+
+// A terminal event precedes releasing the active-turn slot. Receipt ACK is
+// durable projection, not native input readiness; wait for the separate signal.
+func waitFixtureReady(t *testing.T, events <-chan ports.ChatEvent) {
+	t.Helper()
+	for {
+		event := eventUntil(t, events, ports.ChatEventControllerState)
+		if event.ControllerState == ports.ChatControllerReady {
+			return
+		}
 	}
 }
