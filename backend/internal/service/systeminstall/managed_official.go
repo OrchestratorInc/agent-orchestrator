@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -250,6 +251,11 @@ func (s *Service) officialManagedRecipeFor(plan Plan) (officialManagedRecipe, bo
 // runOfficialManagedInstall installs one release into dir: the vendor's
 // installer script, or the recipe's own download.
 func (s *Service) runOfficialManagedInstall(ctx context.Context, plan Plan, recipe officialManagedRecipe, pin, dir string, env []string, out io.Writer) error {
+	// The private HOME must exist: installers such as Codex's and fx's append
+	// their PATH line to a profile in it under set -e, and fail without it.
+	if err := os.MkdirAll(filepath.Join(dir, ".install-home"), 0o700); err != nil {
+		return fmt.Errorf("create installer home: %w", err)
+	}
 	recipeEnv := recipe.env(dir, pin)
 	if recipe.command != nil {
 		argv, err := recipe.command(dir, pin, s.goos, runtime.GOARCH)

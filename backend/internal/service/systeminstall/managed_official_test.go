@@ -207,7 +207,16 @@ func TestCodexCaskUpdatesWithItsInstallerBesideARunningSession(t *testing.T) {
 		mu.Lock()
 		scripts = append(scripts, command)
 		mu.Unlock()
-		// Like chatgpt.com/codex/install.sh: $CODEX_INSTALL_DIR/codex at $CODEX_RELEASE.
+		// Like chatgpt.com/codex/install.sh: $CODEX_INSTALL_DIR/codex at
+		// $CODEX_RELEASE, and a PATH line appended to a profile in $HOME,
+		// which it never creates.
+		profile, err := os.OpenFile(filepath.Join(envValue(command.Env, "HOME"), ".zprofile"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return ports.InstallScriptResult{}, err
+		}
+		if err := profile.Close(); err != nil {
+			return ports.InstallScriptResult{}, err
+		}
 		bin := envValue(command.Env, "CODEX_INSTALL_DIR")
 		if err := os.MkdirAll(bin, 0o755); err != nil {
 			return ports.InstallScriptResult{}, err
