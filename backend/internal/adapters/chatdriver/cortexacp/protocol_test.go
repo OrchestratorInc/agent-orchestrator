@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -200,7 +202,11 @@ func TestConstructorRunsNativeACPApprovalAndReconnectLifecycle(t *testing.T) {
 	if err := conv.Interrupt(ctx, request.ProviderTurnID); err != nil {
 		t.Fatal(err)
 	}
-	eventUntil(t, conv.Events(), ports.ChatEventTurnCompleted)
+	completed := eventUntil(t, conv.Events(), ports.ChatEventTurnCompleted)
+	if completed.TurnState != domain.TurnStateInterrupted {
+		t.Fatalf("cancel state = %q", completed.TurnState)
+	}
+	assertProtocolChoices(t, cfg)
 	if err := conv.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -247,5 +253,96 @@ func TestConstructorRejectsUnknownModelAndNativeMissingHistory(t *testing.T) {
 	// must not fall back, even when the native error is resource-not-found.
 	if strings.Count(string(calls), `"method":"session/new"`) != 1 {
 		t.Fatalf("unexpected fresh fallback: %s", calls)
+	}
+}
+
+func assertProtocolChoices(t *testing.T, cfg ports.ChatStartConfig) {
+	t.Helper()
+	calls, err := os.ReadFile(filepath.Join(cfg.Env["HOME"], "protocol-calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var choices []string
+	mode, model, cancel := false, false, false
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		var message struct {
+			Method string `json:"method"`
+			Params struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			} `json:"params"`
+			Result struct {
+				Outcome struct {
+					Outcome  string `json:"outcome"`
+					OptionID string `json:"optionId"`
+				} `json:"outcome"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			t.Fatal(err)
+		}
+		switch message.Method {
+		case "session/set_config_option":
+			if message.Params.ConfigID == "mode" {
+				if message.Params.Value != "standard" {
+					t.Fatalf("unsafe mode on wire: %s", line)
+				}
+				mode = true
+			}
+			if message.Params.ConfigID == "model" && message.Params.Value == "fixture-model" {
+				model = true
+			}
+		case "session/cancel":
+			cancel = true
+		case "":
+			if message.Result.Outcome.Outcome == "selected" {
+				choices = append(choices, message.Result.Outcome.OptionID)
+			}
+		}
+	}
+	if !reflect.DeepEqual(choices, []string{"allow", "reject"}) || !mode || !model || !cancel {
+		t.Fatalf("wire choices=%v standard=%v model=%v cancel=%v", choices, mode, model, cancel)
+	}
+}
+
+func TestConstructorLoadsExactHistoryAndRejectsWrongWorkspace(t *testing.T) {
+	driver, cfg := protocolDriver(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: "fixture-native-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true}
+	conv, err := driver.Resume(ctx, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeFixture(t, conv) })
+	if _, exposed := conv.(ports.ChatConfigOptionController); exposed {
+		t.Fatal("restore exposes direct config policy bypass")
+	}
+	if conv.ProviderConversationID() != resume.ProviderConversationID {
+		t.Fatal("load changed native ID")
+	}
+	reader, ok := conv.(ports.ChatHistoryRefresher)
+	if !ok {
+		t.Fatal("load lost native history refresh interface")
+	}
+	first, err := reader.ReadHistory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reader.RefreshHistory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) == 0 || !reflect.DeepEqual(first, second) {
+		t.Fatalf("replay changed/duplicated events: first=%+v second=%+v", first, second)
+	}
+	wrong := resume
+	wrong.SessionID = "wrong-workspace"
+	wrong.WorkspacePath = t.TempDir()
+	if other, err := driver.Resume(ctx, wrong); !errors.Is(err, ports.ErrChatResumeFailed) {
+		if other != nil {
+			closeFixture(t, other)
+		}
+		t.Fatalf("native wrong-workspace error = %v", err)
 	}
 }
