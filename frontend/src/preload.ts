@@ -33,6 +33,7 @@ import type {
 	EditorHandoffState,
 	EditorHandoffStateOptions,
 	OpenSessionArtifactsInput,
+	ChatPathActionInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
@@ -408,6 +409,7 @@ const api = {
 		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
 	},
 	editorHandoff: {
+		pathAction: (input: ChatPathActionInput) => ipcRenderer.invoke("editorHandoff:pathAction", input) as Promise<void>,
 		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
 		open: (input: OpenSessionTargetInput) =>

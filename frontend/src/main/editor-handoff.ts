@@ -4,6 +4,7 @@ import path from "node:path";
 import {
 	isEditorId,
 	isTerminalId,
+	type ChatPathActionInput,
 	type EditorHandoffState,
 	type EditorHandoffStateOptions,
 	type EditorId,
@@ -21,12 +22,15 @@ type ResolvedCommand = {
 	command: string;
 	iconPath?: string;
 	argsForWorkspace: (workspacePath: string) => string[];
+	argsForFile?: (filePath: string) => string[];
 };
 
 type EditorCandidate = {
 	id: EditorId;
 	name: string;
 	commands: string[];
+	/** CLI arguments for file handoff; workspace launches keep their existing behavior. */
+	fileArgs?: string[];
 	macApps?: string[];
 	requiresTerminal?: boolean;
 	/**
@@ -44,8 +48,8 @@ const PROGRAM_FILES_X86 = "%ProgramFiles(x86)%";
 const LOCAL_APPDATA_PROGRAMS = "%LOCALAPPDATA%\\Programs";
 
 const EDITOR_CANDIDATES: EditorCandidate[] = [
-	{ id: "cursor", name: "Cursor", commands: ["cursor"], macApps: ["Cursor"], winInstallDirs: [[LOCAL_APPDATA_PROGRAMS, "Cursor", "resources", "app", "bin"], [PROGRAM_FILES, "Cursor", "bin"]] },
-	{ id: "vscode", name: "VS Code", commands: ["code"], macApps: ["Visual Studio Code"], winInstallDirs: [[LOCAL_APPDATA_PROGRAMS, "Microsoft VS Code", "bin"], [PROGRAM_FILES, "Microsoft VS Code", "bin"]] },
+	{ id: "cursor", name: "Cursor", commands: ["cursor"], fileArgs: ["--new-window"], macApps: ["Cursor"], winInstallDirs: [[LOCAL_APPDATA_PROGRAMS, "Cursor", "resources", "app", "bin"], [PROGRAM_FILES, "Cursor", "bin"]] },
+	{ id: "vscode", name: "VS Code", commands: ["code"], fileArgs: ["--new-window"], macApps: ["Visual Studio Code"], winInstallDirs: [[LOCAL_APPDATA_PROGRAMS, "Microsoft VS Code", "bin"], [PROGRAM_FILES, "Microsoft VS Code", "bin"]] },
 	{ id: "neovim", name: "Neovim", commands: ["nvim"], requiresTerminal: true },
 	{ id: "windsurf", name: "Windsurf", commands: ["windsurf"], macApps: ["Windsurf"], winInstallDirs: [[LOCAL_APPDATA_PROGRAMS, "Windsurf", "resources", "app", "bin"], [PROGRAM_FILES, "Windsurf", "bin"]] },
 	{ id: "zed", name: "Zed", commands: ["zed"], macApps: ["Zed"], winInstallDirs: [[LOCAL_APPDATA_PROGRAMS, "Zed", "bin"]] },
@@ -105,6 +109,7 @@ export type EditorHandoffDeps = {
 
 export type EditorHandoff = {
 	getState(sessionId: string, options?: EditorHandoffStateOptions): Promise<EditorHandoffState>;
+	pathAction(input: ChatPathActionInput): Promise<void>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
@@ -229,6 +234,7 @@ function resolveTerminalEditor(editorCommand: string, deps: EditorHandoffDeps, i
 	if (deps.platform === "win32") {
 		return {
 			command: deps.env.ComSpec || deps.env.COMSPEC || "cmd.exe",
+			argsForFile: (filePath) => ["/d", "/s", "/v:off", "/k", `"${[editorCommand, filePath].map(windowsCommandArg).join(" ")}"`],
 			argsForWorkspace: () => {
 				// launch() sets cwd to the workspace, so opening "." avoids sending the
 				// workspace path through cmd.exe variable expansion (for example %TEMP%).
@@ -293,9 +299,17 @@ function resolveEditor(
 	for (const command of candidate.commands) {
 		const resolved = resolveOnPath(command, deps.platform, deps.env, isExecutable);
 		if (resolved) {
-			if (candidate.requiresTerminal) return resolveTerminalEditor(resolved, deps, isExecutable);
+			if (candidate.requiresTerminal) {
+				const terminal = resolveTerminalEditor(resolved, deps, isExecutable);
+				return terminal ? { ...terminal, iconPath: resolved } : undefined;
+			}
+			const appPath = deps.platform === "darwin" ? (candidate.macApps ?? []).flatMap((name) =>
+				["/Applications", path.posix.join(deps.homeDir, "Applications")].map((root) => path.posix.join(root, `${name}.app`)),
+			).find(isDirectory) : undefined;
 			return {
 				command: resolved,
+				iconPath: appPath ?? resolved,
+				argsForFile: (filePath) => [...(candidate.fileArgs ?? []), filePath],
 				argsForWorkspace: (workspacePath) => [workspacePath],
 			};
 		}
@@ -307,7 +321,11 @@ function resolveEditor(
 		const installDirs = winInstallDirsFor(candidate, deps.env);
 		for (const command of candidate.commands) {
 			const resolved = resolveInDirs(command, deps.platform, deps.env, installDirs, isExecutable);
-			if (resolved) return { command: resolved, argsForWorkspace: (workspacePath) => [workspacePath] };
+			if (resolved) return {
+				command: resolved, iconPath: resolved,
+				argsForFile: (filePath) => [...(candidate.fileArgs ?? []), filePath],
+				argsForWorkspace: (workspacePath) => [workspacePath],
+			};
 		}
 	}
 	if (deps.platform !== "darwin") return undefined;
@@ -316,6 +334,10 @@ function resolveEditor(
 			if (isDirectory(path.posix.join(root, `${appName}.app`))) {
 				return {
 					command: "/usr/bin/open",
+					iconPath: path.posix.join(root, `${appName}.app`),
+					argsForFile: (filePath) => candidate.fileArgs?.length
+						? ["-n", "-a", appName, "--args", ...candidate.fileArgs, filePath]
+						: ["-a", appName, filePath],
 					argsForWorkspace: (workspacePath) => ["-a", appName, workspacePath],
 				};
 			}
@@ -502,6 +524,46 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	};
 
 	return {
+		async pathAction(input) {
+			if (typeof input.sessionId !== "string" || !input.sessionId.trim()) throw new Error("Session is required.");
+			if (!["copy", "reveal", "open"].includes(input.action)) throw new Error("That path action is not supported.");
+			if (typeof input.path !== "string" || !input.path.trim() || /[\x00-\x1f]/.test(input.path)) throw new Error("That path is not valid.");
+			const api = pathAPI(deps.platform);
+			const reference = input.path;
+			// Only normalized filesystem paths cross this boundary, never URLs or shell commands.
+			if ((/^[a-z][a-z\d+.-]*:/i.test(reference) && !(deps.platform === "win32" && /^[a-z]:[\\/]/i.test(reference))) || reference.startsWith("//") || reference.startsWith("\\\\")) {
+				throw new Error("That path is not valid.");
+			}
+			const workspace = await deps.resolveWorkspace(input.sessionId.trim());
+			const expanded = reference === "~" ? deps.homeDir : reference.startsWith("~/") ? api.join(deps.homeDir, reference.slice(2)) : reference;
+			const absolute = api.isAbsolute(expanded);
+			const target = api.resolve(workspace, expanded);
+			if (!absolute && target !== workspace && !isInside(api, workspace, target)) throw new Error("That path is outside the session workspace.");
+			if (input.action === "copy") {
+				if (!deps.copyText) throw new Error("Copying is not available.");
+				await deps.copyText(target);
+				return;
+			}
+			const realTarget = await deps.realPath(target).catch(() => { throw new Error("That path no longer exists."); });
+			if (!absolute) {
+				const realWorkspace = await deps.realPath(workspace);
+				if (realTarget !== realWorkspace && !isInside(api, realWorkspace, realTarget)) throw new Error("That path is outside the session workspace.");
+			}
+			if (input.action === "reveal") {
+				await deps.revealPath(realTarget);
+				return;
+			}
+			if (!isEditorId(input.editorId)) throw new Error("That editor is not supported.");
+			const editor = resolveEditors().find(({ target }) => target.id === input.editorId);
+			if (!editor) throw new Error("That editor is not installed. Choose another option.");
+			// Batch shims and terminal editors use cmd.exe, which expands percent variables even in quotes.
+			const command = editor.command.command;
+			if (deps.platform === "win32" && /[%!"]/.test(realTarget) && (/\.(?:cmd|bat)$/i.test(command) || api.basename(command).toLowerCase() === "cmd.exe")) {
+				throw new Error("That path cannot be passed safely to this editor launcher.");
+			}
+			const cwd = isDirectory(realTarget) ? realTarget : api.dirname(realTarget);
+			await deps.launch(editor.command.command, (editor.command.argsForFile ?? editor.command.argsForWorkspace)(realTarget), cwd);
+		},
 		async getState(sessionId, options) {
 			if (options?.refreshTerminals === true) await refreshTerminals();
 			const editors = resolveEditors();
@@ -514,10 +576,18 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const targets = [...editors.map(({ target }) => target), fileManager, ...menuTerminals.map(({ target }) => target)];
 			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
 				if (target.iconDataUrl) return target;
+				const editor = editors.find((entry) => entry.target.id === target.id);
 				const terminal = terminals.find((entry) => entry.target.id === target.id);
-				const iconPath = terminal
+				let iconPath = editor?.command.iconPath ?? (terminal
 					? terminal.command.iconPath ?? terminal.command.command
-					: target.kind === "file_manager" && deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app" : undefined;
+					: target.kind === "file_manager" && deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app" : undefined);
+				if (editor) {
+					// CLI shims may point into a relocated .app. Use that actual bundle's
+					// native icon before falling back to the registered installation or executable.
+					const executable = await deps.realPath(editor.command.command).catch(() => editor.command.command);
+					const bundle = deps.platform === "darwin" ? executable.match(/^(.+?\.app)(?:\/|$)/i)?.[1] : undefined;
+					iconPath = bundle ?? iconPath ?? executable;
+				}
 				const iconDataUrl = iconPath ? await readIcon(iconPath) : undefined;
 				return iconDataUrl ? { ...target, iconDataUrl } : target;
 			}));

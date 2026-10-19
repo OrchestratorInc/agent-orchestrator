@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Copy path",
+	"chat.path.revealInFinder": "Reveal in Finder",
+	"chat.path.revealInFileManager": "Reveal in file manager",
+	"chat.path.openWith": "Open with {{editor}}",
+	"chat.path.actionFailed": "Could not complete the path action",
 	"awake.stopReason.low_battery": "Stopped because the battery reached the configured safety limit. Charge your Mac, then turn Stay Awake off and on to restart.",
 	"awake.stopReason.critical_heat": "Stopped because the Mac needs to cool down. After it cools, turn Stay Awake off and on to restart.",
 	"awake.stopReason.battery_unknown": "Stopped because battery state could not be read. Turn Stay Awake off and on to retry.",
@@ -895,7 +900,7 @@
 	"inspector.openInSystemBrowser": "Open in System Browser",
 	"link.copy": "Copy link",
 	"link.openInAOBrowser": "Open in ao browser",
-	"link.openInFiles": "Open in Files",
+	"link.openInAO": "Open in AO",
 	"link.openInExternalBrowser": "Open in external browser",
 	"inspector.openInlineComments": "{{count}} open comments",
 	"inspector.requestRereviewPR": "Request to re-review PR",

@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Pfad kopieren",
+	"chat.path.revealInFinder": "Im Finder anzeigen",
+	"chat.path.revealInFileManager": "Im Dateimanager anzeigen",
+	"chat.path.openWith": "Mit {{editor}} öffnen",
+	"chat.path.actionFailed": "Die Pfadaktion konnte nicht ausgeführt werden",
 	"awake.stopReason.low_battery": "Gestoppt, weil der Akku den eingestellten Sicherheitsgrenzwert erreicht hat. Lade deinen Mac auf und schalte Stay Awake anschließend aus und wieder ein.",
 	"awake.stopReason.critical_heat": "Gestoppt, weil der Mac abkühlen muss. Schalte Stay Awake nach dem Abkühlen aus und wieder ein.",
 	"awake.stopReason.battery_unknown": "Gestoppt, weil der Akkustand nicht gelesen werden konnte. Schalte Stay Awake aus und wieder ein, um es erneut zu versuchen.",
@@ -899,7 +904,7 @@
 	"inspector.openInSystemBrowser": "Im Systembrowser öffnen",
 	"link.copy": "Link kopieren",
 	"link.openInAOBrowser": "Im AO-Browser öffnen",
-	"link.openInFiles": "In Dateien öffnen",
+	"link.openInAO": "In AO öffnen",
 	"link.openInExternalBrowser": "Im externen Browser öffnen",
 	"inspector.openInlineComments": "{{count}} offene Inline-Kommentare",
 	"inspector.requestRereviewPR": "Erneute PR-Review anfragen",

@@ -203,6 +203,7 @@ if (typeof window !== "undefined") {
 		},
 		sideChats: { capture: async () => undefined },
 	editorHandoff: {
+			pathAction: async () => undefined,
 			getState: async () => ({
 				targets: [
 					{ id: "cursor", name: "Cursor", kind: "editor" },

@@ -74,3 +74,11 @@ export function isEditorId(value: unknown): value is EditorId {
 export function isTerminalId(value: unknown): value is TerminalId {
 	return typeof value === "string" && ((TERMINAL_IDS as readonly string[]).includes(value) || /^terminal-app:[a-f0-9]{64}$/.test(value));
 }
+
+/** Explicit desktop action on a normalized chat path; relative paths use the session workspace. */
+export type ChatPathActionInput = {
+	sessionId: string;
+	path: string;
+	action: "copy" | "reveal" | "open";
+	editorId?: EditorId;
+};
