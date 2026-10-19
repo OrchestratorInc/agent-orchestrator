@@ -495,7 +495,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 				restarted = append(restarted, *reviewState.LatestRun)
 				continue
 			}
-		} else if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, reviewState.PRURL, reviewState.TargetSHA, "superseded by a review trigger for a newer commit"); err != nil {
+		} else if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, reviewState.PRURL, reviewState.TargetSHA, domain.ReviewRunSupersededReason); err != nil {
 			return TriggerResult{}, err
 		}
 		if batchID == "" {
@@ -691,7 +691,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 	}
 	for _, stale := range pendingSupersedes {
-		if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, stale.prURL, stale.targetSHA, "superseded by a review trigger for a newer commit"); err != nil {
+		if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, stale.prURL, stale.targetSHA, domain.ReviewRunSupersededReason); err != nil {
 			if previousReview.IsArchived || modeChanging {
 				return TriggerResult{}, rollbackReplacement(err)
 			}
@@ -1698,7 +1698,7 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 				return CancelResult{}, err
 			}
 		}
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, review.Harness, "cancelled by user"); err != nil {
+		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, review.Harness, domain.ReviewRunCancelledByUserReason); err != nil {
 			return CancelResult{}, err
 		}
 		cancelledHarness[review.Harness] = true
@@ -1710,7 +1710,7 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 		hasLegacy = hasLegacy || run.Harness == ""
 	}
 	if hasLegacy {
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, "", "cancelled by user"); err != nil {
+		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, "", domain.ReviewRunCancelledByUserReason); err != nil {
 			return CancelResult{}, err
 		}
 	}
@@ -1721,7 +1721,7 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 		}
 		run.Status = domain.ReviewRunCancelled
 		run.Verdict = domain.VerdictNone
-		run.Body = "cancelled by user"
+		run.Body = domain.ReviewRunCancelledByUserReason
 		run.GithubReviewID = ""
 		cancelled = append(cancelled, run)
 	}

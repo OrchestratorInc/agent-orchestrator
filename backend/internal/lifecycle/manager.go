@@ -276,7 +276,7 @@ type Manager struct {
 	// reviewNoticeSeen records when a finished pass was first found waiting
 	// for its provider review to be observed (see reviewNoticeObserveGrace).
 	reviewNoticeMu   sync.Mutex
-	reviewNoticeSeen map[string]time.Time
+	reviewNoticeSeen map[string]reviewNoticeWait
 }
 
 // New builds a Lifecycle Manager over the session store it writes and the messenger it uses for agent nudges.
@@ -294,7 +294,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		flights:                     map[domain.SessionID]*toolFlight{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
-		reviewNoticeSeen:            map[string]time.Time{},
+		reviewNoticeSeen:            map[string]reviewNoticeWait{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
 		urgentNudgeWaitingInputSafe: func(domain.AgentHarness) bool { return false },
