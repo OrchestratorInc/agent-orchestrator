@@ -66,6 +66,13 @@ func ArtifactShareSlug(project, feature, email string) string {
 	return strings.Join(parts, "-")
 }
 
+// ArtifactShareDocumentKey identifies a published document by its base slug
+// (project, feature and owner) and file name. Publishing a document with the
+// same key replaces the file its existing link serves.
+func ArtifactShareDocumentKey(baseSlug, name string) string {
+	return baseSlug + "/" + name
+}
+
 // ArtifactShareSlugCandidate returns the slug for one collision attempt:
 // attempt 1 is the base slug, attempt n > 1 appends "-n".
 func ArtifactShareSlugCandidate(base string, attempt int) string {

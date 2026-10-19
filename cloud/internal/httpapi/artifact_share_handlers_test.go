@@ -37,6 +37,8 @@ type memoryShareRows struct {
 	// queue is the sweeper queue of share object versions, keyed by
 	// key+"@"+version.
 	queue map[string]queuedShareVersion
+	// documents maps a user's document key to its share ID.
+	documents map[string]string
 }
 
 type queuedShareVersion struct {
@@ -47,9 +49,10 @@ type queuedShareVersion struct {
 
 func newMemoryShareRows() *memoryShareRows {
 	return &memoryShareRows{
-		shares: map[string]domain.ArtifactShare{},
-		clock:  time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
-		queue:  map[string]queuedShareVersion{},
+		shares:    map[string]domain.ArtifactShare{},
+		clock:     time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+		queue:     map[string]queuedShareVersion{},
+		documents: map[string]string{},
 	}
 }
 
@@ -138,17 +141,30 @@ func (m *memoryShareRows) countLocked(userID string) int {
 	return count
 }
 
-func (m *memoryShareRows) CountArtifactShares(_ context.Context, userID string) (int, error) {
+func (m *memoryShareRows) ArtifactSharePublishAllowed(_ context.Context, userID, documentKey string, limit int) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.countLocked(userID), nil
+	_, published := m.documents[userID+"|"+documentKey]
+	return published || m.countLocked(userID) < limit, nil
 }
 
-func (m *memoryShareRows) CreateArtifactShare(_ context.Context, share domain.ArtifactShare, baseSlug string, limit int) (domain.ArtifactShare, error) {
+func (m *memoryShareRows) PublishArtifactShare(_ context.Context, share domain.ArtifactShare, baseSlug, documentKey string, limit int) (domain.ArtifactShare, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if existingID, ok := m.documents[share.UserID+"|"+documentKey]; ok {
+		if err := m.claimUploadLocked(share.S3Key, share.VersionID); err != nil {
+			return domain.ArtifactShare{}, false, err
+		}
+		current := m.shares[existingID]
+		m.queueLocked(current.S3Key, current.VersionID, "replaced", false)
+		m.clock = m.clock.Add(time.Second)
+		current.ContentType, current.Size, current.SHA256 = share.ContentType, share.Size, share.SHA256
+		current.S3Key, current.VersionID, current.UpdatedAt = share.S3Key, share.VersionID, m.clock
+		m.shares[existingID] = current
+		return current, true, nil
+	}
 	if m.countLocked(share.UserID) >= limit {
-		return domain.ArtifactShare{}, postgres.ErrArtifactShareLimit
+		return domain.ArtifactShare{}, false, postgres.ErrArtifactShareLimit
 	}
 	taken := map[string]bool{}
 	for _, existing := range m.shares {
@@ -160,14 +176,15 @@ func (m *memoryShareRows) CreateArtifactShare(_ context.Context, share domain.Ar
 			continue
 		}
 		if err := m.claimUploadLocked(share.S3Key, share.VersionID); err != nil {
-			return domain.ArtifactShare{}, err
+			return domain.ArtifactShare{}, false, err
 		}
 		m.clock = m.clock.Add(time.Second)
 		share.Slug, share.CreatedAt, share.UpdatedAt = slug, m.clock, m.clock
 		m.shares[share.ID] = share
-		return share, nil
+		m.documents[share.UserID+"|"+documentKey] = share.ID
+		return share, false, nil
 	}
-	return domain.ArtifactShare{}, postgres.ErrConflict
+	return domain.ArtifactShare{}, false, postgres.ErrConflict
 }
 
 func (m *memoryShareRows) UpdateArtifactShare(_ context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error) {
@@ -221,6 +238,11 @@ func (m *memoryShareRows) DeleteArtifactShare(_ context.Context, userID, shareID
 		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
 	delete(m.shares, shareID)
+	for document, id := range m.documents {
+		if id == shareID {
+			delete(m.documents, document)
+		}
+	}
 	m.queueLocked(share.S3Key, share.VersionID, "replaced", false)
 	return share, nil
 }
@@ -536,8 +558,8 @@ func TestArtifactShareUploadValidation(t *testing.T) {
 	if rec := h.request(http.MethodPost, "/api/cloud/v1/me/artifact-shares?name=a.html", "", "", body, nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated publish: status = %d", rec.Code)
 	}
-	if used, _ := h.rows.CountArtifactShares(context.Background(), artifactUserA); used != 0 {
-		t.Fatalf("rejected uploads created %d shares", used)
+	if used, _ := h.rows.ListArtifactShares(context.Background(), artifactUserA); len(used) != 0 {
+		t.Fatalf("rejected uploads created %d shares", len(used))
 	}
 }
 
@@ -680,5 +702,60 @@ func TestArtifactShareUploadOutlivesServerReadTimeout(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		payload, _ := io.ReadAll(resp.Body)
 		t.Fatalf("slow upload: %d %s", resp.StatusCode, payload)
+	}
+}
+
+// Publishing the same document again replaces the version its link serves:
+// the URL and slot stay, the earlier version is no longer served, and it is
+// queued for the sweeper.
+func TestArtifactSharePublishingTheSameDocumentReplacesItsLink(t *testing.T) {
+	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 1})
+	first := h.mustPublish(artifactTokenA, "report.html", "proj", "feat", []byte("v1"))
+
+	again := h.publish(artifactTokenA, "report.html", "proj", "feat", []byte("v2"))
+	if again.Code != http.StatusOK {
+		t.Fatalf("republishing the same document: %d %s", again.Code, again.Body.String())
+	}
+	body := decodeBody[struct {
+		Share    artifactShareResponse `json:"share"`
+		Replaced bool                  `json:"replaced"`
+	}](t, again)
+	if !body.Replaced || body.Share.ID != first.ID || body.Share.URL != first.URL {
+		t.Fatalf("republish = %+v, want the first link replaced", body)
+	}
+	if page := h.visit(first.URL, nil); page.Body.String() != "v2" {
+		t.Fatalf("link served %q, want only the new version", page.Body.String())
+	}
+	if replaced := h.rows.queued("replaced"); len(replaced) != 1 || replaced[0].S3Key != "shares/"+first.ID {
+		t.Fatalf("queued replaced versions = %+v, want the first version", replaced)
+	}
+	listed, _ := h.rows.ListArtifactShares(context.Background(), artifactUserA)
+	if len(listed) != 1 {
+		t.Fatalf("user holds %d links, want 1", len(listed))
+	}
+
+	// A different file, or the same file under another feature, is another
+	// document, so it needs a free slot.
+	for _, other := range []struct{ name, feature string }{{"notes.html", "feat"}, {"report.html", "other"}} {
+		if rec := h.publish(artifactTokenA, other.name, "proj", other.feature, []byte("x")); rec.Code != http.StatusConflict {
+			t.Fatalf("%s under %s: %d, want the limit", other.name, other.feature, rec.Code)
+		}
+	}
+	// Another user publishing the same names gets their own link.
+	theirs := h.mustPublish(artifactTokenB, "report.html", "proj", "feat", []byte("b"))
+	if theirs.ID == first.ID {
+		t.Fatal("another user's publish replaced this user's link")
+	}
+	if page := h.visit(first.URL, nil); page.Body.String() != "v2" {
+		t.Fatalf("first link now serves %q", page.Body.String())
+	}
+
+	// After a revoke the document can be published again as a new link.
+	if rec := h.request(http.MethodDelete, "/api/cloud/v1/me/artifact-shares/"+first.ID, "", artifactTokenA, nil, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke: %d", rec.Code)
+	}
+	fresh := h.mustPublish(artifactTokenA, "report.html", "proj", "feat", []byte("v3"))
+	if fresh.ID == first.ID {
+		t.Fatal("publishing after a revoke reused the revoked link")
 	}
 }

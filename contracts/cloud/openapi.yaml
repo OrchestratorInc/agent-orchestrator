@@ -122,12 +122,16 @@ paths:
       operationId: createArtifactShare
       tags: [Artifacts]
       description: >-
-        Publishes the request body, one file from a local session, as a new
-        public link at <project>-<feature>-<email> under the share origin. A
-        taken name gets a -2, -3, ... suffix. Content-Length and
-        X-AO-Artifact-SHA256 are required. Returns 409
-        artifact_share_limit_reached when the user already holds their limit
-        of links.
+        Publishes the request body, one file from a local session, as the
+        link of the document named by project, feature and name. A new
+        document gets a new public link at <project>-<feature>-<email> under
+        the share origin; a taken name gets a -2, -3, ... suffix. Publishing
+        a document that already has a link replaces the version that link
+        serves: the URL and slot stay, the earlier version is no longer
+        served, and the response is 200 with replaced true.
+        Content-Length and X-AO-Artifact-SHA256 are required. Returns 409
+        artifact_share_limit_reached when a new document would exceed the
+        user's limit of links.
       parameters:
         - $ref: "#/components/parameters/ArtifactShareName"
         - name: project
@@ -147,12 +151,18 @@ paths:
               type: string
               format: binary
       responses:
+        "200":
+          description: The document's existing link, now serving the new version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
         "201":
           description: The new share link.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactShareEnvelope"
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares/{shareId}:
@@ -5503,6 +5513,16 @@ components:
       properties:
         share:
           $ref: "#/components/schemas/ArtifactShare"
+    ArtifactSharePublishResult:
+      type: object
+      additionalProperties: false
+      required: [share, replaced]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+        replaced:
+          type: boolean
+          description: True when publishing replaced the version of the document's existing link.
     ArtifactShareList:
       type: object
       additionalProperties: false

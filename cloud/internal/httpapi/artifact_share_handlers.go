@@ -26,10 +26,10 @@ import (
 // artifactShareStore reads and writes the public share links users create
 // for single files from local sessions.
 type artifactShareStore interface {
-	CountArtifactShares(ctx context.Context, userID string) (int, error)
+	ArtifactSharePublishAllowed(ctx context.Context, userID, documentKey string, limit int) (bool, error)
 	RecordArtifactShareUpload(ctx context.Context, userID, s3Key, versionID string, size int64) error
 	DiscardArtifactShareUpload(ctx context.Context, userID, s3Key, versionID string) error
-	CreateArtifactShare(ctx context.Context, share domain.ArtifactShare, baseSlug string, limit int) (domain.ArtifactShare, error)
+	PublishArtifactShare(ctx context.Context, share domain.ArtifactShare, baseSlug, documentKey string, limit int) (domain.ArtifactShare, bool, error)
 	UpdateArtifactShare(ctx context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error)
 	GetArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error)
 	ListArtifactShares(ctx context.Context, userID string) ([]domain.ArtifactShare, error)
@@ -154,8 +154,11 @@ func (s *Server) listArtifactShares(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// createArtifactShare publishes the request body as a new share link named
-// project-feature-email. The query carries name, project and feature.
+// createArtifactShare publishes the request body as the share link of a
+// document named by the query's project, feature and name. A new document
+// gets a new link named project-feature-email; publishing a document that
+// already has a link replaces the version that link serves, so the earlier
+// version is no longer published and no new slot is used.
 func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	principal := principalFrom(r)
@@ -164,12 +167,14 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	used, err := s.shareRows.CountArtifactShares(r.Context(), principal.UserID)
+	baseSlug := domain.ArtifactShareSlug(query.Get("project"), query.Get("feature"), principal.Email)
+	documentKey := domain.ArtifactShareDocumentKey(baseSlug, upload.name)
+	allowed, err := s.shareRows.ArtifactSharePublishAllowed(r.Context(), principal.UserID, documentKey, s.shareConfig.limit)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	if used >= s.shareConfig.limit {
+	if !allowed {
 		s.writeShareLimit(w, r)
 		return
 	}
@@ -179,7 +184,7 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	share, err := s.shareRows.CreateArtifactShare(r.Context(), domain.ArtifactShare{
+	share, replaced, err := s.shareRows.PublishArtifactShare(r.Context(), domain.ArtifactShare{
 		ID:          shareID,
 		UserID:      principal.UserID,
 		Name:        upload.name,
@@ -188,7 +193,7 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 		SHA256:      upload.sha256,
 		S3Key:       key,
 		VersionID:   versionID,
-	}, domain.ArtifactShareSlug(query.Get("project"), query.Get("feature"), principal.Email), s.shareConfig.limit)
+	}, baseSlug, documentKey, s.shareConfig.limit)
 	if err != nil {
 		s.discardShareUpload(r.Context(), principal.UserID, key, versionID)
 		if errors.Is(err, postgres.ErrArtifactShareLimit) {
@@ -198,7 +203,11 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"share": s.toArtifactShareResponse(share)})
+	status := http.StatusCreated
+	if replaced {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{"share": s.toArtifactShareResponse(share), "replaced": replaced})
 }
 
 // updateArtifactShare replaces the file an existing link serves. The link

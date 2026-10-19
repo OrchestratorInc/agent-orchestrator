@@ -78,7 +78,8 @@ func TestArtifactShareLimitHoldsUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			created[index], results[index] = store.CreateArtifactShare(ctx, shares[index], "proj-feat-dev-example-com", 3)
+			created[index], _, results[index] = store.PublishArtifactShare(ctx, shares[index], "proj-feat-dev-example-com",
+				domain.ArtifactShareDocumentKey("proj-feat-dev-example-com", shares[index].ID+".html"), 3)
 		}()
 	}
 	wg.Wait()
@@ -100,8 +101,8 @@ func TestArtifactShareLimitHoldsUnderConcurrency(t *testing.T) {
 			t.Fatalf("missing slug %q in %v", slug, slugs)
 		}
 	}
-	if count, err := store.CountArtifactShares(ctx, fixture.userID); err != nil || count != 3 {
-		t.Fatalf("count = %d, %v", count, err)
+	if listed, err := store.ListArtifactShares(ctx, fixture.userID); err != nil || len(listed) != 3 {
+		t.Fatalf("listed = %d, %v", len(listed), err)
 	}
 }
 
@@ -118,10 +119,10 @@ func TestArtifactShareOwnershipUpdateAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.CreateArtifactShare(ctx, testShare(fixture.userID, "unrecorded.html"), "proj-feat-a", 3); !errors.Is(err, ErrArtifactVersionUnknown) {
+	if _, _, err := store.PublishArtifactShare(ctx, testShare(fixture.userID, "unrecorded.html"), "proj-feat-a", "proj-feat-a/unrecorded.html", 3); !errors.Is(err, ErrArtifactVersionUnknown) {
 		t.Fatalf("create without a recorded upload err = %v, want ErrArtifactVersionUnknown", err)
 	}
-	share, err := store.CreateArtifactShare(ctx, recordedShare(t, store, fixture.userID, "report.html"), "proj-feat-a", 3)
+	share, _, err := store.PublishArtifactShare(ctx, recordedShare(t, store, fixture.userID, "report.html"), "proj-feat-a", "proj-feat-a/report.html", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +176,8 @@ func TestArtifactShareOwnershipUpdateAndDelete(t *testing.T) {
 	if _, err := store.ArtifactShareBySlug(ctx, share.Slug); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted slug err = %v, want ErrNotFound", err)
 	}
-	if count, err := store.CountArtifactShares(ctx, fixture.userID); err != nil || count != 0 {
-		t.Fatalf("count after delete = %d, %v", count, err)
+	if listed, err := store.ListArtifactShares(ctx, fixture.userID); err != nil || len(listed) != 0 {
+		t.Fatalf("listed after delete = %d, %v", len(listed), err)
 	}
 	if queued := queuedShareVersions(t, admin, share.S3Key); len(queued) != 2 || queued["v2"] != "replaced" {
 		t.Fatalf("queue after delete = %v, want both versions replaced", queued)
@@ -221,5 +222,66 @@ func TestArtifactShareVersionsReachTheSweeper(t *testing.T) {
 	}
 	if visible != 0 {
 		t.Fatalf("another user sees %d of this user's queued versions", visible)
+	}
+}
+
+// Concurrent publishes of one document make one link: the first inserts it,
+// every other replaces its version, and each replaced version is queued.
+func TestArtifactSharePublishingOneDocumentConcurrentlyMakesOneLink(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	const attempts = 6
+	const documentKey = "proj-feat-dev-example-com/report.html"
+	shares := make([]domain.ArtifactShare, attempts)
+	for index := range attempts {
+		shares[index] = recordedShare(t, store, fixture.userID, "report.html")
+	}
+	var wg sync.WaitGroup
+	results := make([]error, attempts)
+	replaced := make([]bool, attempts)
+	published := make([]domain.ArtifactShare, attempts)
+	for index := range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			published[index], replaced[index], results[index] = store.PublishArtifactShare(ctx, shares[index], "proj-feat-dev-example-com", documentKey, 1)
+		}()
+	}
+	wg.Wait()
+	inserted := 0
+	for index, err := range results {
+		if err != nil {
+			t.Fatalf("publish %d: %v", index, err)
+		}
+		if !replaced[index] {
+			inserted++
+		}
+		if published[index].Slug != "proj-feat-dev-example-com" {
+			t.Fatalf("publish %d slug = %q", index, published[index].Slug)
+		}
+	}
+	if inserted != 1 {
+		t.Fatalf("%d publishes inserted a link, want 1", inserted)
+	}
+	listed, err := store.ListArtifactShares(ctx, fixture.userID)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("listed = %d, %v", len(listed), err)
+	}
+	var queued int
+	if err := admin.QueryRow(ctx,
+		`SELECT count(*) FROM ao_artifact_object_versions WHERE user_id = $1 AND reason = 'replaced'`,
+		fixture.userID).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != attempts-1 {
+		t.Fatalf("queued replaced versions = %d, want %d", queued, attempts-1)
+	}
+	allowed, err := store.ArtifactSharePublishAllowed(ctx, fixture.userID, documentKey, 1)
+	if err != nil || !allowed {
+		t.Fatalf("republishing at the limit allowed = %v, %v", allowed, err)
+	}
+	if allowed, err := store.ArtifactSharePublishAllowed(ctx, fixture.userID, "proj-feat-dev-example-com/other.html", 1); err != nil || allowed {
+		t.Fatalf("a new document at the limit allowed = %v, %v", allowed, err)
 	}
 }

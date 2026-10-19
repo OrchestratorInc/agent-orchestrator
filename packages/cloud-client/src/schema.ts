@@ -64,7 +64,7 @@ export interface paths {
         /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as a new public link at <project>-<feature>-<email> under the share origin. A taken name gets a -2, -3, ... suffix. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when the user already holds their limit of links. */
+        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links. */
         post: operations["createArtifactShare"];
         delete?: never;
         options?: never;
@@ -2949,6 +2949,11 @@ export interface components {
         ArtifactShareEnvelope: {
             share: components["schemas"]["ArtifactShare"];
         };
+        ArtifactSharePublishResult: {
+            share: components["schemas"]["ArtifactShare"];
+            /** @description True when publishing replaced the version of the document's existing link. */
+            replaced: boolean;
+        };
         ArtifactShareList: {
             shares: components["schemas"]["ArtifactShare"][];
             limit: number;
@@ -3710,13 +3715,22 @@ export interface operations {
             };
         };
         responses: {
+            /** @description The document's existing link, now serving the new version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
             /** @description The new share link. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
                 };
             };
             default: components["responses"]["Error"];

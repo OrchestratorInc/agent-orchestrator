@@ -12,15 +12,21 @@ import (
 const artifactShareColumns = `id::text, user_id::text, slug, name, content_type,
 	size, sha256, s3_key, version_id, created_at, updated_at`
 
-// CountArtifactShares returns how many active share links the user holds.
-func (s *Store) CountArtifactShares(ctx context.Context, userID string) (int, error) {
-	var count int
+// ArtifactSharePublishAllowed reports whether the user can publish the
+// document: it already has a link, which publishing replaces, or the user
+// holds fewer than limit links. PublishArtifactShare enforces the same rule
+// exactly; this check only avoids storing an object that would be refused.
+func (s *Store) ArtifactSharePublishAllowed(ctx context.Context, userID, documentKey string, limit int) (bool, error) {
+	var allowed bool
 	err := s.withUser(ctx, userID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT count(*) FROM ao_artifact_shares WHERE user_id = $1`, userID,
-		).Scan(&count)
+			`SELECT EXISTS (
+				SELECT 1 FROM ao_artifact_shares WHERE user_id = $1 AND document_key = $2
+			) OR (SELECT count(*) FROM ao_artifact_shares WHERE user_id = $1) < $3`,
+			userID, documentKey, limit,
+		).Scan(&allowed)
 	})
-	return count, err
+	return allowed, err
 }
 
 // RecordArtifactShareUpload queues an uploaded share object version that no
@@ -90,25 +96,61 @@ func queueReplacedShareVersionTx(ctx context.Context, tx pgx.Tx, userID, s3Key, 
 	return nil
 }
 
-// CreateArtifactShare inserts a new share link for share.UserID under the
-// first free slug of baseSlug, baseSlug-2, baseSlug-3, and so on. It returns
-// ErrArtifactShareLimit, and inserts nothing, when the user already holds
-// limit links. The share claims its upload, recorded by
-// RecordArtifactShareUpload, from the sweeper's queue. A per-user advisory lock makes the count and the insert one
-// step, so concurrent requests cannot pass the limit.
-func (s *Store) CreateArtifactShare(
+// PublishArtifactShare publishes share.UserID's document. When the user
+// already has a link for documentKey, that link now serves the new version,
+// which keeps its URL and slot, the version it served is queued for the
+// sweeper, and replaced is true. Otherwise it inserts a new link under the
+// first free slug of baseSlug, baseSlug-2, baseSlug-3, and so on, returning
+// ErrArtifactShareLimit, and inserting nothing, when the user already holds
+// limit links. Either way the link claims its upload, recorded by
+// RecordArtifactShareUpload, from the sweeper's queue. A per-user advisory
+// lock makes the lookup, the count and the write one step, so concurrent
+// requests can neither pass the limit nor make two links for one document.
+func (s *Store) PublishArtifactShare(
 	ctx context.Context,
 	share domain.ArtifactShare,
-	baseSlug string,
+	baseSlug, documentKey string,
 	limit int,
-) (domain.ArtifactShare, error) {
-	var created domain.ArtifactShare
-	err := s.withUser(ctx, share.UserID, func(tx pgx.Tx) error {
+) (published domain.ArtifactShare, replaced bool, err error) {
+	err = s.withUser(ctx, share.UserID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`SELECT pg_advisory_xact_lock(hashtextextended('ao_artifact_shares:' || $1, 0))`,
 			share.UserID,
 		); err != nil {
 			return fmt.Errorf("lock artifact shares: %w", err)
+		}
+		var existingID, previousKey, previousVersion string
+		var previousSize int64
+		err := tx.QueryRow(ctx,
+			`SELECT id::text, s3_key, version_id, size FROM ao_artifact_shares
+			WHERE user_id = $1 AND document_key = $2`,
+			share.UserID, documentKey,
+		).Scan(&existingID, &previousKey, &previousVersion, &previousSize)
+		switch {
+		case err == nil:
+			replaced = true
+			if err := claimShareUploadTx(ctx, tx, share.UserID, share.S3Key, share.VersionID); err != nil {
+				return err
+			}
+			rows, err := tx.Query(ctx,
+				`UPDATE ao_artifact_shares
+				SET content_type = $3, size = $4, sha256 = $5, s3_key = $6,
+					version_id = $7, updated_at = now()
+				WHERE id = $1 AND user_id = $2
+				RETURNING `+artifactShareColumns,
+				existingID, share.UserID, share.ContentType, share.Size, share.SHA256,
+				share.S3Key, share.VersionID,
+			)
+			if err != nil {
+				return fmt.Errorf("replace artifact share version: %w", normalizeConstraintError(err))
+			}
+			published, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
+			if err != nil {
+				return err
+			}
+			return queueReplacedShareVersionTx(ctx, tx, share.UserID, previousKey, previousVersion, previousSize)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("find published artifact document: %w", err)
 		}
 		var count int
 		if err := tx.QueryRow(ctx,
@@ -122,17 +164,17 @@ func (s *Store) CreateArtifactShare(
 		for attempt := 1; attempt <= domain.MaxArtifactShareSlugAttempts; attempt++ {
 			rows, err := tx.Query(ctx,
 				`INSERT INTO ao_artifact_shares (
-					id, user_id, slug, name, content_type, size, sha256, s3_key, version_id
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					id, user_id, slug, name, document_key, content_type, size, sha256, s3_key, version_id
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 				ON CONFLICT (slug) DO NOTHING
 				RETURNING `+artifactShareColumns,
 				share.ID, share.UserID, domain.ArtifactShareSlugCandidate(baseSlug, attempt),
-				share.Name, share.ContentType, share.Size, share.SHA256, share.S3Key, share.VersionID,
+				share.Name, documentKey, share.ContentType, share.Size, share.SHA256, share.S3Key, share.VersionID,
 			)
 			if err != nil {
 				return fmt.Errorf("insert artifact share: %w", normalizeConstraintError(err))
 			}
-			created, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
+			published, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue
 			}
@@ -143,7 +185,7 @@ func (s *Store) CreateArtifactShare(
 		}
 		return ErrConflict
 	})
-	return created, err
+	return published, replaced, err
 }
 
 // UpdateArtifactShare points one of the user's share links at a new object
