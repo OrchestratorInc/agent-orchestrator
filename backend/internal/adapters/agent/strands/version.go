@@ -24,3 +24,7 @@ func checkVersion(ctx context.Context, binary string) error {
 	}
 	return nil
 }
+
+// SupportsTerminalVersionRefresh refuses unattended upgrades of the pinned
+// experimental CLI. A new release needs native lifecycle requalification first.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return false }
