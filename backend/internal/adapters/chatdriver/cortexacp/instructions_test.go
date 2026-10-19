@@ -46,6 +46,14 @@ func TestInstructionPluginEmitsOnlyPrivateAdditiveContext(t *testing.T) {
 	if err := os.WriteFile(project, []byte("independent project rules"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	settingsPath := filepath.Join(cfg.Env["HOME"], ".snowflake", "cortex", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	settings := []byte(`{"plugins":["user-owned-plugin"],"customInstructions":"native user rules"}`)
+	if err := os.WriteFile(settingsPath, settings, 0600); err != nil {
+		t.Fatal(err)
+	}
 	cfg.SystemPrompt = "private context\n'$(touch never-run)' `echo literal`\nUnicode: λ"
 	args, _, err := configureInstructions(context.Background(), acpdriver.LaunchConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, SystemPrompt: cfg.SystemPrompt}, true)
 	if err != nil {
@@ -107,6 +115,10 @@ func TestInstructionPluginEmitsOnlyPrivateAdditiveContext(t *testing.T) {
 	if err != nil || string(rules) != "independent project rules" {
 		t.Fatal("project rules modified")
 	}
+	userRules, err := os.ReadFile(settingsPath)
+	if err != nil || string(userRules) != string(settings) {
+		t.Fatal("native user settings or plugins modified")
+	}
 	// A second cold launch must use NEW context without rewriting a live plugin.
 	next, _, err := configureInstructions(context.Background(), acpdriver.LaunchConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, SystemPrompt: "new restore context"}, true)
 	if err != nil || next[5] == pluginDir {
@@ -124,10 +136,18 @@ func TestInstructionPluginRequiresExplicitOptIn(t *testing.T) {
 	if _, _, err := configureInstructions(context.Background(), launch, false); !errors.Is(err, ports.ErrChatDriverIncompatible) {
 		t.Fatalf("default gate opened: %v", err)
 	}
+	entriesBefore, err := os.ReadDir(cfg.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, _, err := configureInstructions(ctx, launch, true); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled launch wrote context: %v", err)
+	}
+	entriesAfter, err := os.ReadDir(cfg.DataDir)
+	if err != nil || len(entriesBefore) != len(entriesAfter) {
+		t.Fatalf("cancelled launch left plugin files: %v", err)
 	}
 	if runtime.GOOS == "windows" {
 		if _, _, err := configureInstructions(context.Background(), launch, true); !errors.Is(err, ports.ErrChatDriverIncompatible) {

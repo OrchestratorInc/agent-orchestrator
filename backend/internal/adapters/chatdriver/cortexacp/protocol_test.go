@@ -484,6 +484,7 @@ func TestInstructionConstructorSeparatesContextAcrossColdRestoreAndLiveReconnect
 		t.Fatalf("fresh context: %v", got)
 	}
 	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: conv.ProviderConversationID(), DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true, SystemPrompt: cfg.SystemPrompt}
+	resume.SystemPrompt = "changed caller context must not rewrite a live host"
 	if err := conv.Close(); err != nil {
 		t.Fatal(err)
 	}
