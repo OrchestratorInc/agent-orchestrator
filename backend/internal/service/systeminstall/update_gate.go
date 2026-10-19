@@ -217,7 +217,9 @@ func (s *Service) updateInUse(ctx context.Context, target Target, advisory Updat
 		ids = append(ids, string(id))
 	}
 	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask)
-	if managedMethods[advisory.MaintenanceMethod] && s.managedRoot != "" {
+	_, officialRecipe := officialManagedRecipes[target]
+	officialManaged := advisory.MaintenanceMethod == "official-installer" && officialRecipe && (s.goos == "darwin" || s.goos == "linux")
+	if (managedMethods[advisory.MaintenanceMethod] || officialManaged) && s.managedRoot != "" {
 		// MaintenanceMethod is the ownership-checked source of this advisory.
 		// Use the same update recipe as StartAgentOperation: the raw method
 		// overwrites files, but its eligible managed recipe keeps them intact.

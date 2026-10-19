@@ -39,6 +39,8 @@ type InstallScriptCommand struct {
 	URL         string
 	Interpreter []string
 	Env         []string
+	// Args follow the downloaded script, e.g. a vendor installer's version pin.
+	Args []string
 }
 
 // InstallScriptResult records display-safe evidence about a downloaded script.

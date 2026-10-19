@@ -420,6 +420,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
+			// A vendor installer AO can run into a release of its own updates
+			// beside the copy sessions run (officialManagedRecipes).
+			if installScript != nil && s.managedRoot != "" && s.installScripts != nil {
+				if _, ok := s.officialManagedRecipeFor(Plan{Target: plan.Target, Method: plan.Method, Script: installScript}); ok {
+					plan.Command = nil
+					plan.Script = installScript
+					break
+				}
+			}
 			// These self-updaters do not reliably replace the installed binary
 			// headlessly: installerUpdateTargets on every platform, and these
 			// Windows ones. Re-run the vendor's installer instead; ownership and

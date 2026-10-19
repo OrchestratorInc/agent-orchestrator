@@ -78,6 +78,9 @@ func (s *Service) SetBinaryInvalidator(invalidate func(Target)) {
 
 // managedEligible reports whether an update through plan installs side by side.
 func (s *Service) managedEligible(plan Plan) bool {
+	if _, ok := s.officialManagedRecipeFor(plan); ok {
+		return s.managedRoot != "" && s.installScripts != nil && !plan.Unsupported
+	}
 	return s.managedRoot != "" && s.installCommands != nil && managedMethods[plan.Method] &&
 		plan.Package != "" && !plan.Unsupported &&
 		// A managed npm copy installs and runs with the npm and Node on PATH,
@@ -239,16 +242,23 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			pin = baseline.latest
 		}
 	}
-	argv, extraEnv := managedInstallCommand(plan.Method, pkg, pin, dir)
-	if argv == nil {
-		return fmt.Errorf("%s cannot install a managed copy", installMethodLabel(plan.Method))
-	}
-	_, _ = fmt.Fprintf(out, "Installing %s into %s\n", pkg, dir)
-	if err := s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), extraEnv...)}, out, out); err != nil {
-		return err
+	binRel := managedBinRel(s.goos, plan.Method, cli)
+	if recipe, ok := s.officialManagedRecipeFor(plan); ok {
+		if err := s.runOfficialManagedInstall(ctx, plan, recipe, pin, dir, env, out); err != nil {
+			return err
+		}
+		binRel = recipe.binRel
+	} else {
+		argv, extraEnv := managedInstallCommand(plan.Method, pkg, pin, dir)
+		if argv == nil {
+			return fmt.Errorf("%s cannot install a managed copy", installMethodLabel(plan.Method))
+		}
+		_, _ = fmt.Fprintf(out, "Installing %s into %s\n", pkg, dir)
+		if err := s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), extraEnv...)}, out, out); err != nil {
+			return err
+		}
 	}
 
-	binRel := managedBinRel(s.goos, plan.Method, cli)
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
 		return fmt.Errorf("the install finished but %s is missing", binary)

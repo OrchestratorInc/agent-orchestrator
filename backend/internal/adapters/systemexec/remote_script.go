@@ -117,6 +117,7 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 		argv = append(argv, launcherPath)
 	} else {
 		argv = append(argv, scriptPath)
+		argv = append(argv, command.Args...)
 	}
 	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env}, stdout, stderr)
 	return result, err
