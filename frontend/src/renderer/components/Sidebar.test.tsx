@@ -2804,6 +2804,8 @@ describe("Sidebar", () => {
 							title: "ci failed task",
 							status: "working",
 							scmStatus: "ci_failed",
+							kanbanColumn: "validating",
+							displayStatus: "Fixing CI failures",
 							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ ci: "failing" })],
 						},
@@ -2813,6 +2815,7 @@ describe("Sidebar", () => {
 							title: "review task",
 							status: "working",
 							scmStatus: "pr_open",
+							kanbanColumn: "needs_review",
 							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR()],
 						},
@@ -2841,19 +2844,78 @@ describe("Sidebar", () => {
 		const sessionDot = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<HTMLElement>("[data-session-status]");
 
-		// No pull request: the dot falls back to runtime status.
-		expect(sessionDot("idle task")).toHaveClass("bg-status-idle");
+		// No pull request: the idle session sits in the building lane, like its card.
+		expect(sessionDot("idle task")).toHaveClass("bg-status-working");
 		expect(sessionDot("idle task")).not.toHaveClass("animate-status-pulse");
 
 		const workingDot = sessionDot("working task");
 		expect(workingDot).toHaveClass("bg-status-working");
 		expect(workingDot).toHaveClass("animate-status-pulse");
 
-		// The board-section tone stays visible while the pulse says the agent is busy.
-		expect(sessionDot("ci failed task")).toHaveClass("bg-status-needs-you", "animate-status-pulse");
+		// The card's lane tone stays visible while the pulse says the agent is busy.
+		expect(sessionDot("ci failed task")).toHaveClass("bg-status-validating", "animate-status-pulse");
 		expect(sessionDot("review task")).toHaveClass("bg-status-in-review", "animate-status-pulse");
 		expect(sessionDot("ready task")).toHaveClass("bg-status-ready", "animate-status-pulse");
-		expect(sessionDot("merged task")).toHaveClass("bg-status-merged", "animate-status-pulse");
+		expect(sessionDot("merged task")).toHaveClass("bg-status-merged");
+		expect(sessionDot("merged task")).not.toHaveClass("animate-status-pulse");
+	});
+
+	it("shows a red alert icon instead of a dot when a session needs input", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-input",
+							title: "input task",
+							status: "needs_input",
+							activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+						{
+							...session,
+							id: "proj-1-ci",
+							title: "ci task",
+							status: "ci_failed",
+							displayStatus: "CI failing",
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		const marker = (title: string) =>
+			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
+
+		expect(marker("input task")).toHaveAttribute("data-needs-input", "true");
+		expect(marker("input task")).toHaveClass("text-destructive");
+		expect(marker("input task")).not.toHaveClass("rounded-full");
+		// Needs attention without waiting on input keeps its orange-red dot.
+		expect(marker("ci task")).not.toHaveAttribute("data-needs-input");
+		expect(marker("ci task")).toHaveClass("rounded-full", "bg-status-needs-you");
+	});
+
+	it("lists sessions that need input above the rest", () => {
+		const at = "2026-06-30T00:00:00Z";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-a", title: "newest calm task", status: "working", updatedAt: "2026-06-30T03:00:00Z", activity: { state: "active", lastActivityAt: at } },
+						{ ...session, id: "proj-1-b", title: "older input task", status: "needs_input", updatedAt: "2026-06-30T01:00:00Z", activity: { state: "waiting_input", lastActivityAt: at } },
+						{ ...session, id: "proj-1-c", title: "middle calm task", status: "idle", updatedAt: "2026-06-30T02:00:00Z", activity: { state: "idle", lastActivityAt: at } },
+					],
+				},
+			],
+		});
+
+		const titles = screen
+			.getAllByLabelText(/^Open (newest calm|older input|middle calm) task$/)
+			.map((row) => row.getAttribute("aria-label"));
+		expect(titles).toEqual(["Open older input task", "Open newest calm task", "Open middle calm task"]);
 	});
 
 	it("blinks blue when an idle-section session has working activity", () => {
@@ -2899,6 +2961,7 @@ describe("Sidebar", () => {
 							title: "idle draft task",
 							status: "draft",
 							scmStatus: "draft",
+							kanbanColumn: "needs_review",
 							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ state: "draft" })],
 						},
@@ -2913,9 +2976,9 @@ describe("Sidebar", () => {
 			.querySelector<HTMLElement>("span.rounded-full");
 		const idleDraftDot = screen.getByLabelText("Open idle draft task").querySelector<HTMLElement>("span.rounded-full");
 
-		// An idle session with no pull request stays gray; a parked draft keeps
-		// the in-review tone the board gives it, without any motion.
-		expect(idleActivityDot).toHaveClass("bg-status-idle");
+		// An idle session with no pull request takes the building lane's tone; a
+		// parked draft keeps the in-review tone the board gives it, without any motion.
+		expect(idleActivityDot).toHaveClass("bg-status-working");
 		expect(idleDraftDot).toHaveClass("bg-status-in-review");
 		expect(idleActivityDot).not.toHaveClass("animate-status-pulse");
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");

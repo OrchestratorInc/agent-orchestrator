@@ -20,6 +20,7 @@ import {
 	Archive,
 	CalendarClock,
 	ChevronRight,
+	CircleAlert,
 	Copy,
 	Download,
 	LayoutGrid,
@@ -591,11 +592,35 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
+// Sessions waiting on the user sit above the rest. Stable, so the manual order
+// (and the default recency order) still holds within each group.
+function floatNeedsInput(sessions: WorkspaceSession[]): WorkspaceSession[] {
+	const waiting = sessions.filter((session) => getSessionStatusDotView(session).needsInput);
+	if (waiting.length === 0 || waiting.length === sessions.length) return sessions;
+	return [...waiting, ...sessions.filter((session) => !waiting.includes(session))];
+}
+
 // Colour tracks the session's board section, preserving SCM state while the
 // agent runs; motion stays on raw agent activity. A no-PR idle session turns
 // blue when it starts working. See getSessionStatusDotView for the lane mapping.
 function SessionStatusDot({ session }: { session: WorkspaceSession }) {
 	const dot = getSessionStatusDotView(session);
+	// A session waiting on the user gets an alert icon instead of a dot. The
+	// negative margin keeps the row's text where the 8px dot left it.
+	if (dot.needsInput) {
+		return (
+			<span
+				aria-hidden="true"
+				className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5"
+			>
+				<CircleAlert
+					className="-mx-0.5 size-3 text-destructive"
+					data-session-status={session.status}
+					data-needs-input="true"
+				/>
+			</span>
+		);
+	}
 	return (
 		<span
 			aria-hidden="true"
@@ -1507,7 +1532,7 @@ const ProjectItem = memo(function ProjectItem({
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
-		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
+		() => floatNeedsInput(applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start")),
 		[sessionOrder, visibleSessions],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
@@ -2097,7 +2122,7 @@ function ScratchpadSection({
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
-		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
+		() => floatNeedsInput(applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start")),
 		[sessionOrder, visibleSessions],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
