@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -37,11 +39,14 @@ func TestMain(m *testing.M) {
 func protocolFixture() {
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
+	var parked json.RawMessage
+	promptCount := 0
 	for scanner.Scan() {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
+			Result json.RawMessage `json:"result"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &request) != nil {
 			continue
@@ -52,6 +57,30 @@ func protocolFixture() {
 		}
 		_, _ = fmt.Fprintln(calls, request.Method)
 		_ = calls.Close()
+		if request.Method == "" {
+			if string(request.ID) == fmt.Sprintf(`"permission-%d"`, promptCount) && len(parked) > 0 {
+				var response struct {
+					Outcome struct {
+						Outcome  string `json:"outcome"`
+						OptionID string `json:"optionId"`
+					} `json:"outcome"`
+				}
+				if json.Unmarshal(request.Result, &response) != nil {
+					os.Exit(6)
+				}
+				expected := "allow"
+				if promptCount == 2 {
+					expected = "reject"
+				}
+				if response.Outcome.Outcome != "selected" || response.Outcome.OptionID != expected {
+					os.Exit(7)
+				}
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": parked, "result": map[string]string{"stopReason": "end_turn"}})
+				parked = nil
+			}
+			continue
+		}
+
 		var result any = map[string]any{}
 		switch request.Method {
 		case "initialize":
@@ -70,8 +99,21 @@ func protocolFixture() {
 		case "session/set_config_option":
 			os.Exit(4) // any direct setter traffic violates the candidate policy
 		case "session/prompt":
-			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "native-id", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "controlled reply"}}}})
-			result = map[string]string{"stopReason": "end_turn"}
+			parked = append(json.RawMessage(nil), request.ID...)
+			promptCount++
+			if promptCount == 3 {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "native-id", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "controlled running turn"}}}})
+				continue
+			}
+
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": "permission-" + strconv.Itoa(promptCount), "method": "session/request_permission", "params": map[string]any{"sessionId": "native-id", "toolCall": map[string]string{"toolCallId": "tool-1", "title": "Controlled edit", "kind": "edit"}, "options": []map[string]string{{"optionId": "allow", "name": "Allow", "kind": "allow_once"}, {"optionId": "reject", "name": "Reject", "kind": "reject_once"}}}})
+			continue
+		case "session/cancel":
+			if len(parked) > 0 {
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": parked, "result": map[string]string{"stopReason": "cancelled"}})
+				parked = nil
+			}
+
 		}
 		if len(request.ID) > 0 {
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
@@ -86,7 +128,7 @@ func (fixturePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusConfigured, nil
 }
 
-func waitFor(t *testing.T, c ports.ChatConversation, kind ports.ChatEventKind) {
+func waitFor(t *testing.T, c ports.ChatConversation, kind ports.ChatEventKind) ports.ChatEvent {
 	t.Helper()
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
@@ -97,7 +139,7 @@ func waitFor(t *testing.T, c ports.ChatConversation, kind ports.ChatEventKind) {
 				t.Fatal("closed before expected event")
 			}
 			if event.Kind == kind {
-				return
+				return event
 			}
 		case <-timer.C:
 			t.Fatalf("missing %s", kind)
@@ -119,14 +161,51 @@ func TestConstructorStartSendDetachReconnectAndExactResume(t *testing.T) {
 	if first.ProviderConversationID() != "native-id" {
 		t.Fatal("native identity substituted")
 	}
-	ref, err := first.SendTurn(ctx, ports.ChatUserMessage{Text: "ordinary task"})
-	if err != nil {
-		t.Fatal(err)
+	for _, decision := range []string{"allow", "reject", "cancel", "allow"} {
+		ref, err := first.SendTurn(ctx, ports.ChatUserMessage{Text: "ordinary controlled task"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := first.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			t.Fatal(err)
+		}
+		if decision == "cancel" {
+			waitFor(t, first, ports.ChatEventMessageDelta)
+			if err := first.Interrupt(ctx, ref.ProviderTurnID); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			approval := waitFor(t, first, ports.ChatEventApprovalRequested)
+			if approval.RequestID == "" || len(approval.Decisions) != 2 {
+				t.Fatal("native permission options lost")
+			}
+			if err := first.ResolveRequest(ctx, approval.RequestID, ports.ChatDecision{ID: decision}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		terminal := waitFor(t, first, ports.ChatEventTurnCompleted)
+		expected := domain.TurnStateCompleted
+		if decision == "cancel" {
+			expected = domain.TurnStateInterrupted
+		}
+		if terminal.TurnState != expected {
+			t.Fatalf("turn state=%s, want %s", terminal.TurnState, expected)
+		}
+		if terminal.ProviderEventID == "" {
+			t.Fatal("no durable terminal receipt")
+		}
+		if err := first.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(ctx, terminal.ProviderEventID); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			event := waitFor(t, first, ports.ChatEventControllerState)
+			if event.ControllerState == ports.ChatControllerReady {
+				break
+			}
+		}
+
 	}
-	if err := first.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, first, ports.ChatEventTurnCompleted)
+
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
