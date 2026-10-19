@@ -173,6 +173,7 @@ func TestServeStartsDeferredProcessAtFirstClientGrid(t *testing.T) {
 
 	c := newTestClient(t, ln.Addr().String())
 	defer c.close()
+	c.attach(t, true, 0, 0) // declare the viewer role; no grid yet
 	if err := c.send(MsgStatusReq, nil); err != nil {
 		t.Fatalf("status request: %v", err)
 	}
@@ -204,6 +205,41 @@ func TestServeStartsDeferredProcessAtFirstClientGrid(t *testing.T) {
 	if typ != MsgTerminalData || string(payload) != "user@host ~ % " {
 		t.Fatalf("first output frame = type %d %q", typ, payload)
 	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+}
+
+// The attach hello carries the viewer's grid, so a deferred session starts at
+// the first viewer's size the same way the legacy Resize path did.
+func TestAttachHelloGridStartsDeferredProcess(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	rec := &startRecorder{conn: newFakePTY(78)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, ServeConfig{SessionID: "deferred-hello", Listener: ln, PTY: newDeferredPTY(rec.start), Ring: NewRing()})
+	}()
+
+	c := newTestClient(t, ln.Addr().String())
+	defer c.close()
+	c.attach(t, true, 93, 27)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(rec.starts()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got, want := rec.starts(), [][2]uint16{{93, 27}}; !slices.Equal(got, want) {
+		t.Fatalf("starts = %v, want %v", got, want)
+	}
+
 	cancel()
 	select {
 	case <-done:

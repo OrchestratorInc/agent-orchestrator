@@ -10,6 +10,7 @@ package conpty
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,11 +29,35 @@ const (
 	// slowClientGrace is still dropped, so one stalled viewer cannot hold the
 	// PTY; status probes, attaches and input never wait on a viewer's queue.
 	hostClientWriteBuffer = 256
+
+	// MaxReplayChunk bounds one MsgTerminalData frame of the scrollback replay.
+	// A replay bigger than this streams as multiple frames, so a viewer starts
+	// draining it progressively instead of one multi-MB frame (and one
+	// multi-MB EncodeMessage allocation under h.mu).
+	MaxReplayChunk = 256 << 10
 )
 
 // slowClientGrace is how long output waits on a viewer that frees no queue
 // space before dropping it (a variable so tests can shorten it).
 var slowClientGrace = 3 * time.Second
+
+const (
+	// defaultFirstFrameTimeout is how long a connection may stay silent before
+	// it is treated as a legacy viewer — one that connects and reads without
+	// sending anything first, which is what EVERY client used to do, and is how
+	// the host replied to every connection with the scrollback replay. Real
+	// clients send their hello or first request immediately; the wait only
+	// covers that gap.
+	defaultFirstFrameTimeout = 2 * time.Second
+
+	// defaultLegacyViewerGrace is how long a connection whose first frame was
+	// MsgStatusReq is given to reveal itself as a viewer. Status is ambiguous:
+	// the pre-hello attach path sends it right after Resize, and an attach with
+	// no known grid sends Status alone — but so does the status probe. A probe
+	// closes as soon as its response lands; a viewer stays open, so after this
+	// grace it is upgraded and replayed (see upgradeLegacyViewerAfterGrace).
+	defaultLegacyViewerGrace = time.Second
+)
 
 // ptyConn is the host's handle to the running agent's pseudo-terminal.
 // The real impl (conptyConn) lives in host_conpty_windows.go; tests use a fake.
@@ -72,8 +97,10 @@ func newHost(cfg ServeConfig) *host {
 		clients: make(map[net.Conn]*clientState),
 		surface: newAsyncSurface(initialConPTYColumns, initialConPTYRows,
 			func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface),
-		modes:     newModeTracker(),
-		shutdownC: make(chan struct{}),
+		modes:             newModeTracker(),
+		shutdownC:         make(chan struct{}),
+		firstFrameTimeout: defaultFirstFrameTimeout,
+		legacyViewerGrace: defaultLegacyViewerGrace,
 	}
 }
 
@@ -81,10 +108,23 @@ func newHost(cfg ServeConfig) *host {
 // grid this client last asked for (sized reports whether it ever asked), so the
 // host can size the shared PTY to the largest attached client (see
 // applyLargestLocked). A connection that never sends a resize stays sized=false
-// and never influences the shared grid.
+// and never influences the shared grid. Both viewer and classified are guarded
+// by h.mu.
 type clientState struct {
 	cols, rows int
 	sized      bool
+
+	// viewer marks a connection that asked for live terminal output (an attach,
+	// or the legacy signals only an attach sends). Probe connections —
+	// GetOutput/Status/Kill, a fresh connection per request (see client.go) —
+	// register like any other client so sendTo can queue their response, but
+	// they never receive a replay or a broadcast.
+	viewer bool
+
+	// classified records that the first frame (or the firstFrameTimeout
+	// fallback) decided the role above. Set exactly once, on the read
+	// goroutine, except for the legacy-viewer grace upgrade.
+	classified bool
 
 	out       chan []byte
 	drained   chan struct{} // signalled when the writer frees queue space
@@ -138,6 +178,12 @@ type host struct {
 	// modeTracker). record updates it together with the ring under mu, so when
 	// handleConn snapshots the ring, the tracker is up to the same chunk.
 	modes *modeTracker
+
+	// firstFrameTimeout and legacyViewerGrace are the classification timers
+	// (see the defaults above). Per-host so tests can shorten them before Serve
+	// starts, with no shared mutable state; newHost sets both.
+	firstFrameTimeout time.Duration
+	legacyViewerGrace time.Duration
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -369,11 +415,16 @@ func (h *host) lockWithRoom() bool {
 	}
 }
 
-// enqueueAllLocked queues msg to every client. The caller holds h.mu and has
-// seen every queue with room (lockWithRoom); only writers, which free space,
-// touch the queues while h.mu is held, so these cannot fail.
+// enqueueAllLocked queues msg to every viewer. Probe connections are skipped:
+// they never asked for live output, and their queues exist only for their
+// request's response. The caller holds h.mu and has seen every queue with room
+// (lockWithRoom); only writers, which free space, touch the queues while h.mu is
+// held, so these cannot fail.
 func (h *host) enqueueAllLocked(msg []byte) {
 	for _, client := range h.clients {
+		if !client.viewer {
+			continue
+		}
 		client.enqueue(msg)
 	}
 }
@@ -445,49 +496,31 @@ func (h *host) removeClient(conn net.Conn, client *clientState) {
 	client.close(conn)
 }
 
-// handleConn manages the lifecycle of a single client connection.
+// handleConn manages the lifecycle of a single client connection. The
+// connection's role is decided by its FIRST frame (see classifyConn): viewers
+// replay the scrollback and receive live output; probes (GetOutput/Status/Kill)
+// answer their request without ever paying for a replay. A connection that
+// sends nothing within firstFrameTimeout is a legacy viewer and keeps the
+// replay-on-connect behavior it was built against.
 func (h *host) handleConn(conn net.Conn) {
 	client := newClientState()
 	go h.writeClient(conn, client)
 
-	// Scrollback replay: take the ring snapshot, queue it for the conn's writer,
-	// and add the conn to the broadcast set, all under a SINGLE h.mu hold.
-	// record() appends to the ring and queues to clients in one h.mu hold too,
-	// so any PTY chunk is either already in this snapshot or queued strictly
-	// after it, never both. The writer goroutine keeps the socket itself
-	// outside this critical section.
-	//
-	// The snapshot is prefixed with the modes the program has set that the
-	// snapshot itself no longer carries. The ring is bounded, so the
-	// alternate-screen / mouse / bracketed-paste handshake a full-screen
-	// program prints once at startup is the first thing it forgets; without
-	// the prefix a late attacher renders the replay in its normal buffer with
-	// mouse reporting off and cannot scroll the program (#5039). tmux re-sends
-	// these on every attach, and the mux layer relies on the runtime doing so
-	// (internal/terminal/attachment.go).
-	//
-	// Restore re-scans the snapshot under h.mu, so PTY output waits for it.
-	// The scan is the tracker's byte loop (BenchmarkModeTracker: ~410 MB/s,
-	// no allocation), linear in the replay: about half a millisecond for
-	// 200 KB, on a path that already held this lock while EncodeMessage
-	// copied the same bytes.
+	// Register before reading: sendTo needs the entry to queue a probe's
+	// response, and classifyConn takes the replay snapshot and the viewer
+	// registration in one h.mu hold (record queues to viewers under the same
+	// lock), so a PTY chunk is either in the snapshot or queued strictly after
+	// it, never both.
 	h.mu.Lock()
-	snap := h.cfg.Ring.Replay()
-	if prefix := h.modes.Restore(snap); len(prefix) > 0 {
-		snap = append(prefix, snap...)
-	}
-	if len(snap) > 0 {
-		snapFrame, err := EncodeMessage(MsgTerminalData, snap)
-		if err != nil || !client.enqueue(snapFrame) {
-			h.mu.Unlock()
-			client.close(conn)
-			return
-		}
-	}
 	h.clients[conn] = client
 	h.mu.Unlock()
 
 	defer h.removeClient(conn, client)
+
+	// The first frame decides the role; give it firstFrameTimeout. The deadline
+	// is cleared as soon as the role is known: in classifyConn, or in the
+	// silent fallback below.
+	_ = conn.SetReadDeadline(time.Now().Add(h.firstFrameTimeout))
 
 	parser := NewMessageParser(func(msgType byte, payload []byte) {
 		h.handleClientMsg(conn, msgType, payload)
@@ -500,16 +533,178 @@ func (h *host) handleConn(conn net.Conn) {
 			parser.Feed(buf[:n])
 		}
 		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				// No first frame: a client that connects and reads without
+				// sending anything. Every client used to be replayed on
+				// connect, so treat it as a legacy viewer and keep reading
+				// for later frames.
+				h.classifySilentViewer(conn, client)
+				_ = conn.SetReadDeadline(time.Time{})
+				continue
+			}
 			return
 		}
 	}
 }
 
+// classifyConn decides the connection's role from its first frame, under h.mu,
+// and clears the firstFrameTimeout deadline. It is a no-op after the first
+// frame.
+//
+// The host used to replay its scrollback to EVERY connection, so the daemon's
+// probes — a fresh connection per GetOutput/Status check (see client.go) — had
+// to drain a multi-MB replay before reaching their small response, and the host
+// re-encoded the whole ring per probe. Only viewers pay it now:
+//
+//   - MsgAttach is the explicit hello: viewer, replay when asked. The grid it
+//     carries sizes the PTY from birth (a deferred session starts at its first
+//     viewer's grid) under the usual largest-client rules.
+//   - MsgResize / MsgTerminalInput can only come from a viewer, so they mark
+//     the connection a viewer and replay what it was built to expect, then the
+//     frame is processed normally.
+//   - MsgStatusReq is ambiguous: the pre-hello attach path sends it right
+//     after Resize (immediately, so it classifies as a viewer above), but an
+//     attach with no known grid sends Status alone while the status probe uses
+//     it too. It stays a probe; a connection still open after
+//     legacyViewerGrace is upgraded (see upgradeLegacyViewerAfterGrace).
+//   - everything else (GetOutput, StyledOutput, Kill) is a probe: registered
+//     so sendTo can queue the response, never replayed, never broadcast to.
+func (h *host) classifyConn(conn net.Conn, msgType byte, payload []byte) {
+	h.mu.Lock()
+	client := h.clients[conn]
+	if client == nil || client.classified {
+		h.mu.Unlock()
+		return
+	}
+	client.classified = true
+
+	switch msgType {
+	case MsgAttach:
+		client.viewer = true
+		// Default to replaying: the hello is newer than replay-on-connect, so
+		// a client that omits the flag still gets what it always got.
+		hello := AttachPayload{Replay: true}
+		if err := json.Unmarshal(payload, &hello); err != nil {
+			hello = AttachPayload{Replay: true}
+		}
+		if hello.Cols > 0 && hello.Rows > 0 {
+			client.cols, client.rows, client.sized = hello.Cols, hello.Rows, true
+			h.applyLargestLocked()
+		}
+		if hello.Replay && !h.queueReplayLocked(client) {
+			client.close(conn)
+		}
+
+	case MsgResize, MsgTerminalInput:
+		h.upgradeToViewerLocked(conn, client)
+
+	case MsgStatusReq:
+		go h.upgradeLegacyViewerAfterGrace(conn, client)
+	}
+	h.mu.Unlock()
+	_ = conn.SetReadDeadline(time.Time{})
+}
+
+// upgradeToViewerLocked marks the connection a viewer (idempotent) and queues
+// its one replay, under h.mu. A connection first classified by a probe-shaped
+// frame can still turn out to be a viewer: only a viewer sends Resize or input
+// (see handleClientMsg), so a later one upgrades it instead of waiting for the
+// grace.
+func (h *host) upgradeToViewerLocked(conn net.Conn, client *clientState) {
+	if client.viewer {
+		return
+	}
+	client.viewer = true
+	if !h.queueReplayLocked(client) {
+		client.close(conn)
+	}
+}
+
+// classifySilentViewer is the firstFrameTimeout fallback: a connection that
+// sent no frame is a legacy viewer. No-op once the role was decided.
+func (h *host) classifySilentViewer(conn net.Conn, client *clientState) {
+	h.mu.Lock()
+	if h.clients[conn] == client && !client.classified {
+		client.classified = true
+		h.upgradeToViewerLocked(conn, client)
+	}
+	h.mu.Unlock()
+}
+
+// upgradeLegacyViewerAfterGrace promotes a connection whose first frame was
+// MsgStatusReq to a viewer once it has stayed open past legacyViewerGrace
+// without being classified otherwise: the pre-hello attach path with unknown
+// dimensions behaves exactly that way, while a status probe closes as soon as
+// its response lands. A later Resize or input upgrades it sooner (see
+// upgradeToViewerLocked).
+func (h *host) upgradeLegacyViewerAfterGrace(conn net.Conn, client *clientState) {
+	select {
+	case <-time.After(h.legacyViewerGrace):
+	case <-client.done:
+		return
+	}
+	h.mu.Lock()
+	if h.clients[conn] == client {
+		h.upgradeToViewerLocked(conn, client)
+	}
+	h.mu.Unlock()
+}
+
+// queueReplayLocked queues the scrollback replay to a viewer that was just
+// classified, under the caller's h.mu hold — the snapshot and the viewer
+// registration happen together, so a PTY chunk is either inside this snapshot
+// or queued strictly after it, never both (see handleConn). The replay streams
+// in MaxReplayChunk-sized MsgTerminalData frames: the ring can still hold a
+// multi-MB repaint, and one giant frame would be one giant allocation and a
+// long writer batch. Returns false once the client's queue is gone (dropped or
+// closed); the caller closes the connection.
+//
+// The snapshot is prefixed with the modes the program has set that the
+// snapshot itself no longer carries. The ring is bounded, so the
+// alternate-screen / mouse / bracketed-paste handshake a full-screen program
+// prints once at startup is the first thing it forgets; without the prefix a
+// late attacher renders the replay in its normal buffer with mouse reporting
+// off and cannot scroll the program (#5039). tmux re-sends these on every
+// attach, and the mux layer relies on the runtime doing so
+// (internal/terminal/attachment.go).
+//
+// Restore re-scans the snapshot under h.mu, so PTY output waits for it. The
+// scan is the tracker's byte loop (BenchmarkModeTracker: ~410 MB/s, no
+// allocation), linear in the replay, which MaxRingBytes bounds.
+func (h *host) queueReplayLocked(client *clientState) bool {
+	snap := h.cfg.Ring.Replay()
+	if prefix := h.modes.Restore(snap); len(prefix) > 0 {
+		snap = append(prefix, snap...)
+	}
+	for len(snap) > 0 {
+		n := min(len(snap), MaxReplayChunk)
+		frame, err := EncodeMessage(MsgTerminalData, snap[:n])
+		if err != nil || !client.enqueue(frame) {
+			return false
+		}
+		snap = snap[n:]
+	}
+	return true
+}
+
 // handleClientMsg dispatches a decoded client message. Mirrors handleClientMessage
 // from pty-host.ts.
 func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
+	// The first frame decides whether this connection is a viewer or a probe
+	// (and replays the scrollback for the former); see classifyConn.
+	h.classifyConn(conn, msgType, payload)
+
 	switch msgType {
 	case MsgTerminalInput:
+		// Input is a viewer signal: a connection first classified by a
+		// probe-shaped frame is an attach as soon as it types (see
+		// upgradeToViewerLocked).
+		h.mu.Lock()
+		if cs := h.clients[conn]; cs != nil {
+			h.upgradeToViewerLocked(conn, cs)
+		}
+		h.mu.Unlock()
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			if n, err := h.cfg.PTY.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
@@ -526,6 +721,10 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 				h.mu.Lock()
 				if cs := h.clients[conn]; cs != nil {
 					cs.cols, cs.rows, cs.sized = rp.Cols, rp.Rows, true
+					// A resize is a viewer signal too: an attach that first
+					// announced itself with a probe-shaped frame gets its
+					// replay here, not a grace later.
+					h.upgradeToViewerLocked(conn, cs)
 				}
 				h.applyLargestLocked()
 				h.mu.Unlock()
@@ -540,7 +739,7 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			lines = req.Lines
 		}
 		text := h.cfg.Ring.Tail(lines)
-		if frame, err := EncodeMessage(MsgGetOutputRes, []byte(text)); err == nil {
+		if frame, err := EncodeMessage(MsgGetOutputRes, capTailBytes([]byte(text))); err == nil {
 			h.sendTo(conn, frame)
 		}
 
@@ -551,7 +750,7 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			lines = req.Lines
 		}
 		text := h.surface.Tail(lines)
-		if frame, err := EncodeMessage(MsgGetStyledOutputRes, []byte(text)); err == nil {
+		if frame, err := EncodeMessage(MsgGetStyledOutputRes, capTailBytes([]byte(text))); err == nil {
 			h.sendTo(conn, frame)
 		}
 
@@ -568,6 +767,10 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	case MsgKillReq:
 		// Trigger graceful shutdown; returns immediately (idempotent).
 		go h.shutdown()
+
+	case MsgAttach:
+		// Consumed by classifyConn: the hello only declares the viewer role,
+		// the optional grid, and whether a replay was wanted.
 	}
 }
 
