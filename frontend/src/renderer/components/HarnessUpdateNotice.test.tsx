@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -626,27 +626,27 @@ describe("harness updates while sessions run", () => {
 	});
 });
 
-describe("noticePlacement", () => {
-	const place = (browser: Parameters<typeof noticePlacement>[0], top = 72, height = 200, width = 1280) => noticePlacement(browser, top, height, width);
+describe("noticeCoversLiveBrowser", () => {
+	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], top = 72, height = 200, width = 1280) => noticeCoversLiveBrowser(browser, top, height, width);
 
-	it("always uses the app edge when no live page overlaps", () => {
-		expect(place(null)).toEqual({ right: 16 });
-		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
-		expect(place({ left: 820, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
+	it("returns false when no live page overlaps the app corner", () => {
+		expect(covers(null)).toBe(false);
+		expect(covers({ left: 200, top: 60, right: 700, bottom: 800 })).toBe(false);
+		expect(covers({ left: 820, top: 400, right: 1280, bottom: 800 })).toBe(false);
 	});
 
 	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
-		expect(place({ left, top: 100, right: 1280, bottom: 800 })).toBe("hidden");
+		expect(covers({ left, top: 100, right: 1280, bottom: 800 })).toBe(true);
 	});
 
 	it("hides when expanding the stack reaches the browser page", () => {
 		const browser = { left: 820, top: 400, right: 1280, bottom: 800 };
-		expect(place(browser)).toEqual({ right: 16 });
-		expect(place(browser, 72, 500)).toBe("hidden");
+		expect(covers(browser)).toBe(false);
+		expect(covers(browser, 72, 500)).toBe(true);
 	});
 
 	it("keeps the corner above the page but hides overlap in a narrow window", () => {
-		expect(place(null, 72, 200, 280)).toEqual({ right: 16 });
-		expect(place({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe("hidden");
+		expect(covers(null, 72, 200, 280)).toBe(false);
+		expect(covers({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe(true);
 	});
 });

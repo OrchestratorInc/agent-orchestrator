@@ -366,8 +366,7 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 	const top = topbarBottom === null
 		? isWindowsPlatform() ? "calc(var(--size-window-titlebar) + var(--size-toolbar) + var(--space-3))" : "calc(var(--size-toolbar) + var(--space-3))"
 		: `calc(${topbarBottom}px + var(--space-3))`;
-	const placement = noticePlacement(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height);
-	if (placement === "hidden") return null;
+	if (noticeCoversLiveBrowser(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height)) return null;
 	return <aside ref={frameRef} role="region" aria-label={label}
 		className="harness-update-notice fixed right-4 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
 		// The stack reaches the window's drag region, which would swallow its clicks.
@@ -376,18 +375,17 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 	</aside>;
 }
 
-/** Where the notice's right edge sits, clear of the live browser page. */
-export function noticePlacement(
+/** Whether the notice at the app edge overlaps the live native browser page. */
+export function noticeCoversLiveBrowser(
 	browser: ViewportRect | null,
 	top: number,
 	height: number,
 	viewportWidth = document.documentElement.clientWidth,
-): { right: number } | "hidden" {
+): boolean {
 	const width = Math.min(NOTICE_MAX_WIDTH, viewportWidth - 2 * NOTICE_EDGE);
 	const right = viewportWidth - NOTICE_EDGE;
-	if (!browser) return { right: NOTICE_EDGE };
+	if (!browser) return false;
 	const overlapsX = right - width < browser.right && right > browser.left;
 	const overlapsY = top < browser.bottom && top + Math.max(height, 1) > browser.top;
-	if (!overlapsX || !overlapsY) return { right: NOTICE_EDGE };
-	return "hidden";
+	return overlapsX && overlapsY;
 }
