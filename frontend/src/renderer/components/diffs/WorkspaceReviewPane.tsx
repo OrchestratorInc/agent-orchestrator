@@ -561,10 +561,10 @@ export function WorkspaceReviewPane({
 		if (refMoved) invalidateWorkspaceViews(queryClient, sessionId, hostId);
 	}, [hostId, queryClient, refMoved, sessionId]);
 
-	const fallbackFiles = useMemo(() => files.filter((file) => file.binary || !metadataByPath.has(file.path)), [files, metadataByPath]);
+	const fallbackFiles = files.filter((file) => file.binary || !metadataByPath.has(file.path));
 	// Keep non-text rows in Pierre's measured scroll content, including reviews
 	// with no text items. Its ResizeObserver tracks late image loads and collapse.
-	const renderFallbackFiles = useCallback(() => (
+	const renderFallbackFiles = () => (
 		<>
 			{fallbackFiles.map((file) => {
 				const collapsed = collapsedPaths.has(file.path);
@@ -596,14 +596,14 @@ export function WorkspaceReviewPane({
 									<p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p>
 								)}
 								{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
-								{unavailable ? <RetryButton onClick={() => patchQueries.forEach((query) => void query.refetch())} /> : null}
+								{unavailable ? <RetryButton onClick={retryAll} /> : null}
 							</div>
 						) : null}
 					</div>
 				);
 			})}
 		</>
-	), [collapsedPaths, workspaceVersion, fallbackFiles, fileOpenContext, hostId, loadedDeferredPaths, onOpenFile, patchQueries, pendingDiffPaths, serverDeferredByPath, sessionId, split, t, toggleCollapsed]);
+	);
 
 	return (
 		<div
