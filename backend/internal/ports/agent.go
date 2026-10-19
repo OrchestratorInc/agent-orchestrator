@@ -747,6 +747,8 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
+	// Env contains runtime overrides for native identity and restore probes.
+	Env             map[string]string
 	Config          AgentConfig
 	DataDir         string
 	Kind            domain.SessionKind

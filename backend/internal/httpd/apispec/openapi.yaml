@@ -15560,6 +15560,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - open-interpreter
           - memcode
           - fake
           type: string
@@ -16258,6 +16259,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - open-interpreter
           - memcode
           - cloudflared
           type: string
@@ -19427,6 +19429,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - open-interpreter
           - memcode
           type: string
         issueId:

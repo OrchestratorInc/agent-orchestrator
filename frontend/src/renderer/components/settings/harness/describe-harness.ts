@@ -106,14 +106,14 @@ export function describeHarness(input: HarnessDescribeInput) {
 	].filter(Boolean).join(" · ") || undefined : undefined;
 	const rowAuthWorkflow = input.authWorkflow;
 	const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
-	const needsLogin = needsHarnessLogin(authPlan, authStatus);
+	const needsLogin = agentId === "open-interpreter" && authStatus === "configured" ? false : needsHarnessLogin(authPlan, authStatus);
 	const showUpdate = updateAvailable && !input.authPlansPending && !input.authPlansFailed;
 	// The daemon retains this component-repair instruction in persisted output,
 	// including after CLI verification succeeds or AO restarts.
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
-	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
+	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction && agentId !== "open-interpreter" ? "settings.harness.configured" : "settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
@@ -121,7 +121,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const progressLabel = job?.status === "verifying" ? t("settings.harness.verifying")
 		: currentOperation === "update" ? t("settings.harness.updating")
 		: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
-	const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
+	// Readiness is newer than a persisted install job. Once the harness is
+	// installed, an old failed install must not replace its current auth state.
+	const rowError = actionError ?? authState?.error ?? (!isInstalled && jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
 	const listTone: HarnessTone = !isInstalled ? (rowError ? "error" : "off")
 		: rowError || needsLogin ? "error" : "ok";
 	const authProgress = rowAuthWorkflow?.phase === "verifying" ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin")

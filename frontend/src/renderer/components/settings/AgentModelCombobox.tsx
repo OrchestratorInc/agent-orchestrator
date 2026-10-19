@@ -344,7 +344,9 @@ export function AgentModelCombobox({
 										}
 									}}
 									placeholder={t(
-										hasMultipleProviders
+										allowDirectCustom && concreteModels.length === 0
+											? "settings.models.custom"
+											: hasMultipleProviders
 											? "settings.models.searchModelsOrProvidersPlaceholder"
 											: "settings.models.searchPlaceholder",
 									)}

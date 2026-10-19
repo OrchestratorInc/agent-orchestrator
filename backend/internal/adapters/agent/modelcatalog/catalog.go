@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -130,7 +131,8 @@ var commandSpecs = map[string]commandSpec{
 	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
-	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
+	"command-code":     {args: []string{"--list-models"}, parser: parseCommandCodeModels},
+	"open-interpreter": {args: []string{"debug", "models"}, parser: parseOpenInterpreterModels},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -233,7 +235,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "open-interpreter":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -863,6 +865,19 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "open-interpreter" {
+		// The native catalog follows the selected provider and account. Include
+		// a version marker to invalidate older binary-only manual catalogs.
+		root, err := nativeconfig.Resolve(env, "INTERPRETER_HOME", ".openinterpreter")
+		if err != nil {
+			return "native-debug-models-v1"
+		}
+		paths := []string{filepath.Join(root, "config.toml"), filepath.Join(root, "auth.json")}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".openinterpreter", "config.toml"))
+		}
+		return "native-debug-models-v1:" + root + ":" + fingerprintConfigPaths(paths)
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected
@@ -1260,6 +1275,45 @@ func looksLikeModelID(value string) bool {
 	default:
 		return true
 	}
+}
+
+// parseOpenInterpreterModels reads the effective catalog from `interpreter
+// debug models`. The bundled-only variant does not reflect the logged-in
+// provider. Model messages may contain large instructions, so decode only the
+// picker fields from top-level models and never propagate those messages.
+func parseOpenInterpreterModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var catalog struct {
+		Models []struct {
+			Slug                  string `json:"slug"`
+			DisplayName           string `json:"display_name"`
+			Visibility            string `json:"visibility"`
+			DefaultReasoningLevel string `json:"default_reasoning_level"`
+			SupportedLevels       []struct {
+				Effort string `json:"effort"`
+			} `json:"supported_reasoning_levels"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(output, &catalog); err != nil {
+		return nil, err
+	}
+	models := make([]ports.AgentModelInfo, 0, len(catalog.Models))
+	for _, item := range catalog.Models {
+		if item.Visibility != "list" || strings.TrimSpace(item.Slug) == "" {
+			continue
+		}
+		model := ports.AgentModelInfo{
+			ID:            item.Slug,
+			Label:         item.DisplayName,
+			DefaultEffort: item.DefaultReasoningLevel,
+		}
+		for _, level := range item.SupportedLevels {
+			if level.Effort != "" {
+				model.Efforts = append(model.Efforts, level.Effort)
+			}
+		}
+		models = append(models, model)
+	}
+	return models, nil
 }
 
 func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {

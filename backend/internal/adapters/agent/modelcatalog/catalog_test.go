@@ -369,6 +369,62 @@ func TestMiMoCodeDiscoveryUsesNativeModelsCommand(t *testing.T) {
 	}
 }
 
+func TestOpenInterpreterDiscoveryUsesEffectiveNativeCatalog(t *testing.T) {
+	spec, ok := commandSpecs["open-interpreter"]
+	if !ok || !reflect.DeepEqual(spec.args, []string{"debug", "models"}) {
+		t.Fatalf("open-interpreter discovery = %#v, want debug models without --bundled", spec)
+	}
+	base := Base("open-interpreter")
+	if base.SelectionMode != ports.ModelSelectionCatalog || !base.AllowCustom {
+		t.Fatalf("open-interpreter picker policy = %#v", base)
+	}
+	if fallback := Manual("open-interpreter"); fallback.SelectionMode != ports.ModelSelectionText || !fallback.AllowCustom {
+		t.Fatalf("open-interpreter fallback = %#v", fallback)
+	}
+}
+
+func TestParseOpenInterpreterModelsKeepsVisibleModelsAndEfforts(t *testing.T) {
+	output := []byte(`{"models":[
+		{"slug":"gpt-6-sol","display_name":"GPT-6 Sol","visibility":"list","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}],"model_messages":{"instructions_template":"do not use this as a model"}},
+		{"slug":"codex-auto-review","display_name":"Auto Review","visibility":"hide"},
+		{"slug":"custom/provider-model","display_name":"","visibility":"list"}
+	]}`)
+	got, err := parseOpenInterpreterModels(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "gpt-6-sol", Label: "GPT-6 Sol", Efforts: []string{"low", "medium"}, DefaultEffort: "medium"},
+		{ID: "custom/provider-model"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want %#v", got, want)
+	}
+	if _, err := parseOpenInterpreterModels([]byte("not json")); err == nil {
+		t.Fatal("malformed catalog accepted")
+	}
+}
+
+func TestOpenInterpreterCatalogFingerprintTracksNativeAccount(t *testing.T) {
+	root := t.TempDir()
+	env := map[string]string{"INTERPRETER_HOME": root}
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", Env: env}
+	first := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	if err := os.WriteFile(filepath.Join(root, "auth.json"), []byte(`{"account":"one"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	if first == second {
+		t.Fatal("native login did not invalidate the catalog")
+	}
+	if err := os.WriteFile(filepath.Join(root, "auth.json"), []byte(`{"account":"two"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if second == (Discoverer{}).CatalogFingerprint(context.Background(), request) {
+		t.Fatal("account change did not invalidate the catalog")
+	}
+}
+
 func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
 	got, err := parseMiMoModels([]byte("mimo/mimo-auto — window 1M, compacts at 900K\nxiaomi/mimo-v2.5 — window 1.05M\n"))
 	if err != nil {

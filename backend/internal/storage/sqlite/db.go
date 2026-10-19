@@ -1896,11 +1896,12 @@ SELECT COALESCE((
 // here when a burned field profile can skip it, or the session list can regress
 // to the 500s this exists to prevent.
 var schemaRepairs = []struct {
-	version int64
-	table   string
-	column  string
-	addDDL  string
-	postAdd []string
+	version         int64
+	table           string
+	column          string
+	addDDL          string
+	postAdd         []string
+	skipAbsentTable bool
 }{
 	// 0040_add_session_diff_base.sql
 	{version: 40, table: "sessions", column: "diff_base_sha",
@@ -2015,6 +2016,12 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// Draft Open Interpreter builds recorded their harness constraint as 0199
+	// before main assigned 0199 to message continuation. Repair those local
+	// profiles when goose skips main's migration as already applied.
+	{version: 199, table: "conversation_messages", column: "continuation",
+		addDDL:          `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`,
+		skipAbsentTable: true},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
@@ -2025,6 +2032,17 @@ BEGIN
 // on the first session list.
 func reconcileSchema(db *sql.DB) error {
 	for _, rc := range schemaRepairs {
+		// Partial pre-chat schemas used by the older repair tests have no
+		// conversation_messages table yet; migration 0199 cannot have run there.
+		if rc.skipAbsentTable {
+			var tableCount int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, rc.table).Scan(&tableCount); err != nil {
+				return fmt.Errorf("schema verification: inspect %s: %w", rc.table, err)
+			}
+			if tableCount == 0 {
+				continue
+			}
+		}
 		var count int
 		if err := db.QueryRow(
 			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, rc.table, rc.column,
@@ -2109,7 +2127,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMemcode {
+	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsOpenInterpreter && !needsMemcode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2226,6 +2245,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsOpenInterpreter {
+		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2280,6 +2302,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'open-interpreter'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
 	}
 	return nil
 }

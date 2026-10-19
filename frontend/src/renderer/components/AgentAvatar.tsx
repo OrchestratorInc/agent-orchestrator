@@ -50,6 +50,7 @@ import museLogo from "../assets/agents/muse.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
+import openInterpreterLogo from "../assets/agents/open-interpreter.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
 import opencodeDarkLogo from "../assets/agents/opencode-dark.svg";
@@ -93,6 +94,7 @@ const LOGOS: AgentLogoSources = {
 	memcode: memcodeLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
+	"open-interpreter": openInterpreterLogo,
 	kiro: kiroLogo,
 	kilocode: { light: kilocodeLightLogo, dark: kilocodeDarkLogo },
 	vibe: vibeLogo,

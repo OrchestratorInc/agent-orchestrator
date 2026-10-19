@@ -527,6 +527,45 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	}
 }
 
+func TestDoctorOpenInterpreterSkipsPythonCollision(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix executable fixture")
+	}
+	pathDir := t.TempDir()
+	pythonInterpreter := filepath.Join(pathDir, "interpreter")
+	if err := os.WriteFile(pythonInterpreter, []byte("#!/bin/sh\nprintf 'Open Interpreter --model --auto-run\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	rustInterpreter := filepath.Join(home, ".local", "bin", "interpreter")
+	if err := os.MkdirAll(filepath.Dir(rustInterpreter), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rustInterpreter, []byte("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'interpreter 0.0.56\\n'; else printf 'Open Interpreter\\n--no-daemon\\n--chat-completions\\nresume\\n'; fi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+	t.Setenv("HOME", home)
+	setConfigEnv(t)
+	c := doctorContext(t,
+		map[string]string{
+			"git": "/bin/git",
+		},
+		func(_ context.Context, name string, _ ...string) ([]byte, error) {
+			if name == "/bin/git" {
+				return []byte("git version 2.43.0\n"), nil
+			}
+			t.Fatalf("unexpected CommandOutput call for PATH-only harness: %s", name)
+			return nil, nil
+		},
+	)
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "open-interpreter")
+	if check.Level != doctorPass || !strings.Contains(check.Message, "interpreter resolves to "+rustInterpreter) {
+		t.Fatalf("open-interpreter check = %+v, want PASS with Rust interpreter fallback", check)
+	}
+}
+
 // TestDoctorNewVersionedHarnessPassesWithVersion verifies that a Tier-B
 // harness with a --version flag (e.g. opencode) resolves and reports correctly.
 func TestDoctorNewVersionedHarnessPassesWithVersion(t *testing.T) {
