@@ -1,9 +1,9 @@
-// Package hermesacp contains unregistered Hermes ACP qualification helpers.
-// No production driver uses these helpers yet: native hook errors fail open,
-// replay races and complete AO lifecycle conformance remain unqualified.
+// The unregistered Hermes ACP candidate uses supported native configuration.
+// Native hook errors, replay races and AO lifecycle conformance remain gated.
 package hermesacp
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	_ "embed"
@@ -33,6 +33,14 @@ const maxContextBytes = 8192
 // Native defaults, user plugins and cached system prompts are preserved. This
 // is candidate configuration, not proof of execution or a fail-closed boundary.
 func PrepareProfile(ctx context.Context, home, instructions string) error {
+	return prepareProfile(ctx, home, instructions, false)
+}
+
+func prepareLaunchProfile(ctx context.Context, home, instructions string) error {
+	return prepareProfile(ctx, home, instructions, true)
+}
+
+func prepareProfile(ctx context.Context, home, instructions string, refresh bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -127,20 +135,61 @@ func PrepareProfile(ctx context.Context, home, instructions string) error {
 		return fmt.Errorf("hermes ACP: unsafe plugin directory")
 	}
 	dir := filepath.Join(pluginRoot, pluginName)
-	// Exclusive creation refuses user/plugin collisions. A new generation gets
-	// its own isolated profile; never overwrite an existing plugin installation.
+	manifest := []byte("name: ao-standing-context\nversion: \"0.1.0\"\ndescription: Isolated AO ACP standing context candidate\nprovides_hooks: [pre_llm_call]\n")
+	created := false
 	if err := os.Mkdir(dir, 0o700); err != nil {
-		return fmt.Errorf("hermes ACP: managed plugin collision: %w", err)
+		if !refresh || !os.IsExist(err) {
+			return fmt.Errorf("hermes ACP: managed plugin collision: %w", err)
+		}
+		st, err := os.Lstat(dir)
+		if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("hermes ACP: unsafe managed plugin")
+		}
+		// Never overwrite user changes or follow symlinks while refreshing a
+		// generation. Only our exact embedded implementation may own this name.
+		for name, expected := range map[string][]byte{"__init__.py": contextPlugin, "plugin.yaml": manifest} {
+			path := filepath.Join(dir, name)
+			st, err := os.Lstat(path)
+			if err != nil || !st.Mode().IsRegular() {
+				return fmt.Errorf("hermes ACP: unsafe managed plugin file")
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(raw, expected) {
+				return fmt.Errorf("hermes ACP: managed plugin modified")
+			}
+		}
+		st, err = os.Lstat(filepath.Join(dir, "instructions.txt"))
+		if err != nil || !st.Mode().IsRegular() {
+			return fmt.Errorf("hermes ACP: unsafe managed instructions")
+		}
+	} else {
+		created = true
 	}
-	for name, contents := range map[string][]byte{
-		"__init__.py":      contextPlugin,
-		"plugin.yaml":      []byte("name: ao-standing-context\nversion: \"0.1.0\"\ndescription: Isolated AO ACP standing context candidate\nprovides_hooks: [pre_llm_call]\n"),
-		"instructions.txt": []byte(instructions),
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), contents, 0o600); err != nil {
-			return err
+	if created {
+		for name, contents := range map[string][]byte{"__init__.py": contextPlugin, "plugin.yaml": manifest} {
+			if err := os.WriteFile(filepath.Join(dir, name), contents, 0600); err != nil {
+				return err
+			}
 		}
 	}
+	// Replace, never truncate, so a native hook sees one complete bounded value
+	// and existing hard links cannot redirect writes to source-profile files.
+	private, err := os.CreateTemp(dir, ".instructions-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(private.Name()) }()
+	if _, err := private.WriteString(instructions); err != nil {
+		_ = private.Close()
+		return err
+	}
+	if err := private.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(private.Name(), filepath.Join(dir, "instructions.txt")); err != nil {
+		return err
+	}
+
 	raw, err = yaml.Marshal(config)
 	if err != nil {
 		return err
@@ -174,6 +223,19 @@ func ValidateHistory(ctx context.Context, home, id, workspace string) error {
 	}
 	expected, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
+		return fail()
+	}
+	for p := filepath.Clean(home); ; p = filepath.Dir(p) {
+		st, err := os.Lstat(p)
+		if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+			return fail()
+		}
+		if p == filepath.Dir(p) {
+			break
+		}
+	}
+	st, err := os.Lstat(filepath.Join(home, "state.db"))
+	if err != nil || !st.Mode().IsRegular() {
 		return fail()
 	}
 	path := filepath.ToSlash(filepath.Join(home, "state.db"))

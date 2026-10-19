@@ -1,6 +1,8 @@
 package acp
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -136,3 +138,21 @@ func TestApplyAcceptedConfigOptionIgnoresUnknownID(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+// A provider policy must run before both legacy mode/model and typed ACP
+// setters; a rejected option must not require or touch a provider connection.
+func TestSetConfigOptionProviderPolicyRejectsBeforeWire(t *testing.T) {
+	sentinel := errors.New("provider setting not qualified")
+	for _, id := range []string{"model", "mode", "effort"} {
+		c := &conversation{validateConfigOption: func(got string, _ ports.ChatConfigOptionValue) error {
+			if got != id {
+				t.Fatalf("id=%q", got)
+			}
+			return sentinel
+		}}
+		_, err := c.SetConfigOption(context.Background(), id, ports.ChatConfigOptionValue{Select: "unsafe"})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("policy bypassed: %v", err)
+		}
+	}
+}

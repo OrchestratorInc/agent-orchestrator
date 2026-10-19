@@ -58,10 +58,12 @@ type Config struct {
 	ValidateInitialize func(acpsdk.InitializeResponse) error
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
-	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
-	PermissionPolicy             acpdriver.PermissionPolicy
-	ClientExtension              acpdriver.ClientExtensionHandler
-	ClientExtensionAliases       map[string]string
+	SessionPreamble        func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	PermissionPolicy       acpdriver.PermissionPolicy
+	ClientExtension        acpdriver.ClientExtensionHandler
+	ClientExtensionAliases map[string]string
+	// ValidateConfigOption gates direct native option setters as well as turn settings.
+	ValidateConfigOption         func(string, ports.ChatConfigOptionValue) error
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
@@ -159,6 +161,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
+		ValidateConfigOption:         cfg.ValidateConfigOption,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,

@@ -111,6 +111,8 @@ type Config struct {
 	ClientExtensionAliases map[string]string
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
+	// ValidateConfigOption gates direct native option setters as well as turn settings.
+	ValidateConfigOption func(string, ports.ChatConfigOptionValue) error
 	ValidateTurnSettings TurnSettingsValidator
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
@@ -620,6 +622,7 @@ func (d *Driver) initialize(
 	conv := newConversation(
 		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.cfg.ClientExtensionAliases,
 	)
+	conv.validateConfigOption = d.cfg.ValidateConfigOption
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
