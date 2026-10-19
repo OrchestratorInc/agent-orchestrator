@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -609,5 +611,55 @@ func TestLoadHarnessUpdateInterval(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Fatalf("AO_HARNESS_UPDATE_INTERVAL=%q was accepted", raw)
 		}
+	}
+}
+
+func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
+	t.Setenv("AO_TELEMETRY_EVENTS", "on")
+	t.Setenv("AO_TELEMETRY_REMOTE", "posthog")
+	t.Setenv("AO_TELEMETRY_POSTHOG_KEY", "phc_test")
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.13.7")
+	t.Setenv("AO_SENTRY_DSN", "https://k@o.ingest.sentry.io/1")
+	t.Setenv("AO_PORT", "3123")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ScrubTelemetryEnv()
+
+	if cfg.Telemetry.Remote != TelemetryRemotePostHog || cfg.Telemetry.AppVersion != "0.13.7" || cfg.Telemetry.PostHogKey != "phc_test" || cfg.Telemetry.SentryDSN == "" {
+		t.Fatalf("loaded config lost telemetry settings: %+v", cfg.Telemetry)
+	}
+	for _, key := range telemetryEnvKeys {
+		if _, present := os.LookupEnv(key); present {
+			t.Fatalf("%s still set in process env after scrub", key)
+		}
+	}
+	// A child started from os.Environ() after the scrub sees no export settings.
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "AO_TELEMETRY_") || strings.HasPrefix(entry, "AO_SENTRY_DSN=") {
+			t.Fatalf("child environment would inherit %q", entry)
+		}
+	}
+	if os.Getenv("AO_PORT") != "3123" {
+		t.Fatal("scrub must leave unrelated AO_ variables alone")
+	}
+	// The real check: a child process started the way the daemon starts every
+	// child (exec with the inherited environment) must not see the settings.
+	if runtime.GOOS == "windows" {
+		return
+	}
+	out, err := exec.Command("env").Output()
+	if err != nil {
+		t.Fatalf("env: %v", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "AO_TELEMETRY_") || strings.HasPrefix(line, "AO_SENTRY_DSN=") {
+			t.Fatalf("child process inherited %q after scrub", line)
+		}
+	}
+	if !strings.Contains(string(out), "AO_PORT=3123") {
+		t.Fatal("child process should still inherit unrelated AO_ variables")
 	}
 }

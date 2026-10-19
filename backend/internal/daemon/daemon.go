@@ -187,6 +187,8 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	// Children inherit os.Environ(); the export settings stay in cfg only.
+	config.ScrubTelemetryEnv()
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}

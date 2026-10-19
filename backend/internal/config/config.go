@@ -453,6 +453,33 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// telemetryEnvKeys are the variables the desktop stamps on the daemon so it
+// exports product telemetry. Load reads them once; nothing else in the daemon
+// does.
+var telemetryEnvKeys = []string{
+	"AO_TELEMETRY_EVENTS",
+	"AO_TELEMETRY_METRICS",
+	"AO_TELEMETRY_REMOTE",
+	"AO_TELEMETRY_POSTHOG_KEY",
+	"AO_TELEMETRY_POSTHOG_HOST",
+	"AO_TELEMETRY_DISABLED_EVENTS",
+	"AO_TELEMETRY_APP_VERSION",
+	"AO_SENTRY_DSN",
+}
+
+// ScrubTelemetryEnv removes the telemetry export variables from the process
+// environment after Load has consumed them. Every child the daemon starts
+// (tmux and pty shells, ACP agents, git) inherits os.Environ(), so without this
+// an agent working on the AO repo that boots a test daemon with a scratch
+// AO_DATA_DIR inherits the export settings and the host app's version, mints a
+// fresh install id, and reports to the production PostHog project as a new
+// install. The daemon keeps its own copy of the settings in Config.
+func ScrubTelemetryEnv() {
+	for _, key := range telemetryEnvKeys {
+		_ = os.Unsetenv(key)
+	}
+}
+
 func parseToggleEnv(name, raw string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "on", "true", "1", "yes":
