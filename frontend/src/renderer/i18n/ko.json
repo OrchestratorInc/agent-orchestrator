@@ -1270,7 +1270,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "ao 명령으로 터미널에서 Agent Orchestrator 세션을 만들고 관리할 수 있습니다. 명령은 앱과 함께 업데이트됩니다.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "원격 호스트",
 	"settings.terminalCopyOnSelect": "선택 시 복사",

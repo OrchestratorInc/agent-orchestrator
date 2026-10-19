@@ -1252,7 +1252,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "使用 ao 命令，在终端中创建和管理 Agent Orchestrator 会话。该命令会随应用一起更新。",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "远程主机",
 	"settings.terminalCopyOnSelect": "选中即复制",

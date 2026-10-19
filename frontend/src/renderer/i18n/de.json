@@ -1270,7 +1270,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "Erstelle und verwalte Agent Orchestrator-Sitzungen im Terminal mit dem Befehl ao. Er wird mit der App aktualisiert.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Remote-Hosts",
 	"settings.terminalCopyOnSelect": "Bei Auswahl kopieren",
