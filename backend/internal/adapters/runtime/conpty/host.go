@@ -114,11 +114,14 @@ type clientState struct {
 	cols, rows int
 	sized      bool
 
-	// viewer marks a connection that asked for live terminal output (an attach,
-	// or the legacy signals only an attach sends). Probe connections —
-	// GetOutput/Status/Kill, a fresh connection per request (see client.go) —
-	// register like any other client so sendTo can queue their response, but
-	// they never receive a replay or a broadcast.
+	// viewer marks a connection that asked for live terminal output: an attach
+	// hello, the legacy MsgResize signal, the silent-viewer fallback, or the
+	// StatusReq grace (see classifyConn). An input-only connection — the
+	// fire-and-forget clientSendMessage/clientSendInput dial in client.go —
+	// never becomes a viewer. Probe connections (GetOutput/Status/Kill, a fresh
+	// connection per request; see client.go) register like any other client so
+	// sendTo can queue their response, but they never receive a replay or a
+	// broadcast.
 	viewer bool
 
 	// classified records that the first frame (or the firstFrameTimeout
@@ -415,11 +418,11 @@ func (h *host) lockWithRoom() bool {
 	}
 }
 
-// enqueueAllLocked queues msg to every viewer. Probe connections are skipped:
-// they never asked for live output, and their queues exist only for their
-// request's response. The caller holds h.mu and has seen every queue with room
-// (lockWithRoom); only writers, which free space, touch the queues while h.mu is
-// held, so these cannot fail.
+// enqueueAllLocked queues msg to every viewer. Probe and input-only
+// connections are skipped: they never asked for live output, so their queues
+// exist only for a probe's response. The caller holds h.mu and has seen every
+// queue with room (lockWithRoom); only writers, which free space, touch the
+// queues while h.mu is held, so these cannot fail.
 func (h *host) enqueueAllLocked(msg []byte) {
 	for _, client := range h.clients {
 		if !client.viewer {
@@ -557,12 +560,16 @@ func (h *host) handleConn(conn net.Conn) {
 // to drain a multi-MB replay before reaching their small response, and the host
 // re-encoded the whole ring per probe. Only viewers pay it now:
 //
-//   - MsgAttach is the explicit hello: viewer, replay when asked. The grid it
-//     carries sizes the PTY from birth (a deferred session starts at its first
-//     viewer's grid) under the usual largest-client rules.
-//   - MsgResize / MsgTerminalInput can only come from a viewer, so they mark
-//     the connection a viewer and replay what it was built to expect, then the
-//     frame is processed normally.
+//   - MsgAttach is the explicit viewer hello: viewer, replay when asked. The
+//     grid it carries sizes the PTY from birth (a deferred session starts at
+//     its first viewer's grid) under the usual largest-client rules.
+//   - MsgResize is the legacy viewer signal — the pre-hello attach path sent it
+//     as its first frame — so it marks the connection a viewer and replays what
+//     it was built to expect, then the frame is processed normally.
+//   - MsgTerminalInput-first is input-only: the fire-and-forget shape
+//     clientSendMessage/clientSendInput use (see client.go). The input is
+//     dispatched to the PTY, and the connection is never replayed and never
+//     broadcast to.
 //   - MsgStatusReq is ambiguous: the pre-hello attach path sends it right
 //     after Resize (immediately, so it classifies as a viewer above), but an
 //     attach with no known grid sends Status alone while the status probe uses
@@ -596,7 +603,7 @@ func (h *host) classifyConn(conn net.Conn, msgType byte, payload []byte) {
 			client.close(conn)
 		}
 
-	case MsgResize, MsgTerminalInput:
+	case MsgResize:
 		h.upgradeToViewerLocked(conn, client)
 
 	case MsgStatusReq:
@@ -608,9 +615,10 @@ func (h *host) classifyConn(conn net.Conn, msgType byte, payload []byte) {
 
 // upgradeToViewerLocked marks the connection a viewer (idempotent) and queues
 // its one replay, under h.mu. A connection first classified by a probe-shaped
-// frame can still turn out to be a viewer: only a viewer sends Resize or input
-// (see handleClientMsg), so a later one upgrades it instead of waiting for the
-// grace.
+// frame can still turn out to be a viewer: MsgResize, the silent-viewer
+// fallback, and the StatusReq grace mark one (see classifyConn and
+// upgradeLegacyViewerAfterGrace). Input never does: an input-only connection
+// pays no replay (see handleClientMsg).
 func (h *host) upgradeToViewerLocked(conn net.Conn, client *clientState) {
 	if client.viewer {
 		return
@@ -636,7 +644,7 @@ func (h *host) classifySilentViewer(conn net.Conn, client *clientState) {
 // MsgStatusReq to a viewer once it has stayed open past legacyViewerGrace
 // without being classified otherwise: the pre-hello attach path with unknown
 // dimensions behaves exactly that way, while a status probe closes as soon as
-// its response lands. A later Resize or input upgrades it sooner (see
+// its response lands. A later Resize upgrades it sooner; input never does (see
 // upgradeToViewerLocked).
 func (h *host) upgradeLegacyViewerAfterGrace(conn net.Conn, client *clientState) {
 	select {
@@ -697,14 +705,11 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 
 	switch msgType {
 	case MsgTerminalInput:
-		// Input is a viewer signal: a connection first classified by a
-		// probe-shaped frame is an attach as soon as it types (see
-		// upgradeToViewerLocked).
-		h.mu.Lock()
-		if cs := h.clients[conn]; cs != nil {
-			h.upgradeToViewerLocked(conn, cs)
-		}
-		h.mu.Unlock()
+		// Input never promotes a connection to a viewer. The CLI input helpers
+		// (clientSendMessage/clientSendInput in client.go) use exactly this
+		// fire-and-forget shape: MsgTerminalInput is their first and only
+		// frame, they never read a response, and they close after writing.
+		// Upgrading them would queue the scrollback replay that nobody reads.
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			if n, err := h.cfg.PTY.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)

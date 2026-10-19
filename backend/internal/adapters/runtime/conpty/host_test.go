@@ -584,7 +584,96 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	}
 }
 
-// TestTerminalInput: MsgTerminalInput from a client reaches the fakePTY's input.
+// assertNoFrame fails if a frame arrives within d, or if the connection drops.
+// It is the short-window counterpart to readFrame: the input-only assertions
+// below need "nothing arrives", and readFrame's 2s failure timeout would make
+// them needlessly slow.
+func assertNoFrame(t *testing.T, c *testClient, d time.Duration, why string) {
+	t.Helper()
+	select {
+	case f, ok := <-c.frameC:
+		if !ok {
+			t.Fatalf("%s: connection dropped within %s; input-only connections stay open", why, d)
+		}
+		t.Fatalf("%s: received frame 0x%02x (%d bytes) within %s; want silence", why, f.typ, len(f.payload), d)
+	case <-time.After(d):
+	}
+}
+
+// TestInputFirstConnectionIsInputOnly: clientSendMessage/clientSendInput (see
+// client.go) dial fresh write-only connections whose first and only frame is
+// MsgTerminalInput, never read a response, and close after writing. Such a
+// connection is input-only: its bytes go to the PTY, and it must receive no
+// replay and no broadcast — otherwise every automated send pays the multi-MB
+// scrollback this connection shape exists to avoid.
+func TestInputFirstConnectionIsInputOnly(t *testing.T) {
+	f := startServeConfigured(t, 318, func(h *host) {
+		// An hour: the silent-viewer fallback must not fire while the input
+		// frame is in flight. On a loaded runner a 2s firstFrameTimeout could
+		// otherwise turn the connection into a legacy viewer that receives the
+		// replay, making the test fail for the wrong reason.
+		h.firstFrameTimeout = time.Hour
+	})
+	defer f.cancel()
+
+	// A multi-MB ring: if classification slips, the replay queues ~12
+	// MaxReplayChunk frames and the no-frame assertion below cannot miss it.
+	f.ring.Append(bytes.Repeat([]byte("x"), 3<<20))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+
+	input := []byte("hello\r")
+	if err := c.send(MsgTerminalInput, input); err != nil {
+		t.Fatalf("send input: %v", err)
+	}
+
+	// Reading the bytes from the PTY proves the frame was dispatched.
+	got := make([]byte, len(input))
+	if _, err := io.ReadFull(f.pty.inR, got); err != nil {
+		t.Fatalf("read from pty input: %v", err)
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("pty input = %q, want %q", got, input)
+	}
+
+	// The connection is registered but must not be a viewer. The clients map
+	// is keyed by the server-side accepted conn, not the dialing conn held
+	// here, so match it by the address the dialer sees as its LocalAddr.
+	f.host.mu.Lock()
+	var (
+		cs     *clientState
+		viewer bool
+	)
+	for conn, state := range f.host.clients {
+		if conn.RemoteAddr().String() == c.conn.LocalAddr().String() {
+			cs, viewer = state, state.viewer
+			break
+		}
+	}
+	f.host.mu.Unlock()
+	if cs == nil {
+		t.Fatal("input-only connection is not registered")
+	}
+	if viewer {
+		t.Fatal("input-first connection was classified as a viewer; it must be input-only")
+	}
+
+	// No replay was queued at classification...
+	assertNoFrame(t, c, 150*time.Millisecond, "after an input-only frame")
+	// ...and live output skips it like any other non-viewer.
+	frame, err := EncodeMessage(MsgTerminalData, []byte("broadcast to viewers only"))
+	if err != nil {
+		t.Fatalf("encode broadcast: %v", err)
+	}
+	f.host.broadcast(frame)
+	assertNoFrame(t, c, 150*time.Millisecond, "after a broadcast")
+}
+
+// TestTerminalInput: MsgTerminalInput from a client reaches the fakePTY's
+// input. An input-first connection is input-only (see classifyConn), so this
+// exercises that path: the bytes are dispatched to the PTY and the connection
+// is never a viewer — it gets no replay and no broadcast.
 func TestTerminalInput(t *testing.T) {
 	f := startServe(t, 102)
 	defer f.cancel()

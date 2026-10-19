@@ -53,6 +53,11 @@ func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration
 // clientSendMessage chunks message by 512 runes and sends each as a
 // MsgTerminalInput frame with 15ms gaps, then pauses 300ms and sends "\r".
 // Mirrors ptyHostSendMessage from pty-client.ts.
+//
+// This is an input-only connection: MsgTerminalInput is the only kind of frame
+// it ever sends, it waits for no response, and the host classifies it as
+// input-only (see classifyConn in host.go) — no replay, no broadcast. Never
+// send MsgAttach or MsgResize from here.
 func clientSendMessage(addr, message string) error {
 	conn, err := dialHost(addr, dialTimeout)
 	if err != nil {
@@ -95,6 +100,9 @@ func clientSendMessage(addr, message string) error {
 	return err
 }
 
+// clientSendInput sends one MsgTerminalInput frame and closes. Like
+// clientSendMessage, this is an input-only connection (see classifyConn in
+// host.go): never send MsgAttach or MsgResize from here.
 func clientSendInput(addr, input string) error {
 	conn, err := dialHost(addr, dialTimeout)
 	if err != nil {
