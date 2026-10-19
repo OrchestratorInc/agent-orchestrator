@@ -116,6 +116,29 @@ func TestEveryHarnessReportsAuthStatus(t *testing.T) {
 	}
 }
 
+// TestOneShotHarnessesDeclareTerminalMessaging pins the set of harnesses whose
+// terminal launch runs one-shot (ports.AgentTerminalMessagingDeclarer) in both
+// directions: every expected harness declares it, and no other harness does.
+// The declaration turns `ao send` into a refusal, so a new one-shot adapter or
+// a dropped declaration must update this set deliberately.
+func TestOneShotHarnessesDeclareTerminalMessaging(t *testing.T) {
+	want := map[domain.AgentHarness]bool{domain.HarnessZcode: true}
+	seen := map[domain.AgentHarness]bool{}
+	for _, ha := range Harnessed() {
+		seen[ha.Harness] = true
+		declarer, ok := ha.Agent.(ports.AgentTerminalMessagingDeclarer)
+		oneShot := ok && declarer.TerminalMessaging() == ports.AgentTerminalMessagingOneShot
+		if oneShot != want[ha.Harness] {
+			t.Errorf("%s declares one-shot terminal messaging = %v, want %v", ha.Harness, oneShot, want[ha.Harness])
+		}
+	}
+	for harness := range want {
+		if !seen[harness] {
+			t.Errorf("expected one-shot harness %s is not registered", harness)
+		}
+	}
+}
+
 func TestRegistryIncludesFX(t *testing.T) {
 	reg, err := Build()
 	if err != nil {

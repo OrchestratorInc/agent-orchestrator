@@ -45,24 +45,31 @@
 // worth stating plainly: with no hook signals, ACTIVE work also reads as idle
 // (StatusWorking requires an ActivityActive hook callback), waiting_input is
 // unreachable, and the dashboard cannot distinguish a running zcode turn from
-// a finished one sitting in the keep-alive shell. The reaper never sees agent
-// death either — it probes tmux has-session, and the keep-alive keeps that
-// true indefinitely. A future Tier-A installer ships a zcode plugin whose
-// hooks.json runs `ao hooks zcode <event>` per event and registers
-// zcode.DeriveActivityState in activitydispatch.
+// a finished one sitting in the keep-alive shell. The reaper does see the
+// one-shot process end: its workload probe (containsManagedWorkload) notices
+// `zcode -p` has left the pane and flips the row to exited within one 5 s
+// tick, even though the keep-alive shell keeps tmux has-session true. A
+// future Tier-A installer ships a zcode plugin whose hooks.json runs
+// `ao hooks zcode <event>` per event and registers zcode.DeriveActivityState
+// in activitydispatch.
 //
 // Messages (ao send): the orchestrator's standing instructions tell workers
 // that `ao send` is the message channel, and AO delivers those messages by
 // typing them at the session pane's foreground process (tmux send-keys +
-// Enter). For this adapter the foreground is either the running one-shot
-// `zcode -p` (input behavior mid-run is undefined) or, after it exits, the
-// keep-alive interactive shell — in which case the message is typed at a live
-// shell prompt and EXECUTED as a shell command in the worktree. This adapter
-// only returns argv and has no lever on that path, so v1 ships `ao send`
-// against zcode sessions as a documented hazard: operators should message
-// zcode workers through the pane, not `ao send`. A gate (refusing Send for
-// in_command one-shot adapters) belongs in the session manager / runtime
-// messenger layer, outside this adapter.
+// Enter). The launch (GetLaunchCommand) puts nothing interactive there: while
+// `zcode -p` runs the text would go to zcode's stdin (undefined), and in the
+// few seconds between -p returning and the reaper's next tick it would be
+// typed at the keep-alive shell prompt and EXECUTED as a shell command in the
+// worktree. The adapter therefore declares one-shot terminal messaging (see
+// messaging.go), and the session manager refuses `ao send` to a zcode TUI
+// session up front with HARNESS_ONE_SHOT, naming the harness and pointing at
+// `ao spawn`. The declaration is per harness, not per generation: a restore
+// (GetRestoreCommand, `zcode -c`, no -p) opens the full-screen TUI, which
+// could read a pasted follow-up, but the session record carries no fact that
+// tells that generation apart from the one-shot launch, so `ao send` is
+// refused there too; type into the pane directly instead. The mapped
+// app-server chat driver runs in chat mode, which is relayed through its
+// conversation and never gated.
 package zcode
 
 import (
