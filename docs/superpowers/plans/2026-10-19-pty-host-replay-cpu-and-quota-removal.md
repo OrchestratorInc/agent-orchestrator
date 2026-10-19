@@ -43,7 +43,7 @@ Three layers, in order of value. Layer 1+2 are the real fix; layer 3 keeps the l
 ### Layer 1 — bounded ring, bounded tails (safety net)
 
 - Bound the ring by **bytes**, not just lines: `MaxRingBytes = 4 MiB` (env override later if anyone needs more scrollback).
-- Split oversized partial lines at `MaxRingLineBytes = 64 KiB` so line-based eviction actually bounds TUI repaint streams. Splitting only moves the partial line into storage chunks (each entry carries whether it ends a logical line); `Replay()` joins every chunk plus the partial line, so the retained byte stream is unchanged, while `Tail(n)` counts completed logical lines and `Snapshot()` still excludes the in-progress line, including its chunks.
+- Split oversized partial lines at `MaxRingLineBytes = 64 KiB` so entry-based eviction (the byte cap plus the entry-count cap) actually bounds TUI repaint streams. Splitting only moves the partial line into storage chunks (each entry carries whether it ends a logical line); `Replay()` joins every chunk plus the partial line, so the retained byte stream is unchanged, while `Tail(n)` counts completed logical lines and `Snapshot()` still excludes the in-progress line, including its chunks.
 - Cap probe/tail responses at the host: `MaxTailBytes = 128 KiB` suffix (keeps the most recent content, which is what prompt/activity patterns need). Applies to `MsgGetOutputRes` and `MsgGetStyledOutputRes`.
 - Send replays in `MaxReplayChunk = 256 KiB` frames instead of one potentially megabyte-scale iovec.
 
@@ -101,7 +101,7 @@ No speculative UI edits. First measure with a CDP performance trace (chrome-devt
 **Steps:**
 
 1. Add `MaxRingBytes`, `MaxRingLineBytes`, `MaxTailBytes`, `MaxReplayChunk` constants; track total bytes in `Ring` (including newlines).
-2. `Append`: flush `partialLine` into `lines` when it exceeds `MaxRingLineBytes`; evict whole lines from the front while total > `MaxRingBytes`.
+2. `Append`: flush `partialLine` into `lines` when it exceeds `MaxRingLineBytes`; evict storage entries from the front while total > `MaxRingBytes` or the retained entry count exceeds `MaxOutputLines` (a byte-cap eviction can truncate the oldest retained line mid-line).
 3. `Tail(n)`: return the last n completed logical lines, reassembling entries split at `MaxRingLineBytes` and excluding the in-progress line's chunks. The host handlers cap the joined result at `MaxTailBytes` (see the status note above).
 4. `handleConn`: encode the (mode-prefixed) replay into ≤`MaxReplayChunk` frames under the **same single `h.mu` hold** used today (bounded work, ~4 MB worst case; keeps the no-drop snapshot/register invariant from #5445). Verify `clientState.out` capacity (256 entries) comfortably fits the chunk count (~16).
 5. Apply `MaxTailBytes` to `MsgGetOutputRes` and `MsgGetStyledOutputRes` payloads.
