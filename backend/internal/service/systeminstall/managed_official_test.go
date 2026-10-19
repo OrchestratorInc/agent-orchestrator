@@ -178,3 +178,86 @@ func TestDroidDownloadsThePinnedReleaseWithoutItsScript(t *testing.T) {
 		t.Fatal("an unpinned download must fail instead of guessing a release")
 	}
 }
+
+// Codex's cask upgrade deletes the codex-resources a running session can
+// still load, so AO updates a cask install with Codex's own installer into a
+// release of its own and leaves the cask alone.
+func TestCodexCaskUpdatesWithItsInstallerBesideARunningSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed launchers are symlinks on Unix")
+	}
+	root := t.TempDir()
+	s := newTestService("darwin", "brew", "sh")
+	s.managedRoot = root
+	s.releases = &releaseStoreStub{}
+	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "cx-1", Harness: domain.HarnessCodex}}}
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	caskCopy := "/opt/homebrew/bin/codex"
+	launcher := filepath.Join(root, "bin", "codex")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		if target, err := filepath.EvalSymlinks(launcher); err == nil {
+			return VerifyResult{ResolvedPath: launcher, Output: strings.TrimSpace(readFile(target))}, nil
+		}
+		return VerifyResult{ResolvedPath: caskCopy, Output: "0.161.0"}, nil
+	})
+	var mu sync.Mutex
+	var scripts []ports.InstallScriptCommand
+	var commands []ports.InstallCommand
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
+		mu.Lock()
+		scripts = append(scripts, command)
+		mu.Unlock()
+		// Like chatgpt.com/codex/install.sh: $CODEX_INSTALL_DIR/codex at $CODEX_RELEASE.
+		bin := envValue(command.Env, "CODEX_INSTALL_DIR")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			return ports.InstallScriptResult{}, err
+		}
+		return ports.InstallScriptResult{}, os.WriteFile(filepath.Join(bin, "codex"), []byte(envValue(command.Env, "CODEX_RELEASE")+"\n"), 0o755)
+	})
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, command)
+		return nil
+	})
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, err := io.WriteString(stdout, strings.TrimSpace(readFile(argv[0]))+"\n")
+			return err
+		}
+		return nil
+	})
+	s.mu.Lock()
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: {
+		AgentID: string(TargetCodex), Status: UpdateStatusBehindLatest, LatestVersion: "0.163.0",
+		MaintenanceMethod: "homebrew", maintenanceCask: true, maintenancePackage: "codex", CheckedAt: time.Now(),
+	}}
+	s.mu.Unlock()
+
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "homebrew", AgentOperationUpdate, ""); err != nil {
+		t.Fatalf("update with a session running = %v, want it to install beside the session", err)
+	}
+	s.workers.Wait()
+	job, _ := s.Status(context.Background(), TargetCodex)
+	if job.Status != StatusSucceeded {
+		t.Fatalf("job = %+v", job)
+	}
+	for _, command := range commands {
+		if slices.Contains(command.Argv, "brew") {
+			t.Fatalf("ran %q, want the cask left alone", command.Argv)
+		}
+	}
+	if len(scripts) != 1 || scripts[0].URL != codexInstallScriptURL || !scripts[0].Isolated {
+		t.Fatalf("installer runs = %+v, want one isolated Codex installer", scripts)
+	}
+	release := filepath.Join(root, string(TargetCodex), "versions", "v1")
+	if got := envValue(scripts[0].Env, "CODEX_INSTALL_DIR"); got != filepath.Join(release, "bin") {
+		t.Fatalf("CODEX_INSTALL_DIR = %q, want inside %s", got, release)
+	}
+	if got := envValue(scripts[0].Env, "CODEX_RELEASE"); got != "0.163.0" {
+		t.Fatalf("CODEX_RELEASE = %q, want the advisory's release", got)
+	}
+	if target, err := filepath.EvalSymlinks(launcher); err != nil || !strings.HasPrefix(target, release) {
+		t.Fatalf("launcher resolves to %q (%v), want the new release", target, err)
+	}
+}

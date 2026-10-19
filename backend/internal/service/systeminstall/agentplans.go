@@ -62,7 +62,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{s.planNPM(target, "@anthropic-ai/claude-code"), official}
 		}
 	case TargetCodex:
-		official := s.officialByOS(target, "https://chatgpt.com/codex/install.sh", "sh", "https://chatgpt.com/codex/install.ps1", agentDocumentationURLs[target])
+		official := s.officialByOS(target, codexInstallScriptURL, "sh", "https://chatgpt.com/codex/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			plans = []Plan{s.planBrewCask(target, "codex"), s.planNPM(target, "@openai/codex"), official}
 		} else {
@@ -400,6 +400,16 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	if operation == AgentOperationUpdate {
 		switch plan.Method {
 		case "homebrew":
+			// A cask whose upgrade would delete files running sessions load is
+			// updated with the vendor's installer into a release of AO's own.
+			if entry, ok := officialManagedCaskFor(s.goos, plan); ok && s.managedRoot != "" {
+				if script := s.planShellInstaller(plan.Target, entry.url, entry.shell).Script; script != nil {
+					if _, ok := s.officialManagedRecipeFor(Plan{Target: plan.Target, Method: plan.Method, Package: plan.Package, PackageCask: true, Script: script}); ok {
+						plan.Script = script
+						break
+					}
+				}
+			}
 			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
 			// live Homebrew API, so refresh local metadata before upgrading.
 			plan.Prepare = [][]string{{"brew", "update"}}

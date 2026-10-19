@@ -232,6 +232,9 @@ func (s *Service) updateInUse(ctx context.Context, target Target, advisory Updat
 	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask, advisory.maintenancePackage)
 	_, officialRecipe := officialManagedRecipes[target]
 	officialManaged := advisory.MaintenanceMethod == "official-installer" && officialRecipe && (s.goos == "darwin" || s.goos == "linux")
+	if _, ok := officialManagedCaskFor(s.goos, Plan{Target: target, Method: advisory.MaintenanceMethod, PackageCask: advisory.maintenanceCask, Package: advisory.maintenancePackage}); ok {
+		officialManaged = true
+	}
 	if (managedMethods[advisory.MaintenanceMethod] || officialManaged) && s.managedRoot != "" {
 		// MaintenanceMethod is the ownership-checked source of this advisory.
 		// Use the same update recipe as StartAgentOperation: the raw method

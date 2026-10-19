@@ -210,10 +210,34 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 	},
 }
 
+// officialManagedCask is a Homebrew cask whose upgrade deletes files a
+// running session can still load. AO updates it beside running sessions with
+// the vendor's installer instead, into a release of its own; the cask itself
+// is left as it is.
+type officialManagedCask struct {
+	cask, url, shell string
+}
+
+// codexInstallScriptURL is Codex's official macOS and Linux installer.
+const codexInstallScriptURL = "https://chatgpt.com/codex/install.sh"
+
+// officialManagedCasks: Codex's cask also ships codex-resources, which an
+// upgrade removes while sessions may still read it.
+var officialManagedCasks = map[Target]officialManagedCask{
+	TargetCodex: {cask: "codex", url: codexInstallScriptURL, shell: "sh"},
+}
+
+// officialManagedCaskFor returns the cask entry when plan upgrades it.
+func officialManagedCaskFor(goos string, plan Plan) (officialManagedCask, bool) {
+	entry, ok := officialManagedCasks[plan.Target]
+	return entry, ok && goos == "darwin" && plan.Method == "homebrew" && plan.PackageCask && plan.Package == entry.cask
+}
+
 // officialManagedRecipeFor returns the recipe that installs plan's official
 // installer as a managed release, on the platforms it was read for.
 func (s *Service) officialManagedRecipeFor(plan Plan) (officialManagedRecipe, bool) {
-	if plan.Method != "official-installer" || plan.Script == nil || (s.goos != "darwin" && s.goos != "linux") {
+	_, cask := officialManagedCaskFor(s.goos, plan)
+	if plan.Method != "official-installer" && !cask || plan.Script == nil || (s.goos != "darwin" && s.goos != "linux") {
 		return officialManagedRecipe{}, false
 	}
 	recipe, ok := officialManagedRecipes[plan.Target]
