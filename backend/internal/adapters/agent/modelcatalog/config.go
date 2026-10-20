@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,7 +25,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes":
 		return true
 	default:
 		return false
@@ -80,6 +82,8 @@ func configModelParser(agentID string) configParser {
 		return parseClineModels
 	case "autohand":
 		return parseAutoHandModels
+	case "hermes":
+		return parseHermesModels
 	default:
 		return nil
 	}
@@ -98,6 +102,10 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 		}
 	case "continue":
 		if root := continueHomeDir(func(name string) string { return envValue(env, name) }); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"))
+		}
+	case "hermes":
+		if root := hermesConfigHome(home, env); root != "" {
 			paths = append(paths, filepath.Join(root, "config.yaml"))
 		}
 	case "goose":
@@ -137,6 +145,84 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 		}
 	}
 	return paths
+}
+
+// hermesConfigHome mirrors Hermes's HERMES_HOME default: ~/.hermes on macOS
+// and Linux, %LOCALAPPDATA%\hermes on Windows.
+func hermesConfigHome(home string, env map[string]string) string {
+	if root := envValue(env, "HERMES_HOME"); root != "" {
+		if root == "~" {
+			return home
+		}
+		if strings.HasPrefix(root, "~/") && home != "" {
+			return filepath.Join(home, root[2:])
+		}
+		return root
+	}
+	if runtime.GOOS == "windows" {
+		if local := envValue(env, "LOCALAPPDATA"); local != "" {
+			return filepath.Join(local, "hermes")
+		}
+		if home != "" {
+			return filepath.Join(home, "AppData", "Local", "hermes")
+		}
+		return ""
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".hermes")
+}
+
+// hermesReasoningLevels are the native --reasoning values Hermes accepts.
+var hermesReasoningLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// parseHermesModels reports the model Hermes's own configuration selects. The
+// provider stays native configuration, so only that provider's default is a
+// reproducible catalog entry; other model IDs can still be typed directly.
+func parseHermesModels(raw []byte) ([]ports.AgentModelInfo, error) {
+	var config struct {
+		Model yaml.Node `yaml:"model"`
+		Agent struct {
+			ReasoningEffort string `yaml:"reasoning_effort"`
+		} `yaml:"agent"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	var id, provider string
+	switch config.Model.Kind {
+	case yaml.ScalarNode:
+		id = config.Model.Value
+	case yaml.MappingNode:
+		var model struct {
+			Default  string `yaml:"default"`
+			Model    string `yaml:"model"`
+			Provider string `yaml:"provider"`
+		}
+		if err := config.Model.Decode(&model); err != nil {
+			return nil, err
+		}
+		id, provider = model.Default, model.Provider
+		if strings.TrimSpace(id) == "" {
+			id = model.Model
+		}
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	if provider = strings.TrimSpace(provider); provider == "auto" {
+		provider = ""
+	}
+	effort := strings.TrimSpace(config.Agent.ReasoningEffort)
+	if !slices.Contains(hermesReasoningLevels, effort) {
+		effort = ""
+	}
+	return []ports.AgentModelInfo{{
+		ID: id, Label: id, Provider: provider, IsDefault: true,
+		Efforts: append([]string(nil), hermesReasoningLevels...), DefaultEffort: effort,
+	}}, nil
 }
 
 func qwenConfigHome(home string, env map[string]string) string {

@@ -189,6 +189,40 @@ providers:
 	}
 }
 
+func TestParseHermesModelsReportsNativeDefault(t *testing.T) {
+	levels := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	for _, tt := range []struct {
+		name, config string
+		want         []ports.AgentModelInfo
+	}{
+		{"mapping with provider and effort", "model:\n  default: anthropic/claude-opus-4.6\n  provider: anthropic\nagent:\n  reasoning_effort: high\n",
+			[]ports.AgentModelInfo{{ID: "anthropic/claude-opus-4.6", Label: "anthropic/claude-opus-4.6", Provider: "anthropic", IsDefault: true, Efforts: levels, DefaultEffort: "high"}}},
+		{"model key and auto provider", "model:\n  model: glm-5.3\n  provider: auto\n",
+			[]ports.AgentModelInfo{{ID: "glm-5.3", Label: "glm-5.3", IsDefault: true, Efforts: levels}}},
+		{"scalar model and unknown effort", "model: deepseek-chat\nagent:\n  reasoning_effort: turbo\n",
+			[]ports.AgentModelInfo{{ID: "deepseek-chat", Label: "deepseek-chat", IsDefault: true, Efforts: levels}}},
+		{"no model", "agent:\n  system_prompt: hi\n", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			models, err := parseHermesModels([]byte(tt.config))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(models, tt.want) {
+				t.Fatalf("models = %#v, want %#v", models, tt.want)
+			}
+		})
+	}
+}
+
+func TestHermesModelConfigFollowsHermesHome(t *testing.T) {
+	home := t.TempDir()
+	paths := modelConfigPaths("hermes", "", map[string]string{"HERMES_HOME": home})
+	if len(paths) != 1 || paths[0] != filepath.Join(home, "config.yaml") {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
 func TestParseVibeModelsUsesAliasesAndActiveModel(t *testing.T) {
 	models, err := parseVibeModels([]byte(`
 active_model = "zai-glm"

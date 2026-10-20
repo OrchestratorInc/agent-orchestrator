@@ -334,6 +334,30 @@ func TestGooseWindowsUsesPowerShellInstallerCommand(t *testing.T) {
 	}
 }
 
+func TestHermesUsesPinnedOfficialInstallerOnEveryOS(t *testing.T) {
+	for _, tc := range []struct {
+		goos, shell, url string
+		args             []string
+	}{
+		{"darwin", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--commit", hermesQualifiedCommit, "--non-interactive"}},
+		{"linux", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--commit", hermesQualifiedCommit, "--non-interactive"}},
+		{"windows", "powershell.exe", "https://hermes-agent.nousresearch.com/install.ps1", []string{"-Commit", hermesQualifiedCommit, "-NonInteractive"}},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetHermes)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
+				t.Fatalf("Hermes plan = %+v, want available official installer", plan)
+			}
+			if plan.Script.URL != tc.url || !slices.Equal(plan.Script.Args, tc.args) {
+				t.Fatalf("Hermes installer = %s %v, want %s %v", plan.Script.URL, plan.Script.Args, tc.url, tc.args)
+			}
+			if !strings.HasSuffix(displayCommand(plan), strings.Join(tc.args, " ")) {
+				t.Fatalf("display omits installer arguments: %q", displayCommand(plan))
+			}
+		})
+	}
+}
+
 func TestOfficialInstallerIsPreferredOverPackageManagers(t *testing.T) {
 	s := newTestService("darwin", "brew", "npm", "sh")
 	s.installCapabilities = installCapabilitiesStub{

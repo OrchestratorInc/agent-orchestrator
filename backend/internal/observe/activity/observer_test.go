@@ -53,33 +53,19 @@ func (f *fakeSink) ApplyActivitySignal(_ context.Context, id domain.SessionID, s
 
 type pollingResolverAgent struct {
 	ports.Agent
-	state              domain.ActivityState
-	continuousIdentity bool
-	resolvedID         string
-	resolveErr         error
-	resolveCalls       int
-	persistCalls       int
-	persistErr         error
-	onPersist          func()
+	state        domain.ActivityState
+	resolvedID   string
+	resolveErr   error
+	resolveCalls int
 }
 
 func (a *pollingResolverAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
 	return a.state, true
 }
 func (*pollingResolverAgent) ContinuouslyDetectTerminalActivity() bool { return true }
-func (a *pollingResolverAgent) ContinuouslyResolveNativeSessionID() bool {
-	return a.continuousIdentity
-}
 func (a *pollingResolverAgent) ResolveNativeSessionID(context.Context, ports.NativeSessionResolveConfig) (string, bool, error) {
 	a.resolveCalls++
 	return a.resolvedID, true, a.resolveErr
-}
-func (a *pollingResolverAgent) PersistNativeSessionID(context.Context, ports.NativeSessionResolveConfig, string) error {
-	a.persistCalls++
-	if a.onPersist != nil {
-		a.onPersist()
-	}
-	return a.persistErr
 }
 
 func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {
@@ -124,10 +110,9 @@ func TestPollReconcilesActivityWhenNativeIdentityResolutionFails(t *testing.T) {
 			session.Activity.State = tt.current
 			session.Metadata.AgentSessionID = "previous-native-id"
 			agent := &pollingResolverAgent{
-				state:              tt.next,
-				continuousIdentity: true,
-				resolvedID:         "unconfirmed-native-id",
-				resolveErr:         errors.New("native state unavailable"),
+				state:      tt.next,
+				resolvedID: "unconfirmed-native-id",
+				resolveErr: errors.New("native state unavailable"),
 			}
 			sink := &fakeSink{}
 			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &renderedRuntime{}, fakeAgents{session.Harness: renderedResolverAgent{agent}}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
@@ -147,68 +132,7 @@ func TestPollReconcilesActivityWhenNativeIdentityResolutionFails(t *testing.T) {
 					t.Fatalf("activity reconciliation lost its fences: %+v", signal)
 				}
 			}
-			if agent.persistCalls != 0 {
-				t.Fatal("failed identity lookup persisted a restore locator")
-			}
 		})
-	}
-}
-
-func TestPollPersistsHermesLocatorAfterNativeIdentitySignal(t *testing.T) {
-	now := time.Unix(500, 0).UTC()
-	session := activeSession(now, domain.HarnessHermes)
-	session.Metadata.AgentSessionID = "old-id"
-	events := []string{}
-	sink := &fakeSink{applied: func() { events = append(events, "signal") }}
-	agent := &pollingResolverAgent{state: domain.ActivityActive, continuousIdentity: true, resolvedID: "new-id", onPersist: func() { events = append(events, "locator") }}
-	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
-	if err := observer.Poll(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if len(sink.signals) != 1 || sink.signals[0].AgentSessionID != "new-id" || agent.resolveCalls != 1 || agent.persistCalls != 1 || len(events) != 2 || events[0] != "signal" || events[1] != "locator" {
-		t.Fatalf("same-state identity rotation was not persisted after signal: calls=%d persists=%d events=%v signals=%+v", agent.resolveCalls, agent.persistCalls, events, sink.signals)
-	}
-	sink.err = errors.New("identity signal rejected")
-	agent.persistCalls = 0
-	if err := observer.Poll(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if agent.persistCalls != 0 {
-		t.Fatal("locator was persisted after the identity signal failed")
-	}
-}
-
-func TestPollRetriesHermesLocatorAfterIdleIdentityIsCommitted(t *testing.T) {
-	now := time.Unix(500, 0).UTC()
-	session := activeSession(now, domain.HarnessHermes)
-	agent := &pollingResolverAgent{
-		state:              domain.ActivityIdle,
-		continuousIdentity: true,
-		resolvedID:         "native-id",
-		persistErr:         errors.New("temporary locator failure"),
-	}
-	sink := &fakeSink{applied: func() {
-		session.Activity.State = domain.ActivityIdle
-		session.Metadata.AgentSessionID = agent.resolvedID
-		session.Revision++
-	}}
-	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
-	if err := observer.Poll(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if len(sink.signals) != 1 || agent.persistCalls != 1 || session.Metadata.AgentSessionID != agent.resolvedID {
-		t.Fatalf("initial identity was not committed before locator failure: signals=%+v persists=%d session=%+v", sink.signals, agent.persistCalls, session)
-	}
-	observer.sessions = fakeSessions{rows: []domain.SessionRecord{session}}
-	agent.persistErr = nil
-	if err := observer.Poll(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if agent.resolveCalls != 2 || agent.persistCalls != 2 {
-		t.Fatalf("unchanged idle identity did not retry locator: resolves=%d persists=%d", agent.resolveCalls, agent.persistCalls)
-	}
-	if len(sink.signals) != 1 {
-		t.Fatalf("locator retry emitted a redundant activity signal: %+v", sink.signals)
 	}
 }
 

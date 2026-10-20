@@ -174,14 +174,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		return
 	}
 	if state == session.Activity.State {
-		continuousIdentity, supports := agent.(ports.AgentContinuousNativeSessionResolver)
-		if !supports || !continuousIdentity.ContinuouslyResolveNativeSessionID() {
-			return
-		}
+		return
 	}
 	nativeID := ""
-	resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
+		resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
 		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, resolveCfg)
 		if resolveErr != nil {
 			// Native identity is optional evidence; a failed lookup must not
@@ -191,37 +188,25 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 			nativeID = id
 		}
 	}
-	if state != session.Activity.State || (nativeID != "" && nativeID != session.Metadata.AgentSessionID) {
-		event := "terminal-" + string(state)
-		if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
-			// A current native composer/busy frame resolves the prior modal. Keep
-			// its observed destination state: lifecycle accepts this boundary for
-			// active, idle, and waiting input, and clears the blocked tool flight.
-			event = "permission-resolved"
-		} else if state == domain.ActivityWaitingInput {
-			event = "terminal-waiting-input"
-		}
-		err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
-			AgentSessionID:   nativeID,
-			Valid:            true,
-			State:            state,
-			Timestamp:        now,
-			ExpectedRevision: &session.Revision,
-			Event:            event,
-			LaunchID:         session.Metadata.RuntimeLaunchID,
-		})
-		if err != nil {
-			o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
-			return
-		}
+	event := "terminal-" + string(state)
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
+		// A current native composer/busy frame resolves the prior modal. Keep
+		// its observed destination state: lifecycle accepts this boundary for
+		// active, idle, and waiting input, and clears the blocked tool flight.
+		event = "permission-resolved"
+	} else if state == domain.ActivityWaitingInput {
+		event = "terminal-waiting-input"
 	}
-	// Locator persistence is idempotent and can fail after the durable identity
-	// write. Retry it even when subsequent polls see the same state and identity.
-	if nativeID != "" {
-		if persister, supports := agent.(ports.AgentNativeSessionPersister); supports {
-			if err := persister.PersistNativeSessionID(ctx, resolveCfg, nativeID); err != nil {
-				o.logger.Warn("activity observer: native identity locator unavailable", "session", session.ID, "err", err)
-			}
-		}
+	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
+		AgentSessionID:   nativeID,
+		Valid:            true,
+		State:            state,
+		Timestamp:        now,
+		ExpectedRevision: &session.Revision,
+		Event:            event,
+		LaunchID:         session.Metadata.RuntimeLaunchID,
+	})
+	if err != nil {
+		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
 }

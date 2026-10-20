@@ -1,21 +1,23 @@
 // Package hermes supervises the official Hermes Agent classic interactive CLI.
-// It uses native invocation configuration and read-only native leases, never
+// It uses native invocation configuration and AO-titled native sessions, never
 // installs global plugins or changes native safety/approval implementations.
 package hermes
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +38,8 @@ import (
 // Plugin supervises the official native interactive terminal.
 type Plugin struct{ agentbase.Base }
 
-// Revalidate these v0.21.6 chrome markers whenever the supported native version changes.
+// Revalidate these chrome markers whenever the supported native version range changes.
 const (
-	nativeVersion        = "Hermes Agent v0.21.6"
 	nativePrompt         = "❯"
 	nativeNamedPrompt    = "☤ ❯"
 	nativeWarningPrompt  = "⚠ ❯"
@@ -49,8 +50,10 @@ const (
 )
 
 var (
-	nativeVersionLine   = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + `(?: \(2026\.9\.24\) · upstream 818c13be)?$`)
-	terminalKeyUnsafe   = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+	// v0.21.6 through v0.22.x share the classic CLI chrome and session flags AO
+	// drives. Source installs append a date, channel, or commit after a space.
+	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v0\.(?:21\.(?:[6-9]|[1-9][0-9]+)|22\.[0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
+	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 )
 
@@ -64,13 +67,18 @@ func (*Plugin) Manifest() adapters.Manifest {
 
 // ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
-	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux only: %w", ports.ErrAgentBinaryLinuxOnly)
-	}
 	timedOut := false
-	// Probe only documented install locations. A PATH-first --version probe would
-	// execute an unrelated earlier binary during passive agent discovery.
-	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/usr/local/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{{".local", "bin", "hermes"}, {".hermes", "hermes-agent", ".venv", "bin", "hermes"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
+	// Probe only the official installers' locations. A PATH-first --version probe
+	// would execute an unrelated earlier binary during passive agent discovery.
+	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/usr/local/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
+		{".local", "bin", "hermes"},
+		{".hermes", "hermes-agent", ".hermes", "bin", "hermes"},
+		{".hermes", "hermes-agent", ".venv", "bin", "hermes"},
+	}, WinPaths: []binaryutil.WinPath{
+		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.exe"}},
+		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.cmd"}},
+		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}},
+	}, ValidateIdentity: func(ctx context.Context, path string) bool {
 		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		cmd := aoprocess.CommandContext(probeCtx, path, "--version")
@@ -95,7 +103,9 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 
 // GetConfigSpec implements the scoped native adapter contract.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	return agentbase.ModelConfigSpec(ctx, "Native Hermes --model override; provider and credentials remain native configuration.")
+	return agentbase.ModelEffortConfigSpec(ctx,
+		"Native Hermes --model override; provider and credentials remain native configuration.",
+		"Native Hermes --reasoning level: none, minimal, low, medium, high, xhigh, max, or ultra.")
 }
 func validate(cfg ports.LaunchConfig) error {
 	if len(cfg.AllowedTools)+len(cfg.DisallowedTools) > 0 {
@@ -122,13 +132,16 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
-	binary, err := p.ResolveBinary(ctx)
+	// Every fresh launch mints a new title, so a relaunch never adopts an older
+	// conversation; restore reuses the stored one.
+	title, err := newSessionTitle(cfg.DataDir, cfg.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath}
-	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	cmd = append(cmd, permissionArgs(cfg.Permissions)...)
+	cmd, err := p.sessionCommand(ctx, cfg, title, true)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Prompt != "" {
 		dir := sessionDir(cfg.DataDir, cfg.SessionID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -144,6 +157,84 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 func sessionDir(data, id string) string { return filepath.Join(data, "agents", "hermes", id) }
 
+// sessionCommand starts or resumes the native conversation AO titled for this
+// session. Hermes records the title as user-provided, so auto-titling never
+// renames it, and resolves it forward through context compression itself.
+func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, title string, create bool) ([]string, error) {
+	binary, err := p.ResolveBinary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath, "--continue", title}
+	if create {
+		cmd = append(cmd, "--create-if-missing")
+	}
+	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
+	return append(cmd, permissionArgs(cfg.Permissions)...), nil
+}
+
+// newSessionTitle records a fresh native title for an AO launch. The random
+// suffix keeps titles unique when several AO data directories share one
+// Hermes home and reuse session IDs.
+func newSessionTitle(data, id string) (string, error) {
+	suffix := make([]byte, 6)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", err
+	}
+	safeID := titleUnsafe.ReplaceAllString(id, "-")
+	if len(safeID) > 64 {
+		safeID = safeID[:64]
+	}
+	title := "ao-" + safeID + "-" + hex.EncodeToString(suffix)
+	dir := sessionDir(data, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "native-title"), []byte(title), 0o600); err != nil {
+		return "", err
+	}
+	return title, nil
+}
+
+func sessionTitle(data, id string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(sessionDir(data, id), "native-title"))
+	if err != nil {
+		return "", err
+	}
+	if title := strings.TrimSpace(string(b)); title != "" {
+		return title, nil
+	}
+	return "", fmt.Errorf("hermes: empty native session title")
+}
+
+// resolveHome mirrors Hermes's own HERMES_HOME default: ~/.hermes on macOS and
+// Linux, %LOCALAPPDATA%\hermes on Windows. The launch env wins over the daemon's.
+func resolveHome(env map[string]string) (string, error) {
+	if runtime.GOOS != "windows" {
+		return nativeconfig.Resolve(env, "HERMES_HOME", ".hermes")
+	}
+	value, ok := env["HERMES_HOME"]
+	if !ok {
+		value = os.Getenv("HERMES_HOME")
+	}
+	if dir := strings.TrimSpace(value); dir != "" {
+		return filepath.Clean(dir), nil
+	}
+	local := strings.TrimSpace(env["LOCALAPPDATA"])
+	if local == "" {
+		local = os.Getenv("LOCALAPPDATA")
+	}
+	if local == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		local = filepath.Join(home, "AppData", "Local")
+	}
+	return filepath.Join(local, "hermes"), nil
+}
+
 // GetAgentHooks only supplies process-local additive native configuration. The
 // name is AO's existing launch-environment boundary; no native hooks are added.
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
@@ -153,7 +244,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if cfg.Env == nil {
 		return fmt.Errorf("hermes: launch environment required")
 	}
-	home, err := nativeconfig.Resolve(cfg.Env, "HERMES_HOME", ".hermes")
+	home, err := resolveHome(cfg.Env)
 	if err != nil {
 		return err
 	}
@@ -205,9 +296,13 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if original != "" && instructions != "" {
 		combined = original + "\n\n" + instructions
 	}
-	// Linux MAX_ARG_STRLEN counts NAME= and the trailing NUL for each entry.
-	// The AO original-prompt entry carries a second copy of the native text.
-	const maxEnvString = 128 * 1024
+	// Linux MAX_ARG_STRLEN counts NAME= and the trailing NUL for each entry;
+	// Windows caps a variable at 32,767 characters. The AO original-prompt
+	// entry carries a second copy of the native text.
+	maxEnvString := 128 * 1024
+	if runtime.GOOS == "windows" {
+		maxEnvString = 32767
+	}
 	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString ||
 		len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString {
 		return fmt.Errorf("hermes: standing instructions exceed process environment limit")
@@ -222,10 +317,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "native-workspace"), []byte(cfg.WorkspacePath), 0o600)
+	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
 }
 func nativeOverlay(config map[string]any) string {
 	agent, _ := config["agent"].(map[string]any)
@@ -283,181 +375,58 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	id := cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]
-	if id == "" || id == "latest" || strings.ContainsAny(id, " /\\\r\n\t") {
-		return nil, false, fmt.Errorf("hermes: exact observed native session ID required")
+	launch := ports.LaunchConfig{DataDir: cfg.DataDir, SessionID: cfg.Session.ID, WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools}
+	if err := validate(launch); err != nil {
+		return nil, false, err
 	}
-	home, err := nativeHome(cfg.DataDir, cfg.Session.ID)
+	title, err := sessionTitle(cfg.DataDir, cfg.Session.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("hermes: AO native session title unavailable: %w", err)
+	}
+	if _, err := p.titledSessionID(ctx, cfg.DataDir, cfg.Session.ID, title); err != nil {
+		return nil, false, err
+	}
+	// Without --create-if-missing, a conversation renamed or deleted after this
+	// check fails loudly instead of silently starting a fresh one.
+	cmd, err := p.sessionCommand(ctx, launch, title, false)
 	if err != nil {
 		return nil, false, err
 	}
-	terminal, err := os.ReadFile(filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "observed-terminal"))
+	return cmd, true, nil
+}
+
+// titledSessionID reads the native conversation AO titled for a session.
+// Compression continuations keep the root's lineage, which Hermes resolves on
+// resume; the root ID is the stable identity AO reports.
+func (*Plugin) titledSessionID(ctx context.Context, data, id, title string) (string, error) {
+	home, err := nativeHome(data, id)
 	if err != nil {
-		return nil, false, fmt.Errorf("hermes: current terminal identity was not observed")
-	}
-	crumb, err := readBreadcrumb(string(terminal))
-	if err != nil || crumb.SessionID != id {
-		return nil, false, fmt.Errorf("hermes: native terminal rotated after observation; refusing stale restore")
+		return "", fmt.Errorf("hermes: native home was not recorded: %w", err)
 	}
 	db, err := sql.Open("sqlite", nativeStateDSN(home))
 	if err != nil {
-		return nil, false, err
+		return "", err
 	}
 	defer func() { _ = db.Close() }()
-	var cwd string
-	var messages int
-	var children int
-	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var nativeID string
+	err = db.QueryRowContext(ctx, "SELECT id FROM sessions WHERE title=? ORDER BY started_at LIMIT 1", title).Scan(&nativeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("hermes: native conversation %q not found; it may have been renamed or deleted in Hermes", title)
+	}
+	if err != nil {
 		var coded interface{ Code() int }
 		if errors.As(err, &coded) && coded.Code() == sqlite3.SQLITE_READONLY_RECOVERY {
-			return nil, false, fmt.Errorf("hermes: native state database needs WAL recovery; resume Hermes natively once, then retry restore: %w", err)
+			return "", fmt.Errorf("hermes: native state database needs WAL recovery; resume Hermes natively once, then retry restore: %w", err)
 		}
-		return nil, false, fmt.Errorf("hermes: native state database unavailable: %w", err)
+		return "", fmt.Errorf("hermes: native state database unavailable: %w", err)
 	}
-	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
-		return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")
-	}
-	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: cfg.DataDir, SessionID: cfg.Session.ID, WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
-	if err != nil {
-		return nil, false, err
-	}
-	return append(cmd, "--resume", id), true, nil
+	return nativeID, nil
 }
 
 // SessionInfo implements the scoped native adapter contract.
 func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.SessionInfo, bool, error) {
-	return p.readSessionInfo(ctx, ref, "", "")
-}
-func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launchID, persistID string) (ports.SessionInfo, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.SessionInfo{}, false, err
-	}
-	home, err := nativeHome(ref.DataDir, ref.ID)
-	if err != nil {
-		return ports.SessionInfo{}, false, err
-	}
-	workspace := ref.WorkspacePath
-	if workspace == "" {
-		b, err := os.ReadFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "native-workspace"))
-		if err != nil {
-			return ports.SessionInfo{}, false, fmt.Errorf("hermes: native workspace metadata: %w", err)
-		}
-		if len(b) == 0 {
-			return ports.SessionInfo{}, false, nil
-		}
-		workspace = string(b)
-	}
-	b, err := os.ReadFile(filepath.Join(home, "runtime", "active_sessions.json"))
-	if os.IsNotExist(err) {
-		return ports.SessionInfo{}, false, nil
-	}
-	if err != nil {
-		return ports.SessionInfo{}, false, err
-	}
-	var leases struct {
-		Entries []struct {
-			SessionID string  `json:"session_id"`
-			PID       int     `json:"pid"`
-			Start     float64 `json:"process_start_time"`
-		}
-	}
-	if err := json.Unmarshal(b, &leases); err != nil {
-		return ports.SessionInfo{}, false, err
-	}
-	found := ""
-	foundCrumbPath := ""
-	for _, lease := range leases.Entries {
-		if !leaseProcessMatches(lease.PID, lease.Start) {
-			continue
-		}
-		env, err := os.ReadFile(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "environ"))
-		if err != nil {
-			continue
-		}
-		match := false
-		launchMatch := launchID == ""
-		for _, entry := range strings.Split(string(env), "\x00") {
-			if entry == "AO_SESSION_ID="+ref.ID {
-				match = true
-			}
-			if entry == "AO_RUNTIME_LAUNCH_ID="+launchID {
-				launchMatch = true
-			}
-		}
-		if !match || !launchMatch {
-			continue
-		}
-		// The lease proves process ownership only. /new and compression rotate
-		// the native terminal breadcrumb without transferring the startup lease.
-		tty, e := os.Readlink(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "fd", "0"))
-		if e != nil || !strings.HasPrefix(tty, "/dev/pts/") {
-			continue
-		}
-		key := "tty-" + terminalKeyUnsafe.ReplaceAllString(strings.Trim(tty, "/"), "-")
-		crumbPath := filepath.Join(home, "terminal-sessions", key)
-		crumb, e := readBreadcrumb(crumbPath)
-		if e != nil || crumb.Timestamp < lease.Start {
-			continue
-		}
-		cwd, e := os.Readlink(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "cwd"))
-		if e != nil || filepath.Clean(cwd) != filepath.Clean(crumb.Cwd) || filepath.Clean(cwd) != filepath.Clean(workspace) {
-			continue
-		}
-		db, e := sql.Open("sqlite", nativeStateDSN(home))
-		if e != nil {
-			return ports.SessionInfo{}, false, fmt.Errorf("hermes: open native state database: %w", e)
-		}
-		var storedCwd string
-		e = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,'') FROM sessions WHERE id=?", crumb.SessionID).Scan(&storedCwd)
-		_ = db.Close()
-		// Native /new creates the exact database row without cwd. The live
-		// owned process and its PTY breadcrumb still corroborate the AO
-		// workspace; a populated conflicting database cwd remains rejected.
-		if e != nil && !errors.Is(e, sql.ErrNoRows) {
-			return ports.SessionInfo{}, false, fmt.Errorf("hermes: read native state database: %w", e)
-		}
-		if e != nil || (storedCwd != "" && filepath.Clean(storedCwd) != filepath.Clean(cwd)) {
-			continue
-		}
-		if found != "" && found != crumb.SessionID {
-			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
-		}
-		found = crumb.SessionID
-		foundCrumbPath = crumbPath
-	}
-	if found == "" {
-		return ports.SessionInfo{}, false, nil
-	}
-	if persistID != "" {
-		if found != persistID {
-			return ports.SessionInfo{}, false, fmt.Errorf("hermes: native identity changed before locator persistence")
-		}
-		if err := recordObservedTerminal(sessionDir(ref.DataDir, ref.ID), foundCrumbPath); err != nil {
-			return ports.SessionInfo{}, false, err
-		}
-	}
-	return ports.SessionInfo{AgentSessionID: found}, true, nil
-}
-
-func recordObservedTerminal(dir, crumbPath string) error {
-	path := filepath.Join(dir, "observed-terminal")
-	if current, err := os.ReadFile(path); err == nil && string(current) == crumbPath {
-		return nil
-	}
-	tmp, err := os.CreateTemp(dir, "observed-terminal-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.WriteString(crumbPath); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	id, ok, err := p.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: ref.DataDir, SessionID: domain.SessionID(ref.ID)})
+	return ports.SessionInfo{AgentSessionID: id}, ok, err
 }
 
 func nativeStateDSN(home string) string {
@@ -465,17 +434,69 @@ func nativeStateDSN(home string) string {
 	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(1000)"
 }
 
-// AuthStatus implements the scoped native adapter contract.
+// AuthStatus implements the scoped native adapter contract. Hermes keeps API
+// keys in <HERMES_HOME>/.env and OAuth credentials in auth.json; their presence
+// is configured, not verified authorization.
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	for _, key := range []string{"ZAI_API_KEY", "GLM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"} {
+	for _, key := range []string{"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "HF_TOKEN"} {
 		if os.Getenv(key) != "" {
 			return ports.AgentAuthStatusConfigured, nil
 		}
 	}
+	home, err := resolveHome(nil)
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, nil
+	}
+	if envFileHasCredential(filepath.Join(home, ".env")) || authFileHasCredential(filepath.Join(home, "auth.json")) {
+		return ports.AgentAuthStatusConfigured, nil
+	}
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+func envFileHasCredential(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(b))
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(scanner.Text()), "export "), "=")
+		key = strings.TrimSpace(key)
+		if !ok || strings.HasPrefix(key, "#") || strings.Trim(strings.TrimSpace(value), `"'`) == "" {
+			continue
+		}
+		if strings.HasSuffix(key, "_API_KEY") || strings.HasSuffix(key, "_TOKEN") {
+			return true
+		}
+	}
+	return false
+}
+
+func authFileHasCredential(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var store map[string]any
+	if json.Unmarshal(b, &store) != nil {
+		return false
+	}
+	for _, value := range store {
+		switch v := value.(type) {
+		case map[string]any:
+			if len(v) > 0 {
+				return true
+			}
+		case []any:
+			if len(v) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ContinuouslyDetectTerminalActivity implements the scoped native adapter contract.
@@ -554,80 +575,21 @@ func (*Plugin) RequiresRenderedActivity() bool { return true }
 
 // ResolveNativeSessionID implements the scoped native adapter contract.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
-	info, ok, err := p.readSessionInfo(ctx, ports.SessionRef{ID: string(cfg.SessionID), DataDir: cfg.DataDir}, cfg.LaunchID, "")
-	return info.AgentSessionID, ok, err
-}
-
-// ContinuouslyResolveNativeSessionID detects /new even when the TUI remains idle.
-func (*Plugin) ContinuouslyResolveNativeSessionID() bool { return true }
-
-// PersistNativeSessionID records restore evidence after the activity signal.
-func (p *Plugin) PersistNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig, nativeID string) error {
-	if nativeID == "" {
-		return fmt.Errorf("hermes: native identity required for locator persistence")
+	if err := ctx.Err(); err != nil {
+		return "", false, err
 	}
-	_, ok, err := p.readSessionInfo(ctx, ports.SessionRef{ID: string(cfg.SessionID), DataDir: cfg.DataDir}, cfg.LaunchID, nativeID)
+	title, err := sessionTitle(cfg.DataDir, string(cfg.SessionID))
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
 	if err != nil {
-		return err
+		return "", false, err
 	}
-	if !ok {
-		return fmt.Errorf("hermes: native identity unavailable for locator persistence")
-	}
-	return nil
-}
-
-// Linux exports process start ticks relative to the same integer boot time
-// psutil uses for the native lease. Missing/changed identities fail closed.
-func leaseProcessMatches(pid int, expected float64) bool {
-	if pid <= 0 || expected <= 0 {
-		return false
-	}
-	stat, err := os.ReadFile(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(pid), "stat"))
+	id, err := p.titledSessionID(ctx, cfg.DataDir, string(cfg.SessionID), title)
 	if err != nil {
-		return false
+		return "", false, err
 	}
-	end := strings.LastIndex(string(stat), ")")
-	if end < 0 {
-		return false
-	}
-	fields := strings.Fields(string(stat)[end+1:])
-	if len(fields) < 20 || fields[0] == "Z" {
-		return false
-	}
-	ticks, err := strconv.ParseFloat(fields[19], 64)
-	if err != nil {
-		return false
-	}
-	boot, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(boot), "\n") {
-		if strings.HasPrefix(line, "btime ") {
-			b, err := strconv.ParseFloat(strings.TrimPrefix(line, "btime "), 64)
-			return err == nil && math.Abs(b+ticks/100-expected) < 0.02
-		}
-	}
-	return false
-}
-
-type breadcrumb struct {
-	SessionID string  `json:"session_id"`
-	Cwd       string  `json:"cwd"`
-	Timestamp float64 `json:"ts"`
-}
-
-func readBreadcrumb(path string) (breadcrumb, error) {
-	var b breadcrumb
-	raw, e := os.ReadFile(path)
-	if e != nil {
-		return b, e
-	}
-	e = json.Unmarshal(raw, &b)
-	if b.SessionID == "" {
-		return b, fmt.Errorf("hermes: empty native breadcrumb")
-	}
-	return b, e
+	return id, true, nil
 }
 
 // ExitDetectionMode implements the scoped native adapter contract.

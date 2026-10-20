@@ -3,7 +3,6 @@ package hermes
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,16 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
-
-func TestResolveBinaryReportsLinuxOnlyPlatform(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		t.Skip("Linux runs the native resolver")
-	}
-	_, err := New().ResolveBinary(context.Background())
-	if !errors.Is(err, ports.ErrAgentBinaryLinuxOnly) {
-		t.Fatalf("ResolveBinary() error = %v, want Linux-only sentinel", err)
-	}
-}
 
 func TestStandingInstructionsPreserveNativeOverlay(t *testing.T) {
 	home := t.TempDir()
@@ -54,10 +43,11 @@ func TestStandingInstructionsPreserveNativeOverlay(t *testing.T) {
 		t.Fatal("lost native profile")
 	}
 }
-func TestRestoreRefusesUnobservedIdentity(t *testing.T) {
-	for _, id := range []string{"", "latest", "some title", "../../state.db"} {
-		_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
-		if ok || err == nil {
+func TestRestoreRequiresAOTitledSession(t *testing.T) {
+	// A native ID alone, even an exact one, is not an AO-titled conversation.
+	for _, id := range []string{"", "latest", "native-id"} {
+		_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: t.TempDir(), Session: ports.SessionRef{ID: "ao-1", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
+		if ok || err == nil || !strings.Contains(err.Error(), "title unavailable") {
 			t.Fatalf("id %q: ok=%v err=%v", id, ok, err)
 		}
 	}
@@ -203,15 +193,21 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	}
 }
 
-func TestNativeVersionRequiresExactFirstLine(t *testing.T) {
-	// The official pinned checkout includes the date/source suffix in --version.
-	for _, line := range []string{"Hermes Agent v0.21.6", "Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be"} {
+func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
+	// Source installs append a date, channel, or commit; desktop bundles a channel.
+	for _, line := range []string{
+		"Hermes Agent v0.21.6",
+		"Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be",
+		"Hermes Agent v0.21.7 (2026.9.24) · local 1a2b3c4d (+2 carried commits)",
+		"Hermes Agent v0.22.2 · stable · d923a5e",
+		"Hermes Agent v0.22.0+3.gabc1234 (2026.9.24)",
+	} {
 		if !nativeVersionLine.MatchString(line) {
-			t.Fatalf("rejected pinned native banner %q", line)
+			t.Fatalf("rejected supported native banner %q", line)
 		}
 	}
 
-	for _, output := range []string{"Hermes Agent v0.21.60", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Hermes Agent v0.21.6 (2026.9.24) · upstream deadbeef", "Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be extra"} {
+	for _, output := range []string{"Hermes Agent v0.21.5", "Hermes Agent v0.23.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Hermes Agent v1.21.6", "Not Hermes Agent v0.21.6"} {
 		first, _, _ := strings.Cut(output, "\n")
 		if nativeVersionLine.MatchString(first) {
 			t.Fatalf("accepted version %q", output)
@@ -277,7 +273,10 @@ func TestStandingInstructionsIgnoreDaemonEphemeralPrompt(t *testing.T) {
 }
 
 func TestStandingInstructionsBudgetIncludesEnvironmentKey(t *testing.T) {
-	const maxEnvString = 128 * 1024
+	maxEnvString := 128 * 1024
+	if runtime.GOOS == "windows" {
+		maxEnvString = 32767
+	}
 	const promptKey = "HERMES_EPHEMERAL_SYSTEM_PROMPT="
 	const originalKey = "AO_HERMES_ORIGINAL_EPHEMERAL="
 	original := "native instructions"
@@ -315,9 +314,11 @@ func TestStandingInstructionsBudgetIncludesEnvironmentKey(t *testing.T) {
 	}
 }
 
-func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Hermes native lease observation supports Linux only")
+// fakeNativeBinary installs a shell stand-in at the official POSIX launcher path.
+func fakeNativeBinary(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in for the native launcher")
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -325,9 +326,15 @@ func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.21.6'\n"), 0755); err != nil {
+	binary := filepath.Join(binDir, "hermes")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'Hermes Agent v0.21.6'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return binary
+}
+
+func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
+	fakeNativeBinary(t)
 	data := t.TempDir()
 	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: "/workspace", Prompt: "--yolo is task data"})
 	if err != nil {
@@ -345,8 +352,8 @@ func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
 }
 
 func TestNativeLookupDoesNotExecuteEarlierPathCandidate(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Hermes native lease observation supports Linux only")
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in for a PATH collision")
 	}
 	home, pathDir := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -453,49 +460,131 @@ func TestComposerStyleAttributesExcludeColorPayloads(t *testing.T) {
 	}
 }
 
-func TestRestoreRefusesNativeRotationAfterObservation(t *testing.T) {
-	data := t.TempDir()
-	dir := sessionDir(data, "ao-rotation")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// writeNativeState creates a minimal native state database with one titled row.
+func writeNativeState(t *testing.T, home, id, title string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at REAL)`); err != nil {
 		t.Fatal(err)
 	}
-	crumb := filepath.Join(home, "native-terminal-fixture")
-	if err := os.WriteFile(crumb, []byte(`{"session_id":"new-conversation","cwd":"/workspace","ts":1}`), 0o600); err != nil {
+	if _, err := db.Exec(`INSERT INTO sessions VALUES(?, ?, 1)`, id, title); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "observed-terminal"), []byte(crumb), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-rotation", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "old-conversation"}}})
-	if err == nil || ok || !strings.Contains(err.Error(), "rotated") {
-		t.Fatalf("stale conversation restore: %v %v", ok, err)
 	}
 }
 
-func TestRestoreReportsNativeDatabaseFailureSeparately(t *testing.T) {
+func TestFreshLaunchTitlesNewNativeConversation(t *testing.T) {
+	binary := fakeNativeBinary(t)
+	data := t.TempDir()
+	cfg := ports.LaunchConfig{DataDir: data, SessionID: "agent orchestrator/7", WorkspacePath: "/workspace", Config: ports.AgentConfig{Model: "anthropic/claude-sonnet-4.6", Effort: "high"}}
+	first, err := New().GetLaunchCommand(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, err := sessionTitle(data, cfg.SessionID)
+	if err != nil || !strings.HasPrefix(title, "ao-agent-orchestrator-7-") {
+		t.Fatalf("title=%q err=%v", title, err)
+	}
+	want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", title, "--create-if-missing", "--model", "anthropic/claude-sonnet-4.6", "--reasoning", "high"}
+	if !slices.Equal(first, want) {
+		t.Fatalf("launch = %v, want %v", first, want)
+	}
+	// A relaunch must never adopt the previous conversation.
+	if _, err := New().GetLaunchCommand(t.Context(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := sessionTitle(data, cfg.SessionID); again == title {
+		t.Fatal("fresh launch reused the previous native title")
+	}
+}
+
+func TestRestoreResumesTitledConversationWithoutCreating(t *testing.T) {
+	binary := fakeNativeBinary(t)
 	data, home := t.TempDir(), t.TempDir()
-	dir := sessionDir(data, "ao-db-error")
+	dir := sessionDir(data, "ao-1")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	crumb := filepath.Join(home, "terminal")
-	for path, value := range map[string]string{
-		filepath.Join(dir, "native-home"):       home,
-		filepath.Join(dir, "observed-terminal"): crumb,
-		crumb:                                   `{"session_id":"native-id","cwd":"/workspace","ts":1}`,
-		filepath.Join(home, "state.db"):         "not a sqlite database",
-	} {
-		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+	for name, value := range map[string]string{"native-home": home, "native-title": "ao-ao-1-abc"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, ok, err := New().GetRestoreCommand(t.Context(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-db-error", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-id"}}})
-	if ok || err == nil || !strings.Contains(err.Error(), "native state database unavailable") {
-		t.Fatalf("database failure disguised as missing history: ok=%v err=%v", ok, err)
+	writeNativeState(t, home, "20261020_native", "ao-ao-1-abc")
+	cmd, ok, err := New().GetRestoreCommand(t.Context(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-1", WorkspacePath: "/workspace"}, Permissions: ports.PermissionModeBypassPermissions})
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "ao-ao-1-abc", "--yolo"}; !slices.Equal(cmd, want) {
+		t.Fatalf("restore = %v, want %v", cmd, want)
+	}
+	id, found, err := New().ResolveNativeSessionID(t.Context(), ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1"})
+	if err != nil || !found || id != "20261020_native" {
+		t.Fatalf("native id = %q found=%v err=%v", id, found, err)
+	}
+}
+
+func TestRestoreRefusesMissingOrUnreadableConversation(t *testing.T) {
+	for _, tt := range []struct {
+		name, state, want string
+	}{
+		{"renamed or deleted", "", "not found"},
+		{"database failure", "not a sqlite database", "native state database unavailable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, home := t.TempDir(), t.TempDir()
+			dir := sessionDir(data, "ao-1")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for name, value := range map[string]string{"native-home": home, "native-title": "ao-ao-1-abc"} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.state == "" {
+				writeNativeState(t, home, "other", "someone else's title")
+			} else if err := os.WriteFile(filepath.Join(home, "state.db"), []byte(tt.state), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, ok, err := New().GetRestoreCommand(t.Context(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-1", WorkspacePath: "/workspace"}})
+			if ok || err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ok=%v err=%v, want %q", ok, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthStatusReadsNativeCredentialStores(t *testing.T) {
+	for _, key := range []string{"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "HF_TOKEN"} {
+		t.Setenv(key, "")
+	}
+	for _, tt := range []struct {
+		name, file, content string
+		want                ports.AgentAuthStatus
+	}{
+		{"no credentials", "", "", ports.AgentAuthStatusUnknown},
+		{"empty env key", ".env", "OPENROUTER_API_KEY=\n# ANTHROPIC_API_KEY=sk\n", ports.AgentAuthStatusUnknown},
+		{"env api key", ".env", "export OPENROUTER_API_KEY=\"sk-or\"\n", ports.AgentAuthStatusConfigured},
+		{"oauth store", "auth.json", `{"providers":{"nous":{"access_token":"x"}}}`, ports.AgentAuthStatusConfigured},
+		{"empty oauth store", "auth.json", `{"providers":{}}`, ports.AgentAuthStatusUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HERMES_HOME", home)
+			if tt.file != "" {
+				if err := os.WriteFile(filepath.Join(home, tt.file), []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := New().AuthStatus(t.Context())
+			if err != nil || got != tt.want {
+				t.Fatalf("AuthStatus() = %q, %v; want %q", got, err, tt.want)
+			}
+		})
 	}
 }
 

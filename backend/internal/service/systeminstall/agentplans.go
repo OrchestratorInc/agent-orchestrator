@@ -275,7 +275,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
 		}
 	case TargetHermes:
-		plans = []Plan{manualPlan(target, "Install official Hermes Agent v0.21.6 from the pinned upstream release; AO supports the classic CLI on Linux. AO does not execute a remote shell installer.", agentDocumentationURLs[target])}
+		plans = []Plan{s.planHermesInstaller(target)}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -529,6 +529,30 @@ func (s *Service) officialByOS(target Target, unixURL, unixShell, windowsURL, do
 	default:
 		return manualPlan(target, fmt.Sprintf("The official installer does not support %s.", s.goos), docsURL)
 	}
+}
+
+// hermesQualifiedCommit is the official Hermes Agent v0.21.6 release commit whose
+// classic CLI chrome and session flags AO's adapter was qualified against.
+const hermesQualifiedCommit = "818c13be1dc4fd28987e1e881a9408224afd4535"
+
+// planHermesInstaller runs Hermes's official installer pinned to the qualified
+// release. Its setup and gateway stages need a terminal, so they are skipped;
+// provider setup runs afterwards through the harness's own setup action.
+func (s *Service) planHermesInstaller(target Target) Plan {
+	plan := s.officialByOS(target,
+		"https://hermes-agent.nousresearch.com/install.sh", "bash",
+		"https://hermes-agent.nousresearch.com/install.ps1",
+		agentDocumentationURLs[target],
+	)
+	if plan.Script == nil {
+		return plan
+	}
+	if s.goos == "windows" {
+		plan.Script.Args = []string{"-Commit", hermesQualifiedCommit, "-NonInteractive"}
+	} else {
+		plan.Script.Args = []string{"--commit", hermesQualifiedCommit, "--non-interactive"}
+	}
+	return plan
 }
 
 func (s *Service) planShellInstaller(target Target, url, shell string) Plan {
