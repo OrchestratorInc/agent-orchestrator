@@ -2934,7 +2934,7 @@ components:
         A project's Setup (postCreate) or Cleanup (preRemove) shell commands,
         the same settings a local project has. Setup commands run in order
         with sh -c in the session's working directory after its checkout and
-        before the coding agent starts, once per session, each within 10
+        before the coding agent starts, once per session, each within 30
         minutes; a failing step keeps the agent from starting until the
         session is reopened. Cleanup commands run in order before the
         session's workspace is deleted (Coder only), best effort and within

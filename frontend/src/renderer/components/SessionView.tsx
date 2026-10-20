@@ -69,7 +69,7 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
@@ -1931,7 +1931,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
-							{startupFailure && session?.cloud ? (
+							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
+							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
 								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
 							{session && !session.cloud && handoffDialogContainer ? (

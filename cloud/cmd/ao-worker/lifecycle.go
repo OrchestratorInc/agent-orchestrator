@@ -137,7 +137,7 @@ func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,
 		Code:    domain.WorkspaceStartupErrorProjectSetup,
-		Message: event.Summary() + ". Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.",
+		Message: event.Summary() + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again.",
 		Detail:  event.Output,
 	}
 }

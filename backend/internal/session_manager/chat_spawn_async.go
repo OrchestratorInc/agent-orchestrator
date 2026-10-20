@@ -78,7 +78,9 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 		}
 	}
 	in.record = rec
-	bg, cancel := context.WithTimeout(m.backgroundContext, asyncChatSpawnBudget)
+	// Each Setup step has its own limit; the start budget leaves room for all of them.
+	budget := asyncChatSpawnBudget + time.Duration(len(in.project.Config.PostCreate))*setupStepTimeout
+	bg, cancel := context.WithTimeout(m.backgroundContext, budget)
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run
@@ -105,7 +107,8 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 }
 
 // asyncChatSpawnBudget bounds a background start so a hung provider leaves a
-// failed session the user can act on rather than a permanent "starting".
+// failed session the user can act on rather than a permanent "starting". The
+// project's Setup steps get their own time on top (setupStepTimeout each).
 const asyncChatSpawnBudget = 10 * time.Minute
 
 // completeAsyncChatSpawn keeps the visible session and queue on failure.
@@ -415,7 +418,13 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
 	m.stopChatBestEffort(cleanupCtx, id)
-	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, cause.Error()); err != nil {
+	// A failed Setup step already explains itself; the spawn stage prefix is noise.
+	message := cause.Error()
+	var setupErr *SetupStepError
+	if errors.As(cause, &setupErr) {
+		message = setupErr.Error()
+	}
+	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, message); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
 	}
 }

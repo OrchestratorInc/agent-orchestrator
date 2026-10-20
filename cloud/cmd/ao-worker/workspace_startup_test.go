@@ -89,7 +89,7 @@ func TestFailedSetupIsReportedAsTheWorkspaceStartupError(t *testing.T) {
 	}
 	report := reports[0]
 	if report.Status != worker.WorkspaceStartupFailed || report.Code != domain.WorkspaceStartupErrorProjectSetup ||
-		!strings.HasPrefix(report.Message, "Setup step 1 failed: exit status 4.") ||
+		!strings.HasPrefix(report.Message, "The project's Setup script failed at step 1 (exit status 4), so the agent did not start.") ||
 		!strings.Contains(report.Message, "Project settings > Scripts") ||
 		!strings.Contains(report.Detail, "missing secret") || strings.Contains(report.Message, "missing secret") {
 		t.Fatalf("report = %+v", report)

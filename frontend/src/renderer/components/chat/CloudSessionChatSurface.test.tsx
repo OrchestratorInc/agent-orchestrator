@@ -15,6 +15,7 @@ const cloudMocks = vi.hoisted(() => ({
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
 	resumeSession: vi.fn(),
+	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
@@ -165,6 +166,63 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("shows a failed Setup the way a failed local Chat start does, and Retry asks the worker again", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.requestWorkspaceCheckout.mockResolvedValue({});
+		const startupError = { code: "project_setup_failed", message: "Setup step 1 failed: exit status 1.", detail: "could not reach registry", at: "2026-10-20T10:00:00Z" };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1", startupError } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props().session).toMatchObject({
+			provisionState: "failed",
+			provisionSteps: [{ id: "worktree", status: "done" }, { id: "setup", status: "running" }, { id: "agent", status: "pending" }],
+			provisionError: "Setup step 1 failed: exit status 1. Output: could not reach registry",
+		});
+		// No agent runs until a retry prepares the workspace, so the composer waits as local's does.
+		expect(props().snapshot.controller.state).toBe("stopped");
+		expect(props().settingsReady).toBe(false);
+		act(() => props().onResumeAgent());
+		await waitFor(() => expect(cloudMocks.requestWorkspaceCheckout).toHaveBeenCalledWith("org-1", session.id));
+		await waitFor(() => expect(props().session.provisionState).toBe("provisioning"));
+		expect(props().snapshot.controller.state).not.toBe("stopped");
+	});
+
+	it("keeps only the Setup that passed once a retry recovers, as a local start keeps no failed attempts", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "failed", step: 1, exitCode: 1 }, createdAt: "2026-10-01T00:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 400 }, createdAt: "2026-10-01T00:01:00Z" },
+		], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		const setupRows = () => cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items
+			.filter((item: { detail?: { event?: string } }) => item.detail?.event === "workspace.setup");
+		await waitFor(() => expect(setupRows()).toHaveLength(1));
+		expect(setupRows()[0]).toMatchObject({ detail: { setupStatus: "succeeded" } });
+	});
+
+	it("keeps a failed Setup row when no startup failure reports it", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "failed", step: 1, exitCode: 1 }, createdAt: "2026-10-01T00:00:00Z" },
+		], hasMore: false, nextAfter: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toEqual([
+			expect.objectContaining({ detail: expect.objectContaining({ event: "workspace.setup", setupStatus: "failed" }) }),
+		]));
 	});
 
 	it("keeps a read-only Claude session in Plan mode and cannot elevate it to Agent", async () => {
