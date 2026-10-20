@@ -225,7 +225,7 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrame
 	if prepareCalls != 1 {
 		t.Fatalf("launch-only environment prepared %d times, want only the initial provider launch", prepareCalls)
 	}
-	if err := second.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(context.Background(), ref.ProviderTurnID); err != nil {
+	if err := second.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(context.Background(), ref.ProviderTurnID, nil); err != nil {
 		t.Fatalf("activate replacement: %v", err)
 	}
 
@@ -280,7 +280,7 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrame
 		t.Fatalf("second restart: %v", err)
 	}
 	defer func() { _ = third.(ports.ChatProviderTerminator).Terminate() }()
-	if err := third.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(context.Background(), ""); err != nil {
+	if err := third.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(context.Background(), "", nil); err != nil {
 		t.Fatalf("completed prompt was not acknowledged before second restart: %v", err)
 	}
 
@@ -465,7 +465,7 @@ detachEvents:
 		t.Fatalf("Resume: %v", err)
 	}
 	defer func() { _ = second.(ports.ChatProviderTerminator).Terminate() }()
-	if err := second.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(context.Background(), ref.ProviderTurnID); err != nil {
+	if err := second.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(context.Background(), ref.ProviderTurnID, nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = nextEvent(t, second.Events())
@@ -566,7 +566,7 @@ func TestPersistentACPResumeAdoptsLivePromptWithoutSecondSetup(t *testing.T) {
 		t.Fatal("replacement ACP client wrote setup traffic before activation")
 	}
 	_ = host.SetReadDeadline(time.Time{})
-	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn"); err != nil {
+	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn", nil); err != nil {
 		t.Fatalf("ActivateLiveReconnect: %v", err)
 	}
 
@@ -655,7 +655,7 @@ func TestPersistentACPReplayAppliesAcceptedPermissionCommand(t *testing.T) {
 	}
 	conv := opened.(*conversation)
 	t.Cleanup(func() { _ = conv.Close() })
-	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn"); err != nil {
+	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn", nil); err != nil {
 		t.Fatalf("ActivateLiveReconnect: %v", err)
 	}
 
@@ -745,7 +745,7 @@ func TestPersistentACPReconnectAcknowledgesAlreadyCommittedPrompt(t *testing.T) 
 	// No durable running turn means the terminal event was already committed.
 	// Reconnect must close the commit/ACK crash window without projecting it a
 	// second time or becoming permanently unrecoverable.
-	if err := conv.ActivateLiveReconnect(context.Background(), ""); err != nil {
+	if err := conv.ActivateLiveReconnect(context.Background(), "", nil); err != nil {
 		t.Fatalf("ActivateLiveReconnect: %v", err)
 	}
 	select {
@@ -4743,7 +4743,7 @@ func TestACPCompactionRestoredOnLiveReconnect(t *testing.T) {
 		ActiveCompaction: true,
 	}
 
-	if err := c.ActivateLiveReconnect(context.Background(), "durable-compaction-turn"); err != nil {
+	if err := c.ActivateLiveReconnect(context.Background(), "durable-compaction-turn", nil); err != nil {
 		t.Fatalf("ActivateLiveReconnect: %v", err)
 	}
 

@@ -162,7 +162,7 @@ func TestReviewProviderEventsUseReviewControllerFence(t *testing.T) {
 	}
 	applied, err = s.ProjectReviewProviderEvent(ctx, conversation.ID, session.ID, review.ID,
 		"stale-generation", "event-2", "message.delta", `{}`, now, project)
-	if err != nil || applied || projected != 1 {
+	if !errors.Is(err, domain.ErrChatControllerFenced) || applied || projected != 1 {
 		t.Fatalf("stale review event: applied=%v projected=%d err=%v", applied, projected, err)
 	}
 	events, err := s.ProviderEventsSince(ctx, conversation.ID, 0, 10)

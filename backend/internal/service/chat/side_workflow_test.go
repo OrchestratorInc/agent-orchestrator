@@ -251,6 +251,9 @@ func TestSideFreshAndReconstructedContext(t *testing.T) {
 					h.driver.mu.Lock()
 					cfg := h.driver.configs[0]
 					h.driver.mu.Unlock()
+					if !cfg.VolatileEvents || cfg.Ephemeral {
+						t.Fatal("RAM-only fresh/reconstructed side requested durable event ACKs or changed native history")
+					}
 					if cfg.SessionID == testSession || !strings.HasPrefix(cfg.SystemPrompt, "Frozen instructions") || !strings.Contains(cfg.SystemPrompt, "Side conversation boundary.") || cfg.Model != "initial" || cfg.Effort != "low" || cfg.Permissions != "default" {
 						t.Fatalf("config not inherited: %+v", cfg)
 					}

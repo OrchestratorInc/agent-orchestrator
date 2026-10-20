@@ -60,7 +60,7 @@ const (
 type acpReplayEntry struct {
 	kind acpReplayKind
 	key  string
-	span acpJournalSpan
+	span journalSpan
 }
 
 type acpClientFrames struct {
@@ -83,7 +83,7 @@ type acpRelay struct {
 	commandOrder      []string
 	promptReplay      []acpReplayEntry
 	state             ACPState
-	promptJournal     *acpPromptJournal
+	promptJournal     *frameJournal
 	promptResult      []byte
 	cancelRequested   bool
 	// lastActivityAt stamps the last adapter output, prompt registration, or
@@ -100,7 +100,7 @@ func newACPRelay(ctx context.Context, journalPath string) (*acpRelay, error) {
 	if err != nil {
 		return nil, err
 	}
-	journal, err := openACPPromptJournal(ctx, journalPath)
+	journal, err := openFrameJournal(ctx, journalPath)
 	if err != nil {
 		return nil, err
 	}

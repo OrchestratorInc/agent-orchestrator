@@ -27,6 +27,45 @@ type compactSideTestConversation struct {
 	compactions int
 }
 
+type incompatibleSideHostDriver struct{ ports.ChatDriver }
+
+func (incompatibleSideHostDriver) Start(context.Context, ports.ChatStartConfig) (ports.ChatConversation, error) {
+	return nil, fmt.Errorf("%w: close and reopen this chat", ports.ErrChatRecoveryInconclusive)
+}
+
+func (incompatibleSideHostDriver) ForkIntoHost(context.Context, string, string, ports.ChatStartConfig) (ports.ChatConversation, error) {
+	return nil, fmt.Errorf("%w: close and reopen this chat", ports.ErrChatRecoveryInconclusive)
+}
+
+func TestSideOpeningDoesNotStopAnUnclaimedIncompatibleHost(t *testing.T) {
+	for _, mode := range []string{"fresh", "native"} {
+		t.Run(mode, func(t *testing.T) {
+			stops := 0
+			svc := New(Options{DataDir: t.TempDir(), AppRunID: "launch", StopProviderHost: func(context.Context, domain.SessionID) error {
+				stops++
+				return nil
+			}})
+			defer svc.sides.cancel()
+			ctx, now := t.Context(), time.Now()
+			_, _ = svc.sides.store.ClaimSideLaunch(ctx, "launch", now)
+			side := domain.SideConversation{PolicyVersion: sidePolicyVersion, ID: "side", SessionID: "main", MainConversationID: "conversation",
+				AppRunID: "launch", ProviderHostID: "btw-launch-side", ContextMode: mode, SourceProviderID: "parent", NativeAnchorID: "turn", Generation: "g"}
+			if _, _, err := svc.sides.store.CreateSideConversation(ctx, side); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.sides.store.SetSideDraft(ctx, side.ID, "launch", "keep draft", now); err != nil {
+				t.Fatal(err)
+			}
+			svc.sides.open(side, StartConfig{}, incompatibleSideHostDriver{})
+			after, err := svc.sides.store.SideConversation(ctx, side.ID)
+			draft, _ := svc.sides.store.SideDraft(ctx, side.ID)
+			if err != nil || stops != 0 || after.State != "failed" || !strings.Contains(after.ErrorMessage, "close and reopen") || draft != "keep draft" {
+				t.Fatalf("unclaimed host or RAM state was not preserved: stops=%d state=%s message=%q draft=%q error=%v", stops, after.State, after.ErrorMessage, draft, err)
+			}
+		})
+	}
+}
+
 func (*compactSideTestConversation) Capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{ports.ChatCapabilityCompaction: true}
 }

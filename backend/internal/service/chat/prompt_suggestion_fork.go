@@ -82,6 +82,7 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	}
 	side.ProviderHostID = "btw-" + runID + "-" + side.ID
 	cfg.SessionID = domain.SessionID(side.ProviderHostID)
+	cfg.VolatileEvents = true
 	cfg.ProviderScopeID, cfg.ProviderIDsScoped = side.ID, true
 	// Retain a provider identity that can be deleted after a crash or host stop.
 	cfg.Ephemeral, cfg.ReadOnly, cfg.DisableNetwork, cfg.Effort = false, true, true, ""

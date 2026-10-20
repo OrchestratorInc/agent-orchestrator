@@ -659,11 +659,12 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	defer func() { m.mu.Lock(); delete(m.restoring, side.ID); m.mu.Unlock() }()
 	defer cancel()
 	attached := false
+	preserveUnclaimedHost := false
 	var providerID string
 	var err error
 	var conv ports.ChatConversation
 	defer func() {
-		if attached {
+		if attached || preserveUnclaimedHost {
 			return
 		}
 		if conv != nil {
@@ -681,6 +682,9 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		m.deleteRegisteredFork(cleanupCtx, side, providerID)
 	}()
 	failOpen := func(err error) {
+		// An incompatible live host is not ours merely because its ID matches.
+		// No returned connection or recorded fork means cleanup cannot own it.
+		preserveUnclaimedHost = conv == nil && providerID == "" && errors.Is(err, ports.ErrChatRecoveryInconclusive)
 		if providerID != "" && !errors.Is(err, ErrSidePolicyRecreate) {
 			err = fmt.Errorf("%w: %w", ErrSidePolicyRecreate, err)
 		}
@@ -702,7 +706,8 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
 			forkConfig := ports.ChatStartConfig{
-				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
+				VolatileEvents: true,
+				SessionID:      domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
 				ProviderScopeID: side.ID, ProviderIDsScoped: true, RecordFork: recordFork,
@@ -745,7 +750,8 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	}
 	if conv == nil && providerID != "" {
 		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
-			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
+			VolatileEvents: true,
+			SessionID:      domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
 			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 			Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
 			ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -754,7 +760,8 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		})
 	} else if conv == nil {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
-			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
+			VolatileEvents: true,
+			SessionID:      domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 			WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 			Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly,
 			SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), ProviderScopeID: side.ID, ProviderIDsScoped: true,
@@ -875,7 +882,8 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		return
 	}
 	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
-		SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
+		VolatileEvents: true,
+		SessionID:      domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 		Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
 		ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -884,6 +892,8 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 	})
 	if err != nil {
 		m.service.log.Warn("side restore failed", "side", side.ID, "error", err)
+		m.failOpen(side, err)
+		connected = true
 		return
 	}
 	if err := m.reconcileRestoredTurns(ctx, side, conv); err != nil {
@@ -901,7 +911,7 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 				break
 			}
 		}
-		if err := activator.ActivateLiveReconnect(ctx, activeProviderID); err != nil {
+		if err := activator.ActivateLiveReconnect(ctx, activeProviderID, nil); err != nil {
 			_ = conv.Close()
 			m.service.log.Warn("side provider replay activation failed", "side", side.ID, "error", err)
 			_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation,

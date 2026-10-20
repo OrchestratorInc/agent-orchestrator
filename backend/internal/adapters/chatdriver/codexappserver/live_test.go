@@ -18,12 +18,20 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) >= 7 && os.Args[1] == "chat-host" {
-		if os.Args[5] != "--" {
+		protocol := persistenthost.ProtocolRaw
+		fingerprint := ""
+		separator := 5
+		if os.Args[separator] != "--" && len(os.Args) >= 9 {
+			protocol = persistenthost.Protocol(os.Args[separator])
+			fingerprint = os.Args[separator+1]
+			separator += 2
+		}
+		if os.Args[separator] != "--" {
 			os.Exit(2)
 		}
 		err := persistenthost.Run(context.Background(), persistenthost.Config{
 			SessionID: os.Args[2], DataDir: os.Args[3], Workdir: os.Args[4],
-			Env: os.Environ(), Argv: os.Args[6:],
+			Env: os.Environ(), Argv: os.Args[separator+1:], Protocol: protocol, OwnershipFingerprint: fingerprint,
 		})
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)

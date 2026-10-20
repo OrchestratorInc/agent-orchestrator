@@ -853,6 +853,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 	var liveRows ConversationRows
+	var liveTurns []ports.ChatLiveTurn
 	if liveReconnect {
 		if s.reader == nil {
 			_ = cleanupUnpublishedConversation(conv, false)
@@ -862,6 +863,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if err != nil {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf("%w: load live conversation before reconnect: %w", ports.ErrChatRecoveryInconclusive, err)
+		}
+		if reader, ok := conv.(ports.ChatLiveTurnReader); ok {
+			liveTurns, err = reader.ReadLiveTurns(ctx)
+			if err != nil {
+				_ = cleanupUnpublishedConversation(conv, false)
+				return nil, err
+			}
 		}
 	}
 	if owner.Kind == domain.ConversationOwnerReview && !liveReconnect {
@@ -910,10 +918,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, fmt.Errorf("claim chat controller: %w", err)
 		}
 	}
+	// Construct before replay admission so accepted native work can repair its
+	// original AO binding through this controller's newly claimed durable fence.
+	controller := newController(
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	liveProviderTurnID := ""
 	if liveReconnect {
-		// A provider may have accepted a prompt before its ID could be bound.
-		// Its replayed events will be adopted separately; leave bound live work
-		// and queued intake intact while closing the unbound visible spinner.
+		liveProviderTurnID, err = controller.restoreAcceptedLiveTurns(ctx, &liveRows, liveTurns)
+		if err != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, err
+		}
+		// Exact native acceptance has already recovered any matching row. Only
+		// unbound dispatches without that evidence remain uncertain here.
 		for _, turn := range liveRows.Turns {
 			if turn.State != domain.TurnStateRunning || turn.ProviderTurnID != "" || turn.RolledBackAt != nil {
 				continue
@@ -952,15 +969,14 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
-	// A fresh generation per launch, so events from the controller this one
-	// replaced can be told apart from the current one's.
-	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
-		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
+		providerTurnID := liveProviderTurnID
 		if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
-			if err := activator.ActivateLiveReconnect(ctx, providerTurnID); err != nil {
+			reconcile := func(events []ports.ChatEvent) []ports.ChatEvent {
+				return reconcileLiveTurnHistory(providerTurnID, liveRows, events)
+			}
+			if err := activator.ActivateLiveReconnect(ctx, providerTurnID, reconcile); err != nil {
 				_ = cleanupUnpublishedConversation(conv, false)
 				return nil, err
 			}

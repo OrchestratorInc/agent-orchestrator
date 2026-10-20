@@ -44,6 +44,8 @@ const (
 	ProtocolRaw Protocol = ""
 	// ProtocolACP enables the host-owned ACP correlation and replay profile.
 	ProtocolACP Protocol = "acp"
+	// ProtocolCodex retains conversation notifications until durable projection.
+	ProtocolCodex Protocol = "codex"
 	// ProtocolUnreal preserves Unreal Agent's AO-private JSONL stream while
 	// fencing ownership with the same stable launch identity used by ACP hosts.
 	ProtocolUnreal Protocol = "unreal"
@@ -63,7 +65,29 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
+	// CodexEventMethod wraps one replayable conversation notification.
+	CodexEventMethod = "_ao/persistent_codex_event"
+	// CodexAckMethod acknowledges durable projection of a retained notification.
+	CodexAckMethod = "_ao/persistent_codex_ack"
+	// CodexReplayMethod queries fresh state as a request, or opens replay as a
+	// notification after durable turn ownership is restored.
+	CodexReplayMethod = "_ao/persistent_codex_replay"
 )
+
+// CodexEvent is an AO-private wrapper; Frame remains the native provider frame.
+type CodexEvent struct {
+	EventID    string          `json:"eventId"`
+	Frame      json.RawMessage `json:"frame"`
+	Replayed   bool            `json:"replayed,omitempty"`
+	ObservedAt time.Time       `json:"observedAt"`
+}
+
+// CodexState preserves native activity without replaying an obsolete start.
+type CodexState struct {
+	ActiveTurns   map[string]string            `json:"activeTurns,omitempty"`
+	RetainedTurns map[string][]string          `json:"retainedTurns,omitempty"`
+	AcceptedTurns map[string]map[string]string `json:"acceptedTurns,omitempty"`
+}
 
 var (
 	// ErrAttached reports that another daemon controller owns the host.
@@ -133,19 +157,24 @@ type Transport struct {
 	Reconnected   bool
 	NextRequestID int64
 	ACPState      *ACPState
+	CodexReplay   bool
+	CodexState    *CodexState
 }
 
 type hello struct {
-	Version int    `json:"version"`
-	Token   string `json:"token"`
-	Action  string `json:"action"`
+	Version     int    `json:"version"`
+	Token       string `json:"token"`
+	Action      string `json:"action"`
+	CodexReplay bool   `json:"codexReplay,omitempty"`
 }
 
 type helloResponse struct {
-	OK            bool      `json:"ok"`
-	Error         string    `json:"error,omitempty"`
-	NextRequestID int64     `json:"nextRequestId,omitempty"`
-	ACPState      *ACPState `json:"acpState,omitempty"`
+	OK            bool        `json:"ok"`
+	Error         string      `json:"error,omitempty"`
+	NextRequestID int64       `json:"nextRequestId,omitempty"`
+	ACPState      *ACPState   `json:"acpState,omitempty"`
+	CodexReplay   bool        `json:"codexReplay,omitempty"`
+	CodexState    *CodexState `json:"codexState,omitempty"`
 }
 
 func hostDir(dataDir, sessionID string) (string, error) {
@@ -274,7 +303,8 @@ func randomToken() (string, error) {
 }
 
 func validateDescriptor(cfg Config, d Descriptor) error {
-	if d.Protocol != cfg.Protocol {
+	legacyCodex := cfg.Protocol == ProtocolCodex && d.Protocol == ProtocolRaw
+	if d.Protocol != cfg.Protocol && !legacyCodex {
 		return fmt.Errorf("%w: host protocol=%q requested=%q", ErrIncompatible, d.Protocol, cfg.Protocol)
 	}
 	// Codex raw hosts predate this ACP compatibility contract and retain their
@@ -444,7 +474,7 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 	}
 	finishHandshake := bindConnToContext(handshakeCtx, conn)
 	reader := bufio.NewReader(conn)
-	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "attach"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "attach", CodexReplay: d.Protocol == ProtocolCodex}); err != nil {
 		_ = conn.Close()
 		return nil, finishHandshake(err)
 	}
@@ -469,13 +499,19 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 			return nil, ErrAttached
 		case ErrUnauthorized.Error():
 			return nil, ErrUnauthorized
+		case ErrIncompatible.Error():
+			return nil, ErrIncompatible
 		default:
 			return nil, errors.New(response.Error)
 		}
 	}
+	if d.Protocol == ProtocolCodex && !response.CodexReplay {
+		_ = conn.Close()
+		return nil, ErrIncompatible
+	}
 	return &Transport{
 		Stdin: conn, Stdout: reader, Reconnected: reconnected,
-		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
+		NextRequestID: response.NextRequestID, ACPState: response.ACPState, CodexReplay: response.CodexReplay, CodexState: response.CodexState,
 	}, nil
 }
 
@@ -636,6 +672,14 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		defer func() { _ = h.acp.close(context.WithoutCancel(ctx)) }()
 	}
+	if cfg.Protocol == ProtocolCodex {
+		h.codex, err = newCodexRelay(ctx, filepath.Join(filepath.Dir(path), "codex-events.journal"))
+		if err != nil {
+			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			return err
+		}
+		defer func() { h.stopCodex(); _ = h.codex.journal.close(context.WithoutCancel(ctx)) }()
+	}
 	h.cond = sync.NewCond(&h.mu)
 	providerDone := make(chan error, 1)
 	go func() { providerDone <- h.forwardProvider(stdout) }()
@@ -660,6 +704,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	stopProvider := func() {
+		h.stopCodex()
 		_ = stdin.Close()
 		select {
 		case <-providerDone:
@@ -700,6 +745,7 @@ type host struct {
 	stdin    io.WriteCloser
 	token    string
 	acp      *acpRelay
+	codex    *codexRelay
 
 	mu               sync.Mutex
 	cond             *sync.Cond
@@ -757,9 +803,14 @@ func (h *host) handle(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+	if h.codex != nil && !request.CodexReplay {
+		_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrIncompatible.Error()})
+		_ = conn.Close()
+		return
+	}
 
 	h.mu.Lock()
-	if h.client != nil {
+	if h.client != nil || (h.codex != nil && h.codex.stopped) {
 		h.mu.Unlock()
 		_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrAttached.Error()})
 		_ = conn.Close()
@@ -769,57 +820,125 @@ func (h *host) handle(conn net.Conn) {
 	h.clientGeneration++
 	generation := h.clientGeneration
 	response := helloResponse{OK: true, NextRequestID: h.maxRequestID}
-	if h.acp != nil {
-		response.ACPState = h.acp.snapshot()
-	}
-	writeErr := json.NewEncoder(conn).Encode(response)
-	if writeErr == nil && h.acp != nil {
-		writeErr = h.acp.replayTo(h.ctx, conn)
-	}
-	if writeErr == nil {
-		for _, frame := range h.detached {
-			if _, writeErr = conn.Write(frame); writeErr != nil {
-				break
+	var attachment *codexAttachment
+	var writeErr error
+	if h.codex != nil {
+		attachment = &codexAttachment{conn: conn, cutoff: h.codex.next, inFlight: make(map[string]int64)}
+		h.codex.attachment = attachment
+		response.CodexReplay, response.CodexState = true, h.codex.snapshot()
+		h.mu.Unlock()
+		writeErr = json.NewEncoder(conn).Encode(response)
+		if writeErr == nil {
+			// Independent socket I/O lets the reader accept ACKs during replay.
+			go h.writeCodex(attachment)
+		}
+	} else {
+		if h.acp != nil {
+			response.ACPState = h.acp.snapshot()
+		}
+		writeErr = json.NewEncoder(conn).Encode(response)
+		if writeErr == nil && h.acp != nil {
+			writeErr = h.acp.replayTo(h.ctx, conn)
+		}
+		if writeErr == nil {
+			for _, frame := range h.detached {
+				if _, writeErr = conn.Write(frame); writeErr != nil {
+					break
+				}
 			}
 		}
-	}
-	if writeErr == nil {
-		h.detached = h.detached[:0]
-		h.detachedBytes = 0
-		for _, pending := range h.pendingRequests {
-			pending.buffered = false
+		if writeErr == nil {
+			h.detached = h.detached[:0]
+			h.detachedBytes = 0
+			for _, pending := range h.pendingRequests {
+				pending.buffered = false
+			}
+			h.cond.Broadcast()
 		}
-		h.cond.Broadcast()
+		h.mu.Unlock()
 	}
-	h.mu.Unlock()
 	if writeErr != nil {
 		h.detach(conn)
 		return
 	}
 
+	defer h.detach(conn)
 	for {
 		frame, readErr := reader.ReadBytes('\n')
 		if len(frame) > 0 {
 			providerFrame := frame
 			var clientFrame []byte
+			var relayErr error
+			var startRequestID string
 			h.mu.Lock()
-			if h.acp != nil {
-				var relayErr error
+			if h.codex != nil {
+				if h.codex.attachment != attachment {
+					h.mu.Unlock()
+					return
+				}
+				var control struct {
+					ID     json.RawMessage `json:"id"`
+					Method string          `json:"method"`
+					Params struct {
+						EventID  string `json:"eventId"`
+						ThreadID string `json:"threadId"`
+					} `json:"params"`
+				}
+				_ = json.Unmarshal(frame, &control)
+				switch control.Method {
+				case CodexReplayMethod:
+					providerFrame = nil
+					if len(control.ID) > 0 {
+						attachment.stateRequest = &codexStateRequest{id: control.ID, threadID: control.Params.ThreadID}
+						h.cond.Broadcast()
+					} else if !attachment.open {
+						attachment.open = true
+						for _, entry := range h.codex.entries {
+							if entry.request != "" {
+								if pending := h.pendingRequests[entry.request]; pending != nil {
+									attachment.queue = append(attachment.queue, codexOutbound{frame: pending.frame})
+									attachment.directBytes += len(pending.frame)
+								}
+							} else {
+								attachment.queue = append(attachment.queue, codexOutbound{entry: entry, replayed: entry.sequence <= attachment.cutoff})
+							}
+						}
+						h.cond.Broadcast()
+					}
+				case CodexAckMethod:
+					providerFrame = nil
+					if size, sent := attachment.inFlight[control.Params.EventID]; sent {
+						delete(attachment.inFlight, control.Params.EventID)
+						attachment.inFlightBytes -= size
+						relayErr = h.codex.acknowledge(h.ctx, control.Params.EventID)
+					}
+					h.cond.Broadcast()
+				}
+				if len(providerFrame) > 0 {
+					startRequestID = h.observeCodexRequestLocked(providerFrame)
+				}
+			} else if h.acp != nil {
 				var relayed acpClientFrames
 				relayed, relayErr = h.acp.clientFrame(h.ctx, frame, generation)
 				providerFrame = relayed.provider
 				clientFrame = relayed.client
 				if relayErr != nil {
 					h.shutdownOnce.Do(func() { close(h.shutdown) })
-					h.mu.Unlock()
-					h.detach(conn)
-					return
 				}
 			}
 			h.mu.Unlock()
+			if relayErr != nil {
+				return
+			}
 			if len(providerFrame) > 0 {
-				if _, err := h.stdin.Write(providerFrame); err != nil {
+				if written, err := h.stdin.Write(providerFrame); err != nil {
 					readErr = err
+					if written == 0 && startRequestID != "" {
+						h.mu.Lock()
+						_ = h.codex.resolveStart(h.ctx, startRequestID, "")
+						h.cond.Broadcast()
+						h.mu.Unlock()
+					}
 				} else {
 					h.observeClientFrame(providerFrame)
 				}
@@ -831,7 +950,6 @@ func (h *host) handle(conn net.Conn) {
 			}
 		}
 		if readErr != nil {
-			h.detach(conn)
 			return
 		}
 	}
@@ -863,6 +981,16 @@ func (h *host) observeClientFrame(frame []byte) {
 				break
 			}
 		}
+		if h.codex != nil {
+			for i, entry := range h.codex.entries {
+				if entry.request == requestID {
+					copy(h.codex.entries[i:], h.codex.entries[i+1:])
+					h.codex.entries[len(h.codex.entries)-1] = nil
+					h.codex.entries = h.codex.entries[:len(h.codex.entries)-1]
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -870,7 +998,12 @@ func (h *host) detach(conn net.Conn) {
 	h.mu.Lock()
 	if h.client == conn {
 		h.client = nil
-		h.bufferPendingRequestsLocked()
+		if h.codex != nil {
+			h.codex.attachment = nil
+			h.cond.Broadcast()
+		} else {
+			h.bufferPendingRequestsLocked()
+		}
 	}
 	h.mu.Unlock()
 	_ = conn.Close()
@@ -945,24 +1078,22 @@ func (h *host) forwardProvider(stdout io.Reader) error {
 		if len(frame) > 0 {
 			h.mu.Lock()
 			retainedByACP := false
-			if h.acp != nil {
-				var relayErr error
+			var relayErr error
+			if h.codex != nil {
+				relayErr = h.codexProviderFrameLocked(frame)
+				frame = nil // The Codex writer owns delivery.
+			} else if h.acp != nil {
 				frame, retainedByACP, relayErr = h.acp.providerFrame(
 					h.ctx, frame, h.clientGeneration, h.client != nil,
 				)
-				if relayErr != nil {
-					h.mu.Unlock()
-					return relayErr
-				}
 			}
-			if len(frame) == 0 {
+			if relayErr != nil {
 				h.mu.Unlock()
-				if err != nil {
-					return err
-				}
-				continue
+				return relayErr
 			}
-			h.deliverProviderFrameLocked(frame, retainedByACP)
+			if len(frame) > 0 {
+				h.deliverProviderFrameLocked(frame, retainedByACP)
+			}
 			h.mu.Unlock()
 		}
 		if err != nil {

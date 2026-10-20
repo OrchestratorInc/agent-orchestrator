@@ -28,6 +28,7 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 	cfg.ProviderScopeID = s.newID()
 	cfg.ProviderIDsScoped = true
 	cfg.Ephemeral = true
+	cfg.VolatileEvents = true
 	cfg.Effort = ""
 	// shortcut: ACP ignores ReadOnly and DisableNetwork; enforce tool restrictions when those providers support them.
 	cfg.ReadOnly = true

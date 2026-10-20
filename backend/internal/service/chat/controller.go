@@ -83,6 +83,7 @@ type Store interface {
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
 	CleanupOwnedReviewControllerWork(ctx context.Context, reviewID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
+	LatestPrimaryTurn(ctx context.Context, conversationID, providerConversationID, generation string) (domain.ConversationTurn, bool, error)
 
 	SetConversationSettings(ctx context.Context, conversationID string, settings domain.ConversationSettings, now time.Time) error
 
@@ -430,9 +431,13 @@ func (c *Controller) owner() domain.ConversationOwner {
 // Send start a second root turn on the same native conversation.
 func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) string {
 	var latest *domain.ConversationTurn
+	scope, scoped := c.conv.(ports.ChatLiveTurnScope)
 	for i := range turns {
 		turn := &turns[i]
 		if turn.State != domain.TurnStateRunning || turn.ProviderTurnID == "" || turn.RolledBackAt != nil {
+			continue
+		}
+		if scoped && scope.IsChildProviderTurn(turn.ProviderTurnID) {
 			continue
 		}
 		if latest == nil || turn.RequestedAt.After(latest.RequestedAt) {
@@ -448,6 +453,106 @@ func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) s
 	return latest.ProviderTurnID
 }
 
+// restoreAcceptedLiveTurns repairs only exact host acceptance/client-key pairs.
+// The native start response may precede AO's provider-ID binding; replay must
+// attach that work to its original AO row instead of failing or redispatching it.
+func (c *Controller) restoreAcceptedLiveTurns(ctx context.Context, rows *ConversationRows, live []ports.ChatLiveTurn) (string, error) {
+	if len(live) == 0 {
+		return c.restoreLiveTurnOwnership(rows.Turns), nil
+	}
+	scope, scoped := c.conv.(ports.ChatLiveTurnScope)
+	root := func(id string) bool { return !scoped || !scope.IsChildProviderTurn(id) }
+	bound := ""
+	keys := make(map[string]int)
+	for i, turn := range rows.Turns {
+		if turn.State != domain.TurnStateRunning || turn.RolledBackAt != nil ||
+			(turn.BranchID != "" && turn.BranchID != c.conversation.ActiveBranchID) {
+			continue
+		}
+		if turn.ProviderTurnID != "" {
+			if root(turn.ProviderTurnID) {
+				if bound != "" && bound != turn.ProviderTurnID {
+					return "", fmt.Errorf("%w: multiple durable root turns are running", ports.ErrChatRecoveryInconclusive)
+				}
+				bound = turn.ProviderTurnID
+			}
+			continue
+		}
+		key := turn.ID
+		for _, message := range rows.Messages {
+			if message.TurnID == turn.ID && message.Role == domain.MessageRoleUser && message.ClientMessageID != "" {
+				if key != turn.ID && key != message.ClientMessageID {
+					return "", fmt.Errorf("%w: dispatching turn has conflicting client keys", ports.ErrChatRecoveryInconclusive)
+				}
+				key = message.ClientMessageID
+			}
+		}
+		if _, exists := keys[key]; exists {
+			return "", fmt.Errorf("%w: dispatching turns share a client key", ports.ErrChatRecoveryInconclusive)
+		}
+		keys[key] = i
+	}
+	bindings := make(map[int]string)
+	seen := make(map[string]bool)
+	active := ""
+	for _, turn := range live {
+		if turn.ProviderTurnID == "" || !root(turn.ProviderTurnID) {
+			continue
+		}
+		if seen[turn.ProviderTurnID] {
+			return "", fmt.Errorf("%w: repeated host turn identity", ports.ErrChatRecoveryInconclusive)
+		}
+		seen[turn.ProviderTurnID] = true
+		if turn.Active {
+			if active != "" && active != turn.ProviderTurnID {
+				return "", fmt.Errorf("%w: multiple host root turns are active", ports.ErrChatRecoveryInconclusive)
+			}
+			active = turn.ProviderTurnID
+		}
+		if i, found := keys[turn.ClientMessageID]; found {
+			if _, exists := bindings[i]; exists {
+				return "", fmt.Errorf("%w: host accepted a client key more than once", ports.ErrChatRecoveryInconclusive)
+			}
+			bindings[i] = turn.ProviderTurnID
+			if bound != "" && bound != turn.ProviderTurnID {
+				return "", fmt.Errorf("%w: accepted turn conflicts with durable root ownership", ports.ErrChatRecoveryInconclusive)
+			}
+			bound = turn.ProviderTurnID
+		}
+	}
+	if active != "" && bound != "" && active != bound {
+		return "", fmt.Errorf("%w: active host turn differs from durable root ownership", ports.ErrChatRecoveryInconclusive)
+	}
+	for i, providerID := range bindings {
+		// projectEvent checks the newly claimed controller generation and commits
+		// the original binding atomically. This synthetic fact owns no host receipt.
+		c.dispatchingTurnID = rows.Turns[i].ID
+		projected, _, err := c.projectEvent(ctx, ports.ChatEvent{
+			Kind: ports.ChatEventTurnStarted, ProviderTurnID: providerID,
+			ProviderConversationID: c.conv.ProviderConversationID(),
+		})
+		c.dispatchingTurnID = ""
+		if err != nil {
+			return "", fmt.Errorf("%w: bind accepted live turn: %w", ports.ErrChatRecoveryInconclusive, err)
+		}
+		if !projected {
+			return "", fmt.Errorf("%w: accepted live turn lost controller ownership", ports.ErrChatRecoveryInconclusive)
+		}
+		rows.Turns[i].ProviderTurnID = providerID
+	}
+	providerID := bound
+	if providerID == "" {
+		// Provider-owned compaction or unsolicited work may have no AO row yet.
+		// Replay will adopt it; gate new sends before opening that replay stream.
+		providerID = active
+	}
+	if providerID != "" {
+		c.pendingTurnID, c.ackedTurnID = providerID, providerID
+		c.state = ports.ChatControllerBusy
+	}
+	return providerID, nil
+}
+
 // start begins live provider consumption after any durable native history has
 // been imported. Keeping construction and consumption separate prevents a resume
 // notification from racing ahead of the older turns it follows.
@@ -456,6 +561,38 @@ func (c *Controller) start() {
 	if c.harness != domain.HarnessCodex {
 		go c.readRateLimits()
 	}
+}
+
+// reconcileLiveCompletion recovers effects lost after COMMIT, including when the
+// host received the ACK and has no completion left to replay.
+func (c *Controller) reconcileLiveCompletion(ctx context.Context) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	idle := func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.state == ports.ChatControllerReady && c.pendingTurnID == "" &&
+			!c.compactionPending && !c.explicitClose && c.handoff == controllerHandoffNone &&
+			c.interrupts == 0 && c.cancelQueuedAt.IsZero()
+	}
+	if !idle() {
+		return nil
+	}
+	turn, found, err := c.store.LatestPrimaryTurn(ctx, c.conversation.ID, c.conv.ProviderConversationID(), c.generation)
+	if err != nil || !found || turn.State != domain.TurnStateCompleted || turn.ProviderTurnID == "" {
+		return err
+	}
+	if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
+		return err
+	}
+	if !idle() { // Close can retire this controller while the database reads block.
+		return nil
+	}
+	c.afterProject(ctx, ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateCompleted,
+	}, true)
+	return nil
 }
 
 type nativeHistoryHighWater struct {
@@ -1347,6 +1484,78 @@ func reconcileNativeHistory(
 	return reconciled
 }
 
+// reconcileLiveTurnHistory keeps the pending turn's native repair on its existing
+// AO items. Only a prefix unique in both directions can correlate regenerated
+// prose IDs; ambiguous or unrelated content remains separate.
+func reconcileLiveTurnHistory(providerTurnID string, existing ConversationRows, events []ports.ChatEvent) []ports.ChatEvent {
+	var settledMessages []domain.ConversationMessage
+	for _, message := range existing.Messages {
+		if !message.Streaming {
+			settledMessages = append(settledMessages, message)
+		}
+	}
+	events = reconcileNativeHistory(events, existing.Turns, settledMessages, existing.Activities)
+	type streamedItem struct {
+		id, text     string
+		kind         ports.ChatEventKind
+		activityKind domain.ActivityKind
+	}
+	turnID := ""
+	for _, turn := range existing.Turns {
+		if turn.ProviderTurnID == providerTurnID {
+			turnID = turn.ID
+			break
+		}
+	}
+	var pending []streamedItem
+	for _, message := range existing.Messages {
+		if message.TurnID == turnID && message.Role == domain.MessageRoleAssistant && message.Streaming && message.ProviderItemID != "" && message.Text != "" {
+			pending = append(pending, streamedItem{id: message.ProviderItemID, text: message.Text, kind: ports.ChatEventMessageCompleted})
+		}
+	}
+	for _, activity := range existing.Activities {
+		if activity.TurnID == turnID && activity.Kind == domain.ActivityKindReasoning && activity.Status == domain.ActivityStatusRunning && activity.ProviderItemID != "" && activity.StreamedText != "" {
+			pending = append(pending, streamedItem{id: activity.ProviderItemID, text: activity.StreamedText, kind: ports.ChatEventActivityCompleted, activityKind: activity.Kind})
+		}
+	}
+	nativeMatches := make(map[string]int)
+	for _, event := range events {
+		if event.ProviderTurnID != providerTurnID || event.Text == "" {
+			continue
+		}
+		for _, item := range pending {
+			if item.kind == event.Kind && item.activityKind == event.ActivityKind &&
+				(item.id == event.ProviderItemID || strings.HasPrefix(event.Text, item.text)) {
+				nativeMatches[item.id]++
+			}
+		}
+	}
+	used := make(map[string]bool)
+	for i, event := range events {
+		if event.ProviderTurnID != providerTurnID || event.Text == "" {
+			continue
+		}
+		match, count, exact := "", 0, false
+		for _, item := range pending {
+			if item.kind != event.Kind || item.activityKind != event.ActivityKind {
+				continue
+			}
+			if item.id == event.ProviderItemID {
+				match, count, exact = item.id, 1, true
+				break
+			}
+			if strings.HasPrefix(event.Text, item.text) {
+				match, count = item.id, count+1
+			}
+		}
+		if count == 1 && !used[match] && (exact || nativeMatches[match] == 1) {
+			events[i].ProviderItemID = match
+			used[match] = true
+		}
+	}
+	return events
+}
+
 func knownTurnOutcome(state domain.TurnState) bool {
 	switch state {
 	case domain.TurnStateCompleted, domain.TurnStateInterrupted, domain.TurnStateFailed:
@@ -1811,15 +2020,18 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
+	if msg.ClientMessageID == "" {
+		// The host must correlate acceptance even when this caller supplied no
+		// idempotency key. This does not rewrite the durable user message's key.
+		msg.ClientMessageID = turnID
+	}
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
 	// Move it out of the durable queue before crossing that boundary, or a live
 	// reconnect can drain the same prompt after the provider completes it. ACP's
 	// deferred start crosses the provider boundary only after binding succeeds.
-	if !hasDeferredStart {
-		if err := c.store.MarkTurnDispatching(ctx, turnID); err != nil {
-			return domain.ConversationTurn{}, fmt.Errorf("mark turn dispatching: %w", err)
-		}
+	if err := c.projectTurnDispatch(ctx, turnID, !hasDeferredStart); err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("record turn dispatch: %w", err)
 	}
 
 	c.mu.Lock()
@@ -2761,6 +2973,17 @@ func (c *Controller) project() {
 	// controller, and must keep persisting until the provider stream ends.
 	ctx := context.WithoutCancel(context.Background())
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
+	if live, ok := c.conv.(ports.ChatLiveReconnector); ok && live.ReconnectedLive() {
+		if err := c.reconcileLiveCompletion(ctx); err != nil {
+			c.log.Error("failed to reconcile committed chat completion", "session", c.sessionID, "error", err)
+			c.mu.Lock()
+			c.preserveProviderOnStop = true
+			c.state = ports.ChatControllerStopped
+			c.mu.Unlock()
+			c.once.Do(func() { c.closeErr = c.conv.Close() })
+			return
+		}
+	}
 
 	for event := range c.conv.Events() {
 		if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
@@ -2796,12 +3019,18 @@ func (c *Controller) project() {
 		// A terminal receipt compacts the entire prompt, so it cannot pass a
 		// failed earlier projection. Retry transient store errors in order; if
 		// still failing, detach and leave the journal for a replacement controller.
-		for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
+		for attempt := 0; err != nil && persistent && !errors.Is(err, domain.ErrChatControllerFenced) && attempt < 3; attempt++ {
 			time.Sleep(20 * time.Millisecond)
 			projected, primaryTurn, err = c.projectEvent(ctx, event)
 		}
 		if err == nil && persistent && event.ProviderEventID != "" {
 			err = acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID)
+			if errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+				c.mu.Lock()
+				preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
+				c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
+				c.mu.Unlock()
+			}
 		}
 		if err != nil && persistent {
 			c.log.Error("persistent chat projection stopped; provider retained for replay",
@@ -2928,19 +3157,42 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if err != nil {
 		return false, false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
-	var projected bool
-	if c.reviewID != "" {
-		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
-	} else {
-		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
-	}
+	projected, err := c.projectProviderRecord(ctx, event.ProviderEventID, string(event.Kind), string(payload),
+		func(txCtx context.Context) error { return c.apply(txCtx, event) })
 	if err != nil || !projected {
 		return projected, false, err
 	}
 	return true, c.applyCommittedTurnLifecycle(event), nil
+}
+
+// Dispatch and provider lifecycle records share one durable order, even when a
+// reordered queued prompt fails before the provider returns its turn ID.
+func (c *Controller) projectTurnDispatch(ctx context.Context, turnID string, markStarted bool) error {
+	payload, err := json.Marshal(map[string]string{
+		"turnId": turnID, "providerConversationId": c.conv.ProviderConversationID(),
+	})
+	if err != nil {
+		return err
+	}
+	projected, err := c.projectProviderRecord(ctx, "", "turn.dispatching", string(payload), func(txCtx context.Context) error {
+		if markStarted {
+			return c.store.MarkTurnDispatching(txCtx, turnID)
+		}
+		return nil // Deferred providers have not sent the prepared prompt yet.
+	})
+	if err == nil && !projected {
+		return domain.ErrChatControllerFenced
+	}
+	return err
+}
+
+func (c *Controller) projectProviderRecord(ctx context.Context, id, method, payload string, project func(context.Context) error) (bool, error) {
+	if c.reviewID != "" {
+		return c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.reviewID, c.generation, id, method, payload, c.now(), project)
+	}
+	return c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+		c.generation, id, method, payload, c.now(), project)
 }
 
 // applyCommittedTurnLifecycle updates the controller's volatile ownership only
@@ -2995,6 +3247,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	now := c.now()
 
 	switch event.Kind {
+	case ports.ChatEventDeliveryReceipt:
+		return nil
+
 	case ports.ChatEventTurnStarted:
 		c.mu.Lock()
 		dispatchingTurnID := c.dispatchingTurnID

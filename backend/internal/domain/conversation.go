@@ -736,6 +736,9 @@ var ErrConversationRebound = errors.New("conversation is no longer bound to the 
 // an HTTP handler can both recognize it without importing SQLite.
 var ErrNoConversationTurn = errors.New("conversation turn not found")
 
+// ErrChatControllerFenced rejects provider events from a replaced controller.
+var ErrChatControllerFenced = errors.New("chat controller no longer owns this conversation")
+
 // ErrClientMessageConflict refuses reuse of a delivery ID for different content.
 var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
 

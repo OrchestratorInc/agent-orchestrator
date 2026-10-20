@@ -21,6 +21,9 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 )
 
 // frame is the union of every shape that crosses the wire.
@@ -48,8 +51,11 @@ func (e *rpcError) Error() string {
 
 // notification is a server->client message with no id.
 type notification struct {
-	Method string
-	Params json.RawMessage
+	Method     string
+	Params     json.RawMessage
+	ReceiptID  string
+	Replayed   bool
+	ObservedAt time.Time
 }
 
 // serverRequest is a server->client message that expects a reply. Approvals and
@@ -167,7 +173,7 @@ func (c *conn) relayNotifications() {
 }
 
 func notificationBytes(n notification) int {
-	return notificationQueueOverhead + len(n.Method) + len(n.Params)
+	return notificationQueueOverhead + len(n.Method) + len(n.Params) + len(n.ReceiptID)
 }
 
 // notifications the caller consumes. Closed when the connection ends.
@@ -222,6 +228,23 @@ func (c *conn) readLoop(r io.Reader) {
 			c.log.Warn("app-server frame not parseable", "error", err)
 			continue
 		}
+		var receiptID string
+		var replayed bool
+		var observedAt time.Time
+		if f.Method == persistenthost.CodexEventMethod {
+			var delivery persistenthost.CodexEvent
+			if err := json.Unmarshal(f.Params, &delivery); err != nil || delivery.EventID == "" {
+				c.readErr = errors.New("persistent Codex delivery has no valid receipt")
+				return
+			}
+			f = frame{}
+			if err := json.Unmarshal(delivery.Frame, &f); err != nil || f.Method == "" || f.ID != nil {
+				c.readErr = errors.New("persistent Codex delivery is not a notification")
+				return
+			}
+			receiptID, replayed = delivery.EventID, delivery.Replayed
+			observedAt = delivery.ObservedAt
+		}
 
 		switch {
 		case f.ID != nil && f.Method != "":
@@ -229,7 +252,7 @@ func (c *conn) readLoop(r io.Reader) {
 		case f.ID != nil:
 			c.deliver(f)
 		case f.Method != "":
-			c.notificationInput <- notification{Method: f.Method, Params: f.Params}
+			c.notificationInput <- notification{Method: f.Method, Params: f.Params, ReceiptID: receiptID, Replayed: replayed, ObservedAt: observedAt}
 		}
 	}
 }

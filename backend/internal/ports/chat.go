@@ -326,6 +326,9 @@ type ChatStartConfig struct {
 	ProviderIDsScoped bool
 	// Ephemeral asks supporting providers not to persist this conversation.
 	Ephemeral bool
+	// VolatileEvents selects delivery for RAM-only consumers that do not durably
+	// save and acknowledge provider events. It does not change native history.
+	VolatileEvents bool
 	// AdditionalDirectories are extra absolute workspace roots the provider may
 	// access alongside WorkspacePath. Workspace projects use this for child repo
 	// worktrees; it is not a replacement for AO's worktree ownership.
@@ -337,6 +340,8 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	// See ChatStartConfig.VolatileEvents.
+	VolatileEvents bool
 	// ReconnectOnly forbids launching a replacement provider during a health check.
 	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.
@@ -927,6 +932,9 @@ type ChatEventKind string
 const (
 	ChatEventTurnStarted   ChatEventKind = "turn.started"
 	ChatEventTurnCompleted ChatEventKind = "turn.completed"
+	// ChatEventDeliveryReceipt checkpoints a provider frame that produced no
+	// timeline events. It participates in ordered persistence before receipt ACK.
+	ChatEventDeliveryReceipt ChatEventKind = "delivery.receipt"
 	// ChatEventUserMessageCompleted is a settled user message recovered from the
 	// provider's native history. Live sends are already durable before dispatch and
 	// therefore never emit this event; history readers use it to reconstruct turns
@@ -1209,10 +1217,30 @@ type ChatLiveReconnector interface {
 	ReconnectedLive() bool
 }
 
+// ChatLiveTurnScope identifies proven child turns on a surviving connection.
+// Unknown turns retain ownership until the provider supplies stronger evidence.
+type ChatLiveTurnScope interface {
+	IsChildProviderTurn(providerTurnID string) bool
+}
+
+// ChatLiveTurn is a native turn proven by the surviving provider host.
+type ChatLiveTurn struct {
+	ProviderTurnID  string
+	ClientMessageID string
+	Active          bool
+}
+
+// ChatLiveTurnReader refreshes accepted turn correlation before replay or sends.
+type ChatLiveTurnReader interface {
+	ReadLiveTurns(context.Context) ([]ChatLiveTurn, error)
+}
+
 // ChatLiveReconnectActivator releases provider replay only after the service
 // has restored the durable active-turn correlation for the same live process.
 type ChatLiveReconnectActivator interface {
-	ActivateLiveReconnect(ctx context.Context, providerTurnID string) error
+	// reconcile maps a terminal snapshot onto existing AO facts before replay.
+	// Events use AO-scoped identities; nil leaves provider replay unchanged.
+	ActivateLiveReconnect(ctx context.Context, providerTurnID string, reconcile func([]ChatEvent) []ChatEvent) error
 }
 
 // ChatProviderEventAcknowledger lets a persistent provider discard replay

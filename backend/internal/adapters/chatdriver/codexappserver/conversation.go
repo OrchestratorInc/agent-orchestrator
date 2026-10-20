@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -71,6 +73,8 @@ type conversation struct {
 	// activeTurn is the most recent provider turn id, used when a caller asks to
 	// interrupt without naming one.
 	activeTurn string
+	// Only the final derived event can acknowledge its retained source frame.
+	receipts map[string]string
 
 	// contextTokens is the conversation's latest position in the model's context,
 	// and contextWindow the size of that context. Both come from the provider's
@@ -88,14 +92,18 @@ type conversation struct {
 	compactedTurn string
 
 	pumpDone     chan struct{}
+	liveRecovery chan liveTurnRecovery
 	eventsMu     sync.RWMutex
 	eventsClosed bool
 	closeOnce    sync.Once
 	closeErr     error
+	deliveryDone chan struct{}
+	deliveryOnce sync.Once
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatProviderHibernator = (*conversation)(nil)
+var _ ports.ChatProviderEventAcknowledger = (*conversation)(nil)
 
 // Asserted here so a refactor cannot silently drop model listing: the service
 // feature-detects this interface, and a missed method would just mean "no models"
@@ -122,7 +130,10 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		events:          make(chan ports.ChatEvent, eventBuffer),
 		pending:         make(map[string]*parkedRequest),
 		pumpDone:        make(chan struct{}),
+		liveRecovery:    make(chan liveTurnRecovery),
 		providerScopeID: providerScopeID,
+		receipts:        make(map[string]string),
+		deliveryDone:    make(chan struct{}),
 	}
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
@@ -167,24 +178,42 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	var recoveredTurnID string
 
-	for n := range c.conn.notifs() {
-		// Before normalizing, because a token-usage report is the only place the
-		// context position is stated and a compaction event that arrives in the same
-		// batch has to be able to read it.
-		c.trackContext(n)
-		// Some normalized output events omit their thread ID. Read the native
-		// envelope so child-thread recovery cannot settle the root's retry.
+notifications:
+	for {
+		var events []ports.ChatEvent
+		var recovery bool
+		var receiptID string
+		var replayed bool
 		var scope struct {
 			ThreadID string `json:"threadId"`
 		}
-		_ = json.Unmarshal(n.Params, &scope)
-		citations.observeNotification(n, c.threadID)
+		select {
+		case repair := <-c.liveRecovery:
+			recoveredTurnID = repair.turnID
+			recovery = true
+			scope.ThreadID = c.threadID
+			events = repair.events
+		case n, ok := <-c.conn.notifs():
+			if !ok {
+				break notifications
+			}
+			receiptID, replayed = n.ReceiptID, n.Replayed
+			// Context position must be recorded before a compaction in this batch.
+			c.trackContext(n)
+			// Some normalized events omit their thread ID; preserve the wire scope.
+			_ = json.Unmarshal(n.Params, &scope)
+			citations.observeNotification(n, c.threadID)
+			observedAt := n.ObservedAt
+			if observedAt.IsZero() {
+				observedAt = time.Now()
+			}
+			events = normalizeNotification(n, observedAt)
+		}
 
-		// The clock is passed in rather than read inside: a rate-limit reset arrives
-		// as an absolute instant and has to become a remaining duration, and a
-		// normalizer that reads the clock itself cannot be tested deterministically.
-		for _, ev := range normalizeNotification(n, time.Now()) {
+		var delivery []ports.ChatEvent
+		for index, ev := range events {
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
@@ -192,12 +221,25 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
-			var visible bool
-			ev, visible = citations.formatEvent(threadID, ev)
-			if !visible {
+			key := threadID + ":" + ev.ProviderTurnID
+			if receiptID != "" {
+				// Keep identities tied to the native frame and normalized ordinal,
+				// before stateful formatting can hide or add derived events.
+				ev.ProviderEventID = receiptID + ":event:" + strconv.Itoa(index)
+				ev.ProviderConversationID = threadID
+			}
+			// Native terminal proof supersedes replay still queued on the old
+			// attachment; late starts/deltas must not reopen or alter that turn.
+			if !recovery && recoveredTurnID != "" && threadID == c.threadID && ev.ProviderTurnID == recoveredTurnID {
 				continue
 			}
-			key := threadID + ":" + ev.ProviderTurnID
+			if !recovery {
+				var visible bool
+				ev, visible = citations.formatEvent(threadID, ev)
+				if !visible {
+					continue
+				}
+			}
 			if ev.Kind == ports.ChatEventError {
 				// Turn settlement will settle the running retry along with the failure.
 				delete(retries, key)
@@ -209,7 +251,11 @@ func (c *conversation) pump() {
 				} else {
 					// Live Codex errors have no item/replay ID. Keep attempts on one
 					// row, but never overwrite a recovered episode later in the turn.
-					ev.ProviderItemID += ":" + uuid.NewString()
+					if receiptID != "" {
+						ev.ProviderItemID += ":" + receiptID
+					} else {
+						ev.ProviderItemID += ":" + uuid.NewString()
+					}
 				}
 				retries[key] = ev
 			}
@@ -221,15 +267,20 @@ func (c *conversation) pump() {
 					retry.Kind = ports.ChatEventActivityCompleted
 					retry.ActivityStatus = domain.ActivityStatusCompleted
 					if !completed || (ev.TurnState != domain.TurnStateFailed && ev.Err == nil) {
-						c.emit(retry)
+						if receiptID != "" {
+							retry.ProviderEventID = receiptID + ":retry:" + strconv.Itoa(index)
+						}
+						delivery = append(delivery, retry)
 					}
 					delete(retries, key)
 				}
 			}
-			rootConversation := ev.ProviderConversationID == "" || ev.ProviderConversationID == c.threadID
+			rootConversation := threadID == c.threadID
 			if ev.Kind == ports.ChatEventTurnStarted && ev.ProviderTurnID != "" && rootConversation {
 				c.mu.Lock()
-				c.activeTurn = ev.ProviderTurnID
+				if !replayed {
+					c.activeTurn = ev.ProviderTurnID
+				}
 				// Snapshot the context position this turn starts from. Cheap on every
 				// turn, and the only way to know what a compaction reclaimed.
 				c.contextAtTurnStart = c.contextTokens
@@ -254,7 +305,20 @@ func (c *conversation) pump() {
 				// card AO is still showing is stale.
 				c.discardPending(ev.RequestID)
 			}
-			c.emit(ev)
+			delivery = append(delivery, ev)
+		}
+		if receiptID != "" {
+			if len(delivery) == 0 {
+				delivery = append(delivery, ports.ChatEvent{
+					Kind: ports.ChatEventDeliveryReceipt, ProviderEventID: receiptID + ":receipt",
+				})
+			}
+			c.mu.Lock()
+			c.receipts[c.scopedID(delivery[len(delivery)-1].ProviderEventID)] = receiptID
+			c.mu.Unlock()
+		}
+		for _, event := range delivery {
+			c.emit(event)
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go
@@ -262,6 +326,13 @@ func (c *conversation) pump() {
 	state := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
 	if err := c.conn.err(); err != nil {
 		state.Err = err
+	}
+	if c.proc.reliableReplay {
+		cause := state.Err
+		if cause == nil {
+			cause = ErrConnClosed
+		}
+		state.Err = fmt.Errorf("%w: persistent Codex attachment ended: %w", ports.ErrChatRecoveryInconclusive, cause)
 	}
 	c.emit(state)
 	c.failPendingApprovals()
@@ -276,6 +347,15 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 		return
 	}
 	ev = c.scopedEvent(ev)
+	if c.proc != nil && c.proc.terminate != nil {
+		// Hosted output is retained upstream until its receipt commits. Dropping
+		// even one frame here could let a later receipt erase unprojected output.
+		select {
+		case c.events <- ev:
+		case <-c.deliveryDone:
+		}
+		return
+	}
 	select {
 	case c.events <- ev:
 		return
@@ -931,6 +1011,7 @@ func (c *conversation) failPendingApprovals() {
 // Close releases the controller without touching provider-side history.
 func (c *conversation) Close() error {
 	c.closeOnce.Do(func() {
+		c.stopDelivery()
 		if c.proc.terminate == nil {
 			c.failPendingApprovals()
 		}
@@ -945,6 +1026,7 @@ func (c *conversation) Close() error {
 // daemon-wide shutdown; explicit session/controller replacement calls this.
 func (c *conversation) Terminate() error {
 	c.closeOnce.Do(func() {
+		c.stopDelivery()
 		c.failPendingApprovals()
 		if c.proc.terminate != nil {
 			c.closeErr = c.proc.terminate()
@@ -953,6 +1035,38 @@ func (c *conversation) Terminate() error {
 		}
 	})
 	return c.closeErr
+}
+
+func (c *conversation) stopDelivery() {
+	c.deliveryOnce.Do(func() {
+		if c.deliveryDone != nil {
+			close(c.deliveryDone)
+		}
+	})
+}
+
+// AcknowledgeProviderEvent translates a committed final event into its source
+// receipt; earlier derived events and native history cannot release host output.
+func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, eventID string) error {
+	if !c.proc.reliableReplay || eventID == "" {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	receiptID, genuine := c.receipts[eventID]
+	c.mu.Unlock()
+	if !genuine {
+		return nil
+	}
+	if err := c.conn.notify(persistenthost.CodexAckMethod, map[string]string{"eventId": receiptID}); err != nil {
+		return fmt.Errorf("%w: acknowledge persistent Codex event: %w", ports.ErrChatRecoveryInconclusive, err)
+	}
+	c.mu.Lock()
+	delete(c.receipts, eventID)
+	c.mu.Unlock()
+	return nil
 }
 
 // CanHibernate reads Codex's live exec registry, since a settled turn can leave

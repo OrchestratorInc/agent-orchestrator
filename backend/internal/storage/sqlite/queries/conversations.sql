@@ -872,6 +872,67 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
 
+-- A dispatch marker and native root lifecycle share one archive clock, so queue
+-- reordering and late binding cannot turn an older success into the latest work.
+-- Fence the current owner, not the retained turn's original generation.
+-- name: SelectLatestPrimaryConversationTurn :one
+WITH latest_root AS (
+SELECT t.id FROM conversation_turns t
+JOIN conversations c ON c.id = t.conversation_id
+JOIN conversation_provider_events e ON e.conversation_id = c.id AND e.branch_id = c.active_branch_id
+WHERE t.conversation_id = sqlc.arg(conversation_id)
+  AND t.branch_id = c.active_branch_id
+  AND t.state NOT IN ('queued', 'cancelled')
+  AND t.rolled_back_at IS NULL AND t.promoted_to_turn_id IS NULL
+  AND CAST(sqlc.arg(generation) AS TEXT) <> ''
+  AND (
+    (c.current_review_id IS NULL AND t.handled_by_review_id IS NULL
+      AND t.handled_by_session_id = c.current_session_id
+      AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = c.current_session_id
+        AND s.controller_generation = CAST(sqlc.arg(generation) AS TEXT)))
+    OR
+    (t.handled_by_review_id = c.current_review_id
+      AND EXISTS (SELECT 1 FROM review r WHERE r.id = c.current_review_id
+        AND r.session_id = t.handled_by_session_id
+        AND r.controller_generation = CAST(sqlc.arg(generation) AS TEXT)))
+  )
+  AND (COALESCE(json_extract(e.payload_json, '$.providerConversationId'), '') = '' OR json_extract(e.payload_json, '$.providerConversationId') = CAST(sqlc.arg(provider_conversation_id) AS TEXT))
+  AND (
+    (e.method = 'turn.dispatching' AND json_extract(e.payload_json, '$.turnId') = t.id)
+    OR (e.method IN ('turn.started', 'turn.completed') AND t.provider_turn_id <> ''
+      AND json_extract(e.payload_json, '$.providerTurnId') = t.provider_turn_id)
+  )
+ORDER BY e.id DESC LIMIT 1
+)
+SELECT t.* FROM conversation_turns t
+JOIN latest_root latest ON latest.id = t.id
+JOIN conversations c ON c.id = t.conversation_id
+WHERE (t.state <> 'completed' OR t.provider_turn_id = ''
+    OR EXISTS (SELECT 1 FROM conversation_provider_events d
+      WHERE d.conversation_id = c.id AND d.branch_id = c.active_branch_id
+        AND d.method = 'turn.dispatching' AND json_extract(d.payload_json, '$.turnId') = t.id
+        AND (COALESCE(json_extract(d.payload_json, '$.providerConversationId'), '') = '' OR json_extract(d.payload_json, '$.providerConversationId') = CAST(sqlc.arg(provider_conversation_id) AS TEXT)))
+    OR NOT EXISTS (
+      SELECT 1 FROM conversation_turns u
+      WHERE u.conversation_id = c.id AND u.branch_id = c.active_branch_id
+        AND u.handled_by_session_id = t.handled_by_session_id
+        AND u.handled_by_review_id IS t.handled_by_review_id
+        AND u.state NOT IN ('queued', 'cancelled')
+        AND (u.state <> 'completed' OR u.provider_turn_id = '')
+        AND u.rolled_back_at IS NULL AND u.promoted_to_turn_id IS NULL
+        AND EXISTS (SELECT 1 FROM conversation_messages m
+          WHERE m.turn_id = u.id AND m.role = 'user' AND m.provider_item_id = '')
+        AND NOT EXISTS (SELECT 1 FROM conversation_provider_events d
+          WHERE d.conversation_id = c.id AND d.branch_id = c.active_branch_id
+            AND (
+              (d.method = 'turn.dispatching' AND json_extract(d.payload_json, '$.turnId') = u.id)
+              OR (d.method IN ('turn.started', 'turn.completed') AND u.provider_turn_id <> ''
+                AND json_extract(d.payload_json, '$.providerTurnId') = u.provider_turn_id)
+            )
+            AND (COALESCE(json_extract(d.payload_json, '$.providerConversationId'), '') = '' OR json_extract(d.payload_json, '$.providerConversationId') = CAST(sqlc.arg(provider_conversation_id) AS TEXT)))
+    )
+  );
+
 -- Turns represented by one bounded timeline page. Active turns are included
 -- even before their first item arrives, so the live-turn controls never vanish.
 -- name: SelectConversationTurnsPage :many

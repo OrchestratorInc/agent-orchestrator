@@ -110,7 +110,7 @@ func TestPromptSuggestionForkUsesNativeContextAndStaysInvisible(t *testing.T) {
 				if source != parent.ProviderConversationID() || anchor != wantAnchor {
 					t.Fatalf("source/anchor=%q/%q", source, anchor)
 				}
-				if cfg.SessionID == testSession || !cfg.ReadOnly || !cfg.DisableNetwork || cfg.Ephemeral || !cfg.ProviderIDsScoped || cfg.Model != "parent-model" || cfg.Effort != "" || cfg.Permissions != ports.PermissionModeAcceptEdits {
+				if cfg.SessionID == testSession || !cfg.ReadOnly || !cfg.DisableNetwork || cfg.Ephemeral || !cfg.VolatileEvents || !cfg.ProviderIDsScoped || cfg.Model != "parent-model" || cfg.Effort != "" || cfg.Permissions != ports.PermissionModeAcceptEdits {
 					t.Fatalf("unsafe or incorrect child config: %+v", cfg)
 				}
 				if capability == ports.ChatCapabilityForkCurrent {

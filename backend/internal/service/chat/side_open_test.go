@@ -32,6 +32,7 @@ type connectedSideForkDriver struct {
 	onFork     func(context.Context) error
 	beforeFork func(context.Context) error
 	afterFork  func(context.Context) error
+	loadLater  bool
 }
 
 func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
@@ -80,7 +81,33 @@ func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anch
 	d.forks = append(d.forks, conv)
 	d.configs = append(d.configs, cfg)
 	d.sources = append(d.sources, source)
+	if d.loadLater {
+		return nil, nil
+	}
 	return conv, nil
+}
+
+func TestSideForkLoadKeepsVolatileDelivery(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	h.source(t)
+	h.driver.loadLater = true
+	var loaded atomic.Bool
+	h.driver.resume = func(cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+		if !cfg.VolatileEvents {
+			return nil, errors.New("RAM-only fork load requested durable event ACKs")
+		}
+		loaded.Store(true)
+		return newFakeConversation(), nil
+	}
+	h.side(t, "loaded-fork", true)
+	if !loaded.Load() {
+		t.Fatal("native side fork was not loaded")
+	}
+	h.driver.mu.Lock()
+	defer h.driver.mu.Unlock()
+	if h.driver.mainConfig.VolatileEvents {
+		t.Fatal("side delivery policy changed the durable main controller")
+	}
 }
 
 func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
@@ -92,6 +119,9 @@ func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
 	main.setCapabilities(caps)
 	driver := &connectedSideForkDriver{}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+		if cfg.VolatileEvents {
+			t.Fatal("durable main controller selected volatile delivery")
+		}
 		if cfg.SessionID != testSession {
 			return nil, fmt.Errorf("chat host already has a controller: %s", cfg.SessionID)
 		}
@@ -223,6 +253,11 @@ func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
 			t.Fatalf("fork source = %q", source)
 		}
 	}
+	for _, cfg := range driver.configs {
+		if !cfg.VolatileEvents || cfg.Ephemeral {
+			t.Fatal("RAM-only native side requested durable event ACKs or changed native history")
+		}
+	}
 	stopsMu.Lock()
 	defer stopsMu.Unlock()
 	if len(stops) != 1 || stops[0] != domain.SessionID(first.ProviderHostID) {
@@ -246,8 +281,11 @@ func TestSideRecoveryFailureRetryAndCloseFence(t *testing.T) {
 					return main, nil
 				}
 				n := resumeCalls.Add(1)
+				if !cfg.VolatileEvents {
+					return nil, errors.New("RAM-only side recovery requested durable event ACKs")
+				}
 				if n == 1 {
-					return nil, fmt.Errorf("provider offline")
+					return nil, fmt.Errorf("%w: close and reopen this chat", ports.ErrChatRecoveryInconclusive)
 				}
 				if n == 2 {
 					<-release
@@ -285,6 +323,10 @@ func TestSideRecoveryFailureRetryAndCloseFence(t *testing.T) {
 				t.Fatalf("side never reached %s", state)
 			}
 			await("failed")
+			failed, err := svc.SideSnapshot(ctx, testSession, side.ID, time.Time{}, 10)
+			if err != nil || !strings.Contains(failed.Side.ErrorMessage, "close and reopen") {
+				t.Fatalf("side recovery hid the delivery mismatch action: %+v %v", failed.Side, err)
+			}
 			if _, err := svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: "q", ClientMessageID: "c"}); !errors.Is(err, chatsvc.ErrSideNotReady) {
 				t.Fatalf("failed send: %v", err)
 			}

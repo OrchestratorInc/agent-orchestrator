@@ -11,7 +11,7 @@ import (
 
 func TestACPPromptJournalReplaysResetsAndEnforcesQuota(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "prompt.journal")
-	journal, err := openACPPromptJournal(context.Background(), path)
+	journal, err := openFrameJournal(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestACPPromptJournalReplaysResetsAndEnforcesQuota(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("journal permissions = %v", info.Mode().Perm())
 	}
-	var spans []acpJournalSpan
+	var spans []journalSpan
 	for _, frame := range [][]byte{[]byte("one\n"), []byte("two\n")} {
 		span, err := journal.append(context.Background(), frame)
 		if err != nil {
@@ -44,11 +44,11 @@ func TestACPPromptJournalReplaysResetsAndEnforcesQuota(t *testing.T) {
 		t.Fatal(err)
 	}
 	replay.Reset()
-	if err := journal.replayTo(context.Background(), &replay, acpJournalSpan{}); err != nil || replay.Len() != 0 {
+	if err := journal.replayTo(context.Background(), &replay, journalSpan{}); err != nil || replay.Len() != 0 {
 		t.Fatalf("reset replay = %q, err=%v", replay.String(), err)
 	}
-	journal.size = maxACPJournalBytes
-	if _, err := journal.append(context.Background(), []byte("overflow\n")); !errors.Is(err, errACPJournalFull) {
+	journal.size = maxJournalBytes
+	if _, err := journal.append(context.Background(), []byte("overflow\n")); !errors.Is(err, errJournalFull) {
 		t.Fatalf("quota error = %v", err)
 	}
 }

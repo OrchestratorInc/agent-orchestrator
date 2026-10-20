@@ -528,8 +528,8 @@ func TestStaleControllerGenerationDropsArchiveAndProjection(t *testing.T) {
 			projected++
 			return nil
 		})
-	if err != nil {
-		t.Fatalf("ProjectProviderEvent: %v", err)
+	if !errors.Is(err, domain.ErrChatControllerFenced) {
+		t.Fatalf("stale projection: %v, want ErrChatControllerFenced", err)
 	}
 	if applied || projected != 0 {
 		t.Fatalf("stale event applied=%v projection count=%d, want false/0", applied, projected)
