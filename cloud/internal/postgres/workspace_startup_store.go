@@ -43,13 +43,10 @@ func (s *Store) RecordWorkspaceStartupError(
 			SET startup_error_code = $3,
 				startup_error_message = $4,
 				startup_error_detail = $5,
-				startup_error_at = CASE
-					WHEN startup_error_code IS DISTINCT FROM $3
-						OR startup_error_message IS DISTINCT FROM $4
-						OR startup_error_at IS NULL
-						THEN now()
-					ELSE startup_error_at
-				END,
+				-- Every report is a new attempt (a retry the user asked for), so a
+				-- repeat of the same failure still moves the time: the desktop waits
+				-- for a newer failure to stop showing the retry as running.
+				startup_error_at = now(),
 				updated_at = now()
 			WHERE session_id = $1 AND org_id = $2 AND desired_state = 'running'`,
 			sessionID, orgID, code, message, detail,

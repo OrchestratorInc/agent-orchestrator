@@ -347,8 +347,8 @@ const NOTICE_GAP = 12; // --space-3
  * The live browser page is a native view: anything drawn over it has to raise
  * the whole transparent shell above the page, which then swallows every click
  * and scroll meant for the browser. This notice is non-modal and long-lived, so
- * it never does that. It moves beside the page instead, and steps aside while
- * the page leaves no room for it (maximized browser). */
+ * it never does that. It stays at the app edge and steps aside while
+ * the live page overlaps that corner. */
 function NoticeFrame({ label, children }: { label: string; children: ReactNode }) {
 	const topbarBottom = useWorkspaceTopbarBottom();
 	const browserRect = useLiveBrowserViewportRect();
@@ -366,30 +366,26 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 	const top = topbarBottom === null
 		? isWindowsPlatform() ? "calc(var(--size-window-titlebar) + var(--size-toolbar) + var(--space-3))" : "calc(var(--size-toolbar) + var(--space-3))"
 		: `calc(${topbarBottom}px + var(--space-3))`;
-	const placement = noticePlacement(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height);
-	if (placement === "hidden") return null;
+	if (noticeCoversLiveBrowser(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height)) return null;
 	return <aside ref={frameRef} role="region" aria-label={label}
-		className="harness-update-notice fixed isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
+		className="harness-update-notice fixed right-4 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
 		// The stack reaches the window's drag region, which would swallow its clicks.
-		style={{ WebkitAppRegion: "no-drag", top, right: placement.right } as CSSProperties}>
+		style={{ WebkitAppRegion: "no-drag", top } as CSSProperties}>
 		{children}
 	</aside>;
 }
 
-/** Where the notice's right edge sits, clear of the live browser page. */
-export function noticePlacement(
+/** Whether the notice at the app edge overlaps the live native browser page. */
+export function noticeCoversLiveBrowser(
 	browser: ViewportRect | null,
 	top: number,
 	height: number,
 	viewportWidth = document.documentElement.clientWidth,
-): { right: number } | "hidden" {
+): boolean {
 	const width = Math.min(NOTICE_MAX_WIDTH, viewportWidth - 2 * NOTICE_EDGE);
 	const right = viewportWidth - NOTICE_EDGE;
-	if (!browser) return { right: NOTICE_EDGE };
+	if (!browser) return false;
 	const overlapsX = right - width < browser.right && right > browser.left;
 	const overlapsY = top < browser.bottom && top + Math.max(height, 1) > browser.top;
-	if (!overlapsX || !overlapsY) return { right: NOTICE_EDGE };
-	const besideRight = browser.left - NOTICE_GAP;
-	if (besideRight - width < NOTICE_EDGE) return "hidden";
-	return { right: viewportWidth - besideRight };
+	return overlapsX && overlapsY;
 }

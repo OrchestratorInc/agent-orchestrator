@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -39,6 +41,14 @@ type actionReader interface {
 	FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (ports.SCMReviewObservation, error)
 }
 
+type actionLifecycle interface {
+	ApplySCMObservation(ctx context.Context, sessionID domain.SessionID, obs ports.SCMObservation) error
+}
+
+type mergeStateWriter interface {
+	MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error
+}
+
 // ActionDeps contains the storage and SCM boundaries used by ActionService.
 type ActionDeps struct {
 	Store        actionStore
@@ -47,6 +57,10 @@ type ActionDeps struct {
 	Reader       actionReader
 	Resolver     ports.SCMReviewResolver
 	Writer       ports.SCMWriter
+	MergeWriter  mergeStateWriter
+	Lifecycle    actionLifecycle
+	Clock        func() time.Time
+	Logger       *slog.Logger
 	// ThreadWriter updates one resolved thread and its comments without
 	// replacing a potentially newer SCM observation.
 	ThreadWriter interface {
@@ -61,6 +75,10 @@ type ActionService struct {
 	merger       ports.SCMMerger
 	reader       actionReader
 	resolver     ports.SCMReviewResolver
+	mergeWriter  mergeStateWriter
+	lifecycle    actionLifecycle
+	clock        func() time.Time
+	logger       *slog.Logger
 	threadWriter interface {
 		MarkPRReviewThreadResolved(context.Context, string, string) error
 	}
@@ -80,12 +98,24 @@ func NewActionService(deps ActionDeps) *ActionService {
 			MarkPRReviewThreadResolved(context.Context, string, string) error
 		})
 	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	logger := deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &ActionService{
 		store:        deps.Store,
 		resolve:      resolve,
 		merger:       deps.Merger,
 		reader:       deps.Reader,
 		resolver:     deps.Resolver,
+		mergeWriter:  deps.MergeWriter,
+		lifecycle:    deps.Lifecycle,
+		clock:        clock,
+		logger:       logger,
 		threadWriter: threadWriter,
 	}
 }
@@ -151,7 +181,36 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 			return MergeResult{}, fmt.Errorf("merge pull request: %w", err)
 		}
 	}
-	return MergeResult{PRNumber: tracked.Number, Method: string(ports.SCMMergeSquash), MergeCommitSHA: out.MergeCommitSHA}, nil
+	mergedAt := s.clock().UTC()
+	persisted := false
+	if s.mergeWriter != nil {
+		if err := s.mergeWriter.MarkPRMerged(ctx, tracked.URL, out.MergeCommitSHA, mergedAt); err != nil {
+			// GitHub has already committed the irreversible remote mutation. Keep
+			// returning the authoritative success so callers do not retry a merge
+			// that already happened; the observer will reconcile the durable row.
+			s.logger.Error("pr merge succeeded but local state persistence failed", "pr", tracked.URL, "err", err)
+		} else {
+			persisted = true
+		}
+	}
+	if persisted && s.lifecycle != nil {
+		fresh.PR.Draft = false
+		fresh.PR.Merged = true
+		fresh.PR.Closed = false
+		fresh.PR.State = string(domain.PRStateMerged)
+		fresh.PR.MergeCommitSHA = out.MergeCommitSHA
+		fresh.ObservedAt = mergedAt
+		if err := s.lifecycle.ApplySCMObservation(ctx, tracked.SessionID, fresh); err != nil {
+			s.logger.Error("pr merge succeeded but lifecycle notification failed", "session", tracked.SessionID, "pr", tracked.URL, "err", err)
+		}
+	}
+	return MergeResult{
+		PRNumber:       tracked.Number,
+		Method:         string(ports.SCMMergeSquash),
+		State:          domain.PRStateMerged,
+		MergeCommitSHA: out.MergeCommitSHA,
+		StateChangedAt: mergedAt,
+	}, nil
 }
 
 func (s *ActionService) fetchMergeReadiness(ctx context.Context, ref ports.SCMPRRef) (ports.SCMObservation, ports.SCMReviewObservation, error) {

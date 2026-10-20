@@ -1344,6 +1344,8 @@ func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]bi
 				SELECT 1 FROM ao_turns t
 				WHERE t.org_id = sb.org_id AND t.session_id = sb.session_id
 					AND t.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+					-- A message queued behind a failed checkout or Setup waits for a retry.
+					AND NOT (t.state = 'queued' AND sb.startup_error_code = ANY($2))
 			)
 			OR EXISTS (
 				SELECT 1 FROM ao_review_runs r
@@ -1355,7 +1357,7 @@ func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]bi
 			AND sb.observed_state NOT IN ('deleted', 'deleting', 'terminated', 'failed')
 		ORDER BY (sb.startup_started_at IS NOT NULL) DESC, sb.startup_started_at DESC NULLS LAST,
 			se.created_at DESC, sb.session_id`,
-		orgID)
+		orgID, domain.WorkspaceStartupErrorCodes())
 	if err != nil {
 		return nil, err
 	}

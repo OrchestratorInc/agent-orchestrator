@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
@@ -51,6 +52,17 @@ func TestWorkspaceStartupErrorSurvivesHeartbeatsUntilReady(t *testing.T) {
 		t.Fatalf("session startup error = %q %v %q", session.StartupErrorCode, session.StartupErrorAt, session.StartupErrorDetail)
 	}
 
+	// A retry that fails the same way is a newer failure.
+	firstAt := *session.StartupErrorAt
+	if err := store.RecordWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		domain.WorkspaceStartupErrorProjectSetup, "Setup step 1 failed: exit status 3.", "missing secret"); err != nil {
+		t.Fatalf("record again: %v", err)
+	}
+	if again, err := store.GetSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID); err != nil ||
+		again.StartupErrorAt == nil || !again.StartupErrorAt.After(firstAt) {
+		t.Fatalf("repeated failure at = %v (first %v), err %v", again.StartupErrorAt, firstAt, err)
+	}
+
 	// A stale worker cannot record or clear the session's error.
 	if err := store.ClearWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch-1); !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("stale clear = %v", err)
@@ -84,5 +96,57 @@ func TestWorkspaceStartupErrorSurvivesHeartbeatsUntilReady(t *testing.T) {
 	}
 	if code, _, _ := read(); code != "" {
 		t.Fatalf("heartbeat kept a reconciler error: %q", code)
+	}
+}
+
+// A message queued behind a failed checkout or Setup waits for a retry, so it
+// neither keeps the sandbox up nor marks the session busy; once the worker
+// reports the workspace ready, the same queued message does both again.
+func TestQueuedTurnBehindAFailedWorkspaceStartDoesNotKeepTheSandboxUp(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	const owner = "workspace-startup-keep-alive"
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running', interactive_until = NULL WHERE session_id = $1`, fixture.sessionID)
+	exec(`UPDATE ao_sessions SET activity_state = 'idle' WHERE id = $1`, fixture.sessionID)
+	exec(`INSERT INTO ao_events (org_id, session_id, sequence, type) VALUES ($1, $2, 1, 'chat.user_message')`, fixture.orgID, fixture.sessionID)
+	exec(`INSERT INTO ao_turns (org_id, session_id, user_message_sequence) VALUES ($1, $2, 1)`, fixture.orgID, fixture.sessionID)
+	keepAlive := func() bool {
+		t.Helper()
+		exec(`UPDATE ao_sandboxes SET reconcile_lease_owner = '', reconcile_lease_until = NULL,
+			reconcile_after = now() - interval '1 hour' WHERE session_id = $1`, fixture.sessionID)
+		claimed, err := store.ClaimSandboxes(ctx, owner, 100, time.Minute)
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		for _, record := range claimed {
+			if record.SessionID == fixture.sessionID {
+				return record.KeepAlive
+			}
+		}
+		t.Fatal("sandbox was not claimed")
+		return false
+	}
+
+	if !keepAlive() {
+		t.Fatal("a queued message on a healthy session must keep its sandbox up")
+	}
+	if err := store.RecordWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		domain.WorkspaceStartupErrorProjectSetup, "The project's Setup script failed at step 1 (exit status 1).", ""); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if keepAlive() {
+		t.Fatal("a message queued behind a failed Setup kept the sandbox up")
+	}
+	if err := store.ClearWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if !keepAlive() {
+		t.Fatal("once the workspace is ready the queued message must keep the sandbox up again")
 	}
 }

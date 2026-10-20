@@ -687,6 +687,18 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 	}
 }
 
+func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-only step")
+	}
+	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil)
+	want := "The project's Setup script failed at step 2 (exit status 3), so the agent did not start. " +
+		"Fix the script in Project settings > Scripts, then try again. Output: could not reach registry"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v\nwant    %s", err, want)
+	}
+}
+
 func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	workspace := t.TempDir()
 	command := "while :; do :; done"
@@ -696,7 +708,8 @@ func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "setup step 2 failed") {
+	var setupErr *SetupStepError
+	if !errors.As(err, &setupErr) || setupErr.Step != 2 || setupErr.TimedOut {
 		t.Fatalf("cancellation error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {

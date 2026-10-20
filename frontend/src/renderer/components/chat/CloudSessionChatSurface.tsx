@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
+import { cloudStartupProblem, isWorkspaceStartupError } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
@@ -136,7 +139,7 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 	return {
 		kind: "activity", id: `cloud-project-setup-${event.sequence}`, sequence: event.sequence, revision: 1,
 		activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
-		summary: status === "succeeded" ? "Setup finished" : status === "timed_out" ? "Setup timed out" : "Setup failed",
+		summary: status === "succeeded" ? "Setup passed" : status === "timed_out" ? "Setup timed out" : "Setup failed",
 		detail: { event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output },
 		createdAt: event.createdAt,
 	};
@@ -379,6 +382,32 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
+	// A failed checkout or Setup reads the way a failed local Chat start does: the
+	// setup checklist under the opening message, with Retry. Retry asks the running
+	// worker to prepare the workspace again; until it reports, the step runs again.
+	const startupProblem = cloudStartupProblem(session);
+	const workspaceFailure = startupProblem?.phase === "failed" && isWorkspaceStartupError(startupProblem.code) ? startupProblem : undefined;
+	const [retriedFailureAt, setRetriedFailureAt] = useState<string>();
+	const rerunning = retriedFailureAt !== undefined && retriedFailureAt === workspaceFailure?.at;
+	const retryStart = useMutation({
+		mutationFn: () => client.requestWorkspaceCheckout(cloud?.orgId ?? "", session.id),
+		onSuccess: () => {
+			setRetriedFailureAt(workspaceFailure?.at);
+			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+			void queryClient.invalidateQueries({ queryKey: ["cloud-session"] });
+		},
+	});
+	const setupFailed = workspaceFailure?.code === "project_setup_failed";
+	const chatSession: WorkspaceSession = workspaceFailure ? {
+		...session,
+		provisionState: rerunning ? "provisioning" : "failed",
+		provisionSteps: [
+			{ id: "worktree", status: setupFailed ? "done" : "running" },
+			{ id: "setup", status: setupFailed ? "running" : "pending" },
+			{ id: "agent", status: "pending" },
+		],
+		provisionError: [workspaceFailure.message, workspaceFailure.detail && `Output: ${workspaceFailure.detail}`].filter(Boolean).join(" "),
+	} : session;
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
 	const approvalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
@@ -478,9 +507,23 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
-	const snapshot = useMemo(() => ({
-		...toSnapshot(session, eventsQuery.data ?? []), settings,
-	}), [eventsQuery.data, session, settings]);
+	const startFailed = Boolean(workspaceFailure);
+	const startStopped = startFailed && !rerunning;
+	const snapshot = useMemo(() => {
+		const projected = toSnapshot(session, eventsQuery.data ?? []);
+		// A failed Setup is reported by the checklist while the start is failed, as a
+		// failed local start does; once a retry passes, only the Setup that passed stays.
+		const setupStatus = (item: ConversationItem) =>
+			item.kind === "activity" && item.detail?.event === "workspace.setup" ? item.detail.setupStatus : undefined;
+		const lastPassed = Math.max(-1, ...projected.items.filter((item) => setupStatus(item) === "succeeded").map((item) => item.sequence));
+		const items = projected.items.filter((item) => {
+			const status = setupStatus(item);
+			return !status || status === "succeeded" || (!startFailed && item.sequence > lastPassed);
+		});
+		// No agent runs until a retry prepares the workspace, as a failed local start reports.
+		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
+		return { ...projected, items, controller, settings };
+	}, [eventsQuery.data, session, settings, startFailed, startStopped]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -536,15 +579,30 @@ export function CloudSessionChatSurface({
 				],
 			}]
 			: undefined;
+	const workerModels = modelsQuery.data?.models ?? [];
+	const selectedModel = workerModels.find((model) => model.id === settings.model) ?? workerModels.find((model) => model.default);
+	// Claude's model and effort as provider options, the shape local Claude Chat gets from its agent.
+	const claudeOptions: ChatConfigOption[] = session.provider === "claude-code" && workerModels.length > 0 ? [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: selectedModel?.id, choices: workerModels.map((model) => ({ value: model.id, name: model.displayName, description: model.description })) },
+		...(selectedModel?.efforts?.length
+			? [{ id: "effort", name: "Effort", category: "thought_level", type: "select" as const, currentValue: settings.reasoningEffort ?? selectedModel.defaultEffort, choices: selectedModel.efforts.map((value) => ({ value, name: "" })) }]
+			: []),
+	] : [];
+	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
+	const { models, configOptions } = useChatModelChoices(session.provider, workerModels, providerOptions.length ? providerOptions : undefined, settings.model);
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
 			onSessionLinkOpen={openSessionLink}
-			models={modelsQuery.data?.models ?? []}
-			configOptions={planOptions}
-			onChooseConfigOption={planOptions ? (id, choice) => {
-				if (id !== "mode" || !("value" in choice) || !planOptions[0].choices.some((option) => option.value === choice.value)) return;
-				updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
+			models={models}
+			configOptions={configOptions}
+			onChooseConfigOption={configOptions?.length ? (id, choice) => {
+				if (!("value" in choice)) return;
+				if (id === "model") updateSettings({ ...settingsRef.current.settings, model: choice.value, reasoningEffort: undefined });
+				else if (id === "effort") updateSettings({ ...settingsRef.current.settings, reasoningEffort: choice.value });
+				else if (id === "mode" && planOptions?.[0].choices.some((option) => option.value === choice.value)) {
+					updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
+				}
 			} : undefined}
 			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
 			showApprovalMode={approvalModes.length > 0}
@@ -583,7 +641,11 @@ export function CloudSessionChatSurface({
 			steerPending={steer.isPending}
 			showSteerButton
 			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
-			session={session}
+			session={chatSession}
+			settingsReady={!startStopped}
+			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
+			resumingAgent={retryStart.isPending}
+			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}

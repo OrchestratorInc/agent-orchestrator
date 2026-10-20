@@ -54,6 +54,42 @@ it("preserves queued-edit API error codes for delivery recovery", async () => {
 	await expect(result.current.editQueuedTurn("queued-1", "edited")).rejects.toBe(refusal);
 });
 
+it("persists and cancels auto-resume for the selected failed turn", async () => {
+	patchMock.mockResolvedValue({ error: undefined });
+	const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+	await act(async () => { await result.current.retryControl.setAutoResume("limited-1", true); });
+	expect(patchMock).toHaveBeenLastCalledWith(
+		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume",
+		{ params: { path: { sessionId: "ao-1", turnId: "limited-1" } }, body: { enabled: true } },
+	);
+	await act(async () => { await result.current.retryControl.setAutoResume("limited-1", false); });
+	expect(patchMock).toHaveBeenLastCalledWith(
+		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume",
+		{ params: { path: { sessionId: "ao-1", turnId: "limited-1" } }, body: { enabled: false } },
+	);
+	expect(postMock).not.toHaveBeenCalled();
+});
+
+it("shows scheduling errors only for the session that requested auto-resume", async () => {
+	const refusal = { message: "Reset time is unavailable" };
+	patchMock.mockResolvedValue({ error: refusal });
+	apiErrorMessageMock.mockReturnValue("Reset time is unavailable");
+	const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+	const stableWrapper = ({ children }: { children: ReactNode }) =>
+		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const { result, rerender } = renderHook(({ sessionId }) => useConversationCommands(sessionId), {
+		wrapper: stableWrapper, initialProps: { sessionId: "ao-1" },
+	});
+	await act(async () => {
+		await expect(result.current.retryControl.setAutoResume("limited-1", true)).rejects.toBe(refusal);
+	});
+	await waitFor(() => expect(result.current.retryControl.autoResumeError).toBe("Reset time is unavailable"));
+	expect(result.current.retryControl.autoResumeTurnId).toBe("limited-1");
+	rerender({ sessionId: "ao-2" });
+	expect(result.current.retryControl.autoResumeError).toBeUndefined();
+	expect(result.current.retryControl.autoResumeTurnId).toBeUndefined();
+});
+
 /** The provider state the daemon now serves, in wire shape. */
 const WIRE = {
 	conversationId: "conv-1",
@@ -784,7 +820,7 @@ describe("useConversation snapshot mapping", () => {
 		]);
 	});
 
-	it("maps retry lineage and consumed-source facts from the daemon", async () => {
+	it("maps retry lineage and durable prompt facts from the daemon", async () => {
 		getMock.mockResolvedValue({
 			data: {
 				...WIRE,
@@ -793,6 +829,7 @@ describe("useConversation snapshot mapping", () => {
 						...WIRE.turns[0],
 						retryOfTurnId: "turn-source",
 						hasRetryAttempt: true,
+						hasHumanPrompt: true,
 					},
 				],
 			},
@@ -805,7 +842,20 @@ describe("useConversation snapshot mapping", () => {
 		expect(result.current.snapshot!.turns[0]).toMatchObject({
 			retryOfTurnId: "turn-source",
 			hasRetryAttempt: true,
+			hasHumanPrompt: true,
 		});
+	});
+
+	it("maps absolute reset and durable auto-resume state from the daemon", () => {
+		const usageLimit = { resetsAt: "2026-10-14T16:50:00Z", autoResume: true, resumeError: "Could not wake the agent" };
+		const snapshot = toSnapshot({
+			conversationId: "conv-1", sessionId: "ao-1", mode: "chat", controller: "ready", latestSequence: 1,
+			continueTurnId: "",
+			branchedFromEarlierMessage: false, hasMoreBefore: false, nativeForkAvailableAfterSequence: 0,
+			settings: {}, messages: [], activities: [],
+			turns: [{ id: "limited", requestedAt: "2026-10-14T16:00:00Z", state: "failed", usageLimit }],
+		});
+		expect(snapshot.turns[0]?.usageLimit).toEqual(usageLimit);
 	});
 
 	// Absent must stay absent: a client has to tell "the provider said nothing" from
@@ -1234,6 +1284,28 @@ describe("useConversationSkills polling", () => {
 
 
 describe("toSnapshot", () => {
+	it.each([
+		{ action: "accept", content: { question_0: "keep", question_0_custom: "Tell me the names first" }, expectedAction: "accept" },
+		{ action: "decline", content: undefined, expectedAction: "decline" },
+		{ action: "cancel", content: undefined, expectedAction: "cancel" },
+		{ action: "unknown", content: {}, expectedAction: undefined },
+	])("decodes structured input resolution $action from persisted activity details", ({ action, content, expectedAction }) => {
+		const snapshot = toSnapshot({
+			conversationId: "c1", sessionId: "s1", harness: "claude-code", mode: "chat", controller: "ready",
+			latestSequence: 1, oldestSequence: 1, hasMoreBefore: false, turns: [], messages: [], settings: {},
+			branchedFromEarlierMessage: false, continueTurnId: "", nativeForkAvailableAfterSequence: 0,
+			activities: [{
+				kind: "activity", id: "input-1", sequence: 1, revision: 1, activityKind: "user_input",
+				status: "resolved", summary: "Choose worktrees", createdAt: "2026-10-19T00:00:00Z",
+				detail: { action, content },
+			}],
+		});
+		const item = snapshot.items[0];
+		if (item?.kind !== "activity") throw new Error("missing input activity");
+		expect(item.inputResponse?.action).toBe(expectedAction);
+		if (expectedAction) expect(item.inputResponse?.content).toEqual(content);
+	});
+
 	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
 		const snapshot = toSnapshot({
 			conversationId: "c1",

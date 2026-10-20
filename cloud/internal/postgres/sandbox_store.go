@@ -62,6 +62,9 @@ func (s *Store) ClaimSandboxes(
 							WHERE turn.org_id = sandbox.org_id
 								AND turn.session_id = sandbox.session_id
 								AND turn.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+								-- A message queued behind a failed checkout or Setup waits
+								-- for a retry, so it does not keep the sandbox up.
+								AND NOT (turn.state = 'queued' AND sandbox.startup_error_code = ANY($4))
 						)
 						OR EXISTS (
 							SELECT 1 FROM ao_sessions session
@@ -87,6 +90,7 @@ func (s *Store) ClaimSandboxes(
 			limit,
 			owner,
 			intervalString(lease),
+			domain.WorkspaceStartupErrorCodes(),
 		)
 		if err != nil {
 			return fmt.Errorf("claim sandboxes: %w", err)
