@@ -3410,6 +3410,49 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Restart to install update v0.12.11")).not.toHaveLength(0);
 	});
 
+	it("hides the available-update banner while updates are disabled", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "available",
+			version: "9.9.9",
+			updatesDisabled: true,
+		});
+		renderSidebar();
+
+		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
+		expect(screen.queryByText("Update available")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-available")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText(/Download update/)).not.toBeInTheDocument();
+	});
+
+	it("hides the restart-to-update banner while updates are disabled", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "downloaded",
+			version: "9.9.9",
+			stagedAt: Date.now(),
+			updatesDisabled: true,
+		});
+		renderSidebar();
+
+		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
+		expect(screen.queryByText("Restart to update")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-ready")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
+	});
+
+	it("hides the retry banner while updates are disabled", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "idle",
+			checksFailing: true,
+			updatesDisabled: true,
+		});
+		renderSidebar();
+
+		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
+		expect(screen.queryByText("Update check failed")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Retry update check")).not.toBeInTheDocument();
+	});
+
 	it("stays quiet for a one-off update failure that has not become a streak", async () => {
 		updateStatusMock.mockResolvedValue({ state: "idle" });
 		renderSidebar();
