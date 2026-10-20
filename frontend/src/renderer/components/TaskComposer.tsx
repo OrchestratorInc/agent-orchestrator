@@ -564,7 +564,10 @@ export function TaskComposer({
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
-	const effectiveEffort = effort && effort !== "default"
+	// A level carried over from another harness or model is only sent when the
+	// selected model advertises it; with no advertised list it passes through.
+	const effortOffered = effortModel?.efforts === undefined || effortOptions.includes(effort);
+	const effectiveEffort = effort && effort !== "default" && effortOffered
 		? effort
 		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
 	// Cursor's effort and thinking are part of its model id; its effort button swaps the id.
@@ -578,7 +581,7 @@ export function TaskComposer({
 		setModelTouched(true);
 	};
 	const requestedEffort = isCloudProject
-		? effort || cloudDefaultEffort || undefined
+		? (effortOffered ? effort : "") || cloudDefaultEffort || undefined
 		: isStandalone
 		// Standalone sessions have no project role to inherit from. Send the
 		// concrete effort shown by the picker even when the UI is retrying in TUI

@@ -2200,6 +2200,40 @@ describe("TaskComposer", () => {
 		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex).not.toHaveProperty("effort");
 	});
 
+	it("never sends a remembered effort the selected model does not offer", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({
+			"proj-1": {
+				lastAgent: "freebuff",
+				agents: { freebuff: { model: "z-ai/glm-5.3-flash", mode: "", effort: "xhigh" } },
+			},
+		}));
+		h.agentCatalog = { agents: [agentReadiness("freebuff", "Freebuff")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "freebuff",
+						selectionMode: "catalog",
+						models: [
+							{ id: "mimo/mimo-v2.5", label: "MiMo v2.6 Flash Fast", isDefault: true },
+							{ id: "z-ai/glm-5.3-flash", label: "GLM 5.3 Flash", efforts: ["low", "high"], defaultEffort: "high" },
+						],
+						allowCustom: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "freebuff" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { workerId: "freebuff-task" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GLM 5.3 Flash");
+
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body.effort).not.toBe("xhigh");
+	});
+
 	it("returns to the reported agent effort without pinning it", async () => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode: "catalog", models: [

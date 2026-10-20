@@ -1577,13 +1577,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessFreebuff {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, and freebuff agents", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
@@ -1651,6 +1651,14 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 	}
 	if resolved.Effort == "" {
+		return resolved, nil
+	}
+	if cfg.Harness == domain.HarnessFreebuff && !cfg.EffortOverride &&
+		(selected == nil || !containsString(selected.Efforts, resolved.Effort)) {
+		// Several Freebuff models take no effort at all, so an inherited
+		// role/project level that this model does not offer clears instead of
+		// failing the launch.
+		resolved.Effort = ""
 		return resolved, nil
 	}
 	if catalog.Stale || selected == nil {
@@ -6609,6 +6617,9 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	if err := m.waitForPromptReadiness(ctx, agent, cfg, handle); err != nil {
 		return err
 	}
+	if observer, ok := agent.(ports.AgentStartupReadyObserver); ok {
+		observer.AgentStartupReady(cfg.SessionID)
+	}
 	if command != "" {
 		if err := m.deliverStartedInput(ctx, id, command); err != nil {
 			return err
@@ -6620,7 +6631,86 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	if prompt == "" {
 		return nil
 	}
-	return m.deliverStartedInput(ctx, id, prompt)
+	confirmer, confirms := agent.(ports.AgentAfterStartSubmitConfirmer)
+	if confirms && confirmer.PrimesAfterStartSubmit() {
+		if err := m.deliverStartedInput(ctx, id, ""); err != nil {
+			return err
+		}
+	}
+	if err := m.deliverStartedInput(ctx, id, prompt); err != nil {
+		return err
+	}
+	if !confirms {
+		return nil
+	}
+	return m.confirmAfterStartSubmit(ctx, confirmer, handle, id, prompt)
+}
+
+const afterStartSubmitMaxRetries = 3
+
+// Timings for confirmAfterStartSubmit; variables so tests can shorten them.
+var (
+	afterStartSubmitTimeout = 30 * time.Second
+	afterStartSubmitPoll    = 250 * time.Millisecond
+	afterStartDraftSettle   = 1500 * time.Millisecond
+)
+
+// confirmAfterStartSubmit proves from the rendered terminal that the first turn
+// left the composer. It re-sends a lone Enter only after the adapter has shown
+// the typed draft still pending for afterStartDraftSettle, and fails the launch
+// when that draft never submits, instead of reporting a session that never
+// started its task.
+func (m *Manager) confirmAfterStartSubmit(ctx context.Context, confirmer ports.AgentAfterStartSubmitConfirmer, handle ports.RuntimeHandle, id domain.SessionID, prompt string) error {
+	rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return nil
+	}
+	deadline := time.NewTimer(afterStartSubmitTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(afterStartSubmitPoll)
+	defer ticker.Stop()
+	var draftSince time.Time
+	retries := 0
+	var last ports.AfterStartSubmitState
+	for {
+		output, err := rendered.GetStyledOutput(ctx, handle, 100)
+		if err != nil {
+			return fmt.Errorf("read first-turn submission output: %w", err)
+		}
+		last = confirmer.AfterStartSubmitState(output, prompt)
+		switch last {
+		case ports.AfterStartSubmitted:
+			return nil
+		case ports.AfterStartDraftPending:
+			if draftSince.IsZero() {
+				draftSince = time.Now()
+			} else if time.Since(draftSince) >= afterStartDraftSettle {
+				if retries == afterStartSubmitMaxRetries {
+					return fmt.Errorf("first turn stayed unsent in the native composer after %d Enter retries", retries)
+				}
+				if err := m.deliverStartedInput(ctx, id, ""); err != nil {
+					return err
+				}
+				retries++
+				draftSince = time.Time{}
+			}
+		default:
+			draftSince = time.Time{}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			if last == ports.AfterStartDraftPending {
+				return errors.New("first turn stayed unsent in the native composer")
+			}
+			// The screen never proved a stuck draft (a native dialog, say), so
+			// an Enter could not safely help and the delivery stands.
+			m.logger.Warn("first-turn submission could not be confirmed", "sessionID", id)
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 func (m *Manager) waitForAfterStartCommand(ctx context.Context, selector ports.AgentAfterStartCommand, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {

@@ -421,6 +421,38 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+func TestResolveFreebuffAgentConfigValidatesEffortAgainstCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "mimo/mimo-v2.5", IsDefault: true},
+		{ID: "z-ai/glm-5.3-flash", Efforts: []string{"low", "high"}, DefaultEffort: "high"},
+	}}}}
+	// The desktop task form carries an explicit effort; a level the chosen
+	// model offers reaches the adapter instead of failing UNSUPPORTED_EFFORT.
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+		AgentConfig: ports.AgentConfig{Model: "z-ai/glm-5.3-flash", Effort: "high"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if err != nil || resolved.Effort != "high" {
+		t.Fatalf("freebuff explicit effort = %#v, %v; want high", resolved, err)
+	}
+	// An explicit level the model does not offer still fails loudly.
+	_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+		AgentConfig: ports.AgentConfig{Model: "z-ai/glm-5.3-flash", Effort: "max"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("error = %v, want ErrUnsupportedEffort", err)
+	}
+	// An inherited role effort on a model without levels clears silently.
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+		AgentConfig: ports.AgentConfig{Model: "mimo/mimo-v2.5"},
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "mimo/mimo-v2.5", Effort: "high"}}})
+	if err != nil || resolved.Effort != "" {
+		t.Fatalf("freebuff inherited effort = %#v, %v; want cleared", resolved, err)
+	}
+}
+
 func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
@@ -436,7 +468,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and hermes") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, and freebuff") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the

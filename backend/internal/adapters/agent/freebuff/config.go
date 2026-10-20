@@ -33,11 +33,18 @@ func configDir(env map[string]string) string {
 	return filepath.Join(home, ".config", "manicode")
 }
 
+// defaultModelMigrationID is the stamp of Freebuff's one-time move of a saved
+// pick off its previous default (FREEBUFF_DEFAULT_MODEL_MIGRATION_ID in
+// Freebuff 0.2.30). An unstamped file holding the previous default,
+// deepseek/deepseek-v4-flash, is rewritten to the new default on startup.
+const defaultModelMigrationID = "glm-5.3-flash-2026-09-05"
+
 // applyModelSelection saves the AO model choice where Freebuff's /model picker
 // keeps it. Freebuff validates the file on load and drops unknown models or
 // efforts, so a stale choice degrades to its default model rather than failing.
 // The saved catalog-row key is cleared because it would otherwise outrank the
-// model id when Freebuff's server catalog is reachable.
+// model id when Freebuff's server catalog is reachable, and an unstamped file
+// gets the migration stamp so the explicit choice is not migrated away.
 func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 	model := strings.TrimSpace(cfg.Model)
 	effort := strings.TrimSpace(cfg.Effort)
@@ -48,30 +55,44 @@ func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 		return errors.New("freebuff: cannot locate the Freebuff config directory to apply the model")
 	}
 	path := filepath.Join(dir, "settings.json")
-	settings := map[string]any{}
+	settings := map[string]any{"mode": "DEFAULT", "adsEnabled": true}
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
 		if strings.TrimSpace(string(data)) != "" {
-			if err := json.Unmarshal(data, &settings); err != nil {
+			var parsed any
+			if err := json.Unmarshal(data, &parsed); err != nil {
 				return fmt.Errorf("freebuff: read %s: %w", path, err)
+			}
+			// Freebuff loads null, an array or a scalar as empty settings.
+			if object, ok := parsed.(map[string]any); ok {
+				settings = object
 			}
 		}
 	case errors.Is(err, os.ErrNotExist):
-		settings["mode"] = "DEFAULT"
-		settings["adsEnabled"] = true
 	default:
 		return fmt.Errorf("freebuff: read %s: %w", path, err)
 	}
 	settings["freebuffModel"] = model
 	delete(settings, "freebuffModelKey")
+	if stamp, _ := settings["freebuffModelDefaultMigration"].(string); stamp == "" {
+		settings["freebuffModelDefaultMigration"] = defaultModelMigrationID
+	}
+	// An empty effort means the model's own default, so a level saved by an
+	// earlier pick for this model is dropped rather than silently reused.
+	efforts, _ := settings["freebuffReasoningEfforts"].(map[string]any)
+	if efforts == nil {
+		efforts = map[string]any{}
+	}
 	if effort != "" {
-		efforts, _ := settings["freebuffReasoningEfforts"].(map[string]any)
-		if efforts == nil {
-			efforts = map[string]any{}
-		}
 		efforts[model] = effort
+	} else {
+		delete(efforts, model)
+	}
+	if len(efforts) > 0 {
 		settings["freebuffReasoningEfforts"] = efforts
+	} else {
+		delete(settings, "freebuffReasoningEfforts")
 	}
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

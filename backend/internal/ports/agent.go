@@ -526,6 +526,40 @@ type AgentAfterStartCommand interface {
 	AfterStartCommandApplied(cfg LaunchConfig, output string) bool
 }
 
+// AfterStartSubmitState is an adapter's reading of whether the first turn AO
+// typed after startup has left the native composer.
+type AfterStartSubmitState string
+
+const (
+	// AfterStartSubmitted means the composer no longer holds the turn: the
+	// agent is working on it, or the composer is empty again.
+	AfterStartSubmitted AfterStartSubmitState = "submitted"
+	// AfterStartDraftPending means the typed turn is visibly still sitting in
+	// the composer, so an Enter-only re-submit can only submit that draft.
+	AfterStartDraftPending AfterStartSubmitState = "draft"
+	// AfterStartSubmitUnknown means the screen proves neither, for example a
+	// native dialog is open. AO never re-submits in this state.
+	AfterStartSubmitUnknown AfterStartSubmitState = "unknown"
+)
+
+// AgentAfterStartSubmitConfirmer is an optional capability for after-start TUI
+// adapters whose composer can keep a typed first turn as an unsent draft. AO
+// reads the rendered terminal after typing the turn and re-sends Enter, a
+// bounded number of times, only while the adapter reports the draft pending.
+type AgentAfterStartSubmitConfirmer interface {
+	// PrimesAfterStartSubmit asks AO to send a lone Enter into the empty,
+	// ready composer before typing the first turn.
+	PrimesAfterStartSubmit() bool
+	AfterStartSubmitState(output, prompt string) AfterStartSubmitState
+}
+
+// AgentStartupReadyObserver is told when AO has observed a launched TUI ready
+// for input, so an adapter can release launch-scoped native state it had to
+// hold until the process read it.
+type AgentStartupReadyObserver interface {
+	AgentStartupReady(sessionID string)
+}
+
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
 type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
