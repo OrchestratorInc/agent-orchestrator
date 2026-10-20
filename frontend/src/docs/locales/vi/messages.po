@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: vi\n"
+
+msgid "{name} Docs"
+msgstr "Tài liệu {name}"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Tài liệu Agent Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agent"
+
+msgid "Back to the docs home"
+msgstr "Quay lại trang chủ tài liệu"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Tính năng tích hợp sẵn"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Chọn ngôn ngữ"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Đóng tìm kiếm"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Đóng thanh bên"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Thu gọn thanh bên"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Cấu hình"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Đã sao chép"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Sao chép mã"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Sao chép liên kết đến mục này"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Bắt đầu"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Hướng dẫn"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Trợ giúp"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Ẩn thanh bên"
+
+msgid "Main site"
+msgstr "Trang chính"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Tiếp theo"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Không có tiêu đề"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Không tìm thấy kết quả"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Thông báo"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Trên trang này"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Mở tìm kiếm"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Mở thanh bên"
+
+msgid "Page not found"
+msgstr "Không tìm thấy trang"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Trước"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Tham khảo"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Môi trường chạy"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Tìm kiếm"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Hiện thanh bên"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Mục lục"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminal"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "Trang bạn đang tìm có thể đã bị xóa, đổi tên hoặc tạm thời không khả dụng."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Trang này chưa được dịch nên đang hiển thị bằng tiếng Anh."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Bật/tắt menu"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Trình theo dõi"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Sử dụng Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Không gian làm việc"

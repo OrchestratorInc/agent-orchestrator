@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: cs\n"
+
+msgid "{name} Docs"
+msgstr "Dokumentace {name}"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Dokumentace Agent Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agenti"
+
+msgid "Back to the docs home"
+msgstr "Zpět na úvod dokumentace"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Vestavěné funkce"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Vyberte jazyk"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Zavřít vyhledávání"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Zavřít postranní panel"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Sbalit postranní panel"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Konfigurace"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Zkopírováno"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Kopírovat kód"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Kopírovat odkaz na tuto sekci"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Začínáme"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Návody"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Nápověda"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Skrýt postranní panel"
+
+msgid "Main site"
+msgstr "Hlavní web"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Další"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Žádné nadpisy"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Nic nenalezeno"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Oznámení"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Na této stránce"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Otevřít vyhledávání"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Otevřít postranní panel"
+
+msgid "Page not found"
+msgstr "Stránka nenalezena"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Předchozí"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Reference"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Běhová prostředí"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Hledat"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Zobrazit postranní panel"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Obsah"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminály"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "Hledaná stránka mohla být odstraněna, přejmenována nebo je dočasně nedostupná."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Tato stránka zatím není přeložená, proto se zobrazuje v angličtině."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Přepnout nabídku"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Sledování úkolů"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Používání Orchestratoru"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Pracovní prostory"

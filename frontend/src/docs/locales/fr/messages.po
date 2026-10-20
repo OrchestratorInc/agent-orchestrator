@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: fr\n"
+
+msgid "{name} Docs"
+msgstr "Documentation {name}"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Documentation Agent Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agents"
+
+msgid "Back to the docs home"
+msgstr "Retour à l’accueil de la documentation"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Fonctionnalités intégrées"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Choisir une langue"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Fermer la recherche"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Fermer la barre latérale"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Réduire la barre latérale"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Configuration"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Copié"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Copier le code"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Copier le lien vers cette section"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Premiers pas"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Guides"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Aide"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Masquer la barre latérale"
+
+msgid "Main site"
+msgstr "Site principal"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Suivant"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Aucun titre"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Aucun résultat"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Notifications"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Sur cette page"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Ouvrir la recherche"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Ouvrir la barre latérale"
+
+msgid "Page not found"
+msgstr "Page introuvable"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Précédent"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Référence"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Environnements d’exécution"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Rechercher"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Afficher la barre latérale"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Table des matières"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminaux"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "La page que vous recherchez a peut-être été supprimée, renommée ou est temporairement indisponible."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Cette page n’est pas encore traduite ; elle s’affiche donc en anglais."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Afficher ou masquer le menu"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Outils de suivi"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Utiliser Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Espaces de travail"

@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: en\n"
+
+msgid "{name} Docs"
+msgstr "{name} Docs"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator Docs"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agents"
+
+msgid "Back to the docs home"
+msgstr "Back to the docs home"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Built-in capabilities"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Choose a language"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Close search"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Close sidebar"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Collapse sidebar"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Configuration"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Copied"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Copy code"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Copy link to this section"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Getting Started"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Guides"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Help"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Hide sidebar"
+
+msgid "Main site"
+msgstr "Main site"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Next"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "No headings"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "No results found"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Notifications"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "On this page"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Open search"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Open sidebar"
+
+msgid "Page not found"
+msgstr "Page not found"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Previous"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Reference"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Runtimes"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Search"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Show sidebar"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Table of contents"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminals"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "This page is not translated yet, so it is shown in English."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Toggle menu"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Trackers"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Using Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Workspaces"

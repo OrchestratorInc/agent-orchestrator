@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: zh-CN\n"
+
+msgid "{name} Docs"
+msgstr "{name} 文档"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator 文档"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "智能体"
+
+msgid "Back to the docs home"
+msgstr "返回文档首页"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "内置功能"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "选择语言"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "关闭搜索"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "关闭侧边栏"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "收起侧边栏"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "配置"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "已复制"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "复制代码"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "复制此章节的链接"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "入门"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "指南"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "帮助"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "隐藏侧边栏"
+
+msgid "Main site"
+msgstr "官网"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "下一页"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "没有标题"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "未找到结果"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "通知"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "本页内容"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "打开搜索"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "打开侧边栏"
+
+msgid "Page not found"
+msgstr "页面未找到"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "上一页"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "参考"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "运行时"
+
+msgctxt "search"
+msgid "Search"
+msgstr "搜索"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "显示侧边栏"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "目录"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "终端"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "您要查找的页面可能已被删除、已更名，或暂时不可用。"
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "本页尚未翻译，因此以英文显示。"
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "切换菜单"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "跟踪器"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "使用 Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "工作区"

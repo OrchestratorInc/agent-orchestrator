@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: pt-BR\n"
+
+msgid "{name} Docs"
+msgstr "Documentação do {name}"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Documentação do Agent Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agentes"
+
+msgid "Back to the docs home"
+msgstr "Voltar ao início da documentação"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Recursos integrados"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Escolha um idioma"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Fechar pesquisa"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Fechar barra lateral"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Recolher barra lateral"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Configuração"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Copiado"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Copiar código"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Copiar link para esta seção"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Primeiros passos"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Guias"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Ajuda"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Ocultar barra lateral"
+
+msgid "Main site"
+msgstr "Site principal"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Próximo"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Nenhum título"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Nenhum resultado encontrado"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Notificações"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Nesta página"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Abrir pesquisa"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Abrir barra lateral"
+
+msgid "Page not found"
+msgstr "Página não encontrada"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Anterior"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Referência"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Runtimes"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Pesquisar"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Mostrar barra lateral"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Sumário"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminais"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "A página que você está procurando pode ter sido removida, ter mudado de nome ou estar temporariamente indisponível."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Esta página ainda não foi traduzida, por isso é exibida em inglês."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Alternar menu"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Rastreadores"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Como usar o Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Espaços de trabalho"

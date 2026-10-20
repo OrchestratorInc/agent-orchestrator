@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: ja\n"
+
+msgid "{name} Docs"
+msgstr "{name} ドキュメント"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator ドキュメント"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "エージェント"
+
+msgid "Back to the docs home"
+msgstr "ドキュメントのトップへ戻る"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "組み込み機能"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "言語を選択"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "検索を閉じる"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "サイドバーを閉じる"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "サイドバーを折りたたむ"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "設定"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "コピーしました"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "コードをコピー"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "このセクションへのリンクをコピー"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "はじめに"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "ガイド"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "ヘルプ"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "サイドバーを隠す"
+
+msgid "Main site"
+msgstr "メインサイト"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "次へ"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "見出しがありません"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "結果が見つかりません"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "通知"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "このページの内容"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "検索を開く"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "サイドバーを開く"
+
+msgid "Page not found"
+msgstr "ページが見つかりません"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "前へ"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "リファレンス"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "ランタイム"
+
+msgctxt "search"
+msgid "Search"
+msgstr "検索"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "サイドバーを表示"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "目次"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "ターミナル"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "お探しのページは削除されたか、名前が変更されたか、一時的に利用できない可能性があります。"
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "このページはまだ翻訳されていないため、英語で表示しています。"
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "メニューを切り替え"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "トラッカー"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Orchestrator の使い方"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "ワークスペース"

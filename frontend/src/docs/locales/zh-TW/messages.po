@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: zh-TW\n"
+
+msgid "{name} Docs"
+msgstr "{name} 文件"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator 文件"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "代理程式"
+
+msgid "Back to the docs home"
+msgstr "返回文件首頁"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "內建功能"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "選擇語言"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "關閉搜尋"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "關閉側邊欄"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "收合側邊欄"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "設定"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "已複製"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "複製程式碼"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "複製此章節的連結"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "入門"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "指南"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "說明"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "隱藏側邊欄"
+
+msgid "Main site"
+msgstr "官方網站"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "下一頁"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "沒有標題"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "找不到結果"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "通知"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "本頁內容"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "開啟搜尋"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "開啟側邊欄"
+
+msgid "Page not found"
+msgstr "找不到頁面"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "上一頁"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "參考資料"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "執行環境"
+
+msgctxt "search"
+msgid "Search"
+msgstr "搜尋"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "顯示側邊欄"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "目錄"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "終端機"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "您要找的頁面可能已被移除、已更名，或暫時無法使用。"
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "本頁尚未翻譯，因此以英文顯示。"
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "切換選單"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "追蹤器"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "使用 Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "工作區"

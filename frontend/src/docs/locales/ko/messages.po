@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: ko\n"
+
+msgid "{name} Docs"
+msgstr "{name} 문서"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator 문서"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "에이전트"
+
+msgid "Back to the docs home"
+msgstr "문서 홈으로 돌아가기"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "기본 제공 기능"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "언어 선택"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "검색 닫기"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "사이드바 닫기"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "사이드바 접기"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "구성"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "복사됨"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "코드 복사"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "이 섹션 링크 복사"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "시작하기"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "가이드"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "도움말"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "사이드바 숨기기"
+
+msgid "Main site"
+msgstr "메인 사이트"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "다음"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "제목 없음"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "검색 결과가 없습니다"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "알림"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "이 페이지의 내용"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "검색 열기"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "사이드바 열기"
+
+msgid "Page not found"
+msgstr "페이지를 찾을 수 없습니다"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "이전"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "레퍼런스"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "런타임"
+
+msgctxt "search"
+msgid "Search"
+msgstr "검색"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "사이드바 표시"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "목차"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "터미널"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "찾으시는 페이지가 삭제되었거나, 이름이 변경되었거나, 일시적으로 사용할 수 없습니다."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "이 페이지는 아직 번역되지 않아 영어로 표시됩니다."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "메뉴 전환"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "트래커"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Orchestrator 사용하기"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "워크스페이스"

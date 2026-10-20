@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: tr\n"
+
+msgid "{name} Docs"
+msgstr "{name} Belgeleri"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator Belgeleri"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Ajanlar"
+
+msgid "Back to the docs home"
+msgstr "Belgelerin ana sayfasına dön"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Yerleşik özellikler"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Dil seçin"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Aramayı kapat"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Kenar çubuğunu kapat"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Kenar çubuğunu daralt"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Yapılandırma"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Kopyalandı"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Kodu kopyala"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Bu bölümün bağlantısını kopyala"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Başlarken"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Kılavuzlar"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Yardım"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Kenar çubuğunu gizle"
+
+msgid "Main site"
+msgstr "Ana site"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Sonraki"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Başlık yok"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Sonuç bulunamadı"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Bildirimler"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Bu sayfada"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Aramayı aç"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Kenar çubuğunu aç"
+
+msgid "Page not found"
+msgstr "Sayfa bulunamadı"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Önceki"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Başvuru"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Çalışma ortamları"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Ara"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Kenar çubuğunu göster"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "İçindekiler"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminaller"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "Aradığınız sayfa kaldırılmış, adı değiştirilmiş veya geçici olarak kullanılamıyor olabilir."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Bu sayfa henüz çevrilmedi, bu yüzden İngilizce gösteriliyor."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Menüyü aç/kapat"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Takip araçları"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Orchestrator'ı kullanma"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Çalışma alanları"

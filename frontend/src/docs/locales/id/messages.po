@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: id\n"
+
+msgid "{name} Docs"
+msgstr "Dokumentasi {name}"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Dokumentasi Agent Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agen"
+
+msgid "Back to the docs home"
+msgstr "Kembali ke beranda dokumentasi"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Kemampuan bawaan"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Pilih bahasa"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Tutup pencarian"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Tutup bilah samping"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Ciutkan bilah samping"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Konfigurasi"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Disalin"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Salin kode"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Salin tautan ke bagian ini"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Memulai"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Panduan"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Bantuan"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Sembunyikan bilah samping"
+
+msgid "Main site"
+msgstr "Situs utama"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Berikutnya"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Tidak ada judul"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Tidak ada hasil"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Notifikasi"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Di halaman ini"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Buka pencarian"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Buka bilah samping"
+
+msgid "Page not found"
+msgstr "Halaman tidak ditemukan"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Sebelumnya"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Referensi"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Runtime"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Cari"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Tampilkan bilah samping"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Daftar isi"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminal"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "Halaman yang Anda cari mungkin telah dihapus, diganti namanya, atau untuk sementara tidak tersedia."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Halaman ini belum diterjemahkan, jadi ditampilkan dalam bahasa Inggris."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Buka/tutup menu"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Pelacak"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Menggunakan Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Ruang kerja"

@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: ru\n"
+
+msgid "{name} Docs"
+msgstr "Документация {name}"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Документация Agent Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Агенты"
+
+msgid "Back to the docs home"
+msgstr "Вернуться на главную страницу документации"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Встроенные возможности"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Выберите язык"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Закрыть поиск"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Закрыть боковую панель"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Свернуть боковую панель"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Настройка"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Скопировано"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Копировать код"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Копировать ссылку на этот раздел"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Начало работы"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Руководства"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Помощь"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Скрыть боковую панель"
+
+msgid "Main site"
+msgstr "Основной сайт"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Далее"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Нет заголовков"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Ничего не найдено"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Уведомления"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "На этой странице"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Открыть поиск"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Открыть боковую панель"
+
+msgid "Page not found"
+msgstr "Страница не найдена"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Назад"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Справочник"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Среды выполнения"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Поиск"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Показать боковую панель"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Содержание"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Терминалы"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "Возможно, страница, которую вы ищете, была удалена, переименована или временно недоступна."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Эта страница ещё не переведена, поэтому показана на английском."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Показать или скрыть меню"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Трекеры"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Работа с Orchestrator"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Рабочие пространства"

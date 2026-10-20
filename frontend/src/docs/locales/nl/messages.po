@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: nl\n"
+
+msgid "{name} Docs"
+msgstr "{name}-documentatie"
+
+msgid "{title} | Agent Orchestrator Docs"
+msgstr "{title} | Agent Orchestrator-documentatie"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agents"
+
+msgid "Back to the docs home"
+msgstr "Terug naar de startpagina van de documentatie"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Ingebouwde functies"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Kies een taal"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Zoeken sluiten"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Zijbalk sluiten"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Zijbalk samenvouwen"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Configuratie"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Gekopieerd"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Code kopiëren"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Link naar deze sectie kopiëren"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Aan de slag"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Handleidingen"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Hulp"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Zijbalk verbergen"
+
+msgid "Main site"
+msgstr "Hoofdsite"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Volgende"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Geen koppen"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Geen resultaten gevonden"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Meldingen"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Op deze pagina"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Zoeken openen"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Zijbalk openen"
+
+msgid "Page not found"
+msgstr "Pagina niet gevonden"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Vorige"
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Naslag"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Runtimes"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Zoeken"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Zijbalk tonen"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Inhoudsopgave"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminals"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "De pagina die je zoekt is mogelijk verwijderd, hernoemd of tijdelijk niet beschikbaar."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Deze pagina is nog niet vertaald en wordt daarom in het Engels getoond."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Menu in- of uitklappen"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Trackers"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Orchestrator gebruiken"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Werkruimtes"

@@ -4,12 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build --webpack",
-    "start": "next start"
+    "dev": "npm run i18n:compile && next dev",
+    "build": "npm run i18n:compile && next build --webpack",
+    "start": "next start",
+    "i18n:extract": "lingui extract --clean --overwrite",
+    "i18n:compile": "lingui compile --strict --typescript",
+    "check:i18n": "npm run i18n:extract && npm run i18n:compile"
   },
   "dependencies": {
     "@fumadocs/satteri": "^0.3.1",
+    "@lingui/core": "6.8.0",
+    "@lingui/react": "6.8.0",
     "@types/mdast": "^4.0.4",
     "fumadocs-core": "^16.13.0",
     "fumadocs-mdx": "^15.2.0",
@@ -25,6 +30,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@lingui/cli": "6.8.0",
+    "@lingui/format-po": "6.8.0",
+    "@lingui/swc-plugin": "6.6.0",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/mdx": "^2.0.13",
     "@types/node": "^24.12.0",
