@@ -16,7 +16,10 @@ export function EnglishArticleNotice() {
   );
 }
 
-/** Keeps the tab title in the interface language. The prerendered title is English. */
+/**
+ * Keeps the tab title in the interface language. The prerendered title is
+ * English. `title` is shown as given, so pass it already translated if needed.
+ */
 export function LocalizedTitle({ title }: { title: string }) {
   const { i18n } = useLingui();
   useEffect(() => {

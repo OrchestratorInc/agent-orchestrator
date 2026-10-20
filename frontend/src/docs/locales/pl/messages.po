@@ -150,7 +150,7 @@ msgstr "Systemy śledzenia zgłoszeń"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
-msgstr "Korzystanie z Orchestrator"
+msgstr "Korzystanie z Orchestratora"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

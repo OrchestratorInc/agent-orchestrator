@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 
 // Sets <html lang> from the saved language before first paint, ahead of
 // hydration, so assistive tech and the browser see the right language.
-const SET_LANG = `try{var m=document.cookie.match(/(?:^|; )${LOCALE_COOKIE}=([^;]*)/);var l=m&&decodeURIComponent(m[1]);if(${JSON.stringify(SUPPORTED_LOCALES)}.indexOf(l)>-1)document.documentElement.lang=l}catch(e){}`;
+const SET_LANG = `try{var m=document.cookie.match(/(?:^|; )${LOCALE_COOKIE}=([^;]*)/);var l=m&&m[1];if(${JSON.stringify(SUPPORTED_LOCALES)}.indexOf(l)>-1)document.documentElement.lang=l}catch(e){}`;
 
 export default function Layout({ children }: { children: ReactNode }) {
   return (

@@ -25,26 +25,34 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
  * language is applied after hydration, and the switcher changes it in place.
  */
 export function Providers({ children }: { children: ReactNode }) {
-  // Starts in English so the first render matches the prerendered HTML.
-  const [locale, setLocale] = useState<SupportedLocale>(DEFAULT_LOCALE);
+  // Null until the cookie is read. Renders in English meanwhile, so the
+  // first render matches the prerendered HTML.
+  const [saved, setSaved] = useState<SupportedLocale | null>(null);
+  const locale = saved ?? DEFAULT_LOCALE;
 
   useEffect(() => {
-    setLocale(readLocaleCookie(document.cookie));
+    setSaved(readLocaleCookie(document.cookie));
   }, []);
 
+  // The inline head script already set <html lang> from the cookie, so
+  // only write it once the cookie has been read.
   useEffect(() => {
-    document.documentElement.lang = locale;
-  }, [locale]);
+    if (saved) document.documentElement.lang = saved;
+  }, [saved]);
 
   const i18n = useMemo(
     () => setupI18n({ locale, messages: { [locale]: CATALOGS[locale] } }),
     [locale],
   );
+  const translations = useMemo(() => frameworkTranslations(i18n), [i18n]);
 
   const changeLocale = useCallback((next: string) => {
     if (!isSupportedLocale(next)) return;
-    document.cookie = `${LOCALE_COOKIE}=${encodeURIComponent(next)}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
-    setLocale(next);
+    document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
+    setSaved(next);
+    // The page does not navigate, so close the language menu the way
+    // pressing Escape would.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   }, []);
 
   return (
@@ -55,7 +63,7 @@ export function Providers({ children }: { children: ReactNode }) {
         i18n={{
           locale,
           locales: LOCALE_ITEMS,
-          translations: frameworkTranslations(i18n),
+          translations,
           onLocaleChange: changeLocale,
         }}
       >

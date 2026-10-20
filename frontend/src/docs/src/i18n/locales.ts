@@ -56,8 +56,8 @@ export function readLocaleCookie(cookie: string): SupportedLocale {
   for (const part of cookie.split(";")) {
     const [name, value = ""] = part.trim().split("=");
     if (name === LOCALE_COOKIE) {
-      const locale = decodeURIComponent(value);
-      return isSupportedLocale(locale) ? locale : DEFAULT_LOCALE;
+      // Supported values never need decoding; anything else is ignored.
+      return isSupportedLocale(value) ? value : DEFAULT_LOCALE;
     }
   }
   return DEFAULT_LOCALE;

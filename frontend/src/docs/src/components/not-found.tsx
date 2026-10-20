@@ -1,11 +1,14 @@
 "use client";
 
-import { Trans } from "@lingui/react/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import Link from "next/link";
+import { LocalizedTitle } from "./page-locale";
 
 export function NotFound() {
+  const { t } = useLingui();
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col items-start justify-center gap-4 px-4">
+      <LocalizedTitle title={t`Page not found`} />
       <h1 className="text-2xl font-semibold text-foreground">
         <Trans>Page not found</Trans>
       </h1>
