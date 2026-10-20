@@ -65,6 +65,7 @@ func (*Plugin) Manifest() adapters.Manifest {
 // ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	timedOut := false
+	var unconfirmed []string
 	// Probe only the official installers' locations. A PATH-first --version probe
 	// would execute an unrelated earlier binary during passive agent discovery.
 	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
@@ -76,30 +77,64 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.cmd"}},
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}},
 	}, ValidateIdentity: func(ctx context.Context, path string) bool {
-		// A fresh install's first launch compiles Hermes's Python bytecode, which
-		// can take far longer than a warm run; the probe must outlast it.
-		probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-		cmd := aoprocess.CommandContext(probeCtx, path, "--version")
-		aoprocess.ConfigureTreeCancellation(cmd)
-		cmd.WaitDelay = 100 * time.Millisecond
-		b, err := cmd.CombinedOutput()
-		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
-			timedOut = true
-			return false
+		// Retry once: a probe can fail transiently on a loaded machine.
+		var reason string
+		for range 2 {
+			ok, why, timeout := probeNativeVersion(ctx, path)
+			if ok {
+				return true
+			}
+			if timeout {
+				timedOut = true
+				return false
+			}
+			if ctx.Err() != nil {
+				return false
+			}
+			reason = why
 		}
-		if probeCtx.Err() != nil {
-			return false
-		}
-		firstLine, _, _ := strings.Cut(string(b), "\n")
-		return err == nil && supportedNativeVersion(strings.TrimSuffix(firstLine, "\r"))
+		unconfirmed = append(unconfirmed, path+": "+reason)
+		return false
 	}})
 	// A slow probe is not proof of absence: report the timeout so readiness
 	// retries instead of recording Hermes as not installed.
 	if err != nil && timedOut {
 		return "", fmt.Errorf("hermes: native identity check timed out: %w", context.DeadlineExceeded)
 	}
+	// An executable at an official install location that will not confirm its
+	// version is present but unverified, not absent.
+	if errors.Is(err, ports.ErrAgentBinaryNotFound) && len(unconfirmed) > 0 {
+		return "", fmt.Errorf("hermes: %s: %w", strings.Join(unconfirmed, "; "), ports.ErrAgentBinaryIdentityUnknown)
+	}
 	return path, err
+}
+
+// probeNativeVersion runs `hermes --version` and checks its banner. It reports
+// why a probe that ran was rejected, and whether it hit its own deadline.
+func probeNativeVersion(ctx context.Context, path string) (ok bool, reason string, timedOut bool) {
+	// A fresh install's first launch compiles Hermes's Python bytecode, which
+	// can take far longer than a warm run; the probe must outlast it.
+	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	cmd := aoprocess.CommandContext(probeCtx, path, "--version")
+	aoprocess.ConfigureTreeCancellation(cmd)
+	cmd.WaitDelay = 100 * time.Millisecond
+	b, err := cmd.CombinedOutput()
+	if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+		return false, "", true
+	}
+	firstLine, _, _ := strings.Cut(string(b), "\n")
+	firstLine = strings.TrimSuffix(firstLine, "\r")
+	if err == nil && supportedNativeVersion(firstLine) {
+		return true, "", false
+	}
+	if len(firstLine) > 120 {
+		firstLine = firstLine[:120]
+	}
+	if err != nil {
+		return false, fmt.Sprintf("version probe failed (%v): %q", err, firstLine), false
+	}
+	return false, fmt.Sprintf("unsupported version banner %q", firstLine), false
 }
 
 // minNativeVersion is the first release with the --continue <title>
