@@ -92,6 +92,60 @@ func TestFXCatalogDoesNotWarnForConnectionsNeverSetUp(t *testing.T) {
 	}
 }
 
+func TestFXCatalogLegacySavedModels(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		settings    string
+		unavailable string
+	}{
+		{"codex", `{"provider":"gateway","codex_model":"gpt-5.4-mini"}`, "codex"},
+		{"grok", `{"provider":"gateway","grok_model":"grok-4"}`, "grok"},
+		{"both", `{"codex_model":"gpt-5.4-mini","grok_model":"grok-4"}`, "codex,grok"},
+		{"blank legacy models", `{"codex_model":" ","grok_model":""}`, ""},
+		{"new map overrides legacy", `{"codex_model":"gpt-5.4-mini","grok_model":"grok-4","models":{"codex":"","grok":" "}}`, ""},
+		{"new map preserves other legacy providers", `{"codex_model":"gpt-5.4-mini","grok_model":"grok-4","models":{"codex":""}}`, "grok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, statusFails := range []bool{false, true} {
+				name := "status without connections"
+				if statusFails {
+					name = "status fails"
+				}
+				t.Run(name, func(t *testing.T) {
+					home := t.TempDir()
+					if err := os.MkdirAll(filepath.Join(home, ".fx"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(home, ".fx", "settings.json"), []byte(tc.settings), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					run := func(_ context.Context, _ string, args []string, _ string, env map[string]string) ([]byte, error) {
+						if strings.Join(args, " ") == "status --json" && !statusFails {
+							return []byte(`{"kind":"status"}`), nil
+						}
+						if strings.Join(args, " ") == "models --json" && env["FX_PROVIDER"] == "gateway" {
+							return []byte(`{"ids":["openai/gpt-5.2"]}`), nil
+						}
+						return nil, errors.New("offline")
+					}
+					got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": home}}, run)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got.Metadata["unavailableProviders"] != tc.unavailable {
+						t.Fatalf("unavailable providers = %q, want %q", got.Metadata["unavailableProviders"], tc.unavailable)
+					}
+					for _, provider := range []string{"codex", "grok"} {
+						if strings.Contains(got.Warning, provider) != strings.Contains(tc.unavailable, provider) {
+							t.Fatalf("warning = %q, want unavailable providers %q", got.Warning, tc.unavailable)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestFXCatalogRetainsProviderListWithoutLogin(t *testing.T) {
 	run := func(_ context.Context, _ string, _ []string, _ string, _ map[string]string) ([]byte, error) {
 		return nil, errors.New("offline")

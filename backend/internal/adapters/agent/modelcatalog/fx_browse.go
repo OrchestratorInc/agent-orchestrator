@@ -31,9 +31,11 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	result.FetchedAt = time.Now().UTC()
 	result.Providers = []string{"gateway", "codex", "grok"}
 	var settings struct {
-		Provider  string            `json:"provider"`
-		Models    map[string]string `json:"models"`
-		Providers map[string]struct {
+		Provider   string            `json:"provider"`
+		Models     map[string]string `json:"models"`
+		CodexModel string            `json:"codex_model"`
+		GrokModel  string            `json:"grok_model"`
+		Providers  map[string]struct {
 			ModelMetadata map[string]struct {
 				ContextWindow int64 `json:"context_window"`
 			} `json:"model_metadata"`
@@ -78,7 +80,12 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	// fails for connections the user never set up (Grok without a selected
 	// model, for example); that is not worth a warning.
 	setUp := map[string]bool{"gateway": true, settings.Provider: true}
+	// FX still reads the legacy keys; entries in models take precedence.
+	savedModels := map[string]string{"codex": settings.CodexModel, "grok": settings.GrokModel}
 	for provider, model := range settings.Models {
+		savedModels[provider] = model
+	}
+	for provider, model := range savedModels {
 		if strings.TrimSpace(model) != "" {
 			setUp[provider] = true
 		}
