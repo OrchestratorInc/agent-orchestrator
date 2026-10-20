@@ -75,6 +75,10 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 		switch strings.ToLower(value) {
 		case "", "(not set)", "none", "(none)", "not configured":
 			return "", ports.AgentAuthStatusUnauthorized
+		case "auto":
+			// Hermes prints the requested provider when resolving credentials
+			// fails, so "Auto" is no evidence either way.
+			return "", ports.AgentAuthStatusUnknown
 		}
 		return value, ports.AgentAuthStatusConfigured
 	}

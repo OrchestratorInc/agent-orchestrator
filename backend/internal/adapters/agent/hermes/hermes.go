@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -26,7 +27,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -36,7 +36,8 @@ import (
 // Plugin supervises the official native interactive terminal.
 type Plugin struct{ agentbase.Base }
 
-// Revalidate these chrome markers whenever the supported native version range changes.
+// Revalidate these chrome markers whenever qualifiedReleaseLines changes. AO
+// launches Hermes with HERMES_LANGUAGE=en so the busy placeholder is English.
 const (
 	nativePrompt         = "❯"
 	nativeNamedPrompt    = "☤ ❯"
@@ -66,22 +67,16 @@ func (*Plugin) Manifest() adapters.Manifest {
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	timedOut := false
 	var unconfirmed []string
-	// Probe only the official installers' locations. A PATH-first --version probe
-	// would execute an unrelated earlier binary during passive agent discovery.
-	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
-		{".local", "bin", "hermes"},
-		{".hermes", "hermes-agent", ".hermes", "bin", "hermes"},
-		{".hermes", "hermes-agent", ".venv", "bin", "hermes"},
-	}, WinPaths: []binaryutil.WinPath{
-		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.exe"}},
-		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.cmd"}},
-		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}},
-	}, ValidateIdentity: func(ctx context.Context, path string) bool {
+	validate := func(ctx context.Context, path string) bool {
+		if identityConfirmed(path) {
+			return true
+		}
 		// Retry once: a probe can fail transiently on a loaded machine.
 		var reason string
 		for range 2 {
 			ok, why, timeout := probeNativeVersion(ctx, path)
 			if ok {
+				rememberIdentity(path)
 				return true
 			}
 			if timeout {
@@ -95,7 +90,27 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		}
 		unconfirmed = append(unconfirmed, path+": "+reason)
 		return false
-	}})
+	}
+	// The official installers publish launchers under a custom HERMES_HOME.
+	for _, candidate := range customHomeCandidates() {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() && validate(ctx, candidate) {
+			return candidate, nil
+		}
+	}
+	// Probe only the official installers' locations. A PATH-first --version probe
+	// would execute an unrelated earlier binary during passive agent discovery.
+	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
+		{".local", "bin", "hermes"},
+		{".hermes", "hermes-agent", ".hermes", "bin", "hermes"},
+		{".hermes", "hermes-agent", ".venv", "bin", "hermes"},
+	}, WinPaths: []binaryutil.WinPath{
+		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.exe"}},
+		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.cmd"}},
+		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}},
+	}, ValidateIdentity: validate})
 	// A slow probe is not proof of absence: report the timeout so readiness
 	// retries instead of recording Hermes as not installed.
 	if err != nil && timedOut {
@@ -107,6 +122,64 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("hermes: %s: %w", strings.Join(unconfirmed, "; "), ports.ErrAgentBinaryIdentityUnknown)
 	}
 	return path, err
+}
+
+// customHomeCandidates are the launchers the official installers publish when
+// HERMES_HOME is not the platform default.
+func customHomeCandidates() []string {
+	home, err := resolveHome(nil)
+	if err != nil {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		if local := os.Getenv("LOCALAPPDATA"); local != "" && strings.EqualFold(filepath.Clean(home), filepath.Join(local, "hermes")) {
+			return nil
+		}
+		return []string{filepath.Join(home, "bin", "hermes.exe"), filepath.Join(home, "bin", "hermes.cmd"), filepath.Join(home, "hermes-agent", "venv", "Scripts", "hermes.exe")}
+	}
+	if userHome, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == filepath.Join(userHome, ".hermes") {
+		return nil
+	}
+	return []string{filepath.Join(home, "hermes-agent", ".hermes", "bin", "hermes")}
+}
+
+// confirmedIdentities remembers launchers whose --version banner passed, keyed
+// by path and the resolved file's identity, so spawn and restore reuse the
+// background readiness probe instead of waiting on another Python start.
+var confirmedIdentities sync.Map
+
+type binaryIdentity struct {
+	target  string
+	size    int64
+	modTime time.Time
+}
+
+func currentIdentity(path string) (binaryIdentity, bool) {
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return binaryIdentity{}, false
+	}
+	st, err := os.Stat(target)
+	if err != nil {
+		return binaryIdentity{}, false
+	}
+	return binaryIdentity{target: target, size: st.Size(), modTime: st.ModTime()}, true
+}
+
+func identityConfirmed(path string) bool {
+	current, ok := currentIdentity(path)
+	if !ok {
+		return false
+	}
+	remembered, found := confirmedIdentities.Load(path)
+	identity, ok := remembered.(binaryIdentity)
+	return found && ok && identity == current
+}
+
+func rememberIdentity(path string) {
+	if current, ok := currentIdentity(path); ok {
+		confirmedIdentities.Store(path, current)
+	}
 }
 
 // probeNativeVersion runs `hermes --version` and checks its banner. It reports
@@ -134,33 +207,35 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	if err != nil {
 		return false, fmt.Sprintf("version probe failed (%v): %q", err, firstLine), false
 	}
-	return false, fmt.Sprintf("unsupported version banner %q", firstLine), false
+	return false, fmt.Sprintf("version banner %q is not a Hermes release line AO has qualified", firstLine), false
 }
 
-// minNativeVersion is the first release line with the --continue <title>
-// --create-if-missing session flags and classic CLI chrome AO drives. Only
-// major.minor is compared: Hermes derives its banner from git tags, so the
-// same build can report v0.21.6 or v0.21.5+N.g<sha> depending on which tags a
-// checkout under HERMES_HOME has.
-var minNativeVersion = [2]int{0, 21}
+// qualifiedReleaseLines are the major.minor release lines whose composer,
+// busy, modal and transcript chrome AO's terminal detection was checked
+// against (v0.21.6 on Linux, v0.22.2 on macOS). A newer line stays installed
+// but unverified until its markers are revalidated. Only major.minor is
+// compared: Hermes derives its banner from git tags, so the same build can
+// report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
+var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
 
-// supportedNativeVersion accepts a Hermes --version first line whose release
-// line is at or above minNativeVersion.
+// supportedNativeVersion accepts a Hermes --version first line from a
+// qualified release line.
 func supportedNativeVersion(line string) bool {
 	m := nativeVersionLine.FindStringSubmatch(line)
 	if m == nil {
 		return false
 	}
-	for i, min := range minNativeVersion {
-		part, err := strconv.Atoi(m[i+1])
-		if err != nil {
-			return false
-		}
-		if part != min {
-			return part > min
+	major, errMajor := strconv.Atoi(m[1])
+	minor, errMinor := strconv.Atoi(m[2])
+	if errMajor != nil || errMinor != nil {
+		return false
+	}
+	for _, release := range qualifiedReleaseLines {
+		if release == [2]int{major, minor} {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // GetConfigSpec implements the scoped native adapter contract.
@@ -273,28 +348,55 @@ func sessionTitle(data, id string) (string, error) {
 // resolveHome mirrors Hermes's own HERMES_HOME default: ~/.hermes on macOS and
 // Linux, %LOCALAPPDATA%\hermes on Windows. The launch env wins over the daemon's.
 func resolveHome(env map[string]string) (string, error) {
-	if runtime.GOOS != "windows" {
-		return nativeconfig.Resolve(env, "HERMES_HOME", ".hermes")
+	lookup := func(key string) string {
+		if value, ok := env[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
 	}
-	value, ok := env["HERMES_HOME"]
-	if !ok {
-		value = os.Getenv("HERMES_HOME")
-	}
-	if dir := strings.TrimSpace(value); dir != "" {
-		return filepath.Clean(dir), nil
-	}
-	local := strings.TrimSpace(env["LOCALAPPDATA"])
-	if local == "" {
-		local = os.Getenv("LOCALAPPDATA")
-	}
-	if local == "" {
-		home, err := os.UserHomeDir()
+	if dir := strings.TrimSpace(lookup("HERMES_HOME")); dir != "" {
+		expanded, err := expandNativePath(dir, lookup)
 		if err != nil {
 			return "", err
 		}
-		local = filepath.Join(home, "AppData", "Local")
+		return filepath.Clean(expanded), nil
 	}
-	return filepath.Join(local, "hermes"), nil
+	if runtime.GOOS == "windows" {
+		local := strings.TrimSpace(lookup("LOCALAPPDATA"))
+		if local == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			local = filepath.Join(home, "AppData", "Local")
+		}
+		return filepath.Join(local, "hermes"), nil
+	}
+	home := strings.TrimSpace(lookup("HOME"))
+	if home == "" {
+		var err error
+		if home, err = os.UserHomeDir(); err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(home, ".hermes"), nil
+}
+
+// expandNativePath applies Hermes's HERMES_HOME expansion (a leading ~, then
+// $VAR / ${VAR}) against the child environment, so AO reads and records the
+// same directory Hermes writes its state to.
+func expandNativePath(value string, lookup func(string) string) (string, error) {
+	if value == "~" || strings.HasPrefix(value, "~/") || strings.HasPrefix(value, `~\`) {
+		home := strings.TrimSpace(lookup("HOME"))
+		if home == "" {
+			var err error
+			if home, err = os.UserHomeDir(); err != nil {
+				return "", err
+			}
+		}
+		value = home + value[1:]
+	}
+	return os.Expand(value, lookup), nil
 }
 
 // GetAgentHooks only supplies process-local additive native configuration. The
@@ -324,7 +426,20 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 			}
 		}
 	}
+	// Hermes loads <HERMES_HOME>/.env with override before reading these, so a
+	// value there would silently replace AO's instructions or chrome language.
+	for _, key := range dotenvKeys(filepath.Join(home, ".env")) {
+		switch key {
+		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
+			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, filepath.Join(home, ".env"))
+		case "HERMES_LANGUAGE":
+			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, filepath.Join(home, ".env"))
+		}
+	}
 	cfg.Env["HERMES_HOME"] = home
+	// AO reads Hermes's English composer and busy chrome; HERMES_LANGUAGE
+	// outranks display.language for this process only.
+	cfg.Env["HERMES_LANGUAGE"] = "en"
 	original, exists := cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"]
 	if !exists {
 		original = cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
@@ -381,6 +496,23 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
 }
+
+// dotenvKeys lists the variable names a dotenv file assigns, never values.
+func dotenvKeys(path string) []string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var keys []string
+	for _, line := range strings.Split(string(b), "\n") {
+		key, _, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
+		if key = strings.TrimSpace(key); ok && key != "" && !strings.HasPrefix(key, "#") {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
 func nativeOverlay(config map[string]any) string {
 	agent, _ := config["agent"].(map[string]any)
 	display, _ := config["display"].(map[string]any)
@@ -556,6 +688,20 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 			(terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativePrompt) ||
 				terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativeNamedPrompt)) {
 			return domain.ActivityIdle, true
+		}
+	}
+	// Below 64 columns Hermes hides the bottom input rule. Accept that compact
+	// composer only when the prompt row is the last line, directly under the top
+	// rule, and classify it as if the hidden rule were drawn.
+	if last >= 1 {
+		prompt, upper := strings.TrimSpace(lines[last]), strings.TrimSpace(lines[last-1])
+		if (strings.HasPrefix(prompt, nativePrompt) || strings.HasPrefix(prompt, nativeNamedPrompt)) &&
+			len([]rune(upper)) >= 16 && strings.Trim(upper, "─") == "" {
+			closed := strings.TrimRight(composerOutput, "\n") + "\n" + upper
+			if terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(closed, nativePrompt) ||
+				terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(closed, nativeNamedPrompt) {
+				return domain.ActivityIdle, true
+			}
 		}
 	}
 	for i := last; i >= 0 && i >= last-4; i-- {

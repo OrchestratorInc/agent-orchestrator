@@ -42,7 +42,7 @@ func versionSchemeFor(target Target) versionScheme {
 	}
 }
 
-var hermesVersionToken = regexp.MustCompile(`^Hermes Agent (v[0-9][^ \r\n]*)`)
+var hermesVersionToken = regexp.MustCompile(`^Hermes Agent (v\d[^ \r\n]*)`)
 
 // installedVersionText narrows a version probe's output to the text naming the
 // installed release. Hermes's --version also prints its release date and its
@@ -52,8 +52,8 @@ func installedVersionText(target Target, resolvedPath, output string) string {
 	if target != TargetHermes {
 		return output
 	}
-	if real, err := filepath.EvalSymlinks(resolvedPath); err == nil {
-		parts := strings.Split(filepath.ToSlash(real), "/")
+	if resolved, err := filepath.EvalSymlinks(resolvedPath); err == nil {
+		parts := strings.Split(filepath.ToSlash(resolved), "/")
 		for i := 0; i+2 < len(parts); i++ {
 			if parts[i] == "Cellar" && parts[i+1] == "hermes-agent" {
 				return parts[i+2]

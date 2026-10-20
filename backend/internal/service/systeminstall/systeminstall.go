@@ -800,7 +800,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
-			baseline = &installedBaseline{scheme: versionSchemeFor(target)}
+			baseline = &installedBaseline{target: target, scheme: versionSchemeFor(target)}
 		}
 		// An update never moves the installed copy backwards.
 		if versionAtMost(baseline.scheme, expected, baseline.version) {

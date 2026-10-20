@@ -481,8 +481,9 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			admission.handleID = rec.Metadata.RuntimeHandleID
 			admission.launchID = rec.Metadata.RuntimeLaunchID
 			if err := m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, message); err != nil {
-				admission.pending = ""
-				return err
+				// A runtime may report an error after applying input, so a failed write
+				// stays pending until a native witness or a new runtime generation.
+				return fmt.Errorf("session %s: terminal submission may have been written: %w", id, err)
 			}
 			// A socket write acknowledgement precedes native acceptance. Hold admission
 			// until the adapter witnesses submission through busy chrome or a committed

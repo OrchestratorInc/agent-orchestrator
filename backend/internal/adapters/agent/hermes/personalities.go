@@ -1,4 +1,5 @@
-// Native v0.21.6 personality definitions, from NousResearch/hermes-agent (MIT).
+// Native built-in personality definitions, from NousResearch/hermes-agent
+// v0.21.6 (MIT); a user's config.yaml personalities override them.
 // AO preserves the exact text only for a native personality selected in the
 // user's configuration; this adapter does not select a personality itself.
 package hermes

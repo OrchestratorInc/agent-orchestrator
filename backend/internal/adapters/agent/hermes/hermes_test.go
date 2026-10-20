@@ -195,7 +195,7 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 
 func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 	// Source installs append a date, channel, or commit; Homebrew and desktop
-	// bundles report the release. Every v0.21 or later release line is accepted.
+	// bundles report the release. Only the qualified v0.21 and v0.22 lines are accepted.
 	for _, line := range []string{
 		"Hermes Agent v0.21.6",
 		"Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be",
@@ -204,15 +204,14 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 		"Hermes Agent v0.21.7 (2026.9.24) · local 1a2b3c4d (+2 carried commits)",
 		"Hermes Agent v0.22.2 · stable · d923a5e",
 		"Hermes Agent v0.22.0+3.gabc1234 (2026.9.24)",
-		"Hermes Agent v0.23.0",
-		"Hermes Agent v1.0.0",
 	} {
 		if !supportedNativeVersion(line) {
 			t.Fatalf("rejected supported native banner %q", line)
 		}
 	}
 
-	for _, output := range []string{"Hermes Agent v0.20.9", "Hermes Agent v0.19.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
+	// Release lines whose chrome AO has not qualified stay unverified.
+	for _, output := range []string{"Hermes Agent v0.20.9", "Hermes Agent v0.23.0", "Hermes Agent v1.0.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
 		first, _, _ := strings.Cut(output, "\n")
 		if supportedNativeVersion(first) {
 			t.Fatalf("accepted version %q", output)
@@ -570,6 +569,8 @@ func TestProviderFromStatusReadsActiveProvider(t *testing.T) {
 	}{
 		{"configured provider", "  Model:        (not set)\n  Provider:     OpenAI API\n  Providers:    OpenAI API, Anthropic\n", "OpenAI API", ports.AgentAuthStatusConfigured},
 		{"no provider", "  Model:        (not set)\n  Provider:     (not set)\n", "", ports.AgentAuthStatusUnauthorized},
+		// Hermes falls back to the requested "auto" when credential resolution fails.
+		{"auto fallback", "  Provider:     Auto\n", "", ports.AgentAuthStatusUnknown},
 		{"unrecognized output", "Hermes Agent Status\n", "", ports.AgentAuthStatusUnknown},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -616,5 +617,58 @@ func TestUnattendedReleaseRefreshRemainsGated(t *testing.T) {
 	var capability ports.AgentTerminalVersionRefresher = New()
 	if capability.SupportsTerminalVersionRefresh() {
 		t.Fatal("pinned Hermes native identity does not qualify unattended release changes")
+	}
+}
+
+func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"HERMES_HOME": home}
+	if err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"}); err != nil {
+		t.Fatal(err)
+	}
+	if env["HERMES_LANGUAGE"] != "en" {
+		t.Fatalf("HERMES_LANGUAGE = %q, want en", env["HERMES_LANGUAGE"])
+	}
+	for _, key := range []string{"HERMES_EPHEMERAL_SYSTEM_PROMPT", "HERMES_LANGUAGE"} {
+		if err := os.WriteFile(filepath.Join(home, ".env"), []byte("OPENROUTER_API_KEY=x\nexport "+key+"=native\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s in .env accepted: %v", key, err)
+		}
+	}
+}
+
+func TestResolveHomeExpandsLikeHermes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX home expansion")
+	}
+	home := t.TempDir()
+	got, err := resolveHome(map[string]string{"HOME": home, "HERMES_HOME": "~/.hermes-custom"})
+	if err != nil || got != filepath.Join(home, ".hermes-custom") {
+		t.Fatalf("resolveHome(~) = %q, %v", got, err)
+	}
+	got, err = resolveHome(map[string]string{"HOME": home, "HERMES_HOME": "$HOME/h-${SUFFIX}", "SUFFIX": "x"})
+	if err != nil || got != filepath.Join(home, "h-x") {
+		t.Fatalf("resolveHome($VAR) = %q, %v", got, err)
+	}
+}
+
+func TestCompactComposerBelow64ColumnsIsIdle(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	for _, tt := range []struct {
+		name, screen string
+		want         domain.ActivityState
+	}{
+		{"compact idle", "transcript\n" + rule + "\n☤ ❯ ", domain.ActivityIdle},
+		{"compact draft", "transcript\n" + rule + "\n☤ ❯ typed draft", domain.ActivityBlocked},
+		{"compact busy", "transcript\n" + rule + "\n☤ ❯ msg=interrupt · Ctrl+C cancel", domain.ActivityActive},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, ok := New().DetectTerminalActivity(tt.screen); !ok || got != tt.want {
+				t.Fatalf("DetectTerminalActivity = %s/%v, want %s", got, ok, tt.want)
+			}
+		})
 	}
 }

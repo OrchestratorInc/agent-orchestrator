@@ -154,13 +154,13 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 // and Linux, %LOCALAPPDATA%\hermes on Windows.
 func hermesConfigHome(home string, env map[string]string) string {
 	if root := envValue(env, "HERMES_HOME"); root != "" {
+		// Hermes expands a leading ~, then $VAR / ${VAR}.
 		if root == "~" {
-			return home
+			root = home
+		} else if strings.HasPrefix(root, "~/") && home != "" {
+			root = filepath.Join(home, root[2:])
 		}
-		if strings.HasPrefix(root, "~/") && home != "" {
-			return filepath.Join(home, root[2:])
-		}
-		return root
+		return os.Expand(root, func(key string) string { return envValue(env, key) })
 	}
 	if runtime.GOOS == "windows" {
 		if local := envValue(env, "LOCALAPPDATA"); local != "" {

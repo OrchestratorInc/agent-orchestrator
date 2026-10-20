@@ -117,7 +117,7 @@ func TestHermesEveryGuardedWriteRequiresCurrentEmptyComposer(t *testing.T) {
 	}
 }
 
-func TestHermesAdmissionRecoversAfterSendErrorWithNativeWitness(t *testing.T) {
+func TestHermesAdmissionKeepsPendingAfterAmbiguousSendError(t *testing.T) {
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -131,14 +131,23 @@ func TestHermesAdmissionRecoversAfterSendErrorWithNativeWitness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
-	runtime := &lineInputRuntime{screen: idle, sendErr: errors.New("tmux write failed")}
+	rule := strings.Repeat("─", 40)
+	idle := rule + "\n❯ \n" + rule
+	runtime := &lineInputRuntime{screen: idle, sendErr: errors.New("tmux acknowledged after applying input")}
 	messenger := newSessionMessenger(store, runtime, nil, lineAgentResolver{})
 	if err := messenger.Send(ctx, rec.ID, "first"); err == nil {
 		t.Fatal("write failure ignored")
 	}
+	// The write may have landed: an unchanged frame must not admit a retry.
 	runtime.sendErr = nil
-	runtime.nextScreen = "☤ ❯ msg=interrupt · Ctrl+C cancel"
+	if err := messenger.Send(ctx, rec.ID, "first"); err == nil || !strings.Contains(err.Error(), "prior terminal submission remains unconfirmed") {
+		t.Fatalf("ambiguous write admitted a retry: %v", err)
+	}
+	if len(runtime.messages) != 0 {
+		t.Fatalf("retry was written: %v", runtime.messages)
+	}
+	// Hermes's committed echo of the first write releases admission.
+	runtime.screen = rule + "\n● first\n" + rule + "\n" + idle
 	if err := messenger.Send(ctx, rec.ID, "second"); err != nil {
 		t.Fatalf("native submission witness did not release admission: %v", err)
 	}

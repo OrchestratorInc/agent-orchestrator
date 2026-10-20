@@ -307,3 +307,11 @@ func TestConfirmInstalledOwnerRefusesABrokenCopyAnotherMethodInstalled(t *testin
 		t.Fatalf("err = %v, want ErrInstallOwner for a copy uv does not own", err)
 	}
 }
+
+func TestUpdateOutcomeReadsHermesReleaseFromItsBanner(t *testing.T) {
+	baseline := &installedBaseline{target: TargetHermes, version: "0.21.6", latest: "0.22.2", scheme: versionSchemeFor(TargetHermes)}
+	output := "Hermes Agent v0.22.2 (2026.10.14) · upstream d923a5eb\nInstall directory: /x\nPython: 3.14.8\nOpenAI SDK: 2.24.0\n"
+	if failure, _ := updateOutcome(baseline, VerifyResult{ResolvedPath: "/missing/hermes", Output: output}); failure != "" {
+		t.Fatalf("Hermes update not verified: %s", failure)
+	}
+}
