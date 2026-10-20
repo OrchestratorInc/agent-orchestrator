@@ -51,6 +51,28 @@ func setReviewEnv(t *testing.T) testConfig {
 	return cfg
 }
 
+func TestReviewListShowsReviewersPerHead(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviewerHandleId": "review-mer-1",
+		"reviews": [{"prUrl": "https://github.com/o/r/pull/1", "prNumber": 1, "title": "Fix the gate", "targetSha": "sha1", "status": "running"}],
+		"runs": [
+			{"id": "run-1", "harness": "claude-code", "prUrl": "https://github.com/o/r/pull/1", "targetSha": "sha1", "status": "running", "triggerSource": "agent"},
+			{"id": "run-2", "harness": "codex", "prUrl": "https://github.com/o/r/pull/1", "targetSha": "sha1", "status": "complete", "verdict": "approved", "triggerSource": "manual"},
+			{"id": "run-3", "harness": "codex", "prUrl": "https://github.com/o/r/pull/1", "targetSha": "old", "status": "failed", "triggerSource": "auto"}
+		]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+
+	stdout, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(stdout, "2: claude-code (agent), codex (manual)") {
+		t.Fatalf("output = %q, want two reviewers per head with their trigger sources", stdout)
+	}
+}
+
 func TestReviewSubmitRejectsFileBody(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)

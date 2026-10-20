@@ -138,7 +138,8 @@ func TestTriggerRerunAddsAParallelReviewerWithoutStoppingTheRunningOne(t *testin
 		runs: []domain.ReviewRun{requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunRunning, domain.VerdictNone, 1)},
 	}
 	launcher := &fakeLauncher{alive: true, handle: "codex-pane"}
-	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	// Second opinions are opt-in per project; this project raised the cap.
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{cfg: domain.ProjectConfig{MaxReviewersPerHead: 2}}, launcher)
 
 	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Harness: domain.ReviewerCodex, Source: domain.ReviewTriggerAgent, Rerun: true})
 	if err != nil {
@@ -183,7 +184,8 @@ func TestTriggerReleasesAnIdleOtherReviewer(t *testing.T) {
 		runs: []domain.ReviewRun{requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1)},
 	}
 	launcher := &fakeLauncher{alive: true, handle: "codex-pane"}
-	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	// Second opinions are opt-in per project; this project raised the cap.
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{cfg: domain.ProjectConfig{MaxReviewersPerHead: 2}}, launcher)
 
 	if _, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Harness: domain.ReviewerCodex, Source: domain.ReviewTriggerAgent, Rerun: true}); err != nil {
 		t.Fatalf("TriggerWithOptions: %v", err)

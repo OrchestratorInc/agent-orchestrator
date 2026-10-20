@@ -467,6 +467,8 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_ALREADY_REVIEWED", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrPROwnedElsewhere):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_PR_OWNED_BY_OTHER_SESSION", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrReviewerLimitReached):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_LIMIT_REACHED", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):

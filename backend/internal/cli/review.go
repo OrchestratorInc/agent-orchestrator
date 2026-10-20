@@ -32,6 +32,7 @@ type reviewRun struct {
 	TargetSHA      string     `json:"targetSha"`
 	Status         string     `json:"status"`
 	Verdict        string     `json:"verdict"`
+	TriggerSource  string     `json:"triggerSource,omitempty"`
 	Body           string     `json:"body"`
 	PublishState   string     `json:"publishState"`
 	PublishError   string     `json:"publishError,omitempty"`
@@ -53,6 +54,7 @@ type reviewState struct {
 type listReviewsResponse struct {
 	ReviewerHandleID string        `json:"reviewerHandleId"`
 	Reviews          []reviewState `json:"reviews"`
+	Runs             []reviewRun   `json:"runs"`
 }
 
 // triggerReviewResponse mirrors controllers.TriggerReviewResponse: Created
@@ -592,7 +594,7 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tREVIEWERS\tTITLE"); err != nil {
 		return err
 	}
 	for _, review := range res.Reviews {
@@ -600,11 +602,45 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 		if review.LatestRun != nil && review.LatestRun.Verdict != "" {
 			verdict = review.LatestRun.Verdict
 		}
-		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title); err != nil {
+		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, reviewersOnHead(res.Runs, review.PRURL, review.TargetSHA), review.Title); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
+}
+
+// reviewersOnHead summarizes the distinct reviewers with a live or completed
+// pass on one PR head and the trigger source that added each, so `ao review ls`
+// answers "how many reviewers covered this head and who asked for them",
+// including when a project allows more than one per head.
+func reviewersOnHead(runs []reviewRun, prURL, targetSHA string) string {
+	var reviewers []string
+	seen := map[string]bool{}
+	for _, run := range runs {
+		if run.PRURL != prURL || run.TargetSHA != targetSHA {
+			continue
+		}
+		if run.Status != "running" && run.Verdict != "approved" && run.Verdict != "changes_requested" {
+			continue
+		}
+		harness := run.Harness
+		if harness == "" {
+			harness = "unknown"
+		}
+		if seen[harness] {
+			continue
+		}
+		seen[harness] = true
+		if run.TriggerSource != "" {
+			reviewers = append(reviewers, harness+" ("+run.TriggerSource+")")
+		} else {
+			reviewers = append(reviewers, harness)
+		}
+	}
+	if len(reviewers) == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d: %s", len(reviewers), strings.Join(reviewers, ", "))
 }
 
 func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error) {

@@ -135,7 +135,7 @@ ao review trigger [worker-session-id] [flags]
 | `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
-| `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |
+| `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running. A project allows one reviewer per head by default (`maxReviewersPerHead`); a second reviewer is rejected unless the project raised the cap | - |
 | `--no-inject` | Leave the session's review auto-inject setting unchanged | Auto-inject is turned on |
 
 AO fetches the session's PRs fresh from the provider before deciding what is
@@ -154,6 +154,15 @@ forwards those comments to the worker like any other review comments. An
 approval adds no comments, so check the verdict with `ao review ls`. If a run
 shows `failed` or `cancelled`, trigger again; nothing else reports it.
 
+A project allows one reviewer per PR head by default (`maxReviewersPerHead`).
+Adding a second reviewer on the same head is a documented second-opinion
+feature, but it is the owner's call: the daemon rejects the trigger with
+`REVIEWER_LIMIT_REACHED` while the cap is 1, and a worker must not add one
+without an explicit instruction in its task — report the rejection instead of
+retrying. Raise the cap in the project settings to make second opinions
+available. `ao review ls` shows how many reviewers cover each head and which
+trigger source (manual, agent, auto) added each.
+
 **Examples:**
 
 ```bash
@@ -168,5 +177,6 @@ ao review trigger mer-3 --agent codex --model gpt-5.5
 
 ```bash
 # Add a second opinion on the same commit while the first reviewer runs
+# (rejected with REVIEWER_LIMIT_REACHED unless the project raised maxReviewersPerHead)
 ao review trigger --agent claude-code --rerun
 ```

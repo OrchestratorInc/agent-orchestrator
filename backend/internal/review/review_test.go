@@ -1800,7 +1800,8 @@ func TestTriggerDuplicateFallbackUsesRequestedHarness(t *testing.T) {
 		}},
 	}
 	launcher := &fakeLauncher{handle: "review-mer-1"}
-	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	// Second opinions are opt-in per project; this project raised the cap.
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{cfg: domain.ProjectConfig{MaxReviewersPerHead: 2}}, launcher)
 
 	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 	if err != nil {
@@ -1843,10 +1844,12 @@ func TestTriggerIsIdempotentForSameCommit(t *testing.T) {
 	}
 }
 
-// Choosing a different reviewer is a request for a second opinion on this exact
-// commit. Before this, an approved commit was skipped before the harness was
-// even consulted, so the picker looked broken precisely when a user would reach
-// for it: pick another agent, nothing happens.
+// Choosing a different reviewer is a request for a second opinion on this
+// exact commit. Second opinions are opt-in per project: this project raised
+// maxReviewersPerHead above the default of one reviewer per head. Before this,
+// an approved commit was skipped before the harness was even consulted, so the
+// picker looked broken precisely when a user would reach for it: pick another
+// agent, nothing happens.
 func TestTriggerRunsAnotherHarnessOnAnAlreadyApprovedCommit(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
@@ -1857,7 +1860,7 @@ func TestTriggerRunsAnotherHarnessOnAnAlreadyApprovedCommit(t *testing.T) {
 		}},
 	}
 	launcher := &fakeLauncher{alive: true}
-	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{cfg: domain.ProjectConfig{MaxReviewersPerHead: 2}}, launcher)
 
 	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 	if err != nil {
@@ -1874,6 +1877,51 @@ func TestTriggerRunsAnotherHarnessOnAnAlreadyApprovedCommit(t *testing.T) {
 	}
 }
 
+// The per-head reviewer cap is the server-side consent gate: by default one
+// reviewer covers a head, and adding a second one is rejected unless the
+// project raised maxReviewersPerHead. Re-running the same reviewer on its own
+// head never counts as a second reviewer.
+func TestTriggerReviewerCapRejectsASecondReviewerOnOneHead(t *testing.T) {
+	headRuns := []domain.ReviewRun{{
+		ID: "run-1", SessionID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1",
+		Harness: domain.ReviewerClaudeCode,
+		Status:  domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+	}}
+	newEngine := func(cfg domain.ProjectConfig) (*Engine, *fakeStore) {
+		store := &fakeStore{
+			review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
+			runs:   append([]domain.ReviewRun(nil), headRuns...),
+		}
+		eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{cfg: cfg}, &fakeLauncher{alive: true})
+		return eng, store
+	}
+	opts := TriggerOptions{Harness: domain.ReviewerCodex, Rerun: true, Source: domain.ReviewTriggerAgent}
+
+	eng, store := newEngine(domain.ProjectConfig{})
+	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+	if !errors.Is(err, ErrReviewerLimitReached) {
+		t.Fatalf("default cap should reject a second reviewer with ErrReviewerLimitReached, got %v", err)
+	}
+	if len(store.runs) != 1 {
+		t.Fatalf("rejected trigger must not insert a run: %+v", store.runs)
+	}
+
+	eng, store = newEngine(domain.ProjectConfig{MaxReviewersPerHead: 2})
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+	if err != nil || !res.Created || len(store.runs) != 2 {
+		t.Fatalf("raised cap should allow the second reviewer: res=%+v runs=%+v err=%v", res, store.runs, err)
+	}
+
+	eng, store = newEngine(domain.ProjectConfig{})
+	res, err = eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Rerun: true, Source: domain.ReviewTriggerAgent})
+	if err != nil || !res.Created {
+		t.Fatalf("re-running the same reviewer stays within the cap: res=%+v err=%v", res, err)
+	}
+	if len(store.runs) != 2 {
+		t.Fatalf("same-harness rerun should add its pass: %+v", store.runs)
+	}
+}
+
 func TestTriggerHarnessOverrideDoesNotRestartRunningReviewJustBecauseResolvedConfigIsNonEmpty(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "codex-pane"},
@@ -1887,7 +1935,7 @@ func TestTriggerHarnessOverrideDoesNotRestartRunningReviewJustBecauseResolvedCon
 	worker.ReviewerHarness = domain.ReviewerClaudeCode
 	worker.ReviewerConfig = domain.AgentConfig{Model: "gpt-5"}
 	launcher := &fakeLauncher{alive: true, handle: "codex-pane"}
-	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{cfg: domain.ProjectConfig{MaxReviewersPerHead: 2}}, launcher)
 
 	res, err := trigger(context.Background(), eng, "mer-1", domain.ReviewerCodex, domain.AgentConfig{})
 	if err != nil {

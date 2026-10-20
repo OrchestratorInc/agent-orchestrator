@@ -40,6 +40,10 @@ var (
 	// ErrHarnessInstallActive means the reviewer's harness is being installed,
 	// updated or removed, so a reviewer cannot start on it now.
 	ErrHarnessInstallActive = fmt.Errorf("%w: reviewer harness is being updated", ErrConflict)
+	// ErrReviewerLimitReached means the trigger would put one more distinct
+	// reviewer on a PR head than the project's maxReviewersPerHead allows.
+	// Raising that project setting is the owner's consent for a second opinion.
+	ErrReviewerLimitReached = fmt.Errorf("%w: reviewer limit reached", ErrConflict)
 )
 
 // agentConfigsEqual compares two agent configs. AgentConfig carries the Env
@@ -347,6 +351,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if worker.Metadata.WorkspacePath == "" {
 		return TriggerResult{}, fmt.Errorf("%w: worker session %q has no workspace to review", ErrInvalid, workerID)
 	}
+	reviewerLimit := e.maxReviewersPerHead(ctx, worker)
 
 	prs, err := e.prs.ListPRsBySession(ctx, workerID)
 	if err != nil {
@@ -472,6 +477,12 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 
 	var created []domain.ReviewRun
+	// Per-head reviewer cap (ProjectConfig.MaxReviewersPerHead, default 1). A
+	// head at its cap is skipped; when the trigger could not start any pass
+	// because of the cap it fails loudly, so an agent never mistakes silence
+	// for a started review. Raising the setting is the owner's consent; the
+	// trigger itself carries no override a worker could decide on its own.
+	var limitBlocked []PRReviewState
 	type staleSupersede struct {
 		prURL     string
 		targetSHA string
@@ -505,6 +516,10 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 				continue
 			}
 		case !eligible && !secondOpinionWanted(reviewState, hasHarnessOverride, secondOpinionOverride, harness):
+			continue
+		}
+		if reviewerCountOnHead(runs, reviewState.PRURL, reviewState.TargetSHA, harness) > reviewerLimit {
+			limitBlocked = append(limitBlocked, reviewState)
 			continue
 		}
 		if hasConfigOverride {
@@ -568,6 +583,10 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.AgentSessionID = ""
 			reviewRow.ProviderConversationID = ""
 			reviewRow.ControllerGeneration = ""
+		}
+		if len(limitBlocked) > 0 {
+			state := limitBlocked[0]
+			return TriggerResult{}, fmt.Errorf("%w: PR #%d head %s already has %d reviewer(s) and the project cap maxReviewersPerHead is %d; raise the project setting to allow a second reviewer", ErrReviewerLimitReached, state.PRNumber, shortSHA(state.TargetSHA), reviewerLimit, reviewerLimit)
 		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
 			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun)
@@ -788,6 +807,52 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 	default:
 		return ""
 	}
+}
+
+// maxReviewersPerHead resolves the project's per-head reviewer cap. Without a
+// project record, or when the project cannot be read, the default of one
+// reviewer per head applies: the gate fails closed.
+func (e *Engine) maxReviewersPerHead(ctx stdctx.Context, worker domain.SessionRecord) int {
+	if e.projects == nil {
+		return 1
+	}
+	proj, ok, err := e.projects.GetProject(ctx, string(worker.ProjectID))
+	if err != nil || !ok {
+		return 1
+	}
+	return proj.Config.MaxReviewersPerHeadLimit()
+}
+
+// reviewerCountOnHead counts the distinct reviewers with a live or completed
+// pass on one PR head, counting the pass this trigger is about to start.
+// Failed and cancelled passes never produced a review, so they do not count.
+// Legacy runs recorded before harnesses were stamped count as this trigger's
+// reviewer, so re-triggering the session reviewer stays within the cap.
+func reviewerCountOnHead(runs []domain.ReviewRun, prURL, targetSHA string, harness domain.ReviewerHarness) int {
+	known := []domain.ReviewerHarness{harness}
+	for _, run := range runs {
+		if run.PRURL != prURL || run.TargetSHA != targetSHA {
+			continue
+		}
+		if run.Status != domain.ReviewRunRunning && run.Verdict != domain.VerdictApproved && run.Verdict != domain.VerdictChangesRequested {
+			continue
+		}
+		runHarness := run.Harness
+		if runHarness == "" {
+			runHarness = harness
+		}
+		duplicate := false
+		for _, k := range known {
+			if k == runHarness {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			known = append(known, runHarness)
+		}
+	}
+	return len(known)
 }
 
 // headHasReview reports whether any reviewer has a running or completed pass

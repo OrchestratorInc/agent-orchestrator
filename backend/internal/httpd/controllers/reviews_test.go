@@ -535,6 +535,7 @@ func TestReviewsTriggerMapsSameCommitConflictsTo409(t *testing.T) {
 		{fmt.Errorf("%w: codex is already reviewing PR #1 head abc", reviewcore.ErrReviewAlreadyRunning), "REVIEW_ALREADY_RUNNING"},
 		{fmt.Errorf("%w: PR #1 head abc was already reviewed (approved); push new commits, or pass --rerun", reviewcore.ErrHeadAlreadyReviewed), "REVIEW_HEAD_ALREADY_REVIEWED"},
 		{fmt.Errorf("%w: PR #1 head abc belongs to active session mer-2", reviewcore.ErrPROwnedElsewhere), "REVIEW_PR_OWNED_BY_OTHER_SESSION"},
+		{fmt.Errorf("%w: PR #1 head abc already has 1 reviewer(s) and the project cap maxReviewersPerHead is 1", reviewcore.ErrReviewerLimitReached), "REVIEWER_LIMIT_REACHED"},
 	} {
 		srv := newReviewTestServer(t, &fakeReviewService{triggerErr: tc.err})
 		body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", `{"rejectReviewedHead":true}`)

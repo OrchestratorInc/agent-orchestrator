@@ -290,7 +290,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker.
 - `+"`ao session claim-pr <worker-session-id> <pr-ref>`"+` - attach an existing PR for authorized implementation continuation to a worker session. Never use it for review-only work. Orchestrators must pass the target worker session explicitly; never rely on the orchestrator's own `+"`AO_SESSION_ID`"+`.
 - `+"`ao session kill <session-id>`"+` - terminate a session when appropriate.
-- `+"`ao review trigger <worker-session-id>`"+` - start AO's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one.
+- `+"`ao review trigger <worker-session-id>`"+` - start AO's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one. A project allows one reviewer per PR head by default; a second reviewer is rejected with `+"`REVIEWER_LIMIT_REACHED`"+` unless the project raised `+"`maxReviewersPerHead`"+`.
 - `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state and verdicts.
 
 ## Coordination Workflow
@@ -433,6 +433,7 @@ How it works:
 - ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review-comment delivery for this session (` + "`--no-inject`" + ` leaves that setting alone).
 - A head that is already being reviewed, or already has a review, is not reviewed again: the command fails and says why. Push new commits first, or pass ` + "`--rerun`" + ` for a deliberate second pass on the same commit. If you just pushed and it says the head was already reviewed, wait a few seconds and run it again.
 - ` + "`--agent <harness>`" + `, ` + "`--model <id>`" + `, and ` + "`--effort <level>`" + ` choose a different reviewer for one pass; otherwise the project's reviewer is used. Reviewers with different agents can run at the same time (add ` + "`--rerun`" + ` while another is running).
+- A project allows one reviewer per PR head by default (` + "`maxReviewersPerHead`" + `). Adding a second reviewer on the same head is the owner's call: do not add one unless your task explicitly instructs it, and if the daemon rejects the trigger with ` + "`REVIEWER_LIMIT_REACHED`" + `, report that instead of retrying or working around it.
 - Check results with ` + "`ao review ls`" + `; stop every running reviewer with ` + "`ao review cancel`" + `.
 - Never spawn, or ask the orchestrator to spawn, a separate worker session to review your PR, and do not review your own PR as a substitute for the native reviewer.
 - AO's review is internal. An AO approval is not a GitHub approval: it does not satisfy required or independent-account reviews or branch protection, and it never authorizes merging. Do not try to approve your own PR or work around branch protection; report what is still required to the human.`

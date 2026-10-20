@@ -86,6 +86,13 @@ type ProjectConfig struct {
 	// after spawn.
 	AutoReview bool `json:"autoReview,omitempty"`
 
+	// MaxReviewersPerHead caps how many distinct reviewers may hold a live or
+	// completed pass on one PR head. The default (0) means 1: a trigger asking
+	// for a second reviewer on the same head is rejected server-side. Raising
+	// it is the project owner's consent for extra paid review passes on the
+	// same diff; worker sessions cannot override it per trigger.
+	MaxReviewersPerHead int `json:"maxReviewersPerHead,omitempty"`
+
 	// WorkersRequestReview changes what worker sessions are told about AO's
 	// native reviewer. When set, a worker requests an AO review of its own PR
 	// (`ao review trigger`) once the PR is pushed and verified, and again after
@@ -166,6 +173,15 @@ func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
 		config.Effort = c.Worker.AgentConfig.Effort
 	}
 	return harness, config
+}
+
+// MaxReviewersPerHeadLimit resolves the effective per-head reviewer cap. Zero
+// and absent mean the default of one reviewer per PR head.
+func (c ProjectConfig) MaxReviewersPerHeadLimit() int {
+	if c.MaxReviewersPerHead <= 0 {
+		return 1
+	}
+	return c.MaxReviewersPerHead
 }
 
 // RoleOverride overrides the harness and/or agent config for a session role.
@@ -303,6 +319,9 @@ func (c ProjectConfig) Validate() error {
 	}
 	if err := c.TrackerIntake.Validate(); err != nil {
 		return err
+	}
+	if c.MaxReviewersPerHead < 0 {
+		return fmt.Errorf("maxReviewersPerHead: must not be negative")
 	}
 	return nil
 }

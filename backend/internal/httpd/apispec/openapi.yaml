@@ -17719,6 +17719,8 @@ components:
           additionalProperties:
             type: string
           type: object
+        maxReviewersPerHead:
+          type: integer
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
         orchestratorPromptOverride:

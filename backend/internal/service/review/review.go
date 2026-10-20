@@ -38,6 +38,7 @@ var (
 	ErrHeadAlreadyReviewed  = reviewcore.ErrHeadAlreadyReviewed
 	ErrPROwnedElsewhere     = reviewcore.ErrPROwnedElsewhere
 	ErrAgentBinaryNotFound  = ports.ErrAgentBinaryNotFound
+	ErrReviewerLimitReached = reviewcore.ErrReviewerLimitReached
 )
 
 // reviewErrorKind reduces a trigger failure to a safe category. Raw error text

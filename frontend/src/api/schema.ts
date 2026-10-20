@@ -6225,6 +6225,7 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
+            maxReviewersPerHead?: number;
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorPromptOverride?: string;
             orchestratorRules?: string;
