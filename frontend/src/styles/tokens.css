@@ -85,6 +85,13 @@
 	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
 	--color-text-terminal: #d6d6d6;
 	--color-text-terminal-dim: #8e8e8e;
+	/* The terminal keeps its own palette in both app themes (DESIGN.md; #6861):
+	   agent TUIs print 24-bit text designed for a dark plate, so the xterm plate
+	   and its foreground are pinned here — derived from neither the themed
+	   --background nor --color-text-terminal, and never re-themed for light. */
+	--terminal-plate: oklch(0.210 0.002 250);
+	--terminal-plate-foreground: #d6d6d6;
+	--terminal-plate-dim: #8e8e8e;
 
 	/* Borders */
 	--color-border: var(--border);
@@ -843,10 +850,15 @@
    ═══════════════════════════════════════════════════════════════ */
 
 /* A named palette owns the terminal's default plate and text as well as the
-   surrounding app chrome. */
+   surrounding app chrome — the plate tokens included (#6861): the pinned
+   defaults above are for Orchestrate, and a data-style-theme re-points them
+   to the palette exactly as the pre-#6861 themed tokens were. */
 :root[data-style-theme] {
 	--color-bg-terminal-opaque: var(--background);
 	--color-bg-terminal: var(--background);
 	--color-text-terminal: var(--foreground);
 	--color-text-terminal-dim: var(--muted-foreground);
+	--terminal-plate: var(--background);
+	--terminal-plate-foreground: var(--foreground);
+	--terminal-plate-dim: var(--muted-foreground);
 }

@@ -133,6 +133,10 @@
 	--color-terminal-opaque: var(--color-bg-terminal-opaque);
 	--color-terminal-foreground: var(--color-text-terminal);
 	--color-terminal-dim: var(--color-text-terminal-dim);
+	/* The terminal's own plate (DESIGN.md; #6861): dark-stable, never themed. */
+	--color-terminal-plate: var(--terminal-plate);
+	--color-terminal-plate-foreground: var(--terminal-plate-foreground);
+	--color-terminal-plate-dim: var(--terminal-plate-dim);
 	--color-scrim: var(--bridge-scrim);
 
 	/* Settings page (Figma) */
@@ -1555,14 +1559,14 @@ textarea,
 	left: 1px;
 	min-height: 24px;
 	border-radius: 999px;
-	background-color: color-mix(in srgb, var(--color-text-terminal) 30%, transparent);
+	background-color: color-mix(in srgb, var(--terminal-plate-foreground) 30%, transparent);
 	will-change: height, transform;
 }
 
 .terminal-scrollbar:hover .terminal-scrollbar__thumb,
 .terminal-scrollbar:active .terminal-scrollbar__thumb,
 .terminal-xterm-host--mac:focus-within + .terminal-scrollbar .terminal-scrollbar__thumb {
-	background-color: color-mix(in srgb, var(--color-text-terminal) 48%, transparent);
+	background-color: color-mix(in srgb, var(--terminal-plate-foreground) 48%, transparent);
 }
 
 /* Scrollable region that must not show a scrollbar — the wheel/trackpad still
@@ -1852,18 +1856,18 @@ textarea,
 	background: var(--color-bg-primary);
 }
 
-/* Paint the pane with the opaque RGB of --color-bg-terminal only. The e7 alpha
-   on the token composites against app chrome and left a #111316 fringe in the
-   p-2 gutter / FitAddon leftover strips. */
+/* Paint the pane with the terminal's own opaque plate (--terminal-plate, pinned
+   dark in tokens.css). Deriving it from an alpha token composited against app
+   chrome and left a #111316 fringe in the p-2 gutter / FitAddon leftover strips. */
 .terminal-surface {
-	background-color: var(--color-bg-terminal-opaque);
+	background-color: var(--terminal-plate);
 }
 
 .terminal-surface .xterm,
 .terminal-surface .xterm-viewport,
 .terminal-surface .xterm-screen,
 .terminal-surface .xterm-helpers {
-	background-color: var(--color-bg-terminal-opaque) !important;
+	background-color: var(--terminal-plate) !important;
 }
 
 .multi-step-loader__step {

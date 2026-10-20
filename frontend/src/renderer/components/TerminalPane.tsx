@@ -501,7 +501,7 @@ export function TerminalCacheProvider({
 				// terminal host must be opaque, though: during route/cache hand-off an
 				// older frame can still be composited beneath it for a paint, which would
 				// otherwise produce a visible double terminal.
-				container.className = "h-full min-h-0 w-full overflow-hidden bg-terminal-opaque";
+				container.className = "h-full min-h-0 w-full overflow-hidden bg-terminal-plate";
 				container.style.position = "relative";
 				container.dataset.terminalCacheKey = descriptor.cacheKey;
 				entry = {
@@ -766,7 +766,7 @@ function TerminalBootStatus({ subject, label }: { subject: string; label?: strin
 	}, []);
 	const step = Math.min(Math.floor(tick / 15), BOOT_STATUS_STEPS.length - 1);
 	return (
-		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
+		<div className="flex items-center gap-2.5 text-terminal-plate-dim" role="status" aria-live="polite">
 			<span aria-hidden="true" className="inline-block w-[1ch] shrink-0 text-center font-mono">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
 			<span>{label ?? BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
 		</div>
@@ -820,11 +820,11 @@ export function TerminalPane({
 		if (terminalTarget?.kind === "shell") {
 			return (
 				<pre
-					className="h-full overflow-auto bg-terminal p-4 font-mono leading-relaxed text-terminal"
+					className="h-full overflow-auto bg-terminal-plate p-4 font-mono leading-relaxed text-terminal-plate-foreground"
 					style={{ fontSize }}
 				>
-					<span className="text-terminal-dim">{terminalTarget.title}</span> $ {"\n"}
-					<span className="text-terminal-dim">
+					<span className="text-terminal-plate-dim">{terminalTarget.title}</span> $ {"\n"}
+					<span className="text-terminal-plate-dim">
 						{"(standalone shell — a live PTY here in the desktop app)"}
 						{"\n"}
 					</span>
@@ -836,11 +836,11 @@ export function TerminalPane({
 			terminalTarget?.kind === "reviewer" ? reviewerPreviewLines(session) : workerPreviewLines(session, provider);
 		return (
 			<pre
-				className="h-full overflow-auto bg-terminal p-4 font-mono leading-relaxed text-terminal-foreground"
+				className="h-full overflow-auto bg-terminal-plate p-4 font-mono leading-relaxed text-terminal-plate-foreground"
 				data-testid="session-terminal"
 				style={{ fontSize }}
 			>
-				<span className="text-terminal-dim">~/{session?.workspaceName ?? "reverbcode"}</span>{" "}
+				<span className="text-terminal-plate-dim">~/{session?.workspaceName ?? "reverbcode"}</span>{" "}
 				{session?.branch ? <span className="text-accent-strong">{session.branch}</span> : null}
 				{session?.branch ? " " : ""}$ {provider}
 				{"\n"}
@@ -854,7 +854,7 @@ export function TerminalPane({
 									? "text-warning"
 									: line.startsWith("$") || line.startsWith("▲")
 										? "text-accent-strong"
-										: "text-terminal-foreground"
+										: "text-terminal-plate-foreground"
 						}
 					>
 						{line}
@@ -1310,7 +1310,7 @@ function AttachedTerminal({
 
 	if (initFailed) {
 		return (
-			<div className="terminal-surface grid h-full place-items-center p-4 font-mono text-xs text-muted-foreground">
+			<div className="terminal-surface grid h-full place-items-center p-4 font-mono text-xs text-terminal-plate-dim">
 				{t("terminal.initFailed")}
 			</div>
 		);
@@ -1447,8 +1447,8 @@ function AttachedTerminal({
 							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
 						) : (
 							<div className="text-center">
-								<div className="text-terminal">{"Agent Orchestrator"}</div>
-								<div className="mt-2 text-terminal-dim">{t("terminal.noSessionSelected")}</div>
+								<div className="text-terminal-plate-foreground">{"Agent Orchestrator"}</div>
+								<div className="mt-2 text-terminal-plate-dim">{t("terminal.noSessionSelected")}</div>
 							</div>
 						)}
 					</div>
@@ -1458,7 +1458,7 @@ function AttachedTerminal({
 						className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control"
 						data-testid="terminal-connecting-cover"
 					>
-						<div className="text-terminal">{t("terminal.connecting")}</div>
+						<div className="text-terminal-plate-foreground">{t("terminal.connecting")}</div>
 					</div>
 				)}
 				{showReplayCover && !isCloudConnecting && (
@@ -1492,7 +1492,7 @@ function AttachedTerminal({
 function CloudConnectError({ onRetry }: { onRetry: () => void }) {
 	const { t } = useTranslation();
 	return (
-		<div className="absolute inset-0 z-10 grid place-items-center bg-terminal-opaque pointer-events-auto">
+		<div className="absolute inset-0 z-10 grid place-items-center bg-terminal-plate pointer-events-auto">
 			<div className="flex max-w-sm flex-col items-center gap-4 rounded-lg border border-border bg-surface p-6 text-center shadow-lg">
 				<div className="font-mono text-sm font-medium text-foreground">{t("terminal.cloudConnectTitle")}</div>
 				<div className="text-xs leading-relaxed text-muted-foreground">{t("terminal.cloudConnectDescription")}</div>
@@ -1517,10 +1517,10 @@ function ReplayCover({ message }: { message?: string }) {
 		// local replay stays deliberately silent to avoid covering settled output.
 		<div
 			aria-hidden={message ? undefined : "true"}
-			className="bg-terminal-opaque pointer-events-none absolute inset-0 grid place-items-center"
+			className="bg-terminal-plate pointer-events-none absolute inset-0 grid place-items-center"
 			data-testid="terminal-replay-cover"
 		>
-			{message ? <span className="font-mono text-sm text-terminal-dim">{message}</span> : null}
+			{message ? <span className="font-mono text-sm text-terminal-plate-dim">{message}</span> : null}
 		</div>
 	);
 }

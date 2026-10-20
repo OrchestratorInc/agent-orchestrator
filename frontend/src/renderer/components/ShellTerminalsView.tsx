@@ -182,12 +182,12 @@ export function ShellTerminalsView() {
 						theme={theme}
 					/>
 				) : (
-					<div className="grid h-full place-items-center bg-terminal font-mono text-control">
+					<div className="grid h-full place-items-center bg-terminal-plate font-mono text-control">
 						<div className="text-center">
-							<div className="text-terminal">{t("terminal.emptyTitle")}</div>
-							<div className="mt-2 text-terminal-dim">
+							<div className="text-terminal-plate-foreground">{t("terminal.emptyTitle")}</div>
+							<div className="mt-2 text-terminal-plate-dim">
 								<Trans
-									components={{ shortcut: <span className="text-terminal" /> }}
+									components={{ shortcut: <span className="text-terminal-plate-foreground" /> }}
 									i18nKey="terminal.emptyHint"
 									values={{ shortcut: newTerminalShortcutLabel }}
 								/>

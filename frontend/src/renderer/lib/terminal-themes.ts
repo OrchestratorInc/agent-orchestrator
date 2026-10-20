@@ -10,11 +10,16 @@ function cssVar(name: string): string {
 export function buildTerminalThemes(): { dark: ITheme; light: ITheme } {
 	// Opaque plate — xterm cells must not be translucent or the p-2 gutter and
 	// the glyph grid pick up different composites against app chrome.
+	// Named themes re-point the plate tokens to their palette in tokens.css
+	// (:root[data-style-theme]); the default Orchestrate plate is pinned dark
+	// and never follows the app theme: agent TUIs print 24-bit text designed
+	// for a dark plate, and a light plate turns that output white-on-white
+	// (#6861).
 	const namedThemeActive = typeof document !== "undefined" && Boolean(document.documentElement.dataset.styleTheme);
 	const terminalBg = namedThemeActive
 		? cssVar("--background")
-		: cssVar("--color-bg-terminal-opaque") || cssVar("--color-bg-terminal");
-	const terminalForeground = namedThemeActive ? cssVar("--foreground") : cssVar("--color-text-terminal");
+		: cssVar("--terminal-plate");
+	const terminalForeground = namedThemeActive ? cssVar("--foreground") : cssVar("--terminal-plate-foreground");
 	const terminalCursor = namedThemeActive ? cssVar("--primary") : cssVar("--color-working");
 	// Collapse ANSI black into the plate. Agent TUIs (Cursor's prompt bar) fill
 	// rows with "black"; leaving the slot as a true dark color paints a black
