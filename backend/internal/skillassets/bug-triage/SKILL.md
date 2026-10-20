@@ -47,7 +47,7 @@ Keep raw logs out of the human body. Evidence belongs in a separate comment.
 Say what was not verified in the same sentence as the claim it limits.
 About 120 words is useful guidance, not a cap. Use more when the facts need it.
 Set the first line to `status: ready`, `status: duplicate`, or `status: draft` if incomplete.
-Set `status: ready` when the user's observation is complete, even if logs or diagnostics are missing or stale; note the gap in the evidence comment, not in the body.
+For a new issue, set `status: ready` when the user's observation is complete, even if diagnostics are missing or stale. Keep `status: duplicate` for a completed duplicate. Note diagnostic gaps in the evidence comment, not in the body.
 
 ## Finish
 
