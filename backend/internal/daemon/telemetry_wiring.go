@@ -58,9 +58,15 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// job for every event name that isn't aggregated.
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Opt-out is enforced ahead of the aggregator: events folded into a rollup
-	// bucket while opted out would otherwise be flushed after an opt back in.
-	gated := telemetryadapter.NewOptOutSink(aggregated, remote.Identity().ExportSuppressed)
+	// Keep the full local error stream. One percent of remote HTTP and CLI
+	// occurrences enter the minute rollup, which carries the sampling rate.
+	sampled := telemetryadapter.NewSamplingSink(aggregated, map[string]float64{
+		"ao.http.5xx":         0.01,
+		"ao.cli.usage_errors": 0.01,
+	})
+	// Opt-out is enforced ahead of sampling and aggregation: events folded
+	// into a rollup while opted out could flush after an opt back in.
+	gated := telemetryadapter.NewOptOutSink(sampled, remote.Identity().ExportSuppressed)
 	// The kill switch sits outermost on the remote chain so a silenced stream
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.

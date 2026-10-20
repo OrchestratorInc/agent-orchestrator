@@ -15,6 +15,8 @@ const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
+const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
+const UPDATE_FAILURE_TTL_MS = 24 * 60 * 60_000;
 const EMBEDDED_LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -25,6 +27,18 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 	"ao.renderer.daemon_failure": "ao.v2.renderer.daemon_failure",
 	"ao.renderer.session_management_summary": "ao.v2.renderer.session_management_summary",
 };
+
+const OBSOLETE_REQUEST_EVENTS = new Set([
+	"project_add", "task_create", "settings_save", "session_kill", "notification_mark_read",
+	"open_in_editor", "orchestrator_spawn", "artifact_create", "automation_create",
+	"session_restart", "project_clone",
+].map((action) => `ao.renderer.${action}_requested`));
+
+export function isProductionRendererEvent(event: string): boolean {
+	return event.startsWith("ao.") && event !== "ao.unset_test" &&
+		!event.endsWith(".heartbeat_stale") && !event.endsWith(".nudged") &&
+		!OBSOLETE_REQUEST_EVENTS.has(event);
+}
 
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
@@ -42,6 +56,7 @@ let fallbackRouteViewSurfaces = new Set<string>();
 // allowance with a hard daily ceiling per name.
 const EVENTS_PER_NAME_PER_MINUTE = 5;
 const EVENTS_PER_NAME_PER_DAY = 200;
+const API_ERROR_SAMPLE_RATE = 0.01;
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 const minuteWindows = new Map<string, { start: number; count: number }>();
@@ -67,6 +82,62 @@ function reserveWindow(
 export function reserveCapture(name: string, now = Date.now()): boolean {
 	if (!reserveWindow(minuteWindows, name, now, MINUTE_MS, EVENTS_PER_NAME_PER_MINUTE)) return false;
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
+}
+
+export function sampleApiError(random: () => number = Math.random): boolean {
+	const value = random();
+	return Number.isFinite(value) && value >= 0 && value < API_ERROR_SAMPLE_RATE;
+}
+
+// Only bounded update dimensions enter this key. A failure is reported once
+// per day until a successful download of the same version clears it.
+export function reserveUpdateFailure(
+	storage: DailyActiveStorage,
+	properties: TelemetryProperties,
+	now = Date.now(),
+): boolean {
+	const key = updateFailureKey(properties);
+	try {
+		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		const recent = Object.entries(parsed)
+			.filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]) &&
+				entry[1] <= now && now - entry[1] < UPDATE_FAILURE_TTL_MS)
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, 31);
+		if (recent.some(([existing]) => existing === key)) return false;
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(Object.fromEntries([[key, now], ...recent])));
+		return true;
+	} catch {
+		return true;
+	}
+}
+
+function updateFailureKey(properties: TelemetryProperties): string {
+	return [properties.phase, properties.error_category, properties.to_version ?? ""].join("|");
+}
+
+function releaseUpdateFailure(storage: DailyActiveStorage, properties: TelemetryProperties, reservedAt: number): void {
+	try {
+		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		const key = updateFailureKey(properties);
+		if (parsed[key] !== reservedAt) return;
+		delete parsed[key];
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(parsed));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
+}
+
+export function clearUpdateFailures(storage: DailyActiveStorage, version: unknown): void {
+	try {
+		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		for (const key of Object.keys(parsed)) {
+			if (key.endsWith(`|${version ?? ""}`)) delete parsed[key];
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(parsed));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
 }
 
 type TelemetryProperties = Record<string, unknown>;
@@ -719,19 +790,15 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
-		case "ao.renderer.project_add_requested":
 		case "ao.renderer.loaded":
 			break;
 		case "ao.renderer.project_add_succeeded":
 		case "ao.renderer.project_removed":
 		case "ao.renderer.orchestrator_open_requested":
-		case "ao.renderer.task_create_requested":
 		case "ao.renderer.task_create_succeeded":
 		case "ao.renderer.task_create_failed":
-		case "ao.renderer.session_kill_requested":
 		case "ao.renderer.session_kill_succeeded":
 		case "ao.renderer.session_kill_failed":
-		case "ao.renderer.settings_save_requested":
 		case "ao.renderer.settings_save_succeeded":
 		case "ao.renderer.settings_save_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
@@ -756,7 +823,6 @@ export async function sanitizeRendererProperties(
 			// separates "checking on a worker" from "reviewing its output".
 			if (typeof properties?.has_pr === "boolean") safe.has_pr = properties.has_pr;
 			break;
-		case "ao.renderer.orchestrator_spawn_requested":
 		case "ao.renderer.orchestrator_spawn_succeeded":
 		case "ao.renderer.orchestrator_spawn_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
@@ -768,7 +834,6 @@ export async function sanitizeRendererProperties(
 		}
 		case "ao.renderer.automation_create_opened":
 			break;
-		case "ao.renderer.automation_create_requested":
 		case "ao.renderer.automation_create_succeeded":
 		case "ao.renderer.automation_create_failed": {
 			// Which kind of automation a prompt describes stays on the machine;
@@ -783,7 +848,6 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
-		case "ao.renderer.artifact_create_requested":
 		case "ao.renderer.artifact_create_succeeded":
 		case "ao.renderer.artifact_create_failed":
 			// Where the session lives, never which project.
@@ -792,7 +856,6 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
-		case "ao.renderer.notification_mark_read_requested":
 		case "ao.renderer.notification_mark_read_succeeded":
 		case "ao.renderer.notification_mark_read_failed":
 			if (properties?.scope === "single" || properties?.scope === "all") safe.scope = properties.scope;
@@ -821,17 +884,6 @@ export async function sanitizeRendererProperties(
 			}
 			if (typeof properties?.authorized_agents === "string") {
 				safe.authorized_agents = properties.authorized_agents;
-			}
-			break;
-		}
-		case "ao.renderer.open_in_editor_requested": {
-			const projectIDHash = await hashedTelemetryID(properties?.project_id);
-			if (projectIDHash) safe.project_id_hash = projectIDHash;
-			if (typeof properties?.editor_id === "string" && EDITOR_ID_SET.has(properties.editor_id)) {
-				safe.editor_id = properties.editor_id;
-			}
-			if (typeof properties?.target_kind === "string" && OPEN_TARGET_KIND_SET.has(properties.target_kind)) {
-				safe.target_kind = properties.target_kind;
 			}
 			break;
 		}
@@ -1125,21 +1177,42 @@ export function clearRendererTelemetryQueues(): void {}
 // independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
-export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<void> {
+export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
 	// Checked before the reservations so a silenced stream does not consume a
 	// rate-limit slot on its way to being discarded, matching the daemon, where
 	// the denylist sits outermost.
-	if (isDeniedEvent(event)) return;
+	if (!isProductionRendererEvent(event) || isDeniedEvent(event)) return false;
+	if (event === "ao.renderer.api_error" && !sampleApiError()) return false;
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
 	if (event === "ao.renderer.route_viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
-		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return;
-	} else if (!reserveCapture(event)) {
-		return;
+		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return false;
+	} else if (event !== "ao.renderer.update_failed" && !reserveCapture(event)) {
+		return false;
 	}
-	if (!(await initTelemetry())) return;
+	if (!(await initTelemetry())) return false;
+	const storage = telemetryStorage();
+	let updateFailureReservedAt: number | undefined;
+	if (event === "ao.renderer.update_failed") {
+		if (!reserveCapture(event)) return false;
+		if (storage) {
+			const now = Date.now();
+			if (!reserveUpdateFailure(storage, sanitizedProperties, now)) return false;
+			updateFailureReservedAt = now;
+		}
+	}
+	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
 	const safeProperties = withTelemetryContext(sanitizedProperties);
-	posthog.capture(postHogEventName(event), safeProperties);
+	if (event === "ao.renderer.api_error") safeProperties.sample_rate = API_ERROR_SAMPLE_RATE;
+	let captured = false;
+	try {
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		return captured;
+	} finally {
+		if (!captured && storage && updateFailureReservedAt !== undefined) {
+			releaseUpdateFailure(storage, sanitizedProperties, updateFailureReservedAt);
+		}
+	}
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {

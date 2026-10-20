@@ -409,7 +409,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		});
 
 		setMarkReadError(null);
-		void captureRendererEvent("ao.renderer.notification_mark_read_requested", { scope: "all" });
 		void markAllMutate(newly)
 			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
 			.catch((error: unknown) => {

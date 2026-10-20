@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
-import { isEditorId, isTerminalId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
+import { isEditorId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
 
@@ -111,12 +111,7 @@ export type OpenSessionTargetMutationInput = {
 export function useOpenSessionTarget() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: async ({ sessionId, projectId, targetId }: OpenSessionTargetMutationInput) => {
-			void captureRendererEvent("ao.renderer.open_in_editor_requested", {
-				project_id: projectId,
-				target_kind: targetId === "file-manager" ? "file_manager" : isTerminalId(targetId) ? "terminal" : "editor",
-				...(targetId && isEditorId(targetId) ? { editor_id: targetId } : {}),
-			});
+		mutationFn: async ({ sessionId, targetId }: OpenSessionTargetMutationInput) => {
 			try {
 				return await aoBridge.editorHandoff.open({ sessionId, ...(targetId ? { targetId } : {}) });
 			} catch (error) {

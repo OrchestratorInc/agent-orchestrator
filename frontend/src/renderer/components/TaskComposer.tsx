@@ -186,7 +186,6 @@ export function TaskComposer({
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
-			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
 				// No provider: the control plane runs the session on the project's
@@ -221,7 +220,6 @@ export function TaskComposer({
 
 	const createDaemonTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			try {
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -270,7 +268,6 @@ export function TaskComposer({
 
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			void captureRendererEvent("ao.renderer.task_create_requested", { scope: "standalone" });
 			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,

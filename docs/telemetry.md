@@ -88,9 +88,8 @@ It also records these events when you create an automation:
 | Event | When it is sent | Automation-specific properties |
 | --- | --- | --- |
 | `ao.renderer.automation_create_opened` | You open the create dialog | None |
-| `ao.renderer.automation_create_requested` | You submit a form that passes local validation | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
-| `ao.renderer.automation_create_succeeded` | The create request succeeds | The same properties as the request event |
-| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the request event |
+| `ao.renderer.automation_create_succeeded` | The create request succeeds | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
+| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the success event |
 
 These events also include the standard installation and environment information
 described above. The project identifier is hashed before transmission.
@@ -114,7 +113,6 @@ also records these events when you start an artifact session from that page:
 
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
-| `ao.renderer.artifact_create_requested` | You pick the Scratchpad or a project in the Create artifact menu | `scope` |
 | `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
 | `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
 
@@ -125,8 +123,8 @@ The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
 Editing an existing automation does not emit these creation events. Closing the
 create dialog or failing local validation does not emit a separate event.
-Orchestrator.inc uses the creation events to understand completion and abandonment
-of the create flow and which schedule presets people choose.
+Orchestrator.inc uses the outcome events to understand which schedule presets
+people choose and whether creation succeeds.
 
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
@@ -183,6 +181,16 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
+- Remote HTTP 5xx and CLI usage errors are sampled at one percent before
+  minute rollup. The rollup carries `sample_rate` and a count of sampled
+  occurrences. The local diagnostic stream keeps every occurrence.
+- Renderer API error analytics are sampled at one percent. API error handling
+  and separately configured Sentry reporting still run for every failure.
+- Repeated updater failures with the same phase, category, and target version
+  are reported once per day until a successful download clears that version.
+- The session management summary reports at most once per UTC day per desktop
+  installation. Its counters and active time stay local until capture accepts
+  them, including across a desktop restart.
 - Session recording is disabled in the desktop and mobile apps. Orchestrator.inc does not
   automatically record screens, clicks, or touches.
 - Person profiles are off for anonymous events. A profile is created when a

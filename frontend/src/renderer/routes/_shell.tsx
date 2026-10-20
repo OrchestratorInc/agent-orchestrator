@@ -629,10 +629,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			);
 		}, PROVISIONING_TIMEOUT_MS);
 		try {
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", {
-				project_id: workspace.id,
-				source,
-			});
 			const {
 				data: spawnData,
 				error: spawnError,
@@ -732,7 +728,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				operation: "project_add",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_add_requested");
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				throw new Error(status.message || "AO daemon is not ready.");
@@ -818,7 +813,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				operation: "project_clone",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_clone_requested");
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				throw new Error(status.message || "AO daemon is not ready.");

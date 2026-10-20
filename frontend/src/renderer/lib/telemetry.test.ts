@@ -4,16 +4,20 @@ import {
 	automationPromptLengthBucket,
 	buildPostHogConfig,
 	buildTelemetryContext,
+	clearUpdateFailures,
 	isDeniedEvent,
+	isProductionRendererEvent,
 	postHogEventName,
 	reserveCapture,
 	reserveDailyActiveCapture,
+	reserveUpdateFailure,
 	reserveRouteViewCapture,
 	routeSurface,
 	sanitizePostHogEvent,
 	sanitizeReplayRequestName,
 	sanitizeRendererExceptionProperties,
 	sanitizeRendererProperties,
+	sampleApiError,
 	startDailyActiveHeartbeat,
 	withTelemetryContext,
 	releaseChannelFrom,
@@ -32,6 +36,34 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("rejects junk and obsolete request names only at the analytics capture boundary", () => {
+		for (const name of ["to.open", "ddragon.event", "maestro.event", "tools.call", "ao.unset_test",
+			"ao.renderer.heartbeat_stale", "ao.renderer.nudged", "ao.renderer.task_create_requested",
+			"ao.renderer.session_restart_requested"]) {
+			expect(isProductionRendererEvent(name)).toBe(false);
+		}
+		expect(isProductionRendererEvent("ao.renderer.task_create_succeeded")).toBe(true);
+		expect(isProductionRendererEvent("ao.v2.renderer.api_error")).toBe(true);
+	});
+
+	it("samples only one percent of analytics API errors with injectable decisions", () => {
+		expect(sampleApiError(() => 0)).toBe(true);
+		expect(sampleApiError(() => 0.009999)).toBe(true);
+		expect(sampleApiError(() => 0.01)).toBe(false);
+		expect(sampleApiError(() => 1)).toBe(false);
+		expect(sampleApiError(() => Number.NaN)).toBe(false);
+	});
+
+	it("deduplicates updater failures for a day and resets after expiry", () => {
+		const storage = memoryStorage();
+		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		expect(reserveUpdateFailure(storage, failure, 100)).toBe(true);
+		expect(reserveUpdateFailure(storage, failure, 101)).toBe(false);
+		expect(reserveUpdateFailure(storage, { ...failure, error_category: "signature" }, 102)).toBe(true);
+		clearUpdateFailures(storage, "2.0.0");
+		expect(reserveUpdateFailure(storage, failure, 103)).toBe(true);
+		expect(reserveUpdateFailure(storage, failure, 103 + 86_400_000)).toBe(true);
+	});
 	it("allows only the fixed session management summary schema", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {
 			measurement_schema_version: 1,
@@ -351,7 +383,7 @@ describe("telemetry sanitizers", () => {
 
 	it("drops automation funnel values outside the closed vocabularies", async () => {
 		expect(
-			await sanitizeRendererProperties("ao.renderer.automation_create_requested", {
+			await sanitizeRendererProperties("ao.renderer.automation_create_succeeded", {
 				schedule_preset: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9",
 				prompt_length_bucket: "4096",
 			}),
@@ -492,19 +524,16 @@ describe("telemetry sanitizers", () => {
 		);
 	});
 
-	it("hashes project ids and drops everything else on CTA triads", async () => {
-		const triads = [
-			"ao.renderer.task_create_requested",
+	it("hashes project ids and drops everything else on CTA outcomes", async () => {
+		const outcomes = [
 			"ao.renderer.task_create_succeeded",
 			"ao.renderer.task_create_failed",
-			"ao.renderer.session_kill_requested",
 			"ao.renderer.session_kill_succeeded",
 			"ao.renderer.session_kill_failed",
-			"ao.renderer.settings_save_requested",
 			"ao.renderer.settings_save_succeeded",
 			"ao.renderer.settings_save_failed",
 		];
-		for (const event of triads) {
+		for (const event of outcomes) {
 			const props = await sanitizeRendererProperties(event, {
 				project_id: "demo-project",
 				title: "raw user text",
@@ -516,7 +545,6 @@ describe("telemetry sanitizers", () => {
 
 	it("keeps only the scope enum on artifact_create events", async () => {
 		for (const event of [
-			"ao.renderer.artifact_create_requested",
 			"ao.renderer.artifact_create_succeeded",
 			"ao.renderer.artifact_create_failed",
 		]) {
@@ -527,7 +555,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("keeps only the source enum on orchestrator_spawn events", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_requested", {
+		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
 			project_id: "demo-project",
 			source: "board",
 		});
@@ -557,9 +585,6 @@ describe("telemetry sanitizers", () => {
 			target: "pr",
 		});
 		expect(await sanitizeRendererProperties("ao.renderer.notification_opened", { target: "http://x" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.notification_mark_read_requested", { scope: "all" })).toEqual({
-			scope: "all",
-		});
 		expect(await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "all" })).toEqual({
 			scope: "all",
 		});
@@ -567,12 +592,12 @@ describe("telemetry sanitizers", () => {
 			scope: "all",
 		});
 		expect(
-			await sanitizeRendererProperties("ao.renderer.notification_mark_read_requested", { scope: "everything" }),
+			await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "everything" }),
 		).toEqual({});
 	});
 
-	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_requested", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_requested", {
+	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_succeeded", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
 			project_id: "demo-project",
 			editor_id: "vscode",
 			target_kind: "editor",
@@ -581,7 +606,7 @@ describe("telemetry sanitizers", () => {
 		expect(props.editor_id).toBe("vscode");
 		expect(props.target_kind).toBe("editor");
 
-		const bogus = await sanitizeRendererProperties("ao.renderer.open_in_editor_requested", {
+		const bogus = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
 			project_id: "demo-project",
 			// Not a real editor id — must not be forwarded as-is.
 			editor_id: "/Users/alice/bin/notepad",

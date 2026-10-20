@@ -82,6 +82,45 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	}
 }
 
+func TestPostHogSinkRejectsNonProductNames(t *testing.T) {
+	var names []string
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body struct {
+			Event string `json:"event"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		names = append(names, body.Event)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.unset_test", "ao.renderer.heartbeat_stale", "ao.renderer.nudged", "ao.session.spawned"} {
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "ao.session.spawned" {
+		t.Fatalf("exported names = %v", names)
+	}
+}
+
+func TestSampleRateSurvivesRemoteAllowlist(t *testing.T) {
+	for _, name := range []string{"ao.http.5xx", "ao.cli.usage_errors"} {
+		got := sanitizeRemotePayload(name, map[string]any{"sample_rate": 0.01, "count": 3, "raw_error": "/private/path"})
+		if got["sample_rate"] != 0.01 || got["count"] != int64(3) {
+			t.Fatalf("%s payload = %#v, want sampled count and rate", name, got)
+		}
+		if _, leaked := got["raw_error"]; leaked {
+			t.Fatalf("%s leaked raw error", name)
+		}
+	}
+}
+
 func TestPostHogSinkSanitizesPayloads(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
