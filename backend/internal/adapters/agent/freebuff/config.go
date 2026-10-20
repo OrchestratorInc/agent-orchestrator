@@ -52,7 +52,7 @@ func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		if len(strings.TrimSpace(string(data))) > 0 {
+		if strings.TrimSpace(string(data)) != "" {
 			if err := json.Unmarshal(data, &settings); err != nil {
 				return fmt.Errorf("freebuff: read %s: %w", path, err)
 			}
@@ -80,24 +80,32 @@ func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("freebuff: create config directory: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".settings-*.json")
-	if err != nil {
-		return fmt.Errorf("freebuff: write settings: %w", err)
-	}
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return fmt.Errorf("freebuff: write settings: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return fmt.Errorf("freebuff: write settings: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		os.Remove(tmp.Name())
+	if err := writeFileAtomic(dir, path, out); err != nil {
 		return fmt.Errorf("freebuff: write settings: %w", err)
 	}
 	return nil
+}
+
+// writeFileAtomic replaces path through a sibling temp file, so a Freebuff
+// process starting concurrently never reads a half-written settings file.
+func writeFileAtomic(dir, path string, data []byte) (err error) {
+	tmp, err := os.CreateTemp(dir, ".settings-*.json")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // chatsDir is where Freebuff keeps a project's conversations:
