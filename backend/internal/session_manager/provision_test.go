@@ -436,7 +436,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, and command-code") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and hermes") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the
@@ -546,6 +546,22 @@ func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing
 	m.modelCatalog = tuningCatalog{err: context.Canceled}
 	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
 		t.Fatal("cancelled spawn launched")
+	}
+}
+
+func TestResolveHermesAgentConfigPassesReasoningThrough(t *testing.T) {
+	// Hermes takes effort as native --reasoning for any model, including typed
+	// IDs its configuration catalog does not list, so the level is forwarded.
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("discovery failed")}}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessHermes,
+		AgentConfig: ports.AgentConfig{Model: "MiniMax-M2", Effort: "high"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model != "MiniMax-M2" || resolved.Effort != "high" {
+		t.Fatalf("resolved = %#v, want model MiniMax-M2 effort high", resolved)
 	}
 }
 
