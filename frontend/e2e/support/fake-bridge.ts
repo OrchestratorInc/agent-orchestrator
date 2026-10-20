@@ -76,7 +76,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			const ao = {
 				triage: {
 					launch: async () => ({ ok: true }),
-					prepare: async () => ({ ok: false, error: "report.prepareFailed" }),
+					prepare: async () => ({ ok: false, error: "report.prepareFailed" as const }),
 				},
 					app: {
 						getVersion: async () => version,
@@ -986,7 +986,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			const ao = {
 				triage: {
 					launch: async () => ({ ok: true }),
-					prepare: async () => ({ ok: false, error: "report.prepareFailed" }),
+					prepare: async () => ({ ok: false, error: "report.prepareFailed" as const }),
 				},
 					app: {
 						getVersion: async () => version,
