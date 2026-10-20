@@ -1817,6 +1817,46 @@ func TestSpawn_IgnoresNonOrchestratorParent(t *testing.T) {
 	}
 }
 
+func TestSpawn_OrchestratorWorkerUsesProjectWorkerAgent(t *testing.T) {
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.Config.Worker.Harness = domain.HarnessStrands
+	st.projects["mer"] = project
+	st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator}
+
+	// The orchestrator asks for claude-code, but the project's Worker agent is
+	// strands, so the spawned worker must run strands.
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0", Harness: domain.HarnessClaudeCode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Harness; got != domain.HarnessStrands {
+		t.Fatalf("harness = %q, want project Worker agent %q", got, domain.HarnessStrands)
+	}
+}
+
+func TestSpawn_NonOrchestratorParentKeepsRequestedAgent(t *testing.T) {
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.Config.Worker.Harness = domain.HarnessStrands
+	st.projects["mer"] = project
+	// A worker parent must not force the project Worker agent: a human running
+	// `ao spawn --agent claude-code` from a worker keeps their explicit choice.
+	st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindWorker}
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0", Harness: domain.HarnessClaudeCode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Harness; got != domain.HarnessClaudeCode {
+		t.Fatalf("harness = %q, want requested %q", got, domain.HarnessClaudeCode)
+	}
+}
+
 type rejectingHarnessUseGate struct {
 	harness domain.AgentHarness
 }
