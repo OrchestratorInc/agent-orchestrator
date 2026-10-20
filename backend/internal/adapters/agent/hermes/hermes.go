@@ -79,7 +79,9 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.cmd"}},
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}},
 	}, ValidateIdentity: func(ctx context.Context, path string) bool {
-		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		// A fresh install's first launch compiles Hermes's Python bytecode, which
+		// can take far longer than a warm run; the probe must outlast it.
+		probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		cmd := aoprocess.CommandContext(probeCtx, path, "--version")
 		aoprocess.ConfigureTreeCancellation(cmd)
