@@ -43,6 +43,18 @@ describe("prepareTriage", () => {
 		const result = prepare(); child.emit("error", new Error("ENOENT"));
 		expect((await result).ok).toBe(false);
 	});
+	it("keeps credentials in the spawn environment and out of returned results and logs", async () => {
+		const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "info"), vi.spyOn(console, "warn"), vi.spyOn(console, "error"), vi.spyOn(console, "debug")];
+		const env = { GH_TOKEN: "secret123", ANTHROPIC_API_KEY: "anthropic-test-secret", OPENAI_API_KEY: "openai-test-secret" };
+		const success = prepareTriage(env);
+		child.stdout.write(JSON.stringify({ ...payload, env })); child.emit("close", 0);
+		expect(await success).toEqual({ ok: true, prompt: payload.prompt, dir: payload.dir });
+		expect(spawn).toHaveBeenCalledWith("/bundled resources/daemon/ao", ["triage", "--no-launch", "--json"], { env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+		const failure = prepareTriage(env);
+		child.emit("error", new Error("GH_TOKEN=secret123"));
+		expect(await failure).toEqual({ ok: false, error: "report.prepareFailed" });
+		for (const log of logs) expect(log).not.toHaveBeenCalled();
+	});
 	it("handles a synchronous spawn failure", async () => {
 		vi.mocked(spawn).mockImplementation(() => { throw new Error("spawn failed"); });
 		expect((await prepare()).ok).toBe(false);
