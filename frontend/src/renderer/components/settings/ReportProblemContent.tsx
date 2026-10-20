@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
+import { newChatDraftScope, readChatSessionDraft } from "../../lib/chat-drafts";
 import { collectReportProblemDiagnostics, reportProblemDestinationUrl } from "../../lib/report-problem";
 import { useShell } from "../../lib/shell-context";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { Button } from "../ui/button";
+
+// A report never replaces text already typed on the new chat page.
+const hasNewChatDraft = () => Boolean(readChatSessionDraft(newChatDraftScope()).composer.text.trim());
 
 export function ReportProblemContent({ active }: { active: boolean }) {
 	const { t } = useTranslation();
@@ -27,18 +31,20 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 		try {
 			if (daemonStatus.state !== "ready") {
 				const result = await aoBridge.triage.launch();
-				if (!result.ok) setError(result.error);
+				if (!result.ok) setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : ""));
 				return;
 			}
+			if (hasNewChatDraft()) { setError(t("report.composerBusy")); return; }
 			const result = await aoBridge.triage.prepare();
-			if (!result.ok) { setError(result.error); return; }
+			if (!result.ok) { setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : "")); return; }
 			const ui = useUiStore.getState();
+			if (hasNewChatDraft()) { setError(t("report.composerBusy")); return; }
 			ui.closeSettings();
 			ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, {
 				initialPrompt: result.prompt, displayName: t("report.action"),
 			});
-		} catch (error) {
-			setError(error instanceof Error ? error.message : t("report.failed"));
+		} catch {
+			setError(t("report.failed"));
 		} finally { setOpening(false); }
 	};
 	return (

@@ -1,4 +1,4 @@
-import type { TriageInput, TriageResult, TriagePrepareResult } from "./main/triage-launch";
+import type { TriageResult, TriagePrepareResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
@@ -189,7 +189,7 @@ function isRendererQueuePurgeRequest(value: unknown): value is RendererTelemetry
 
 const api = {
 	triage: {
-		launch: (input: TriageInput = {}) => ipcRenderer.invoke("triage.launch", input) as Promise<TriageResult>,
+		launch: () => ipcRenderer.invoke("triage.launch") as Promise<TriageResult>,
 		prepare: () => ipcRenderer.invoke("triage.prepare") as Promise<TriagePrepareResult>,
 	},
 	app: {

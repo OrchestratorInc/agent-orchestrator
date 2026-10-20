@@ -26,6 +26,12 @@ export interface ChatDraftScope {
 
 type ChatDraftScopeInput = string | ChatDraftScope;
 
+/** The new chat page's composer draft; one per host, shared by every project on it. */
+export function newChatDraftScope(hostId?: string): ChatDraftScope {
+	const id = `new-chat:${hostId ?? "local"}`;
+	return { sessionId: id, incarnation: id };
+}
+
 type ChatDraftScopeLease = {
 	schemaVersion: typeof CHAT_DRAFT_SCOPE_SCHEMA_VERSION;
 	sessionId: string;

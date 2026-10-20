@@ -68,3 +68,19 @@ describe("GitHub report fallback", () => {
 		expect(url.searchParams.get("body")).toContain("Daemon: unknown");
 	});
 });
+
+it.each(["client_secret", "refreshToken", "access_token", "id_token", "private_key", "pairing code", "pairing_password", "session-secret", "GH_TOKEN", "MY_API_KEY_VALUE", "apiToken"])("redacts %s in every diagnostic form", (key) => {
+ for (const value of ["SENTINELVALUE", "abCDEF0123+/".repeat(4), "abcdef0123456789".repeat(3)]) {
+  for (const input of [
+   `{"${key}":"${value}"}`, `{"${key}":${value}}`, `${key}="${value}"`, `${key}=${value}`,
+   `${key}: '${value}'`, `${key}: ${value}`, `--${key} "${value}"`, `--${key} ${value}`, `--${key}="${value}"`, `--${key}=${value}`,
+   String.raw`error="{\"${key}\":\"${value}\"}"`,
+  ]) {
+   expect(sanitizeReportText(input), input).not.toContain(value);
+   expect(sanitizeReportText(input), input).toContain("[redacted-secret]");
+  }
+ }
+});
+it.each(["pairing 123456", "pairing code 1234567", "code: 12345678"])("redacts %s", (input) => {
+ expect(sanitizeReportText(input)).not.toMatch(/\d/);
+});

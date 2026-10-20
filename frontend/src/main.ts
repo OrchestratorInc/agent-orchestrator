@@ -2666,14 +2666,20 @@ ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => 
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
-ipcMain.handle("triage.prepare", () => prepareTriage({
-	AO_DATA_DIR: desktopDataDir,
-	AO_RUN_FILE: runFilePath() ?? undefined,
-}));
-ipcMain.handle("triage.launch", (_event, input) => launchTriageInTerminal(input, {
-	AO_DATA_DIR: desktopDataDir,
-	AO_RUN_FILE: runFilePath() ?? undefined,
-}));
+async function triageEnv(): Promise<NodeJS.ProcessEnv> {
+	await ensureShellEnv();
+	const env = process.platform === "win32"
+		? { ...process.env, ...(cachedShellEnv ?? {}) }
+		: buildDaemonEnv(process.env, cachedShellEnv, {}, configuredLoginShell);
+	return {
+		...env,
+		AO_DEV_DAEMON_BINARY: daemonLaunchEnv().AO_DEV_DAEMON_BINARY,
+		AO_DATA_DIR: path.resolve(desktopDataDir),
+		AO_RUN_FILE: path.resolve(runFilePath() ?? path.join(desktopDataDir, "running.json")),
+	};
+}
+ipcMain.handle("triage.prepare", async () => prepareTriage(await triageEnv()));
+ipcMain.handle("triage.launch", async () => launchTriageInTerminal(await triageEnv()));
 
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);

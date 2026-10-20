@@ -25,8 +25,8 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 		setReportError(null);
 		try {
 			const result = await aoBridge.triage.launch();
-			if (!result.ok) setReportError(result.error);
-		} catch (error) { setReportError(error instanceof Error ? error.message : t("report.failed")); }
+			if (!result.ok) setReportError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : ""));
+		} catch { setReportError(t("report.failed")); }
 		finally { setReporting(false); }
 	};
 	const copiedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
