@@ -436,7 +436,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, and command-code") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and kiro") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the
@@ -549,36 +549,52 @@ func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing
 	}
 }
 
-func TestResolveCommandCodeTUIAgentConfigPassesEffortThrough(t *testing.T) {
-	// Command Code's catalog advertises no effort levels, so resolution must
-	// forward the raw level without consulting the catalog at all — even a
+func TestResolvePassthroughHarnessesForwardTUIAgentConfigEffort(t *testing.T) {
+	// Command Code and Kiro catalogs advertise no effort levels, so resolution
+	// must forward the raw level without consulting the catalog at all — even a
 	// discovery failure must not clear it or fail the spawn.
+	for _, harness := range []domain.AgentHarness{domain.HarnessCommandCode, domain.HarnessKiro} {
+		t.Run(string(harness), func(t *testing.T) {
+			m := &Manager{modelCatalog: tuningCatalog{err: errors.New("discovery failed")}}
+
+			resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+				RequestedMode: domain.SessionModeTUI,
+				AgentConfig:   ports.AgentConfig{Model: "deepseek/deepseek-v4-flash", Effort: "high"},
+			}, domain.ProjectConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Model != "deepseek/deepseek-v4-flash" || resolved.Effort != "high" {
+				t.Fatalf("resolved = %#v, want model deepseek/deepseek-v4-flash effort high", resolved)
+			}
+
+			resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+				RequestedMode: domain.SessionModeTUI,
+			}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "medium"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Effort != "medium" {
+				t.Fatalf("worker effort = %q, want medium", resolved.Effort)
+			}
+
+			resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindOrchestrator, Harness: harness,
+				RequestedMode: domain.SessionModeTUI,
+			}, domain.ProjectConfig{Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "xhigh"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Effort != "xhigh" {
+				t.Fatalf("orchestrator effort = %q, want xhigh", resolved.Effort)
+			}
+		})
+	}
+
 	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("discovery failed")}}
-
 	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
-		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode,
-		RequestedMode: domain.SessionModeTUI,
-		AgentConfig:   ports.AgentConfig{Model: "deepseek/deepseek-v4-flash", Effort: "high"},
-	}, domain.ProjectConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.Model != "deepseek/deepseek-v4-flash" || resolved.Effort != "high" {
-		t.Fatalf("resolved = %#v, want model deepseek/deepseek-v4-flash effort high", resolved)
-	}
-
-	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
-		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode,
-		RequestedMode: domain.SessionModeTUI,
-	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "medium"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.Effort != "medium" {
-		t.Fatalf("project effort = %q, want medium", resolved.Effort)
-	}
-
-	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOpenCode,
 		RequestedMode: domain.SessionModeTUI,
 		AgentConfig:   ports.AgentConfig{Effort: "high"},

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -50,15 +51,17 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	argv := []string{binary, "chat", "--agent", reviewerAgentName}
+	agentbase.AppendEffortFlag(&argv, inv.Config, "--effort")
 	if inv.TaskPromptRoot == "" {
-		return ports.ReviewCommandSpec{Argv: []string{binary, "chat", "--agent", reviewerAgentName}}, nil
+		return ports.ReviewCommandSpec{Argv: argv}, nil
 	}
 	reviewerDir := filepath.Join(inv.TaskPromptRoot, "kiro")
 	if err := writeReviewerAgent(reviewerDir, inv); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
 	return ports.ReviewCommandSpec{
-		Argv:             []string{binary, "chat", "--agent", reviewerAgentName},
+		Argv:             argv,
 		InitialMessage:   inv.Prompt,
 		WorkingDirectory: reviewerDir,
 	}, nil

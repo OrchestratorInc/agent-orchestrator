@@ -33,6 +33,7 @@ func TestGetLaunchCommandBuildsInteractiveArgv(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "kiro-cli"}
 
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config:      ports.AgentConfig{Effort: " high "},
 		Permissions: ports.PermissionModeBypassPermissions,
 		Kind:        domain.KindWorker,
 		Prompt:      "-fix this",
@@ -44,6 +45,7 @@ func TestGetLaunchCommandBuildsInteractiveArgv(t *testing.T) {
 	want := []string{
 		"kiro-cli", "chat",
 		"--agent", "ao",
+		"--effort", "high",
 		"--trust-all-tools",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -359,7 +361,7 @@ func TestAuthStatusUsesKiroWhoami(t *testing.T) {
 	}
 }
 
-func TestGetConfigSpecReportsModelField(t *testing.T) {
+func TestGetConfigSpecReportsModelAndEffortFields(t *testing.T) {
 	p := New()
 
 	spec, err := p.GetConfigSpec(context.Background())
@@ -367,21 +369,23 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 		t.Fatalf("GetConfigSpec: %v", err)
 	}
 
-	var found bool
-	for _, f := range spec.Fields {
-		if f.Key != "model" {
-			continue
+	for _, key := range []string{"model", "effort"} {
+		var found bool
+		for _, f := range spec.Fields {
+			if f.Key != key {
+				continue
+			}
+			found = true
+			if f.Type != ports.ConfigFieldString {
+				t.Errorf("%s field Type = %v, want %v", key, f.Type, ports.ConfigFieldString)
+			}
+			if f.Description == "" {
+				t.Errorf("%s field Description is empty", key)
+			}
 		}
-		found = true
-		if f.Type != ports.ConfigFieldString {
-			t.Errorf("model field Type = %v, want %v", f.Type, ports.ConfigFieldString)
+		if !found {
+			t.Fatalf("GetConfigSpec did not report a %q field", key)
 		}
-		if f.Description == "" {
-			t.Error("model field Description is empty")
-		}
-	}
-	if !found {
-		t.Fatal("GetConfigSpec did not report a \"model\" field")
 	}
 }
 
@@ -734,6 +738,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "kiro-cli"}
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:      ports.AgentConfig{Effort: " high "},
 		Permissions: ports.PermissionModeAuto,
 		Session: ports.SessionRef{
 			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "uuid-123"},
@@ -749,6 +754,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		"kiro-cli", "chat",
 		"--agent", "ao",
 		"--resume-id", "uuid-123",
+		"--effort", "high",
 		"--trust-all-tools",
 	}
 	if !reflect.DeepEqual(cmd, want) {

@@ -1642,22 +1642,23 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessKiro {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, and command-code agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and kiro agents", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
 	}
-	if cfg.Harness == domain.HarnessCommandCode {
-		// Command Code's `cmd --list-models` catalog advertises no per-model
-		// effort levels, so there is nothing to validate against: forward the
-		// raw level (empty keeps the adapter default) and let `cmd --effort`
-		// reject unknown values at launch.
+	if cfg.Harness == domain.HarnessCommandCode || cfg.Harness == domain.HarnessKiro {
+		// Command Code's `cmd --list-models` and Kiro's `kiro-cli chat
+		// --list-models --format json` catalogs advertise no per-model effort
+		// levels, so there is nothing to validate against: forward the raw level
+		// (empty keeps the adapter default) and let the harness reject unknown
+		// values at launch.
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)

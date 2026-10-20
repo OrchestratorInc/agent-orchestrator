@@ -7931,6 +7931,41 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 }
 
+// TestSpawn_TUIKiroEffortIsPassedThroughAndPersisted asserts Kiro accepts an
+// explicit effort override even though its catalog advertises no effort levels,
+// passes it to the adapter, and keeps it durable for a later TUI rebuild.
+func TestSpawn_TUIKiroEffortIsPassedThroughAndPersisted(t *testing.T) {
+	m, st, rt, _ := newManager()
+	agent := &recordingAgent{}
+	m.agents = singleAgent{agent: agent}
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID:      "mer",
+		Kind:           domain.KindWorker,
+		Harness:        domain.HarnessKiro,
+		RequestedMode:  domain.SessionModeTUI,
+		Prompt:         "do the work",
+		AgentConfig:    ports.AgentConfig{Effort: "high"},
+		EffortOverride: true,
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if rt.created != 1 {
+		t.Fatalf("runtime creates = %d, want 1", rt.created)
+	}
+	if agent.lastConfig.Effort != "high" {
+		t.Fatalf("launch effort = %q, want high", agent.lastConfig.Effort)
+	}
+	stored, ok := st.sessions[rec.ID]
+	if !ok {
+		t.Fatal("spawned session row missing")
+	}
+	if stored.Metadata.Effort != "high" {
+		t.Fatalf("persisted effort = %q, want high", stored.Metadata.Effort)
+	}
+}
+
 func TestSpawn_RejectsFreshClaudeAuthInWorkspaceLaunchContext(t *testing.T) {
 	m, st, rt, ws := newManager()
 	project := st.projects["mer"]
