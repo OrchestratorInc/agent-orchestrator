@@ -49,6 +49,21 @@ func TestOMPDispatchesManagedExtensionActivity(t *testing.T) {
 	}
 }
 
+func TestCopilotDispatchesNotificationAndPreToolUse(t *testing.T) {
+	got, ok := Derive("copilot", "pre-tool-use", []byte(`{"toolName":"bash"}`))
+	if !ok || got != domain.ActivityActive {
+		t.Fatalf("Derive(copilot, pre-tool-use) = (%q, %v), want (%q, true)", got, ok, domain.ActivityActive)
+	}
+	got, ok = Derive("copilot", "notification", []byte(`{"notification_type":"permission_prompt"}`))
+	if !ok || got != domain.ActivityWaitingInput {
+		t.Fatalf("Derive(copilot, notification) = (%q, %v), want (%q, true)", got, ok, domain.ActivityWaitingInput)
+	}
+	got, ok = Derive("copilot", "permission-request", []byte(`{"toolName":"bash"}`))
+	if ok || got != "" {
+		t.Fatalf("Derive(copilot, permission-request) = (%q, %v), want (\"\", false)", got, ok)
+	}
+}
+
 func TestAmpPiAndAuggieDispatchActivity(t *testing.T) {
 	tests := []struct {
 		agent   string
