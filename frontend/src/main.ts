@@ -54,6 +54,7 @@ import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
 import { closeDaemonLog, openDaemonLog, writeDaemonLog } from "./main/daemon-log";
+import { bootDaemonAndWindow } from "./main/daemon-boot-gate";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
@@ -3470,15 +3471,15 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
-	// Boot the daemon alongside the window, not after it: the board cannot show
-	// until the daemon answers. createWindow links the browser runtime itself
-	// when the daemon is already ready by the time the window exists. Windows
-	// keeps the old order until this path has been tried there.
-	const daemonStartsWithWindow = process.platform !== "win32";
-	if (daemonStartsWithWindow) void startDaemon();
-	await createWindow();
-	if (browserQuitRequested) return;
-	if (!daemonStartsWithWindow) void startDaemon();
+	// Boot the daemon BEFORE the window: the board cannot show until the daemon
+	// answers, so give the start a bounded wait instead of racing the first
+	// paint. Windows keeps the old order until this path has been tried there.
+	await bootDaemonAndWindow({
+		startDaemon,
+		createWindow,
+		isWindows: process.platform === "win32",
+		shouldAbort: () => browserQuitRequested,
+	});
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a
