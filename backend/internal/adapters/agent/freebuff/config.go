@@ -88,24 +88,25 @@ func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 
 // writeFileAtomic replaces path through a sibling temp file, so a Freebuff
 // process starting concurrently never reads a half-written settings file.
-func writeFileAtomic(dir, path string, data []byte) (err error) {
+func writeFileAtomic(dir, path string, data []byte) error {
 	tmp, err := os.CreateTemp(dir, ".settings-*.json")
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-	if _, err = tmp.Write(data); err != nil {
+	if _, writeErr := tmp.Write(data); writeErr != nil {
 		_ = tmp.Close()
-		return err
+		_ = os.Remove(tmp.Name())
+		return writeErr
 	}
-	if err = tmp.Close(); err != nil {
-		return err
+	if closeErr := tmp.Close(); closeErr != nil {
+		_ = os.Remove(tmp.Name())
+		return closeErr
 	}
-	return os.Rename(tmp.Name(), path)
+	if renameErr := os.Rename(tmp.Name(), path); renameErr != nil {
+		_ = os.Remove(tmp.Name())
+		return renameErr
+	}
+	return nil
 }
 
 // chatsDir is where Freebuff keeps a project's conversations:
