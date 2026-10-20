@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDesktopLogWriter, initializeDesktopLog } from "./desktop-log";
 
 const dirs: string[] = [];
-const dataDir = () => { const dir = mkdtempSync(path.join(os.homedir(), ".ao", "desktop-log-test-")); dirs.push(dir); return dir; };
+const dataDir = () => { const dir = mkdtempSync(path.join(os.tmpdir(), "desktop-log-test-")); dirs.push(dir); return dir; };
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe("desktop.log", () => {
 	it("writes private log entries under the data directory", () => {
