@@ -680,7 +680,7 @@ describe("TerminalPane replay cover", () => {
 		try {
 			const cover = screen.getByTestId("terminal-replay-cover");
 			expect(cover).toBeInTheDocument();
-			expect(cover).toHaveClass("bg-terminal-opaque", "pointer-events-none");
+			expect(cover).toHaveClass("bg-terminal-plate", "pointer-events-none");
 			expect(cover).not.toHaveClass("terminal-surface");
 			// xterm keeps rendering underneath — covered, never unmounted, so the
 			// grid it measures stays correct.

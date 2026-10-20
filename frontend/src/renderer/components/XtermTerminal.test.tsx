@@ -803,8 +803,8 @@ describe("XtermTerminal", () => {
 		const style = document.createElement("style");
 		style.textContent = `
 			:root {
-				--color-bg-terminal-opaque: #101317;
-				--color-text-terminal: #d7d7d2;
+				--terminal-plate: #101317;
+				--terminal-plate-foreground: #d7d7d2;
 				--color-working: #60a5fa;
 			}
 		`;
@@ -836,8 +836,8 @@ describe("XtermTerminal", () => {
 		const style = document.createElement("style");
 		style.textContent = `
 			:root {
-				--color-bg-terminal-opaque: #f5f5f4;
-				--color-text-terminal: #24292f;
+				--terminal-plate: #101317;
+				--terminal-plate-foreground: #d7d7d2;
 				--color-working: #2563eb;
 			}
 		`;
@@ -848,10 +848,10 @@ describe("XtermTerminal", () => {
 		try {
 			render(<XtermTerminal theme="light" />);
 			expect(state.lastTerminal!.options.theme).toMatchObject({
-				background: "#f5f5f4",
-				foreground: "#24292f",
-				cursor: "#24292f",
-				cursorAccent: "#f5f5f4",
+				background: "#101317",
+				foreground: "#d7d7d2",
+				cursor: "#d7d7d2",
+				cursorAccent: "#101317",
 			});
 		} finally {
 			style.remove();

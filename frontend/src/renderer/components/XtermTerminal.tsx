@@ -1272,7 +1272,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		resizeCover.setAttribute("aria-hidden", "true");
 		Object.assign(resizeCover.style, {
 			position: "absolute", pointerEvents: "none", zIndex: "1",
-			backgroundColor: "var(--color-bg-terminal-opaque)",
+			backgroundColor: "var(--terminal-plate)",
 		});
 		let hasResizeFrame = false;
 		const cancelResizeCover = () => {
@@ -1951,7 +1951,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 					ref={hostRef}
 					className={macPlatform ? "terminal-xterm-host terminal-xterm-host--mac" : "terminal-xterm-host"}
 					style={{
-						backgroundColor: "var(--color-bg-terminal-opaque)",
+						backgroundColor: "var(--terminal-plate)",
 						position: "relative",
 						contain: "paint",
 						minWidth: 0,

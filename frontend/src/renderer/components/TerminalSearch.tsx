@@ -165,7 +165,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			<input
 				aria-label={t("terminal.search")}
 				aria-invalid={!queryIsValid || undefined}
-				className="h-7 min-w-0 flex-1 bg-transparent px-2 font-mono text-xs text-foreground outline-none placeholder:text-terminal-dim aria-invalid:text-destructive"
+				className="h-7 min-w-0 flex-1 bg-transparent px-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground aria-invalid:text-destructive"
 				maxLength={512}
 				onChange={(event) => setQuery(event.target.value)}
 				placeholder={t("terminal.searchPlaceholder")}
@@ -180,7 +180,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 						: t("terminal.searchInvalidRegex")
 				}
 				aria-live="polite"
-				className="min-w-9 text-center font-mono text-2xs tabular-nums text-terminal-dim"
+				className="min-w-9 text-center font-mono text-2xs tabular-nums text-muted-foreground"
 			>
 				{resultLabel}
 			</span>
