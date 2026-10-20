@@ -195,10 +195,12 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 
 func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 	// Source installs append a date, channel, or commit; Homebrew and desktop
-	// bundles report the release. Every release from v0.21.6 on is accepted.
+	// bundles report the release. Every v0.21 or later release line is accepted.
 	for _, line := range []string{
 		"Hermes Agent v0.21.6",
 		"Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be",
+		// Homebrew 0.22.2 reading tags from a stray checkout under HERMES_HOME.
+		"Hermes Agent v0.21.5+9180.g818c13b (2026.9.24) · upstream d87e7536",
 		"Hermes Agent v0.21.7 (2026.9.24) · local 1a2b3c4d (+2 carried commits)",
 		"Hermes Agent v0.22.2 · stable · d923a5e",
 		"Hermes Agent v0.22.0+3.gabc1234 (2026.9.24)",
@@ -210,7 +212,7 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 		}
 	}
 
-	for _, output := range []string{"Hermes Agent v0.21.5", "Hermes Agent v0.20.9", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
+	for _, output := range []string{"Hermes Agent v0.20.9", "Hermes Agent v0.19.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
 		first, _, _ := strings.Cut(output, "\n")
 		if supportedNativeVersion(first) {
 			t.Fatalf("accepted version %q", output)

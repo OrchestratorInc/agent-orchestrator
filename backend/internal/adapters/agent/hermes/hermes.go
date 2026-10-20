@@ -137,12 +137,15 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	return false, fmt.Sprintf("unsupported version banner %q", firstLine), false
 }
 
-// minNativeVersion is the first release with the --continue <title>
-// --create-if-missing session flags and classic CLI chrome AO drives.
-var minNativeVersion = [3]int{0, 21, 6}
+// minNativeVersion is the first release line with the --continue <title>
+// --create-if-missing session flags and classic CLI chrome AO drives. Only
+// major.minor is compared: Hermes derives its banner from git tags, so the
+// same build can report v0.21.6 or v0.21.5+N.g<sha> depending on which tags a
+// checkout under HERMES_HOME has.
+var minNativeVersion = [2]int{0, 21}
 
-// supportedNativeVersion accepts a Hermes --version first line at or above
-// minNativeVersion.
+// supportedNativeVersion accepts a Hermes --version first line whose release
+// line is at or above minNativeVersion.
 func supportedNativeVersion(line string) bool {
 	m := nativeVersionLine.FindStringSubmatch(line)
 	if m == nil {
