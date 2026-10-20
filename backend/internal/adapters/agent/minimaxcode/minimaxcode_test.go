@@ -316,3 +316,39 @@ func TestSnapshotRefusesConcurrentSourceEscape(t *testing.T) {
 		t.Fatalf("snapshot wrote a replaced source: %v", err)
 	}
 }
+
+func TestSnapshotFollowsSymlinkedSkills(t *testing.T) {
+	home := t.TempDir()
+	shared := filepath.Join(home, ".agents", "skills", "gsap-core")
+	if err := os.MkdirAll(shared, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "SKILL.md"), []byte("shared skill"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	skills := filepath.Join(home, ".minimax", "skills")
+	if err := os.MkdirAll(skills, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../.agents/skills/gsap-core", filepath.Join(skills, "gsap-core")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Symlink("../../.agents/skills/missing", filepath.Join(skills, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "skills")
+	if err := copyProfileTree(context.Background(), skills, target); err != nil {
+		t.Fatalf("symlinked skill refused: %v", err)
+	}
+	copied := filepath.Join(target, "gsap-core", "SKILL.md")
+	info, err := os.Lstat(copied)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("skill content not snapshotted as a regular file: %v", err)
+	}
+	if b, _ := os.ReadFile(copied); string(b) != "shared skill" {
+		t.Fatalf("snapshotted skill = %q", b)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "dangling")); !os.IsNotExist(err) {
+		t.Fatalf("dangling skill link produced output: %v", err)
+	}
+}

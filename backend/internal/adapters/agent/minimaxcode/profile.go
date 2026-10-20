@@ -278,7 +278,40 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 	return nil
 }
 
+// Skill installers commonly link one shared copy of a skill into each agent's
+// profile, so these resource trees snapshot the content behind symlinked
+// entries. Credentials, policy and instruction files keep refusing links.
+var linkedProfileResources = map[string]bool{"skills": true, "agents": true, "subagents": true, "plugins": true}
+
+const maxProfileLinkDepth = 8
+
+type profileSnapshot struct {
+	followLinks bool
+	count       int
+	bytes       int64
+}
+
 func copyProfileTree(ctx context.Context, source, target string) error {
+	snapshot := &profileSnapshot{followLinks: linkedProfileResources[filepath.Base(source)]}
+	return snapshot.copyTree(ctx, source, target, 0)
+}
+
+// copyLink snapshots a followed symlink's resolved content at target. Dangling
+// links contribute nothing; link chains and cycles are bounded by depth.
+func (s *profileSnapshot) copyLink(ctx context.Context, link, target string, depth int) error {
+	if depth >= maxProfileLinkDepth {
+		return fmt.Errorf("MiniMax profile snapshot symlink %q nests too deeply", link)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return s.copyTree(ctx, resolved, target, depth+1)
+}
+
+func (s *profileSnapshot) copyTree(ctx context.Context, source, target string, depth int) error {
 	if _, err := os.Lstat(source); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
@@ -291,8 +324,6 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 		return err
 	}
 	defer func() { _ = sourceRoot.Close() }()
-	count := 0
-	var bytes int64
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -300,23 +331,26 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("MiniMax profile snapshot refuses symlink %q; use a regular file or directory in the source profile", path)
-		}
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
 		}
 		dst := filepath.Join(target, rel)
+		if entry.Type()&os.ModeSymlink != 0 {
+			if !s.followLinks {
+				return fmt.Errorf("MiniMax profile snapshot refuses symlink %q; use a regular file or directory in the source profile", path)
+			}
+			return s.copyLink(ctx, path, dst, depth)
+		}
 		if entry.IsDir() {
 			return os.MkdirAll(dst, 0o700)
 		}
-		count++
+		s.count++
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		if count > 10000 || !info.Mode().IsRegular() || info.Size() > 16<<20 {
+		if s.count > 10000 || !info.Mode().IsRegular() || info.Size() > 16<<20 {
 			return errors.New("MiniMax profile snapshot exceeds bounds")
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
@@ -341,8 +375,8 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 		}(); err != nil {
 			return err
 		}
-		bytes += int64(len(b))
-		if len(b) > 16<<20 || bytes > 64<<20 {
+		s.bytes += int64(len(b))
+		if len(b) > 16<<20 || s.bytes > 64<<20 {
 			return errors.New("MiniMax profile snapshot exceeds bounds")
 		}
 		mode := fs.FileMode(0o600)
