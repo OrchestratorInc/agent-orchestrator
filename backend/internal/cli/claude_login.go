@@ -62,7 +62,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
-	if err := c.deps.RunInteractiveCommand(ctx, claude, args, in, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, claude, "", args, in, out, stderr); err != nil {
 		return fmt.Errorf("claude login failed: %w", err)
 	}
 	// The newest sign-in wins: a setup token saved earlier would otherwise keep
