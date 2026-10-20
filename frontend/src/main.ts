@@ -161,6 +161,7 @@ import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { configureBrowserWebAuthn, createWebAuthnAccountChooser } from "./main/browser-webauthn";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
@@ -1002,6 +1003,10 @@ async function createWindowInternal(): Promise<void> {
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
 			shell,
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
+		}),
+		webAuthnAccountChooser: createWebAuthnAccountChooser({
+			showMessageBox: (options) =>
+				mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		clipboard: { writeImage: writeClipboardImage },
@@ -3251,6 +3256,8 @@ async function writeAppStateOnLaunch(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+	// Before any window exists, so a Browser tab's first passkey request can use Touch ID.
+	configureBrowserWebAuthn({ app, platform: process.platform, resourcesPath: process.resourcesPath });
 	if (app.isPackaged) {
 		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
 		await checkDesktopVersionFloor().catch((err) =>

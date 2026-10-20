@@ -117,18 +117,27 @@ describe("native runtime resources", () => {
 
 type MacSignOptions = {
 	identity?: string;
-	optionsForFile?: typeof macSignOptionsForFile;
+	optionsForFile?: (filePath: string) => ReturnType<typeof macSignOptionsForFile>;
+	provisioningProfile?: string;
 };
 
-async function loadMacSignOptions(env: {
+type SigningEnv = {
 	APPLE_SIGNING_IDENTITY?: string;
 	CSC_LINK?: string;
-}): Promise<MacSignOptions | undefined> {
+	AO_MAC_PROVISIONING_PROFILE?: string;
+};
+
+async function loadConfig(env: SigningEnv): Promise<typeof config> {
 	vi.stubEnv("APPLE_SIGNING_IDENTITY", env.APPLE_SIGNING_IDENTITY ?? "");
 	vi.stubEnv("CSC_LINK", env.CSC_LINK ?? "");
+	vi.stubEnv("AO_MAC_PROVISIONING_PROFILE", env.AO_MAC_PROVISIONING_PROFILE ?? "");
 	vi.resetModules();
 	const { default: envConfig } = await import("./forge.config");
-	return envConfig.packagerConfig?.osxSign as MacSignOptions | undefined;
+	return envConfig;
+}
+
+async function loadMacSignOptions(env: SigningEnv): Promise<MacSignOptions | undefined> {
+	return (await loadConfig(env)).packagerConfig?.osxSign as MacSignOptions | undefined;
 }
 
 afterEach(() => {
@@ -209,6 +218,66 @@ describe("macOS signing", () => {
 
 	it("leaves unsigned local packages unsigned", async () => {
 		await expect(loadMacSignOptions({})).resolves.toBeUndefined();
+	});
+
+	it("gives only the top-level app the passkey entitlements of a provisioned build", () => {
+		const app = join(fixtureDir, "out", "Agent Orchestrator.app");
+		const helper = join(app, "Contents", "Frameworks", "Agent Orchestrator Helper (Renderer).app");
+		const executable = join(app, "Contents", "MacOS", "agent-orchestrator");
+
+		expect(macSignOptionsForFile(app, "/tmp/app-entitlements.plist")).toEqual({ entitlements: "/tmp/app-entitlements.plist" });
+		// Nested code embeds no profile, so it must never carry keychain-access-groups.
+		expect(macSignOptionsForFile(helper, "/tmp/app-entitlements.plist")).toEqual({});
+		expect(macSignOptionsForFile(executable, "/tmp/app-entitlements.plist")).toEqual({});
+		// Without a profile the app keeps electron-osx-sign's defaults.
+		expect(macSignOptionsForFile(app)).toEqual({});
+	});
+
+	it("embeds the passkey provisioning profile only when the signer provides one", async () => {
+		const provisioned = await loadMacSignOptions({
+			APPLE_SIGNING_IDENTITY: "Developer ID Application: AO (TEAMID)",
+			AO_MAC_PROVISIONING_PROFILE: "/secure/ao.provisionprofile",
+		});
+		expect(provisioned?.provisioningProfile).toBe("/secure/ao.provisionprofile");
+
+		const unprovisioned = await loadMacSignOptions({ APPLE_SIGNING_IDENTITY: "Developer ID Application: AO (TEAMID)" });
+		expect(unprovisioned).not.toHaveProperty("provisioningProfile");
+	});
+});
+
+describe("macOS Touch ID passkeys", () => {
+	it("ships webauthn.json only in a macOS build signed with a passkey profile", () => {
+		const provisioned = { AO_MAC_PROVISIONING_PROFILE: "/secure/ao.provisionprofile" };
+
+		expect(extraResourcesForPlatform("darwin", provisioned)).toContain("webauthn.json");
+		expect(extraResourcesForPlatform("darwin", {})).not.toContain("webauthn.json");
+		expect(extraResourcesForPlatform("linux", provisioned)).not.toContain("webauthn.json");
+		expect(extraResourcesForPlatform("win32", provisioned)).not.toContain("webauthn.json");
+	});
+
+	it("fails packaging when a provisioned app lost its profile or passkey resource", async () => {
+		const envConfig = await loadConfig({
+			APPLE_SIGNING_IDENTITY: "Developer ID Application: AO (TEAMID)",
+			AO_MAC_PROVISIONING_PROFILE: "/secure/ao.provisionprofile",
+		});
+		const contents = join(fixtureDir, "AO.app", "Contents");
+		const resources = join(contents, "Resources");
+		mkdirSync(join(resources, "update-helper"), { recursive: true });
+		mkdirSync(join(resources, "wake-helper"), { recursive: true });
+		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
+		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const hook = envConfig.hooks?.postPackage;
+		expect(hook).toBeTypeOf("function");
+		if (typeof hook !== "function") return;
+		const packageResult = { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] } as const;
+
+		// keychain-access-groups without the profile is an app macOS kills at launch.
+		await expect(hook(envConfig, packageResult)).rejects.toThrow("missing its provisioning profile");
+		writeFileSync(join(contents, "embedded.provisionprofile"), "");
+		await expect(hook(envConfig, packageResult)).rejects.toThrow("missing webauthn.json");
+		writeFileSync(join(resources, "webauthn.json"), "{}");
+		// Past both checks, packaging moves on to the existing tmux verification.
+		await expect(hook(envConfig, packageResult)).rejects.toThrow("packaged tmux missing");
 	});
 });
 

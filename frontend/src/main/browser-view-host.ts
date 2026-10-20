@@ -47,6 +47,7 @@ import type {
 import type { BrowserProfileStore } from "./browser-profile-store";
 import type { BrowserHistoryStore } from "./browser-history-store";
 import type { BrowserDownloadManager } from "./browser-download-manager";
+import type { WebAuthnAccountChooser } from "./browser-webauthn";
 import type { BrowserDownloadActionInput } from "../shared/browser-downloads";
 import { matchInstruction } from "./browser-act-matcher";
 import { trustPreviewCertificate } from "./preview-certificate";
@@ -486,6 +487,8 @@ export type BrowserViewHostOptions = {
   browserProfileStore?: BrowserProfileStore;
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
+  // Answers passkey account selection for every Browser tab session.
+  webAuthnAccountChooser?: WebAuthnAccountChooser;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
@@ -1088,6 +1091,7 @@ export function createBrowserViewHost(
     const viewSession = view.webContents.session;
     if (viewSession?.setCertificateVerifyProc) trustPreviewCertificate(viewSession);
     options.browserDownloadManager?.attach(view.webContents.session);
+    options.webAuthnAccountChooser?.attach(view.webContents.session);
     let scrollbarStyleKey: string | undefined;
     let scrollbarStyleUpdate = Promise.resolve();
     const applyScrollbarStyle = (): void => {
@@ -4463,6 +4467,7 @@ export function createBrowserViewHost(
       disposePromise = (async () => {
         ipcDisposers.splice(0).forEach((dispose) => dispose());
         options.browserDownloadManager?.dispose();
+        options.webAuthnAccountChooser?.dispose();
         for (const viewId of [...entries.keys()]) {
           destroy(viewId);
         }
