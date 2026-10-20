@@ -44,6 +44,48 @@ func TestCreateSessionInitialEffort(t *testing.T) {
 	}
 }
 
+// A session starts in the interface the client asks for. Chat for a harness
+// without a Chat controller is refused as the local daemon refuses it
+// (SESSION_MODE_UNSUPPORTED), and an unknown interface is invalid.
+func TestCreateSessionInterfaceMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, harness, mode string
+		want                domain.SessionInterface
+		status              int
+	}{
+		{"chat", "claude-code", "chat", domain.SessionInterfaceChat, http.StatusCreated},
+		{"omitted", "claude-code", "", "", http.StatusCreated},
+		{"no chat controller", "aider", "chat", "", http.StatusConflict},
+		{"unknown", "claude-code", "gui", "", http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &stubAutolinkStore{}
+			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+			req := createSessionRequestHTTP(t, "worker", "")
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Replace(strings.TrimSuffix(string(body), "}"), `"harness":"claude-code"`, `"harness":"`+tc.harness+`"`, 1)
+			req.Body = io.NopCloser(strings.NewReader(text + `,"interfaceMode":"` + tc.mode + `"}`))
+			recorder := httptest.NewRecorder()
+			srv.createSession(recorder, req)
+			if recorder.Code != tc.status {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+			}
+			if tc.status == http.StatusCreated && store.captured.Interface != tc.want {
+				t.Fatalf("captured interface = %q, want %q", store.captured.Interface, tc.want)
+			}
+			if tc.status != http.StatusCreated && store.created {
+				t.Fatal("a refused interface created a session")
+			}
+			if tc.status == http.StatusConflict && !strings.Contains(recorder.Body.String(), "SESSION_MODE_UNSUPPORTED") {
+				t.Fatalf("refusal code missing: %s", recorder.Body)
+			}
+		})
+	}
+}
+
 // stubAutolinkStore embeds Store (nil) so it satisfies the interface while
 // implementing only the methods createSession reaches on the auto-link path.
 type stubAutolinkStore struct {

@@ -231,6 +231,7 @@ type meOfferingBody struct {
 		Default   string   `json:"default"`
 	} `json:"sandboxProviders"`
 	Organizations []organizationResponse `json:"organizations"`
+	ChatHarnesses []string               `json:"chatHarnesses"`
 }
 
 func getMe(t *testing.T, s *Server, principal domain.Principal) meOfferingBody {
@@ -247,6 +248,17 @@ func getMe(t *testing.T, s *Server, principal domain.Principal) meOfferingBody {
 		t.Fatalf("decode /me: %v", err)
 	}
 	return body
+}
+
+// /me lists the harnesses that can start in Chat, as the local daemon's
+// settings list chatHarnesses, so the composer decides Chat or terminal the
+// same way for a cloud project.
+func TestMeListsChatHarnesses(t *testing.T) {
+	store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
+	body := getMe(t, newOfferingServer(store), teamPrincipal())
+	if !slices.Equal(body.ChatHarnesses, chatHarnesses) || !chatControllerSupported("claude-code") || chatControllerSupported("aider") {
+		t.Fatalf("chatHarnesses = %v", body.ChatHarnesses)
+	}
 }
 
 // Every organization is offered Coder; a gated provider only with its

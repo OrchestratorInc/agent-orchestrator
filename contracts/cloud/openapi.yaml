@@ -2684,6 +2684,11 @@ components:
           $ref: "#/components/schemas/Offering"
         sandboxProviders:
           $ref: "#/components/schemas/SandboxProviders"
+        chatHarnesses:
+          type: array
+          description: Harnesses a session can start in, or switch to, Chat with.
+          items:
+            type: string
     AgentCapability:
       type: string
       enum:
@@ -4836,6 +4841,13 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            Interface the session starts in. Optional; omitted starts in the
+            terminal (tui). chat needs a harness listed in the current
+            account's chatHarnesses, else the request is refused with
+            SESSION_MODE_UNSUPPORTED.
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false

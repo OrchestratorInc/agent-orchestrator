@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -41,13 +42,13 @@ type startInterfaceTransitionRequest struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
-func (s *Server) interfaceTransitionSupported(harness string) bool {
-	switch harness {
-	case "claude-code", "codex", "cursor":
-		return true
-	default:
-		return false
-	}
+// chatHarnesses are the harnesses with a headless Chat controller in the
+// worker: a session can start in Chat or switch to it. The local daemon
+// publishes its own list the same way (settings chatHarnesses).
+var chatHarnesses = []string{"claude-code", "codex", "cursor"}
+
+func chatControllerSupported(harness string) bool {
+	return slices.Contains(chatHarnesses, harness)
 }
 
 // getSessionInterfaceTransition reports whether the session's harness can
@@ -66,7 +67,7 @@ func (s *Server) getSessionInterfaceTransition(w http.ResponseWriter, r *http.Re
 		return
 	}
 	status := interfaceTransitionStatusResponse{
-		Supported:  s.interfaceTransitionSupported(session.Harness),
+		Supported:  chatControllerSupported(session.Harness),
 		TargetMode: string(session.Interface.Opposite()),
 	}
 	if session.IsTerminated {
@@ -124,7 +125,7 @@ func (s *Server) startSessionInterfaceTransition(w http.ResponseWriter, r *http.
 			"Terminated sessions must be restored before switching interfaces.")
 		return
 	}
-	if !s.interfaceTransitionSupported(session.Harness) {
+	if !chatControllerSupported(session.Harness) {
 		writeError(w, r, http.StatusUnprocessableEntity, "INTERFACE_HANDOFF_UNSUPPORTED",
 			session.Harness+" does not support interface handoff.")
 		return
