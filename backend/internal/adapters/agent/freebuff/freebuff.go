@@ -7,12 +7,11 @@
 //
 //   - launches `freebuff --cwd <workspace>` and types the first turn after the
 //     composer is ready, carrying AO's standing instructions in that turn;
-//   - applies a model/effort choice through Freebuff's own settings.json
-//     (`freebuffModel`, `freebuffReasoningEfforts`), the same preference its
-//     /model picker persists, holding it until the launched TUI has read it;
+//   - seeds the canonical model under a startup guard, then pins the choice
+//     through the running TUI's /model picker before releasing that guard;
+//     reasoning effort and selection are confirmed before the first turn;
 //   - restores with `--continue <chat-id>`, resolving the exact chat by the
-//     project root Freebuff records in each chat's run-state.json, inside the
-//     config directory that session's process actually used.
+//     project root Freebuff records in each chat's run-state.json.
 //
 // Freebuff has no approval prompts, so every AO permission mode launches the
 // same command.
@@ -54,18 +53,19 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
-	leases         *modelLeases
+	startupMu      sync.Mutex
+	startupGates   map[string]*startupGate
 }
 
 // New returns a ready-to-register Freebuff adapter.
-func New() *Plugin { return &Plugin{leases: newModelLeases()} }
+func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAfterStartPromptBuilder = (*Plugin)(nil)
 var _ ports.AgentExitDetector = (*Plugin)(nil)
-var _ ports.AgentStartupReadyObserver = (*Plugin)(nil)
-var _ ports.AgentAfterStartSubmitConfirmer = (*Plugin)(nil)
+var _ ports.AgentStartupInitializer = (*Plugin)(nil)
+var _ ports.AgentStartupGuard = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -85,15 +85,15 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 // GetConfigSpec reports the model and reasoning-effort choices AO applies via
-// Freebuff's settings.json before launch.
+// Freebuff's native picker after launch.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelEffortConfigSpec(ctx,
-		"Freebuff model id, saved as Freebuff's picker selection before launch.",
-		"Reasoning effort for the chosen model; Freebuff ignores rungs the model does not offer.")
+		"Freebuff model id, selected in the running session's native picker.",
+		"Reasoning effort selected in the chosen model's native picker.")
 }
 
-// GetLaunchCommand builds `freebuff --cwd <workspace>`. The model choice is
-// applied by GetAgentHooks, which sees the session's real environment.
+// GetLaunchCommand builds `freebuff --cwd <workspace>`. Selection happens in
+// the running process so concurrent launches cannot overwrite each other.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -144,44 +144,9 @@ func (p *Plugin) BuildAfterStartPrompt(ctx context.Context, cfg ports.LaunchConf
 	return "## AO Standing Instructions\n\n" + standing + "\n\n## AO Task\n\n" + task, nil
 }
 
-// GetAgentHooks installs no hooks (Freebuff has none). It is the one
-// pre-launch step AO runs with the session's real environment on spawn,
-// restore and agent switch, so it records the config directory this session's
-// Freebuff uses and writes the requested model there. The selection stays
-// leased until AgentStartupReady, so a concurrent launch with another model
-// cannot replace it before this process reads it.
-func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if cfg.SessionID == "" {
-		return nil
-	}
-	dir := configDir(cfg.Env)
-	if err := writeSessionRecord(cfg.DataDir, cfg.SessionID, dir); err != nil {
-		return err
-	}
-	if strings.TrimSpace(cfg.Config.Model) == "" {
-		return nil
-	}
-	return p.modelLeases().acquire(ctx, dir, cfg.SessionID, modelSelection(cfg.Config), func() error {
-		return applyModelSelection(dir, cfg.Config)
-	})
-}
-
-// AgentStartupReady releases the session's model lease: a Freebuff TUI that
-// shows its composer has already read settings.json.
-func (p *Plugin) AgentStartupReady(sessionID string) {
-	p.modelLeases().release(sessionID)
-}
-
-func (p *Plugin) modelLeases() *modelLeases {
-	p.binaryMu.Lock()
-	defer p.binaryMu.Unlock()
-	if p.leases == nil {
-		p.leases = newModelLeases()
-	}
-	return p.leases
+// GetAgentHooks is a no-op: Freebuff has no hook system.
+func (p *Plugin) GetAgentHooks(ctx context.Context, _ ports.WorkspaceHookConfig) error {
+	return ctx.Err()
 }
 
 // GetRestoreCommand continues the session's exact Freebuff chat. Without a
@@ -195,7 +160,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	dir := sessionConfigDir(cfg.DataDir, cfg.Session.ID)
+	dir := configDir(cfg.Env)
 	chatID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if chatID == "" || !chatExists(dir, workspace, chatID) {
 		chatID, err = latestChatID(dir, workspace)
@@ -220,7 +185,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	}
 	info, ok := agentbase.StandardSessionInfo(session)
 	if info.AgentSessionID == "" && session.WorkspacePath != "" {
-		if chatID, err := latestChatID(sessionConfigDir(session.DataDir, session.ID), session.WorkspacePath); err == nil && chatID != "" {
+		if chatID, err := latestChatID(configDir(nil), session.WorkspacePath); err == nil && chatID != "" {
 			info.AgentSessionID = chatID
 			ok = true
 		}

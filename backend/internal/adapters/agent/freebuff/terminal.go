@@ -2,9 +2,11 @@ package freebuff
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -13,145 +15,231 @@ import (
 
 // Freebuff's composer placeholder names the run state: "Enter a coding task"
 // when idle, "Add to the current task" while a run is in flight (Enter steers
-// the running task). During a run the status bar row shows "thinking..." or
-// "working..." with the "■ Esc" stop button on the same row.
+// the running task). The status bar shows "thinking..." or "working..." next to
+// a "■ Esc" stop button during a run.
 const (
-	idlePlaceholder   = "Enter a coding task"
-	activePlaceholder = "Add to the current task"
-	stopButton        = "■ Esc"
+	idlePlaceholder   = "Enter a coding task or / for commands"
+	activePlaceholder = "Add to the current task (/ for commands)"
 )
 
-var runningStatus = []string{"thinking...", "working..."}
+var activeStatus = regexp.MustCompile(`^(?:thinking|working)\.{3}(?:\s.*)?\s■ Esc(?:\s.*)?$`)
+var nativeCursorSGR = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-// tailLines covers Freebuff's composer, status bar and footer chrome.
-const tailLines = 12
-
-// PromptReadinessHints waits for the idle composer before typing the first turn.
-// Freebuff may hold a new session in a model queue first, so the wait is long.
+// PromptReadinessHints retains a short settling delay after initialization.
+// InitializeTerminal already requires a positively empty current composer;
+// raw text patterns could mistake a historical prompt for readiness.
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	return ports.PromptReadinessHints{
 		InitialDelay: 500 * time.Millisecond,
 		Timeout:      60 * time.Second,
 		PollInterval: 200 * time.Millisecond,
 		Lines:        60,
-		Patterns:     []string{idlePlaceholder},
 	}, ctx.Err()
 }
 
-// ComposerIsEmpty reports whether Freebuff's composer shows its idle placeholder.
+// ComposerIsEmpty requires Freebuff's current input chrome and placeholder.
+// Unlike a dim-styled placeholder, Freebuff's placeholder uses a normal muted
+// color. Its focused empty input inserts a bold cursor before the placeholder;
+// a cursor over real draft text highlights its first character instead. Plain
+// captures and unfocused inputs cannot prove that distinction and fail closed.
 func (*Plugin) ComposerIsEmpty(output string) bool {
-	return composerPlaceholder(screenTail(output)) == idlePlaceholder
+	composer, ok := currentComposer(output)
+	return ok && composer.placeholder != "" && composer.placeholderCursor
 }
 
 // ContinuouslyDetectTerminalActivity samples Freebuff's screen every tick: it
 // has no hooks, so the terminal is the only activity signal.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// DetectTerminalActivity reads only Freebuff's current chrome: the status-bar
-// row and the newest composer placeholder. Marker text inside the transcript or
-// a human draft never counts.
+// TerminalActivityOptions retains the cursor styling needed to distinguish a
+// real placeholder from a human draft containing the same words.
+func (*Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
+	return ports.TerminalActivityOptions{PreferStyledOutput: true}
+}
+
+// DetectTerminalActivity reads Freebuff's current composer and status bar.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	lines := screenTail(output)
-	if statusBarRunning(lines) {
+	composer, ok := currentComposer(output)
+	if !ok {
+		return "", false
+	}
+	if activeStatus.MatchString(composer.status) || composer.status == "high demand — in line, starting soon..." {
 		return domain.ActivityActive, true
 	}
-	switch composerPlaceholder(lines) {
-	case activePlaceholder:
-		return domain.ActivityActive, true
-	case idlePlaceholder:
+	if composer.placeholder == idlePlaceholder {
 		return domain.ActivityIdle, true
 	}
 	return "", false
 }
 
-// PrimesAfterStartSubmit asks AO for a lone Enter into the empty composer
-// before the first turn. Freebuff ignores an empty submit, and until it has
-// seen a Return key it treats a bare line feed as Enter on Linux, which would
-// otherwise split a multi-line turn into several messages.
-func (*Plugin) PrimesAfterStartSubmit() bool { return true }
-
-// AfterStartSubmitState reads whether the typed first turn left the composer.
-// Freebuff's submit handler can read stale input when Enter lands right after
-// a large burst of typed text, leaving the whole turn as a draft.
-func (p *Plugin) AfterStartSubmitState(output, prompt string) ports.AfterStartSubmitState {
-	if _, known := p.DetectTerminalActivity(output); known {
-		// Running, or the composer is empty again: the turn was consumed.
-		return ports.AfterStartSubmitted
-	}
-	fragment := promptTailFragment(prompt)
-	if fragment != "" && strings.Contains(compact(strings.Join(screenTail(output), "")), fragment) {
-		return ports.AfterStartDraftPending
-	}
-	return ports.AfterStartSubmitUnknown
+type terminalComposer struct {
+	status            string
+	content           string
+	placeholder       string
+	placeholderCursor bool
 }
 
-func screenTail(output string) []string {
-	lines := strings.Split(strings.TrimSpace(terminalui.PlainTerminalText(output)), "\n")
-	if len(lines) > tailLines {
-		lines = lines[len(lines)-tailLines:]
+// currentComposer recognizes the last complete composer immediately above
+// Freebuff's native footer. Transcript words, quoted prompts, partial captures
+// and changed layouts do not provide authoritative activity or draft evidence.
+func currentComposer(output string) (terminalComposer, bool) {
+	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
+	lines := terminalui.PlainTerminalLines(output)
+	if len(raw) != len(lines) {
+		return terminalComposer{}, false
 	}
-	return lines
-}
-
-// composerPlaceholder returns the placeholder of the bottom-most composer row,
-// or "" when the composer holds text. A row counts only when the placeholder
-// starts it after the composer's border and prompt glyphs, so transcript
-// sentences that merely mention the words are ignored.
-func composerPlaceholder(lines []string) string {
-	for i := len(lines) - 1; i >= 0; i-- {
-		content := chromeContent(lines[i])
-		for _, placeholder := range []string{idlePlaceholder, activePlaceholder} {
-			if strings.HasPrefix(content, placeholder) {
-				return placeholder
-			}
-		}
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
 	}
-	return ""
-}
-
-// statusBarRunning matches the status-bar row itself: a running indicator
-// that starts the row together with the stop button rendered beside it.
-func statusBarRunning(lines []string) bool {
-	for _, line := range lines {
-		if !strings.Contains(line, stopButton) {
+	if last < 2 || strings.TrimSpace(lines[last]) != "← for history · ? for help" {
+		return terminalComposer{}, false
+	}
+	// The model/path/chat title can wrap. The closest complete bottom border
+	// separates that footer from the input; the title's text is never input.
+	for bottom := last - 1; bottom >= 0 && bottom >= last-12; bottom-- {
+		width := composerBorderWidth(lines[bottom], '╰', '╯')
+		if width == 0 {
 			continue
 		}
-		content := chromeContent(line)
-		for _, status := range runningStatus {
-			if strings.HasPrefix(content, status) {
-				return true
+		if !nativeFooter(lines[bottom+1 : last]) {
+			return terminalComposer{}, false
+		}
+		for top := bottom - 1; top >= 0; top-- {
+			if composerBorderWidth(lines[top], '╭', '╮') > 0 {
+				if composerBorderWidth(lines[top], '╭', '╮') != width || top+1 == bottom {
+					return terminalComposer{}, false
+				}
+				contents := make([]string, 0, bottom-top-1)
+				styled := make([]string, 0, bottom-top-1)
+				for i := top + 1; i < bottom; i++ {
+					row := []rune(strings.TrimSpace(lines[i]))
+					if len(row) < 2 || ansi.StringWidth(string(row)) != width || row[0] != '│' || row[len(row)-1] != '│' {
+						return terminalComposer{}, false
+					}
+					contents = append(contents, string(row[1:len(row)-1]))
+					// The first visible border is outside the input; keep all
+					// subsequent SGR sequences, including the cursor's bold.
+					styled = append(styled, raw[i][strings.Index(raw[i], "│")+len("│"):])
+				}
+				return classifyComposer(lines, top, contents, styled), true
+			}
+			// Interior rows must be complete; do not look through another
+			// box or clipped content to an older transcript border.
+			if !strings.HasPrefix(strings.TrimSpace(lines[top]), "│") {
+				return terminalComposer{}, false
 			}
 		}
+		return terminalComposer{}, false
 	}
-	return false
-}
-
-// chromeContent strips the leading border, prompt glyph and padding that
-// Freebuff draws around its composer and status bar.
-func chromeContent(line string) string {
-	return strings.TrimLeftFunc(line, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-}
-
-// promptTailFragment is the end of the turn's last line, which sits beside the
-// cursor in a composer still holding the draft.
-func promptTailFragment(prompt string) string {
-	lines := strings.Split(strings.TrimSpace(prompt), "\n")
-	runes := []rune(compact(lines[len(lines)-1]))
-	if len(runes) > 24 {
-		runes = runes[len(runes)-24:]
-	}
-	return string(runes)
-}
-
-// compact drops whitespace and box-drawing characters, so a draft wrapped
-// across composer rows still matches the text AO typed.
-func compact(text string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || (r >= 0x2500 && r <= 0x259F) {
-			return -1
+	// Short terminals use a borderless input with a native ❯ prompt. Require
+	// the full footer and placeholder cursor before accepting this narrower
+	// layout; arbitrary transcript prompts are insufficient.
+	for top := last - 2; top >= 0 && top >= last-12; top-- {
+		line := strings.TrimSpace(lines[top])
+		if strings.HasPrefix(line, "❯") {
+			for footer := top + 1; footer < last; footer++ {
+				if !nativeFooter(lines[footer:last]) {
+					continue
+				}
+				contents := append([]string{strings.TrimPrefix(line, "❯")}, lines[top+1:footer]...)
+				styled := append([]string{raw[top][strings.Index(raw[top], "❯")+len("❯"):]}, raw[top+1:footer]...)
+				composer := classifyComposer(lines, top, contents, styled)
+				if composer.placeholder != "" && composer.placeholderCursor {
+					return composer, true
+				}
+			}
+			return terminalComposer{}, false
 		}
-		return r
-	}, text)
+	}
+	return terminalComposer{}, false
+}
+
+func nativeFooter(lines []string) bool {
+	rows := make([]string, len(lines))
+	for i, line := range lines {
+		rows[i] = strings.TrimSpace(line)
+		if strings.HasPrefix(rows[i], "│") {
+			return false
+		}
+	}
+	return strings.Contains(strings.Join(rows, " "), " · /model to change · Chat: ")
+}
+
+func classifyComposer(lines []string, top int, contents, styled []string) terminalComposer {
+	composer := terminalComposer{}
+	if top > 0 {
+		composer.status = strings.TrimSpace(lines[top-1])
+	}
+	var text []string
+	var content []string
+	for i, row := range contents {
+		row = strings.TrimSpace(row)
+		content = append(content, withoutNativeCursor(row, styled[i]))
+		if row == "" {
+			continue
+		}
+		if len(text) == 0 {
+			composer.placeholderCursor = terminalui.LastPromptHasBoldMarker(styled[i], "▍")
+		}
+		text = append(text, row)
+	}
+	value := strings.Join(text, " ")
+	composer.content = strings.TrimSpace(strings.Join(content, "\n"))
+	if !strings.HasPrefix(value, "▍") {
+		return composer
+	}
+	value = strings.TrimPrefix(value, "▍")
+	switch value {
+	case idlePlaceholder, activePlaceholder:
+		composer.placeholder = value
+	case "Enter a coding task": // Freebuff abbreviates below 65 columns.
+		composer.placeholder = idlePlaceholder
+	case "Add to the current task":
+		composer.placeholder = activePlaceholder
+	}
+	return composer
+}
+
+// The native cursor can sit at either end or inside an input row. Preserve
+// literal human-authored ▍ characters; remove only glyphs whose current SGR
+// state marks them as the native bold cursor.
+func withoutNativeCursor(content, styled string) string {
+	var cursor []bool
+	for offset := 0; offset < len(styled); {
+		position := strings.Index(styled[offset:], "▍")
+		if position < 0 {
+			break
+		}
+		position += offset
+		styles := strings.Join(nativeCursorSGR.FindAllString(styled[:position], -1), "")
+		cursor = append(cursor, terminalui.LastPromptHasBoldMarker(styles+"▍", "▍"))
+		offset = position + len("▍")
+	}
+	var text strings.Builder
+	index := 0
+	for _, r := range content {
+		if r == '▍' {
+			remove := index < len(cursor) && cursor[index]
+			index++
+			if remove {
+				continue
+			}
+		}
+		text.WriteRune(r)
+	}
+	return text.String()
+}
+
+func composerBorderWidth(line string, left, right rune) int {
+	runes := []rune(strings.TrimSpace(line))
+	if len(runes) < 4 || runes[0] != left || runes[len(runes)-1] != right {
+		return 0
+	}
+	for _, r := range runes[1 : len(runes)-1] {
+		if r != '─' {
+			return 0
+		}
+	}
+	return len(runes)
 }

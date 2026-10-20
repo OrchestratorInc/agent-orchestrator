@@ -1016,7 +1016,9 @@ func (r *Runtime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lin
 	return tailLines(trimTrailingBlankLines(string(out)), lines), nil
 }
 
-// GetStyledOutput is GetOutput with tmux's -e flag so SGR styling is retained.
+// GetStyledOutput returns bounded current viewport rows with SGR styling.
+// Unlike GetOutput, it excludes history because callers use it as live input
+// evidence before writing to a composer's current draft.
 func (r *Runtime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	id, err := handleID(handle)
 	if err != nil {
@@ -1025,7 +1027,7 @@ func (r *Runtime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandl
 	if lines <= 0 {
 		return "", errors.New("tmux runtime: lines must be positive")
 	}
-	out, err := r.runForSession(ctx, id, capturePaneStyledArgs(id, lines)...)
+	out, err := r.runForSession(ctx, id, capturePaneStyledArgs(id)...)
 	if err != nil {
 		return "", fmt.Errorf("tmux runtime: capture styled output %s: %w", id, err)
 	}

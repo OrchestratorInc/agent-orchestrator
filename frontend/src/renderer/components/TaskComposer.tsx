@@ -550,8 +550,17 @@ export function TaskComposer({
 		onEffortReset: setEffort,
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
+	// Freebuff's native catalog enumerates each model's entire effort ladder;
+	// an omitted ladder there means the model has no effort setting.
+	const effortCapabilitiesKnown = modelCatalogQuery.data !== undefined && (selectedAgent === "freebuff" || !effortModel || effortModel.efforts !== undefined);
+	// A refreshed catalog can remove a rung without changing the selected model.
+	// Keep an unknown choice until capabilities arrive, then use only levels the
+	// selected model advertises rather than submitting a stale saved override.
+	const selectedEffort = effort && effort !== "default" && (!effortCapabilitiesKnown || effortOptions.includes(effort)) ? effort : "";
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
-	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
+	const inheritedEffortForAgent = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
+	const incompatibleInheritedEffort = Boolean(inheritedEffortForAgent && effortCapabilitiesKnown && !effortOptions.includes(inheritedEffortForAgent));
+	const inheritedEffort = incompatibleInheritedEffort ? "" : inheritedEffortForAgent;
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
@@ -563,12 +572,9 @@ export function TaskComposer({
 		!(chatHarnesses ?? []).includes(selectedAgent);
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
-	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
-	// A level carried over from another harness or model is only sent when the
-	// selected model advertises it; with no advertised list it passes through.
-	const effortOffered = effortModel?.efforts === undefined || effortOptions.includes(effort);
-	const effectiveEffort = effort && effort !== "default" && effortOffered
-		? effort
+	const aoDefaultEffort = fallbackEffort(effortOptions, implicitEffort);
+	const effectiveEffort = selectedEffort
+		? selectedEffort
 		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
 	// Cursor's effort and thinking are part of its model id; its effort button swaps the id.
 	const cursorFamilies = listsModelVariants(selectedAgent)
@@ -581,22 +587,23 @@ export function TaskComposer({
 		setModelTouched(true);
 	};
 	const requestedEffort = isCloudProject
-		? (effortOffered ? effort : "") || cloudDefaultEffort || undefined
+		? selectedEffort || cloudDefaultEffort || undefined
 		: isStandalone
 		// Standalone sessions have no project role to inherit from. Send the
 		// concrete effort shown by the picker even when the UI is retrying in TUI
 		// mode, otherwise the native harness may use a different default.
 		? (effectiveEffort || undefined)
+		// An empty explicit override clears an incompatible project/role value.
+		: incompatibleInheritedEffort
+			? effectiveEffort
 		: effortTouched || rememberedEffortIsExplicit
 			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
 			: aoDefaultEffort;
-	const effortAvailability: EffortAvailability = requiresTuiFallback
-		? "launch-unavailable"
-		: !effortModel || effortModel.efforts === undefined
-			? "unknown"
-			: effortOptions.length > 0
-				? "supported"
-				: "unsupported";
+	const effortAvailability: EffortAvailability = !effortCapabilitiesKnown
+		? "unknown"
+		: effortOptions.length > 0
+			? "supported"
+			: "unsupported";
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
@@ -691,7 +698,7 @@ export function TaskComposer({
 				brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 				model: requestedModel,
-				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
+				// Send the selected model's effort consistently in Chat and Terminal UI.
 				effort: requestedEffort,
 				// The local daemon applies the default session mode itself; the control
 				// plane has none, so a cloud task carries it.
@@ -850,7 +857,7 @@ export function TaskComposer({
 				footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={cursorChoice ? cursorChoice.family.efforts.length > 1 : !requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
+			showEffort={cursorChoice ? cursorChoice.family.efforts.length > 1 : effortOptions.length > 0 || Boolean(selectedEffort)}
 		/>
 	);
 }
