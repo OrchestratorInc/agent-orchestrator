@@ -510,6 +510,7 @@ func run(logger *slog.Logger) error {
 			if runCtx.Err() != nil {
 				return
 			}
+			dropPendingReopen(checkoutRequested)
 			logger.Error("background workspace startup failed; waiting for session open", "error", err)
 			failure := checkoutStartupFailure(err)
 			reportWorkspaceStartup(runCtx, logger, client, failure)
@@ -559,6 +560,7 @@ func run(logger *slog.Logger) error {
 			if runCtx.Err() != nil {
 				return
 			}
+			dropPendingReopen(checkoutRequested)
 			failure := setupStartupFailure(*failed)
 			reportWorkspaceStartup(runCtx, logger, client, failure)
 			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {

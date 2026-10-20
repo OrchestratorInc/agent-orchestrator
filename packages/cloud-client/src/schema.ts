@@ -1728,6 +1728,8 @@ export interface components {
             organizations: components["schemas"]["OrganizationMembership"][];
             offering?: components["schemas"]["Offering"];
             sandboxProviders?: components["schemas"]["SandboxProviders"];
+            /** @description Harnesses a session can start in, or switch to, Chat with. */
+            chatHarnesses?: string[];
         };
         UserCloudPreferences: {
             sandboxProvider: string | null;
@@ -1863,7 +1865,7 @@ export interface components {
              */
             repository?: string;
         };
-        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. Only organization owners and admins may set them. */
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 30 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. Only organization owners and admins may set them. */
         ProjectScriptCommands: (string | components["schemas"]["ProjectScriptStep"])[];
         /** @description Coder dev-kit settings inherited by every Coder session of the project. */
         ProjectCoderConfig: {
@@ -2780,6 +2782,8 @@ export interface components {
             provider?: string;
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Interface the session starts in. Optional; omitted starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;

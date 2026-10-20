@@ -60,9 +60,10 @@ type Supervisor struct {
 	prObserver  *pullRequestObserver
 }
 
-// SetWorkspaceStartupError keeps Chat from running a prompt in an empty
-// checkout. The controller still claims queued turns so each receives a
-// durable failure instead of waiting forever for a workspace that cannot load.
+// SetWorkspaceStartupError keeps Chat from running a prompt in a workspace
+// whose checkout or Setup failed. Queued turns stay queued, as a failed local
+// start keeps its messages: the desktop shows the failure with Retry, and the
+// turns run once a retry prepares the workspace and this is cleared.
 func (s *Supervisor) SetWorkspaceStartupError(message string) {
 	if message == "" {
 		s.workspaceStartupError.Store(nil)
@@ -157,7 +158,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	for {
-		if s.stopping.Load() || s.drainFences.Load() > 0 {
+		if s.stopping.Load() || s.drainFences.Load() > 0 || s.workspaceStartupError.Load() != nil {
 			if !wait(ctx, s.PollInterval) {
 				return nil
 			}
@@ -210,9 +211,6 @@ func (s *Supervisor) Run(ctx context.Context) error {
 func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 	if turn.CancelRequested || s.stopping.Load() {
 		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
-	}
-	if failure := s.workspaceStartupError.Load(); failure != nil {
-		return s.retryFailure(ctx, turn.ID, turn.Attempt, *failure)
 	}
 	executionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

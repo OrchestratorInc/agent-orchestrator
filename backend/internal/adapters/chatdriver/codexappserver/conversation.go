@@ -167,12 +167,15 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		now := time.Now()
+		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
 		// envelope so child-thread recovery cannot settle the root's retry.
 		var scope struct {
@@ -184,7 +187,8 @@ func (c *conversation) pump() {
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
-		for _, ev := range normalizeNotification(n, time.Now()) {
+		for _, ev := range normalizeNotification(n, now) {
+			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID

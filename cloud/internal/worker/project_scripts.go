@@ -21,9 +21,12 @@ import (
 // before the coding agent starts; Cleanup commands run before the session's
 // workspace is permanently deleted.
 const (
-	// ProjectScriptStepTimeout bounds each Setup or Cleanup command, as the
-	// local daemon does.
-	ProjectScriptStepTimeout = 10 * time.Minute
+	// ProjectSetupStepTimeout bounds each Setup command, as the local daemon
+	// does.
+	ProjectSetupStepTimeout = 30 * time.Minute
+	// ProjectCleanupStepTimeout bounds each Cleanup command; Cleanup as a whole
+	// also has the sandbox provider's deletion budget.
+	ProjectCleanupStepTimeout = 10 * time.Minute
 	// ProjectScriptOutputLimit bounds the command output kept for the worker
 	// log and the session event, as the local daemon does.
 	ProjectScriptOutputLimit = 8 << 10
@@ -76,13 +79,13 @@ type SetupEvent struct {
 }
 
 // Summary names the failed step and why, in the local daemon's words
-// ("setup step N failed"), without the command's output.
+// ("The project's Setup script failed at step N (exit status X)"), without the
+// command's output.
 func (e SetupEvent) Summary() string {
-	cause := fmt.Sprintf("exit status %d", e.ExitCode)
 	if e.Status == SetupTimedOut {
-		cause = "timed out after " + ProjectScriptStepTimeout.String()
+		return fmt.Sprintf("The project's Setup script stopped at step %d after %d minutes", e.Step, int(ProjectSetupStepTimeout/time.Minute))
 	}
-	return fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+	return fmt.Sprintf("The project's Setup script failed at step %d (exit status %d)", e.Step, e.ExitCode)
 }
 
 // Message is the startup error shown when Setup did not succeed: the summary
@@ -155,7 +158,7 @@ type SetupRunner struct {
 	// (or under a worker from before Setup existed) never runs one added to
 	// the project later inside its already-prepared workspace.
 	FirstStart bool
-	// StepTimeout overrides ProjectScriptStepTimeout for tests.
+	// StepTimeout overrides ProjectSetupStepTimeout for tests.
 	StepTimeout time.Duration
 }
 
@@ -185,7 +188,7 @@ func (r SetupRunner) Run(
 	r.writeMarker(attempted)
 	timeout := r.StepTimeout
 	if timeout <= 0 {
-		timeout = ProjectScriptStepTimeout
+		timeout = ProjectSetupStepTimeout
 	}
 	started := time.Now()
 	event = SetupEvent{Status: SetupSucceeded}
@@ -306,11 +309,11 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 func (b *tailBuffer) String() string { return b.data.String() }
 
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
-// command with `sh -c` in order, each bounded by ProjectScriptStepTimeout when
+// command with `sh -c` in order, each bounded by ProjectCleanupStepTimeout when
 // timeout(1) is available, stopping at the first failure with that command's
 // status. With no commands it does nothing.
 func CleanupCommandsScript(commands []string) string {
-	seconds := strconv.Itoa(int(ProjectScriptStepTimeout / time.Second))
+	seconds := strconv.Itoa(int(ProjectCleanupStepTimeout / time.Second))
 	var steps strings.Builder
 	steps.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
 	steps.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5 " + seconds + "\"; fi\n")

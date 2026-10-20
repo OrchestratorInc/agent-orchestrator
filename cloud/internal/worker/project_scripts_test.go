@@ -62,7 +62,7 @@ func TestSetupStopsAtTheFailingStepAndRetries(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "never-ran")); err == nil {
 		t.Fatal("a step after the failure ran")
 	}
-	if message := event.Message(); !strings.HasPrefix(message, "Setup step 2 failed: exit status 3: ") {
+	if message := event.Message(); !strings.HasPrefix(message, "The project's Setup script failed at step 2 (exit status 3): ") {
 		t.Fatalf("message = %q", message)
 	}
 	if _, ran := (SetupRunner{DataDir: dataDir, FirstStart: true}).Run(context.Background(), commands, workspace, scriptEnvironment(workspace)); !ran {
@@ -75,7 +75,7 @@ func TestSetupStepTimeout(t *testing.T) {
 	t.Parallel()
 	event, _ := SetupRunner{DataDir: t.TempDir(), FirstStart: true, StepTimeout: 200 * time.Millisecond}.Run(
 		context.Background(), []string{"sleep 30 & wait"}, t.TempDir(), scriptEnvironment(t.TempDir()))
-	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "timed out") {
+	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "stopped at step 1 after 30 minutes") {
 		t.Fatalf("event = %+v", event)
 	}
 }

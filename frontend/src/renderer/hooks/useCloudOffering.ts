@@ -33,6 +33,8 @@ export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "sou
 	selfServeBilling: boolean;
 	/** The signed-in user may buy, change or reset the org's plan. */
 	canManageBilling: boolean;
+	/** Harnesses a session can start in Chat with (`/me` chatHarnesses). */
+	chatHarnesses: string[];
 	org: CloudCpOrganization | undefined;
 	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
@@ -86,6 +88,7 @@ export function useCloudOffering(): UseCloudOfferingResult {
 		offersProviderChoice: me.data !== undefined && offersProviderChoice(resolved),
 		selfServeBilling: resolved.billingMode === "self_serve",
 		canManageBilling: canManageBilling(org),
+		chatHarnesses: me.data?.chatHarnesses ?? [],
 		org,
 		ready,
 		loaded,

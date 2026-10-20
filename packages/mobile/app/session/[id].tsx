@@ -163,10 +163,15 @@ export default function MobileSessionRoute() {
 		case "screen": {
 			const sessionMode = source?.kind === "cloud" ? cloudInterfaceDisplayMode(cloudInterface.status, view.session.mode) : view.session.mode;
 			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode, requestedView: source?.kind === "cloud" && cloudInterface.transition ? undefined : requestedView });
-			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} showSpawnStartup={startup === "spawn"} interfaceSwitch={cloudInterface} />;
-			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} source={source ?? undefined} />;
-			if (source) return <ChatSessionScreen session={view.session} source={source} cloudInterface={source.kind === "cloud" ? cloudInterface : undefined} />;
-			return null;
+			return (
+				<View style={styles.screen}>
+					{surface === "cloud-terminal" && source
+						? <CloudTerminalSessionScreen session={view.session} source={source} showSpawnStartup={startup === "spawn"} interfaceSwitch={cloudInterface} />
+						: surface === "local-terminal"
+							? <TerminalSessionScreen session={view.session} source={source ?? undefined} />
+							: source ? <ChatSessionScreen session={view.session} source={source} cloudInterface={source.kind === "cloud" ? cloudInterface : undefined} /> : null}
+				</View>
+			);
 		}
 		case "loading":
 			return (
@@ -242,6 +247,7 @@ export default function MobileSessionRoute() {
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	});
 

@@ -750,6 +750,12 @@ func createSessionTx(
 			return domain.Session{}, err
 		}
 	}
+	// A Chat session's opening prompt is its first queued turn (below), so a
+	// later terminal launch starts without it, as a local Chat session's does.
+	launchPrompt := input.Prompt
+	if input.Interface == domain.SessionInterfaceChat {
+		launchPrompt = ""
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
@@ -767,7 +773,7 @@ func createSessionTx(
 		input.Kind,
 		input.Harness,
 		input.DisplayName,
-		input.Prompt,
+		launchPrompt,
 		input.Mode,
 		input.Model,
 		input.DeniedCommands,
@@ -828,9 +834,16 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
-		); err != nil {
+		settings := domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort}
+		var err error
+		// A Terminal session gets the opening prompt on the agent's command line;
+		// a Chat session's controller runs queued turns, so it is queued as one.
+		if input.Interface == domain.SessionInterfaceChat {
+			_, err = appendUserMessage(ctx, tx, orgID, session.ID, "", input.Prompt, "", nil, settings)
+		} else {
+			_, err = appendUserMessageEvent(ctx, tx, orgID, session.ID, input.Prompt, settings)
+		}
+		if err != nil {
 			return domain.Session{}, err
 		}
 	}

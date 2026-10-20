@@ -1283,7 +1283,7 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
-	function withUserInput(status: "pending" | "completed") {
+	function withUserInput(status: "pending" | "resolved") {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.turns[0] = { ...snapshot.turns[0], state: "running" };
 		snapshot.items = snapshot.items.filter(
@@ -1304,6 +1304,10 @@ describe("ChatWorkspace timeline", () => {
 			status,
 			summary: "Choose a direction",
 			requestId: "input-1",
+			inputResponse: status === "resolved" ? {
+				action: "accept",
+				content: { question_0: "acp", question_0_custom: "Please tell me the worktree names first." },
+			} : undefined,
 			detail: {
 				inputMode: "form",
 				message: "Choose a direction",
@@ -1315,6 +1319,7 @@ describe("ChatWorkspace timeline", () => {
 							title: "Which harness?",
 							oneOf: [{ const: "acp", title: "ACP" }],
 						},
+						question_0_custom: { type: "string", title: "Other" },
 					},
 				},
 			},
@@ -1333,13 +1338,29 @@ describe("ChatWorkspace timeline", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("leaves nothing behind once a question is answered", () => {
-		render(<ChatWorkspace snapshot={withUserInput("completed")} onResolveInput={vi.fn()} />);
+	it.each(["running", "completed"] as const)("keeps answered questions and feedback readable during a %s turn", async (state) => {
+		const snapshot = withUserInput("resolved");
+		snapshot.turns[0] = { ...snapshot.turns[0], state };
+		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
 
 		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
 		expect(screen.queryByRole("group", { name: "Agent question" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Which harness?")).not.toBeInTheDocument();
-		expect(screen.queryByText("Choose a direction")).not.toBeInTheDocument();
+		const history = within(screen.getByRole("region", { name: "Agent question history" }));
+		await waitFor(() => expect(history.getByText("Choose a direction")).toBeVisible());
+		expect(history.getByText("ACP")).toBeVisible();
+		expect(history.getByText("Please tell me the worktree names first.")).toBeVisible();
+		expect(history.queryByRole("button")).not.toBeInTheDocument();
+	});
+
+	it("retains the earlier reply when the agent asks another question in the same turn", () => {
+		const snapshot = withUserInput("resolved");
+		const pending = withUserInput("pending").items.find((item) => item.id === "input-1");
+		if (!pending || pending.kind !== "activity") throw new Error("missing pending question fixture");
+		snapshot.items.push({ ...pending, id: "input-2", requestId: "input-2", sequence: 101 });
+		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+
+		expect(screen.getByTestId("elicitation-composer-dock")).toBeVisible();
+		expect(within(screen.getByRole("region", { name: "Agent question history" })).getByText("Please tell me the worktree names first.")).toBeVisible();
 	});
 
 	it.each([false, true])("does not repeat a docked question in tool activity (other tools: %s)", async (withOtherTool) => {

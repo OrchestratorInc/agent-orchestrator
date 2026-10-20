@@ -155,11 +155,10 @@ describe("TopbarOpenEditorButton", () => {
 		expect(ghostty.querySelector("image")).not.toBeInTheDocument();
 		expect(ghostty.querySelector("svg path")).toBeInTheDocument();
 		const menu = screen.getByRole("menu");
-		expect(menu.textContent!.indexOf("Open in")).toBeLessThan(menu.textContent!.indexOf("Ghostty"));
-		expect(menu.textContent!.indexOf("Ghostty")).toBeLessThan(menu.textContent!.indexOf("Open with"));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy path", "Finder", "Terminal", "Ghostty", "Cursor", "VS Code"]);
+		expect(menu.textContent).toBe("FinderTerminalGhosttyCursorVS CodeCopy path");
+		expect(menu.querySelector("[role='separator']")).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Finder", "Terminal", "Ghostty", "Cursor", "VS Code", "Copy path"]);
 		for (const item of screen.getAllByRole("menuitem")) expect(item.querySelector("svg")).toBeInTheDocument();
-		expect(menu.textContent!.indexOf("Copy path")).toBeLessThan(menu.textContent!.indexOf("Open with"));
 		expect(screen.queryByRole("menuitem", { name: "Open in Ghostty" })).not.toBeInTheDocument();
 		await userEvent.click(ghostty);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "ghostty" }));
@@ -237,9 +236,9 @@ describe("TopbarOpenEditorButton", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
 		expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual([
-			"Copy path",
 			"Finder",
 			"Terminal",
+			"Copy path",
 		]);
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("No supported editor found");

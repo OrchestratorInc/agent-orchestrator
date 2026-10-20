@@ -3109,6 +3109,43 @@ paths:
       summary: Fetch link-preview metadata (Open Graph) for an external URL
       tags:
       - link-preview
+  /api/v1/mobile/browser-control:
+    post:
+      operationId: setMobileBrowserRemoteAccess
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetBrowserRemoteAccessRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Allow or deny paired-device access to the desktop browser
+      tags:
+      - mobile
   /api/v1/mobile/devices:
     get:
       operationId: listMobileDevices
@@ -7944,6 +7981,67 @@ paths:
       summary: Name the provider's conversation thread
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume:
+    patch:
+      operationId: setSessionConversationTurnAutoResume
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: AO conversation turn identifier, from the snapshot's turns array.
+        in: path
+        name: turnId
+        required: true
+        schema:
+          description: AO conversation turn identifier, from the snapshot's turns
+            array.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetTurnAutoResumeRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Schedule or cancel a usage-limited turn retry
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/cancel:
     post:
       operationId: cancelQueuedSessionConversationTurn
@@ -9318,6 +9416,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
       summary: Send a request to the running session-owned application preview
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/preview/artifacts/*:
+    get:
+      operationId: getSessionPreviewArtifact
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a selected static browser preview file from the session artifact
+        directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/preview/files/*:
@@ -15382,6 +15520,8 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        hasHumanPrompt:
+          type: boolean
         hasRetryAttempt:
           type: boolean
         id:
@@ -15410,6 +15550,8 @@ components:
           - failed
           - cancelled
           type: string
+        usageLimit:
+          $ref: '#/components/schemas/ConversationUsageLimitResponse'
       required:
       - id
       - state
@@ -15428,6 +15570,19 @@ components:
           type: string
         reasoningEffort:
           type: string
+      type: object
+    ConversationUsageLimitResponse:
+      properties:
+        autoResume:
+          type: boolean
+        resetsAt:
+          type:
+          - "null"
+          - string
+        resumeError:
+          type: string
+      required:
+      - autoResume
       type: object
     ConversationUsagePayload:
       properties:
@@ -16880,10 +17035,19 @@ components:
           type: boolean
         prNumber:
           type: integer
+        state:
+          enum:
+          - merged
+          type: string
+        stateChangedAt:
+          format: date-time
+          type: string
       required:
       - ok
       - prNumber
       - method
+      - state
+      - stateChangedAt
       type: object
     MobileDeviceResponse:
       properties:
@@ -16947,6 +17111,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        browserRemoteAccess:
+          type: boolean
         enabled:
           type: boolean
         endpoints:
@@ -16977,6 +17143,7 @@ components:
           type: string
       required:
       - enabled
+      - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
       - endpoints
@@ -18597,6 +18764,13 @@ components:
           type: string
         sessionId:
           type: string
+        source:
+          description: Root containing the selected static entry; omitted for external
+            app URLs.
+          enum:
+          - workspace
+          - artifact
+          type: string
       required:
       - sessionId
       type: object
@@ -18802,6 +18976,13 @@ components:
       - sessionId
       - state
       type: object
+    SetBrowserRemoteAccessRequest:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
+      type: object
     SetChatViewRequest:
       properties:
         active:
@@ -18997,6 +19178,15 @@ components:
           - cline
           - autohand
           type: string
+      type: object
+    SetTurnAutoResumeRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     SettingsResponse:
       properties:

@@ -387,16 +387,14 @@ function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArti
 	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>
-			<div className="flex min-w-0 items-start gap-2">
-				<Icon aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0 text-muted-foreground" />
-				<div className="min-w-0 flex-1">
-					<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
-					<p className="mt-0.5 truncate text-xs text-muted-foreground">
-						{author}
-						{author !== session.id ? <span className="font-mono"> · {session.id}</span> : null}
-					</p>
-				</div>
+			<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5">
+				<Icon aria-hidden="true" className="size-icon-sm text-muted-foreground" />
+				<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
 				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>
+				<p className="col-start-2 col-end-4 truncate text-xs text-muted-foreground">
+					{author}
+					{author !== session.id ? <span> · {session.id}</span> : null}
+				</p>
 			</div>
 			<div className="border-t border-border pt-2">
 				<ArtifactContentPreview artifact={artifact} session={session} remote={remote} />

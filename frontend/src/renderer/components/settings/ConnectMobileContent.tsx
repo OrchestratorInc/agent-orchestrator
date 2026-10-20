@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -47,7 +49,7 @@ import {
 	type PairingEndpoint,
 } from "../../lib/pairing-payload";
 
-export const mobileStatusQueryKey = ["mobile-status"] as const;
+export { mobileStatusQueryKey };
 
 // One scan gives the mobile app every value required to connect. Keep the
 // secure key absent for plaintext payloads so older mobile builds can decode
@@ -218,6 +220,7 @@ interface MobileStatus {
 	enabled: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
+	browserRemoteAccess?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -418,26 +421,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	const setKeepAwake = useMutation({
-		mutationFn: async (keepAwake: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake, lidClosed: false } });
+	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	const stayAwake = useStayAwake(active);
+
+
+	const setBrowserRemoteAccess = useMutation({
+		mutationFn: async (browserRemoteAccess: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
 			if (error) throw new Error(apiErrorMessage(error));
 			return data;
 		},
-		// Flip the cached status up front so the switch never falls back to the
-		// old value between the POST finishing and the refetch landing.
-		onMutate: async (keepAwake) => {
+		onMutate: async (browserRemoteAccess) => {
 			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
 			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
-			if (previous?.keepAwake) {
-				queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, {
-					...previous,
-					keepAwake: { ...previous.keepAwake, enabled: keepAwake, lidClosed: false, lidActive: false },
-				});
-			}
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, browserRemoteAccess });
 			return { previous };
 		},
-		onError: (_error, _keepAwake, context) => {
+		onError: (_error, _enabled, context) => {
 			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
 		},
 		onSettled: invalidate,
@@ -487,16 +487,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
 	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
-	const setLidAwake = useMutation({
-		mutationFn: async (lidClosed: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", {
-				body: { enabled: lidClosed || (status?.keepAwake?.enabled ?? false), lidClosed },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		onSettled: invalidate,
-	});
 
 	const busy =
 		enable.isPending ||
@@ -504,8 +494,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
-		setKeepAwake.isPending ||
-		setLidAwake.isPending;
+		setBrowserRemoteAccess.isPending ||
+		stayAwake.busy;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -513,8 +503,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
-		setKeepAwake.reset();
-		setLidAwake.reset();
+		setBrowserRemoteAccess.reset();
 	};
 
 	const copyPassword = async () => {
@@ -550,8 +539,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
-		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
-		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
+		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		stayAwake.error ||
 		null;
 
 	const turnOff = () => {
@@ -796,18 +785,34 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={status.keepAwake}
-					disabled={busy}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
+					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						setKeepAwake.mutate(next);
+						stayAwake.set(next, true);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
-						setLidAwake.mutate(next);
+						stayAwake.setLid(next);
 					}}
 				/>
 			)}
+			<SettingsRow
+				icon={MonitorSmartphone}
+				label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+				description={t("mobile.browserRemote.help", "Streams browser content and allows touch control from paired phones. This is separate from the mobile connection and is off by default.")}
+				data-testid="mobile-browser-remote-access"
+			>
+				<Switch
+					aria-label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+					disabled={busy}
+					checked={status.browserRemoteAccess ?? false}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setBrowserRemoteAccess.mutate(next);
+					}}
+				/>
+			</SettingsRow>
 		</>
 	);
 }

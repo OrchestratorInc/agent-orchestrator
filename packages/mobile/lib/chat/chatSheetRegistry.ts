@@ -24,6 +24,7 @@ export type ConversationActionsEntry = {
 	pinned: boolean;
 	canDelete: boolean;
 	onMap(): void;
+	onFiles(): void;
 	onOpenShell(): void;
 	onPreview(): void;
 	onPullRequests(): void;

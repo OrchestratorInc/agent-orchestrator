@@ -73,6 +73,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
+import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandBinaryLabel,
@@ -95,6 +96,7 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
 	type DiffStatus,
@@ -352,11 +354,28 @@ export function TurnOutcome({
 	state,
 	error,
 	retry,
+	usageLimit,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
 	retry?: TurnOutcomeRetryControl;
+	usageLimit?: ConversationUsageLimit;
 }) {
+	if (state === "failed" && usageLimit) {
+		return (
+			<div className="flex min-w-0 flex-col gap-2 py-3">
+				<UsageLimitNotice
+					compact={!retry}
+					usageLimit={usageLimit}
+					onResume={retry?.onRetry}
+					pending={retry?.pending}
+					disabled={retry?.disabled}
+					error={retry?.error}
+				/>
+				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+			</div>
+		);
+	}
 	const copy = {
 		recovered: {
 			label: "This turn was recovered from an earlier session",

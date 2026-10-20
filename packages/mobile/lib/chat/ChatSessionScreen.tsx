@@ -67,7 +67,9 @@ import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
-import { archiveSessionMessage } from "../worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
+import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { useChangeSummary } from "../files/useChangeSummary";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -231,6 +233,15 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 	}, [conversation.loadTurnOptions, conversation.snapshot, session.id]);
 
 	const sessionName = sessionTitle(session);
+	// Codex-style: every surface that shows the agent changed files can open them.
+	const filesNavigation = useMemo<FilesNavigation | null>(() => cloudSession ? null : ({
+		openChanges: () => router.push(filesRoute(session.id, source.id, sessionName)),
+		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, source.id, previousPath)),
+	}), [cloudSession, source.id, router, session.id, sessionName]);
+	// Re-read git's totals when a turn reports edits, not on a timer.
+	const lastTurn = conversation.snapshot?.turns.at(-1);
+	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
+	const changeSummary = useChangeSummary(config, session.id, changeSignal);
 	// Desktop derives one name from the session (useWorkspaceQuery: displayName ??
 	// issueId ?? id) and its chat header prefers it over the conversation's own
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
@@ -571,9 +582,10 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			canRename: !cloudSession && !("projectName" in session),
 			canPin: !cloudSession && !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
+			onFiles: () => filesNavigation?.openChanges(),
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
-			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined, hostId: source.id } }),
+			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: source.id } }),
 			onPullRequests: () => {
 				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
 					? reviewRouteForSession(session, source.id)
@@ -598,20 +610,20 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			onDelete: () => {
 				haptics.warning();
 				Alert.alert(
-					"Archive session?",
-					archiveSessionMessage(sessionName),
+					ARCHIVE_SESSION_CONFIRM.title,
+					ARCHIVE_SESSION_CONFIRM.message,
 					[
-						{ text: "Cancel", style: "cancel" },
+						{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Archive session", style: "destructive", onPress: () => { backOr(router); void killOn(source, session.id).catch(() => {}); } },
+						{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void killOn(source, session.id).catch(() => {}); } },
 					],
 				);
 			},
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [cloudSession, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinnedOn, renameWorkerOn, killOn, source, terminated, title]);
+	}, [cloudSession, conversation, filesNavigation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinnedOn, renameWorkerOn, killOn, source, terminated, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -751,6 +763,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
 			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
+				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -765,6 +778,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 					answeredBelow={answeredBelow}
 					startup={timelineStartup}
 				/>
+				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
 			<ChatComposer
 				key={composerKey}
@@ -780,6 +794,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 				draftScopeKey={cloudSession ? sessionSource?.scopeKey : undefined}
 				onDraftFlushReady={draftFlushReady}
 				snapshot={snapshot}
+				changes={filesNavigation && changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
 				quotaActive={Boolean(quota)}
 				request={request}
 				requestDismissed={requestDismissed}

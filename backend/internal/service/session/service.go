@@ -1612,6 +1612,11 @@ func toSpawnAPIError(err error) error {
 	if mapped := toAPIError(err); !errors.Is(mapped, err) {
 		return mapped
 	}
+	// A failed Setup step already explains itself; the spawn stage prefix is noise.
+	var setupErr *sessionmanager.SetupStepError
+	if errors.As(err, &setupErr) {
+		return apierr.Conflict("WORKSPACE_PROVISION_FAILED", setupErr.Error(), nil)
+	}
 	switch {
 	case errors.Is(err, sessionmanager.ErrClientRequestConflict):
 		return apierr.Conflict("CLIENT_REQUEST_CONFLICT", "clientRequestId belongs to a different task", nil)

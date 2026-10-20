@@ -1,4 +1,3 @@
-import { AwakeControl } from "./AwakeControl";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
@@ -46,7 +45,7 @@ import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAct
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { ProjectTerminationFeedback } from "./ShellTopbar";
@@ -180,6 +179,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, hostId, "artifact");
 		openSession(session);
 	}, [openSession, hostId]);
+	const openSessionArtifacts = useCallback((session: WorkspaceSession) => {
+		const uiKey = sessionUiKey(session.id, hostId);
+		useUiStore.getState().initializeInspectorSession(uiKey, Boolean(session.previewUrl), true);
+		useUiStore.getState().setInspectorView(uiKey, "artifacts");
+		useUiStore.getState().setInspectorOpen(uiKey, true);
+		openSession(session);
+	}, [openSession, hostId]);
 
 	const restartOrchestrator = async () => {
 		if (!projectId || isProjectRestarting || isProvisioning) return;
@@ -253,7 +259,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					<div className="min-w-0 flex-1" />
 					{actions ? (
 						<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
-						<AwakeControl compact />
 							{actions}
 						</div>
 					) : null}
@@ -321,6 +326,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
+								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
 							/>

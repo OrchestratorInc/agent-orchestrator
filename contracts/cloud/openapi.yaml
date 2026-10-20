@@ -2809,6 +2809,11 @@ components:
           $ref: "#/components/schemas/Offering"
         sandboxProviders:
           $ref: "#/components/schemas/SandboxProviders"
+        chatHarnesses:
+          type: array
+          description: Harnesses a session can start in, or switch to, Chat with.
+          items:
+            type: string
     UserCloudPreferences:
       type: object
       additionalProperties: false
@@ -3093,7 +3098,7 @@ components:
         A project's Setup (postCreate) or Cleanup (preRemove) shell commands,
         the same settings a local project has. Setup commands run in order
         with sh -c in the session's working directory after its checkout and
-        before the coding agent starts, once per session, each within 10
+        before the coding agent starts, once per session, each within 30
         minutes; a failing step keeps the agent from starting until the
         session is reopened. Cleanup commands run in order before the
         session's workspace is deleted (Coder only), best effort and within
@@ -5080,6 +5085,13 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            Interface the session starts in. Optional; omitted starts in the
+            terminal (tui). chat needs a harness listed in the current
+            account's chatHarnesses, else the request is refused with
+            SESSION_MODE_UNSUPPORTED.
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false
