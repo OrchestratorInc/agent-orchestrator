@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -202,15 +203,16 @@ func readPrivateConfig(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// Refresh only source-owned credentials/configuration at each new native launch.
-// Provider history and AO context files are never replaced. Validate and stage
-// first so malformed, missing or symlinked auth cannot destroy a saved snapshot.
-// A failed config write restores the old auth; failed rollback retains its backup.
 // nativeRegionPreference records the account namespace (Global or China)
 // MiniMax uses when auth state exists for both; without it the native
 // resolver can pick the other namespace.
 const nativeRegionPreference = "preferences/mcode-region.json"
 
+// Refresh only source-owned credentials/configuration at each new native launch.
+// Provider history and AO context files are never replaced. Validate and stage
+// first so malformed, missing or symlinked auth cannot destroy a saved snapshot.
+// A failed later step restores the old auth and region preference; failed
+// rollback retains its backup.
 func refreshProfileCredentials(ctx context.Context, target, source string) error {
 	config, err := readPrivateConfig(filepath.Join(source, "config.yaml"))
 	if err != nil {
@@ -219,10 +221,6 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 	var parsed map[string]any
 	if err := yaml.Unmarshal(config, &parsed); err != nil {
 		return errors.New("MiniMax provider config is not valid YAML")
-	}
-	// Like auth, a preference absent from the source leaves any private one intact.
-	if err := copyProfileTree(ctx, filepath.Join(source, filepath.FromSlash(nativeRegionPreference)), filepath.Join(target, filepath.FromSlash(nativeRegionPreference))); err != nil {
-		return err
 	}
 	staging, err := os.MkdirTemp(target, ".ao-auth-refresh-")
 	if err != nil {
@@ -234,6 +232,13 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 			_ = os.RemoveAll(staging)
 		}
 	}()
+	// The region preference selects which auth namespace is active, so it is
+	// staged with auth and published or restored together with it. Like auth,
+	// a preference absent from the source leaves any private one intact.
+	stagedPreference := filepath.Join(staging, "region.json")
+	if err := copyProfileTree(ctx, filepath.Join(source, filepath.FromSlash(nativeRegionPreference)), stagedPreference); err != nil {
+		return err
+	}
 	stagedAuth := filepath.Join(staging, "auth")
 	if err := copyProfileTree(ctx, filepath.Join(source, "auth"), stagedAuth); err != nil {
 		return err
@@ -241,45 +246,71 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	auth := filepath.Join(target, "auth")
 	info, err := os.Lstat(stagedAuth)
-	if errors.Is(err, os.ErrNotExist) {
-		// Config-only providers need no source auth directory. MiniMax may
-		// create private auth state at runtime; leave it intact on restore.
-		return hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600)
-	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return errors.New("MiniMax source auth must be a directory")
-	}
-	backup := filepath.Join(staging, "previous")
-	err = os.Rename(auth, backup)
-	hadAuth := err == nil
+	hasSourceAuth := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	installedAuth := false
+	if hasSourceAuth && !info.IsDir() {
+		return errors.New("MiniMax source auth must be a directory")
+	}
+	var undo []func() error
 	rollback := func(cause error) error {
-		if installedAuth {
-			if err := os.RemoveAll(auth); err != nil {
+		for i := len(undo) - 1; i >= 0; i-- {
+			if err := undo[i](); err != nil {
 				keepBackup = true
-				return errors.Join(cause, fmt.Errorf("remove replacement auth: %w; recovery staging retained at %s", err, staging))
-			}
-		}
-		if hadAuth {
-			if err := os.Rename(backup, auth); err != nil {
-				keepBackup = true
-				return errors.Join(cause, fmt.Errorf("restore previous auth: %w; snapshot retained at %s", err, backup))
+				return errors.Join(cause, fmt.Errorf("%w; recovery staging retained at %s", err, staging))
 			}
 		}
 		return cause
 	}
-	if err := os.Rename(stagedAuth, auth); err != nil {
+	// replace swaps staged into live, keeping any previous copy for rollback.
+	replace := func(staged, live, backup, name string) error {
+		if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+			return err
+		}
+		err := os.Rename(live, backup)
+		hadPrevious := err == nil
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		restore := func() error {
+			if hadPrevious {
+				if err := os.Rename(backup, live); err != nil {
+					return fmt.Errorf("restore previous %s: %w", name, err)
+				}
+			}
+			return nil
+		}
+		if err := os.Rename(staged, live); err != nil {
+			if restoreErr := restore(); restoreErr != nil {
+				keepBackup = true
+				return errors.Join(err, restoreErr)
+			}
+			return err
+		}
+		undo = append(undo, func() error {
+			if err := os.RemoveAll(live); err != nil {
+				return fmt.Errorf("remove replacement %s: %w", name, err)
+			}
+			return restore()
+		})
+		return nil
+	}
+	// Config-only providers need no source auth directory. MiniMax may create
+	// private auth state at runtime; leave it intact on restore.
+	if hasSourceAuth {
+		if err := replace(stagedAuth, filepath.Join(target, "auth"), filepath.Join(staging, "previous"), "auth"); err != nil {
+			return rollback(err)
+		}
+	}
+	if _, err := os.Lstat(stagedPreference); err == nil {
+		if err := replace(stagedPreference, filepath.Join(target, filepath.FromSlash(nativeRegionPreference)), filepath.Join(staging, "previous-region.json"), "region preference"); err != nil {
+			return rollback(err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return rollback(err)
 	}
-	installedAuth = true
 	if err := ctx.Err(); err != nil {
 		return rollback(err)
 	}
@@ -546,15 +577,20 @@ var hookNode = func(ctx context.Context) string {
 var releasePattern = regexp.MustCompile(`^[0-9A-Za-z._-]+$`)
 
 // officialLauncherNode reads the Node runtime pinned by the official
-// installer's layout: <root>/bin/mcode execs <root>/releases/<current>/
-// .mcode-launcher, which assigns node='<absolute path>'. It returns "" for any
-// other install.
+// installer. On POSIX, <root>/bin/mcode execs <root>/releases/<current>/
+// .mcode-launcher, which assigns node=<shell word>. On Windows, <root>/mcode.cmd
+// calls releases/<current>/.mcode-launcher.cmd, which invokes "<node.exe>"
+// directly. It returns "" for any other install.
 func officialLauncherNode(binary string) string {
 	resolved, err := filepath.EvalSymlinks(binary)
 	if err != nil {
 		return ""
 	}
-	root := filepath.Dir(filepath.Dir(resolved))
+	windows := strings.EqualFold(filepath.Base(resolved), "mcode.cmd")
+	root, launcherName := filepath.Dir(filepath.Dir(resolved)), ".mcode-launcher"
+	if windows {
+		root, launcherName = filepath.Dir(resolved), ".mcode-launcher.cmd"
+	}
 	current, err := os.ReadFile(filepath.Join(root, "current"))
 	if err != nil {
 		return ""
@@ -563,22 +599,92 @@ func officialLauncherNode(binary string) string {
 	if !releasePattern.MatchString(release) || release == "." || release == ".." {
 		return ""
 	}
-	launcher, err := os.ReadFile(filepath.Join(root, "releases", release, ".mcode-launcher"))
+	launcher, err := os.ReadFile(filepath.Join(root, "releases", release, launcherName))
 	if err != nil || len(launcher) > 64<<10 {
 		return ""
 	}
+	node := ""
 	for _, line := range strings.Split(string(launcher), "\n") {
-		value, ok := strings.CutPrefix(strings.TrimSpace(line), "node=")
-		if !ok {
+		line = strings.TrimSpace(line)
+		if windows {
+			// The runtime is the first quoted word; cmd variables are not resolved.
+			if rest, ok := strings.CutPrefix(line, `"`); ok {
+				if end := strings.IndexByte(rest, '"'); end > 0 && !strings.Contains(rest[:end], "%") {
+					node = rest[:end]
+				}
+				break
+			}
 			continue
 		}
-		node := strings.Trim(value, `'"`)
-		if info, err := os.Stat(node); err == nil && filepath.IsAbs(node) && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-			return node
+		if value, ok := strings.CutPrefix(line, "node="); ok {
+			node, _ = unquoteShellWord(value)
+			break
 		}
+	}
+	if node == "" || !filepath.IsAbs(node) {
 		return ""
 	}
-	return ""
+	info, err := os.Stat(node)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	if windows {
+		if !strings.EqualFold(filepath.Ext(node), ".exe") {
+			return ""
+		}
+	} else if info.Mode()&0o111 == 0 {
+		return ""
+	}
+	return node
+}
+
+// unquoteShellWord decodes one POSIX shell word made of literal, single- and
+// double-quoted parts, which covers install.sh's '...'"'"'...' escaping.
+// Expansions and operators are rejected rather than guessed.
+func unquoteShellWord(word string) (string, bool) {
+	if strings.HasPrefix(word, "~") {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 0; i < len(word); {
+		switch c := word[i]; c {
+		case '\'':
+			end := strings.IndexByte(word[i+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(word[i+1 : i+1+end])
+			i += end + 2
+		case '"':
+			i++
+			for {
+				if i >= len(word) || word[i] == '$' || word[i] == '`' {
+					return "", false
+				}
+				if word[i] == '"' {
+					i++
+					break
+				}
+				if word[i] == '\\' && i+1 < len(word) && strings.IndexByte("$`\"\\", word[i+1]) >= 0 {
+					i++
+				}
+				b.WriteByte(word[i])
+				i++
+			}
+		case '\\':
+			if i+1 >= len(word) {
+				return "", false
+			}
+			b.WriteByte(word[i+1])
+			i += 2
+		case '$', '`', ' ', '\t', ';', '&', '|', '<', '>', '(', ')', '*', '?', '[', '#':
+			return "", false
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String(), true
 }
 
 func writeHookConfig(plugin, node, launch string) error {
@@ -586,7 +692,13 @@ func writeHookConfig(plugin, node, launch string) error {
 	// Its cached command pins the generation without repurposing TMPDIR. Encode
 	// the absolute path so spaces and shell metacharacters remain a single arg.
 	interpreter := "node"
-	if node != "node" {
+	switch {
+	case node == "node":
+	case runtime.GOOS == "windows":
+		// Windows paths cannot contain double quotes; cmd and POSIX shells
+		// both read a double-quoted path as one word.
+		interpreter = `"` + node + `"`
+	default:
 		interpreter = "'" + strings.ReplaceAll(node, "'", `'\''`) + "'"
 	}
 	command := interpreter + ` "${CLAUDE_PLUGIN_ROOT}/hook.cjs" ` + base64.RawURLEncoding.EncodeToString([]byte(launch))

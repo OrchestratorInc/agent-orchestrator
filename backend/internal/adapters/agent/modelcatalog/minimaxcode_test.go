@@ -1,6 +1,7 @@
 package modelcatalog
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,5 +15,17 @@ func TestMiniMaxConfiguredModels(t *testing.T) {
 	}
 	if Base("minimax-code").CustomModelEntry != ports.CustomModelEntryConfigured {
 		t.Fatal("MiniMax must use configured model IDs")
+	}
+}
+
+// Without a clean interrupt, discovery must fail rather than report an empty
+// catalog that would replace cached models.
+func TestMiniMaxDiscoveryUnavailableWithoutInterrupt(t *testing.T) {
+	previous := commandInterruptSupported
+	commandInterruptSupported = false
+	t.Cleanup(func() { commandInterruptSupported = previous })
+	got, err := discoverCommandCatalog(context.Background(), "minimax-code", "/nonexistent/mcode", t.TempDir(), nil, true)
+	if err == nil {
+		t.Fatalf("discovery succeeded with %d models; want unavailable error", len(got.Models))
 	}
 }

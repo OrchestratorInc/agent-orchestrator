@@ -307,7 +307,12 @@ func TestOfficialLauncherNodePinsHookRuntime(t *testing.T) {
 	writeRefreshFixture(t, binary, "#!/bin/sh\n")
 	writeRefreshFixture(t, filepath.Join(root, "current"), "0.6.12\n")
 	launcher := filepath.Join(root, "releases", "0.6.12", ".mcode-launcher")
-	writeRefreshFixture(t, launcher, "#!/bin/sh\nset -eu\nnode='"+node+"'\nexec \"$node\" cli.js \"$@\"\n")
+	// Exact escaping from the official install.sh write_versioned_launchers.
+	assignment := "node='" + strings.ReplaceAll(node, "'", `'"'"'`) + "'"
+	writeRefreshFixture(t, launcher, "#!/bin/sh\nset -eu\n"+assignment+"\nexec \"$node\" cli.js \"$@\"\n")
+	if out, err := exec.Command("/bin/sh", "-c", assignment+`; printf %s "$node"`).Output(); err != nil || string(out) != node {
+		t.Fatalf("fixture assignment resolves to %q, %v; want %q", out, err, node)
+	}
 	if got := officialLauncherNode(binary); got != node {
 		t.Fatalf("launcher node = %q, want %q", got, node)
 	}
@@ -341,5 +346,66 @@ func TestOfficialLauncherNodePinsHookRuntime(t *testing.T) {
 	writeRefreshFixture(t, filepath.Join(root, "current"), "../escape\n")
 	if got := officialLauncherNode(binary); got != "" {
 		t.Fatalf("accepted an invalid release pointer: %q", got)
+	}
+}
+
+// The official Windows installer puts mcode.cmd at the install root and its
+// release launcher invokes the private node.exe directly.
+func TestOfficialWindowsLauncherNode(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "minimax code")
+	node := filepath.Join(root, "runtime", "node.exe")
+	writeRefreshFixture(t, node, "")
+	binary := filepath.Join(root, "mcode.cmd")
+	writeRefreshFixture(t, binary, "@ECHO off\r\n")
+	writeRefreshFixture(t, filepath.Join(root, "current"), "0.6.12\r\n")
+	launcher := filepath.Join(root, "releases", "0.6.12", ".mcode-launcher.cmd")
+	writeRefreshFixture(t, launcher, "@ECHO off\r\n\""+node+"\" \"%~dp0node_modules\\@minimax-ai\\code\\cli.js\" %*\r\nEXIT /B %ERRORLEVEL%\r\n")
+	if got := officialLauncherNode(binary); got != node {
+		t.Fatalf("launcher node = %q, want %q", got, node)
+	}
+	writeRefreshFixture(t, launcher, "@ECHO off\r\n\"%NODE%\" cli.js %*\r\n")
+	if got := officialLauncherNode(binary); got != "" {
+		t.Fatalf("resolved a cmd variable: %q", got)
+	}
+}
+
+func TestUnquoteShellWord(t *testing.T) {
+	for word, want := range map[string]string{
+		`'/a/b'`:             "/a/b",
+		`'/a/it'"'"'s/node'`: "/a/it's/node",
+		`"/a/\$x"`:           "/a/$x",
+		`/a\ b`:              "/a b",
+	} {
+		if got, ok := unquoteShellWord(word); !ok || got != want {
+			t.Errorf("unquoteShellWord(%s) = %q, %v; want %q", word, got, ok, want)
+		}
+	}
+	for _, word := range []string{`"$HOME/node"`, "`which node`", `~/node`, `'/open`, `/a b`, `/a;rm`} {
+		if got, ok := unquoteShellWord(word); ok {
+			t.Errorf("unquoteShellWord(%s) = %q; want rejected", word, got)
+		}
+	}
+}
+
+// A refused credential refresh must not switch the account namespace: the
+// region preference is published only with its auth.
+func TestRejectedRefreshKeepsRegionPreference(t *testing.T) {
+	source, target := t.TempDir(), t.TempDir()
+	oldPreference := `{"version":1,"regions":{"prod":"en"}}`
+	writeRefreshFixture(t, filepath.Join(source, "config.yaml"), "defaultModel: minimax/model\n")
+	writeRefreshFixture(t, filepath.Join(source, nativeRegionPreference), `{"version":1,"regions":{"prod":"cn"}}`)
+	writeRefreshFixture(t, filepath.Join(target, nativeRegionPreference), oldPreference)
+	writeRefreshFixture(t, filepath.Join(target, "auth", "prod", "en", "mcode-public", "auth-state.json"), `{"status":"authenticated"}`)
+	if err := os.Symlink(t.TempDir(), filepath.Join(source, "auth")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := refreshProfileCredentials(context.Background(), target, source); err == nil {
+		t.Fatal("refresh accepted symlinked source auth")
+	}
+	if got, err := os.ReadFile(filepath.Join(target, nativeRegionPreference)); err != nil || string(got) != oldPreference {
+		t.Fatalf("region preference = %s, %v; want %s", got, err, oldPreference)
+	}
+	if _, err := os.Stat(filepath.Join(target, "auth", "prod", "en", "mcode-public", "auth-state.json")); err != nil {
+		t.Fatalf("previous auth lost: %v", err)
 	}
 }

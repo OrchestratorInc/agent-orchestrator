@@ -38,6 +38,10 @@ const (
 	commandTerminationWait = 2 * time.Second
 )
 
+// commandInterruptSupported reports whether a canceled discovery can ask the
+// CLI to exit cleanly. Windows has no deliverable interrupt for a child.
+var commandInterruptSupported = runtime.GOOS != "windows"
+
 type commandSpec struct {
 	args   []string
 	parser func([]byte) ([]ports.AgentModelInfo, error)
@@ -466,8 +470,9 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 			return base, err
 		}
 	}
-	if spec.interruptOnCancel && runtime.GOOS == "windows" {
-		return base, nil
+	if spec.interruptOnCancel && !commandInterruptSupported {
+		// An error, not an empty success, so the service keeps cached models.
+		return base, errors.New("model discovery is unavailable on this platform because AO cannot stop the agent without leaving its profile locked")
 	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
