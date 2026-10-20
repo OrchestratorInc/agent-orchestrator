@@ -4,13 +4,10 @@
 package hermes
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -459,71 +456,6 @@ func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.S
 func nativeStateDSN(home string) string {
 	path := filepath.ToSlash(filepath.Join(home, "state.db"))
 	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(1000)"
-}
-
-// AuthStatus implements the scoped native adapter contract. Hermes keeps API
-// keys in <HERMES_HOME>/.env and OAuth credentials in auth.json; their presence
-// is configured, not verified authorization.
-func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	for _, key := range []string{"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "HF_TOKEN"} {
-		if os.Getenv(key) != "" {
-			return ports.AgentAuthStatusConfigured, nil
-		}
-	}
-	home, err := resolveHome(nil)
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, nil
-	}
-	if envFileHasCredential(filepath.Join(home, ".env")) || authFileHasCredential(filepath.Join(home, "auth.json")) {
-		return ports.AgentAuthStatusConfigured, nil
-	}
-	return ports.AgentAuthStatusUnknown, nil
-}
-
-func envFileHasCredential(path string) bool {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(b))
-	for scanner.Scan() {
-		key, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(scanner.Text()), "export "), "=")
-		key = strings.TrimSpace(key)
-		if !ok || strings.HasPrefix(key, "#") || strings.Trim(strings.TrimSpace(value), `"'`) == "" {
-			continue
-		}
-		if strings.HasSuffix(key, "_API_KEY") || strings.HasSuffix(key, "_TOKEN") {
-			return true
-		}
-	}
-	return false
-}
-
-func authFileHasCredential(path string) bool {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var store map[string]any
-	if json.Unmarshal(b, &store) != nil {
-		return false
-	}
-	for _, value := range store {
-		switch v := value.(type) {
-		case map[string]any:
-			if len(v) > 0 {
-				return true
-			}
-		case []any:
-			if len(v) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // ContinuouslyDetectTerminalActivity implements the scoped native adapter contract.

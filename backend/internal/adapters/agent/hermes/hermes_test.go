@@ -561,19 +561,38 @@ func TestRestoreRefusesMissingOrUnreadableConversation(t *testing.T) {
 	}
 }
 
-func TestAuthStatusReadsNativeCredentialStores(t *testing.T) {
-	for _, key := range []string{"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "HF_TOKEN"} {
+func TestProviderFromStatusReadsActiveProvider(t *testing.T) {
+	for _, tt := range []struct {
+		name, output, provider string
+		want                   ports.AgentAuthStatus
+	}{
+		{"configured provider", "  Model:        (not set)\n  Provider:     OpenAI API\n  Providers:    OpenAI API, Anthropic\n", "OpenAI API", ports.AgentAuthStatusConfigured},
+		{"no provider", "  Model:        (not set)\n  Provider:     (not set)\n", "", ports.AgentAuthStatusUnauthorized},
+		{"unrecognized output", "Hermes Agent Status\n", "", ports.AgentAuthStatusUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, status := providerFromStatus(tt.output)
+			if provider != tt.provider || status != tt.want {
+				t.Fatalf("providerFromStatus = %q, %q; want %q, %q", provider, status, tt.provider, tt.want)
+			}
+		})
+	}
+}
+
+func TestCredentialStoreIdentityReadsNativeStores(t *testing.T) {
+	for _, key := range hermesCredentialEnv {
 		t.Setenv(key, "")
 	}
 	for _, tt := range []struct {
 		name, file, content string
-		want                ports.AgentAuthStatus
+		found               bool
+		method              domain.AgentAccountMethod
 	}{
-		{"no credentials", "", "", ports.AgentAuthStatusUnknown},
-		{"empty env key", ".env", "OPENROUTER_API_KEY=\n# ANTHROPIC_API_KEY=sk\n", ports.AgentAuthStatusUnknown},
-		{"env api key", ".env", "export OPENROUTER_API_KEY=\"sk-or\"\n", ports.AgentAuthStatusConfigured},
-		{"oauth store", "auth.json", `{"providers":{"nous":{"access_token":"x"}}}`, ports.AgentAuthStatusConfigured},
-		{"empty oauth store", "auth.json", `{"providers":{}}`, ports.AgentAuthStatusUnknown},
+		{"no credentials", "", "", false, ""},
+		{"empty env key", ".env", "OPENROUTER_API_KEY=\n# ANTHROPIC_API_KEY=sk\n", false, ""},
+		{"env api key", ".env", "export OPENROUTER_API_KEY=\"sk-or\"\n", true, domain.AgentAccountMethodAPIKey},
+		{"oauth store", "auth.json", `{"providers":{"nous":{"access_token":"x"}}}`, true, domain.AgentAccountMethodAccount},
+		{"empty oauth store", "auth.json", `{"providers":{}}`, false, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -583,9 +602,9 @@ func TestAuthStatusReadsNativeCredentialStores(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := New().AuthStatus(t.Context())
-			if err != nil || got != tt.want {
-				t.Fatalf("AuthStatus() = %q, %v; want %q", got, err, tt.want)
+			identity, found := credentialStoreIdentity(t.Context())
+			if found != tt.found || identity.Method != tt.method || (found && identity.SourceKind != domain.AgentCredentialSourceFile) {
+				t.Fatalf("credentialStoreIdentity = %+v, %v", identity, found)
 			}
 		})
 	}
