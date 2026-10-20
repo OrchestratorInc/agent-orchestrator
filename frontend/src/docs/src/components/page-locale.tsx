@@ -27,11 +27,23 @@ export function LocalizedTitle({ title }: { title: string }) {
     const apply = () => {
       if (document.title !== localized) document.title = localized;
     };
-    apply();
     // The framework writes the English title after hydration and on
-    // navigation, so reapply whenever the head changes.
-    const observer = new MutationObserver(apply);
-    observer.observe(document.head, { childList: true, subtree: true, characterData: true });
+    // navigation. Watch only the <title> element, and the head's direct
+    // children in case that element is replaced.
+    let watched: Element | null = null;
+    const watchTitle = () => {
+      const element = document.head.querySelector("title");
+      if (!element || element === watched) return;
+      watched = element;
+      observer.observe(element, { childList: true, subtree: true, characterData: true });
+    };
+    const observer = new MutationObserver(() => {
+      watchTitle();
+      apply();
+    });
+    observer.observe(document.head, { childList: true });
+    watchTitle();
+    apply();
     return () => observer.disconnect();
   }, [i18n, title]);
   return null;
