@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -52,7 +51,7 @@ func setReviewEnv(t *testing.T) testConfig {
 	return cfg
 }
 
-func TestReviewSubmitReadsBodyFile(t *testing.T) {
+func TestReviewSubmitRejectsFileBody(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 	writeRunFileFor(t, cfg, srv)
@@ -64,18 +63,67 @@ func TestReviewSubmitReadsBodyFile(t *testing.T) {
 
 	_, errOut, err := executeCLI(t, aliveDeps(),
 		"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested", "--body", bodyFile)
+	if err == nil {
+		t.Fatalf("file-valued --body is obsolete and must fail clearly: stdout, stderr=%s", errOut)
+	}
+	if !strings.Contains(err.Error(), "--body only accepts -") {
+		t.Fatalf("err = %v, want the stdin-only body message", err)
+	}
+	if strings.Contains(capture.path, "/reviews/submit") {
+		t.Fatalf("no request may be sent for an obsolete input, got %s %s", capture.method, capture.path)
+	}
+}
+
+func TestReviewSubmitReadsBodyFile(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	bodyFile := filepath.Join(t.TempDir(), "review.md")
+	want := "# Review\n\nThe handler drops the error; it's wrong here.\n\n```go\nif err != nil {\n\treturn err\n}\n```\n"
+	if err := os.WriteFile(bodyFile, []byte(want), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, err := executeCLI(t, aliveDeps(),
+		"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested",
+		"--comment-path", "a/b.go", "--comment-line", "3", "--comment-body", "guard the error",
+		"--body-file", bodyFile)
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
-	}
-	if capture.method != http.MethodPost || capture.path != "/api/v1/sessions/mer-1/reviews/submit" {
-		t.Fatalf("request = %s %s", capture.method, capture.path)
 	}
 	var req submitReviewRequest
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if req.RunID != "run-1" || req.Verdict != "changes_requested" || req.Body != "please fix" {
-		t.Fatalf("request = %+v", req)
+	if req.Body != want {
+		t.Fatalf("body = %q, want the file bytes verbatim", req.Body)
+	}
+}
+
+func TestReviewSubmitRejectsDoubleBodySource(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	bodyFile := filepath.Join(t.TempDir(), "review.md")
+	if err := os.WriteFile(bodyFile, []byte("please fix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := aliveDeps()
+	deps.In = strings.NewReader("from stdin")
+	_, _, err := executeCLI(t, deps,
+		"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested",
+		"--body", "-", "--body-file", bodyFile)
+	if err == nil {
+		t.Fatal("--body and --body-file together must fail")
+	}
+	if !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("err = %v, want the mutual-exclusion message", err)
+	}
+	if strings.Contains(capture.path, "/reviews/submit") {
+		t.Fatalf("no request may be sent, got %s %s", capture.method, capture.path)
 	}
 }
 
@@ -100,23 +148,25 @@ func TestReviewSubmitReadsBodyFromStdin(t *testing.T) {
 	}
 }
 
-func TestReviewSubmitAcceptsUnderscoreFlags(t *testing.T) {
+func TestReviewSubmitRejectsLegacyReviewID(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 	writeRunFileFor(t, cfg, srv)
 
-	// Reviewer agents often spell --review-id as --review_id; both must work.
-	_, errOut, err := executeCLI(t, aliveDeps(),
-		"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested", "--review_id", "98765")
-	if err != nil {
-		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	// Reviewer agents often spell --review-id as --review_id; normalization
+	// must route both to the same obsolete-input error.
+	for _, flag := range []string{"--review-id", "--review_id"} {
+		_, errOut, err := executeCLI(t, aliveDeps(),
+			"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested", flag, "98765")
+		if err == nil {
+			t.Fatalf("%s is obsolete and must fail clearly: stderr=%s", flag, errOut)
+		}
+		if !strings.Contains(err.Error(), "GitHub review ids are outputs") {
+			t.Fatalf("%s: err = %v, want the obsolete review-id message", flag, err)
+		}
 	}
-	var req submitReviewRequest
-	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if req.GithubReviewID != "98765" {
-		t.Fatalf("githubReviewId = %q, want 98765", req.GithubReviewID)
+	if strings.Contains(capture.path, "/reviews/submit") {
+		t.Fatalf("no request may be sent for an obsolete input, got %s %s", capture.method, capture.path)
 	}
 }
 
@@ -146,37 +196,34 @@ func TestReviewSubmitBatchReadsReviewsFromStdin(t *testing.T) {
 	}
 }
 
-// The staged results file is the body channel for queued reviews (#6021):
-// content that shell quoting would mangle — apostrophes, double quotes,
-// unicode, newlines — must round-trip through the file untouched.
-func TestReviewSubmitBatchReadsReviewsFile(t *testing.T) {
+func TestReviewSubmitRetriesAcrossDaemonRestartWithIdenticalPayload(t *testing.T) {
 	cfg := setReviewEnv(t)
-	srv, capture := reviewServer(t, http.StatusOK, `{"reviews":[{"id":"run-1","verdict":"changes_requested"}]}`)
-	writeRunFileFor(t, cfg, srv)
+	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 
-	const nastyBody = "it's \"required\" — реплика 'в кавычках' ‣ ünïcode\nsecond line\n"
-	resultsFile := filepath.Join(t.TempDir(), "ao-review-results.json")
-	payload := `{"reviews":[{"runId":"run-1","verdict":"changes_requested","githubReviewId":"101","body":` + strconv.Quote(nastyBody) + `}]}`
-	if err := os.WriteFile(resultsFile, []byte(payload), 0o600); err != nil {
-		t.Fatal(err)
+	deps := aliveDeps()
+	deps.In = strings.NewReader("fix auth")
+	retries := 0
+	deps.Sleep = func(time.Duration) {
+		retries++
+		writeRunFileFor(t, cfg, srv)
 	}
 
-	_, errOut, err := executeCLI(t, aliveDeps(), "review", "submit", "mer-1", "--reviews", resultsFile)
+	out, errOut, err := executeCLI(t, deps, "review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested", "--body", "-")
 	if err != nil {
-		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+		t.Fatalf("submit should survive a daemon restart: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(capture.body, `"reviews"`) {
-		t.Fatalf("request should carry the batch field: %s", capture.body)
+	if retries != 1 {
+		t.Fatalf("retry waits = %d, want 1", retries)
+	}
+	if !strings.Contains(out, "recorded changes_requested review for mer-1") {
+		t.Fatalf("stdout = %q", out)
 	}
 	var req submitReviewRequest
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if len(req.Reviews) != 1 || req.Reviews[0].RunID != "run-1" || req.Reviews[0].GithubReviewID != "101" {
-		t.Fatalf("request = %+v", req)
-	}
-	if req.Reviews[0].Body != nastyBody {
-		t.Fatalf("body did not round-trip: %q", req.Reviews[0].Body)
+	if req.RunID != "run-1" || req.Body != "fix auth" || req.Verdict != "changes_requested" {
+		t.Fatalf("retried request = %+v", req)
 	}
 }
 
@@ -222,12 +269,12 @@ func TestReviewSubmitRetriesUncertainTransportFailureWithIdenticalPayload(t *tes
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := setReviewEnv(t)
-			srv, _ := reviewServer(t, http.StatusOK, `{}`)
+			srv, _ := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"approved"}}`)
 			writeRunFileFor(t, cfg, srv)
 
 			var bodies []string
 			deps := aliveDeps()
-			deps.In = strings.NewReader(`{"reviews":[{"runId":"run-1","verdict":"approved","githubReviewId":"101"}]}`)
+			deps.In = strings.NewReader("ship it")
 			deps.Sleep = func(time.Duration) {}
 			deps.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.URL.Path != "/api/v1/sessions/mer-1/reviews/submit" {
@@ -248,25 +295,25 @@ func TestReviewSubmitRetriesUncertainTransportFailureWithIdenticalPayload(t *tes
 						StatusCode: http.StatusOK,
 						Header:     make(http.Header),
 						Body: io.NopCloser(io.MultiReader(
-							strings.NewReader(`{"reviews":[`), iotest.ErrReader(tc.bodyErr),
+							strings.NewReader(`{"review":`), iotest.ErrReader(tc.bodyErr),
 						)),
 					}, nil
 				}
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     make(http.Header),
-					Body:       io.NopCloser(strings.NewReader(`{"reviews":[{"id":"run-1","verdict":"approved"}]}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"review":{"id":"run-1","verdict":"approved"}}`)),
 				}, nil
 			})}
 
-			out, errOut, err := executeCLI(t, deps, "review", "submit", "mer-1", "--reviews", "-")
+			out, errOut, err := executeCLI(t, deps, "review", "submit", "mer-1", "--run", "run-1", "--verdict", "approved", "--body", "-")
 			if err != nil {
 				t.Fatalf("retry uncertain result: %v\nstderr=%s", err, errOut)
 			}
 			if len(bodies) != 2 || bodies[0] != bodies[1] {
 				t.Fatalf("request bodies = %#v, want two identical attempts", bodies)
 			}
-			if !strings.Contains(out, "recorded 1 review(s) for mer-1") {
+			if !strings.Contains(out, "recorded approved review for mer-1") {
 				t.Fatalf("stdout = %q", out)
 			}
 		})
@@ -275,9 +322,9 @@ func TestReviewSubmitRetriesUncertainTransportFailureWithIdenticalPayload(t *tes
 
 func TestReviewSubmitDoesNotRetryInvalidJSONResponse(t *testing.T) {
 	for _, body := range []string{
-		`{"reviews":[}`,
-		`{"reviews":"invalid type"}`,
-		`{"reviews":[{"createdAt":"invalid timestamp"}]}`,
+		`{"review":[}`,
+		`{"review":"invalid type"}`,
+		`{"review":{"createdAt":"invalid timestamp"}}`,
 	} {
 		t.Run(body, func(t *testing.T) {
 			cfg := setReviewEnv(t)
@@ -396,6 +443,126 @@ func TestReviewSubmitMissingWorkerIsUsageError(t *testing.T) {
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
 	}
+}
+
+func TestReviewSubmitPairsCommentFlagsByOccurrence(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested","publishState":"published","githubReviewId":"9001"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	deps := aliveDeps()
+	deps.In = strings.NewReader("# Review\n\nLong markdown with `quotes` and 'single quotes'.\n\n```go\ncode_block()\n```\n")
+	_, errOut, err := executeCLI(t, deps,
+		"review", "submit", "mer-1",
+		"--run", "run-1", "--verdict", "changes_requested", "--body", "-",
+		"--comment-path", "src/auth.go", "--comment-line", "42", "--comment-body", "Missing authorization check.",
+		"--comment-path", "src/db.go", "--comment-line", "7", "--comment-body", "Unclosed transaction.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var req submitReviewRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if req.RunID != "run-1" || req.Verdict != "changes_requested" || len(req.Comments) != 2 {
+		t.Fatalf("request = %+v", req)
+	}
+	if req.Comments[0].Path != "src/auth.go" || req.Comments[0].Line != 42 || req.Comments[0].Body != "Missing authorization check." {
+		t.Fatalf("first finding = %+v", req.Comments[0])
+	}
+	if req.Comments[1].Path != "src/db.go" || req.Comments[1].Line != 7 || req.Comments[1].Body != "Unclosed transaction." {
+		t.Fatalf("second finding = %+v", req.Comments[1])
+	}
+	if !strings.Contains(req.Body, "```go") || !strings.Contains(req.Body, "'single quotes'") {
+		t.Fatalf("stdin markdown did not survive verbatim: %q", req.Body)
+	}
+}
+
+func TestReviewSubmitRejectsIncompleteAndMultilineFindings(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing body", []string{"--comment-path", "a.go", "--comment-line", "1"}, "--comment-path, --comment-line, and --comment-body must occur the same number of times"},
+		{"missing line", []string{"--comment-path", "a.go", "--comment-body", "boom"}, "--comment-path, --comment-line, and --comment-body must occur the same number of times"},
+		{"multiline body", []string{"--comment-path", "a.go", "--comment-line", "1", "--comment-body", "line one\nline two"}, "--comment-body must be single-line"},
+		{"blank path", []string{"--comment-path", " ", "--comment-line", "1", "--comment-body", "boom"}, "--comment-path must not be blank"},
+		{"zero line", []string{"--comment-path", "a.go", "--comment-line", "0", "--comment-body", "boom"}, "--comment-line must be a positive line number"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested", "--body", "-"}, tc.args...)
+			_, _, err := executeCLI(t, aliveDeps(), args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	if strings.Contains(capture.path, "/reviews/submit") {
+		t.Fatalf("invalid findings must not reach the daemon, got %s %s", capture.method, capture.path)
+	}
+}
+
+func TestReviewSubmitPrintsPublicationOutcome(t *testing.T) {
+	cfg := setReviewEnv(t)
+
+	t.Run("published", func(t *testing.T) {
+		srv, _ := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"approved","publishState":"published","githubReviewId":"9001"}}`)
+		writeRunFileFor(t, cfg, srv)
+		deps := aliveDeps()
+		deps.In = strings.NewReader("ship it")
+		out, _, err := executeCLI(t, deps, "review", "submit", "mer-1", "--run", "run-1", "--verdict", "approved", "--body", "-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "published GitHub review 9001") {
+			t.Fatalf("stdout = %q", out)
+		}
+	})
+	t.Run("no publish state", func(t *testing.T) {
+		srv, _ := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"approved"}}`)
+		writeRunFileFor(t, cfg, srv)
+		deps := aliveDeps()
+		deps.In = strings.NewReader("ship it")
+		out, _, err := executeCLI(t, deps, "review", "submit", "mer-1", "--run", "run-1", "--verdict", "approved", "--body", "-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "published") || !strings.Contains(out, "publication outcome unknown") {
+			t.Fatalf("stdout = %q, want the unknown-outcome line without a published claim", out)
+		}
+	})
+	t.Run("failed", func(t *testing.T) {
+		srv, _ := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"approved","publishState":"failed","publishError":"422: validation"}}`)
+		writeRunFileFor(t, cfg, srv)
+		deps := aliveDeps()
+		deps.In = strings.NewReader("ship it")
+		out, _, err := executeCLI(t, deps, "review", "submit", "mer-1", "--run", "run-1", "--verdict", "approved", "--body", "-")
+		if err != nil {
+			t.Fatalf("a publication failure must not fail the recorded result: %v", err)
+		}
+		if !strings.Contains(out, "GitHub publication failed: 422: validation") || !strings.Contains(out, "rerun the same command") {
+			t.Fatalf("stdout = %q", out)
+		}
+	})
+	t.Run("uncertain", func(t *testing.T) {
+		srv, _ := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"approved","publishState":"uncertain","publishError":"publication interrupted by a daemon restart; outcome unknown"}}`)
+		writeRunFileFor(t, cfg, srv)
+		deps := aliveDeps()
+		deps.In = strings.NewReader("ship it")
+		out, _, err := executeCLI(t, deps, "review", "submit", "mer-1", "--run", "run-1", "--verdict", "approved", "--body", "-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "GitHub publication outcome unknown") || !strings.Contains(out, "check the pull request") {
+			t.Fatalf("stdout = %q", out)
+		}
+	})
 }
 
 func TestReviewSubmitMissingRunIsUsageError(t *testing.T) {

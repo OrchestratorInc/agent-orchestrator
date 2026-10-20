@@ -280,7 +280,7 @@ func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 		t.Fatalf("same sha on different PR should insert: %v", err)
 	}
 
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunFailed, domain.VerdictNone, "claude: not found", "", true); err != nil {
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunFailed, domain.VerdictNone, "claude: not found", "[]", "", true); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	} else if !ok {
 		t.Fatal("mark failed: got ok=false")
@@ -362,7 +362,7 @@ func TestInsertReviewRunAllowsRerunAfterChangesRequested(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "rev-1", true); err != nil {
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "[]", "rev-1", true); err != nil {
 		t.Fatalf("mark changes requested: %v", err)
 	} else if !ok {
 		t.Fatal("mark changes requested: got ok=false")
@@ -556,7 +556,7 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "rev-987", false); err != nil {
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "[]", "rev-987", false); err != nil {
 		t.Fatalf("update run: %v", err)
 	} else if !ok {
 		t.Fatal("update run: got ok=false")
@@ -606,7 +606,7 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 		t.Fatalf("batch runs = %+v", batchRuns)
 	}
 
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "again", "", true); err != nil {
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "again", "[]", "", true); err != nil {
 		t.Fatalf("second update: %v", err)
 	} else if ok {
 		t.Fatal("second update completed an already-complete run")
@@ -848,7 +848,7 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "approved", "", "rev-1", true); err != nil {
 		t.Fatalf("mark approved: %v", err)
 	} else if !ok {
 		t.Fatal("mark approved: got ok=false")
@@ -866,7 +866,7 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, duplicate); !errors.Is(err, domain.ErrDuplicateReviewRun) {
 		t.Fatalf("concurrent rerun = %v, want duplicate", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, rerun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
+	if ok, err := s.UpdateReviewRunResult(ctx, rerun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "approved again", "", "rev-2", true); err != nil || !ok {
 		t.Fatalf("finish rerun = %v, %v", ok, err)
 	}
 	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)

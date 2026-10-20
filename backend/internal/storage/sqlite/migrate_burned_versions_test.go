@@ -218,6 +218,7 @@ var shippedMigrations = map[int64]string{
 	9001: "9001_add_user_config.sql",
 	9006: "9006_session_provider_stamp.sql",
 	9011: "9011_gateway_entries.sql",
+	9012: "9012_review_run_publication.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -338,10 +339,11 @@ SELECT COUNT(*) FROM (
 // TestMigrationsApplyOverDroppedForkMigrations pins the live-install profile
 // after the 2026-10-13 publication drop: real installs keep goose_db_version
 // rows for fork migrations whose files no longer ship (9002, 9003, 9004, 9005,
-// 9009 — 9004 was dropped with the daemon-owned publication contract). goose
-// runs with WithAllowMissing, so the orphaned rows are ignored and the
-// surviving fork files (9006, 9011) still apply: a rebuild needs no manual
-// ledger surgery, and burnedVersion keeps any later file off those numbers.
+// 9009 — 9004 shipped with the original daemon-owned publication contract and
+// is burned; its schema returned at the fresh number 9012). goose runs with
+// WithAllowMissing, so the orphaned rows are ignored and the surviving fork
+// files (9006, 9011, 9012) still apply: a rebuild needs no manual ledger
+// surgery, and burnedVersion keeps any later file off those numbers.
 func TestMigrationsApplyOverDroppedForkMigrations(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
 	if err != nil {

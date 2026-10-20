@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -2847,7 +2846,7 @@ func TestPRObservation_ReviewCommentsNudgeAgent(t *testing.T) {
 		"fix this",
 		"https://github.com/o/r/pull/1#discussion_r1",
 		"Thread ID: T1",
-		"re-fetch review data unless you need additional context",
+		"then resolve the threads by their IDs.",
 	} {
 		if !strings.Contains(msg.msgs[0], want) {
 			t.Fatalf("review nudge missing %q:\n%s", want, msg.msgs[0])
@@ -5587,11 +5586,12 @@ func TestEmitTelemetryStampsRequestID(t *testing.T) {
 	}
 }
 
-// Each unresolved comment gets its own dedup slot. Sharing one key per PR made
-// every poll re-send whichever comments were not the most recent signature
-// written, and made them share the reviewMaxNudge budget so a PR with more
-// comments than that could never deliver the last of them.
-func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
+// All of a PR's injectable unresolved comments ride in ONE digest message per
+// poll. The former per-comment nudges meant N comments cost N full-boilerplate
+// walls in the agent's chat (#60), and the pre-#5640 shared-key shape this test
+// used to pin starved later comments through a shared attempt budget — a shape
+// batching makes unreachable, since one message carries every comment.
+func TestPRObservation_ReviewCommentNudgesBatchedPerPR(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
 	comments := make([]domain.PullRequestComment, 0, reviewMaxNudge+2)
@@ -5599,8 +5599,7 @@ func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 		id := fmt.Sprintf("%d", i+1)
 		// Every comment shares one thread: the observer expands a thread into
 		// one row per comment, so this is the routine shape whenever a worker
-		// replies to a review comment without resolving it. Keying on the
-		// thread would collapse them all back into one dedup slot.
+		// replies to a review comment without resolving it.
 		comments = append(comments, domain.PullRequestComment{
 			ID: id, ThreadID: "T1", Author: "alice", File: "foo.go", Line: i + 1,
 			Body: "finding " + id, AutoInjectReview: true,
@@ -5612,12 +5611,12 @@ func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.msgs) != len(comments) {
-		t.Fatalf("first poll sent %d nudges, want one per comment (%d)", len(msg.msgs), len(comments))
+	if len(msg.msgs) != 1 {
+		t.Fatalf("first poll sent %d nudges, want one digest per PR:\n%v", len(msg.msgs), msg.msgs)
 	}
 	for _, c := range comments {
-		if !slices.ContainsFunc(msg.msgs, func(m string) bool { return strings.Contains(m, "finding "+c.ID) }) {
-			t.Fatalf("comment %s never nudged; the attempt budget is shared", c.ID)
+		if !strings.Contains(msg.msgs[0], "finding "+c.ID) {
+			t.Fatalf("comment %s missing from the digest:\n%s", c.ID, msg.msgs[0])
 		}
 	}
 
@@ -5628,6 +5627,26 @@ func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	if len(msg.msgs) != sent {
 		t.Fatalf("second poll re-sent %d nudges for unchanged comments:\n%v",
 			len(msg.msgs)-sent, msg.msgs[sent:])
+	}
+
+	// A new comment after the first delivery re-fires once, as one digest of
+	// the current unresolved set — the earlier findings included, so the agent
+	// sees one coherent list instead of a diff.
+	comments = append(comments, domain.PullRequestComment{
+		ID: "9", ThreadID: "T1", Author: "alice", File: "foo.go", Line: 99,
+		Body: "finding 9", AutoInjectReview: true,
+	})
+	st.comments["pr1"] = comments
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != sent+1 {
+		t.Fatalf("new comment produced %d new nudges, want one digest:\n%v", len(msg.msgs)-sent, msg.msgs[sent:])
+	}
+	for _, c := range comments {
+		if !strings.Contains(msg.msgs[sent], "finding "+c.ID) {
+			t.Fatalf("digest after new comment missing %s:\n%s", c.ID, msg.msgs[sent])
+		}
 	}
 }
 

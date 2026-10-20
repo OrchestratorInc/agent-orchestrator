@@ -51,6 +51,7 @@ const forkReservedFloor int64 = 9000
 // duplicate at 9000+ — same as conversation_provider_ownership_epochs above.
 var forkLocalMigrations = []string{
 	"add_user_config",
+	"review_run_publication",
 	"session_provider_stamp",
 	"gateway_entries",
 }

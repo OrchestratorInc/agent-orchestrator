@@ -17,6 +17,91 @@ import (
 
 const reviewMaxNudge = 3
 
+// ReviewDeliveryOutcome reports what ApplyReviewBatch did with completed
+// AO-internal review passes.
+type ReviewDeliveryOutcome string
+
+const (
+	// ReviewDeliveryNoop means lifecycle did not send or confirm a review nudge
+	// because the result was not relevant for delivery.
+	ReviewDeliveryNoop ReviewDeliveryOutcome = "no_op"
+	// ReviewDeliverySent means the worker nudge was sent or was already covered
+	// by sendOnce dedup state and may be stamped delivered.
+	ReviewDeliverySent ReviewDeliveryOutcome = "sent"
+)
+
+// ReviewResult is the already-persisted result of an AO-internal review pass.
+// Lifecycle treats it as input to the reaction reducer; it does not write the
+// review_run row.
+type ReviewResult struct {
+	RunID          string
+	BatchID        string
+	WorkerID       domain.SessionID
+	PRURL          string
+	TargetSHA      string
+	Verdict        domain.ReviewVerdict
+	Body           string
+	GithubReviewID string
+	DeliveredAt    *time.Time
+}
+
+// ApplyReviewBatch reacts to one reviewer CLI submission after the review
+// service has decided which current-head changes-requested results are
+// deliverable.
+func (m *Manager) ApplyReviewBatch(ctx context.Context, workerID domain.SessionID, batchID string, results []ReviewResult) (ReviewDeliveryOutcome, error) {
+	if batchID == "" || len(results) == 0 {
+		return ReviewDeliveryNoop, nil
+	}
+	rec, ok, err := m.store.GetSession(ctx, workerID)
+	if err != nil || !ok {
+		return ReviewDeliveryNoop, err
+	}
+	if cannotNudge(rec) {
+		return ReviewDeliveryNoop, nil
+	}
+	if m.guard == nil {
+		return ReviewDeliveryNoop, nil
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].PRURL != results[j].PRURL {
+			return results[i].PRURL < results[j].PRURL
+		}
+		return results[i].RunID < results[j].RunID
+	})
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "[AO reviewer] AO's internal code reviewer submitted %d review(s) requesting changes.\n", len(results))
+	var sigParts []string
+	for i, r := range results {
+		fmt.Fprintf(&msg, "\nReview %d\nPR: %s\nVerdict: %s", i+1, domain.SanitizeControlChars(r.PRURL), domain.SanitizeControlChars(string(r.Verdict)))
+		if r.TargetSHA != "" {
+			fmt.Fprintf(&msg, "\nHead commit: %s", domain.SanitizeControlChars(r.TargetSHA))
+		}
+		if r.GithubReviewID != "" {
+			safeReviewID := domain.SanitizeControlChars(r.GithubReviewID)
+			fmt.Fprintf(&msg, "\nGitHub review: %s", safeReviewID)
+			fmt.Fprintf(&msg, "\nAddress the findings, reply on GitHub review %s with how you addressed it, and resolve the threads you addressed.", safeReviewID)
+		}
+		if r.Body != "" {
+			fmt.Fprintf(&msg, "\n\nReview body:\n%s\n", domain.SanitizeControlChars(r.Body))
+		}
+		sigParts = append(sigParts, strings.Join([]string{r.RunID, r.PRURL, r.TargetSHA, r.GithubReviewID, r.Body}, "\x00"))
+	}
+	anchorPR := results[0].PRURL
+	key := "review-batch:" + anchorPR + ":" + batchID
+	sig := strings.Join(sigParts, "\x01")
+	outcome, err := m.sendOnce(ctx, workerID, anchorPR, key, sig, msg.String(), reviewMaxNudge, false)
+	if err != nil {
+		return ReviewDeliveryNoop, err
+	}
+	if outcome == sendOnceSuppressed {
+		// The worker went terminated/exited/needs-input between the entry guard and the
+		// paste: nothing reached it, so do NOT let the caller stamp the run
+		// delivered — it must re-fire once the session is workable again.
+		return ReviewDeliveryNoop, nil
+	}
+	return ReviewDeliverySent, nil
+}
+
 type reactionState struct {
 	mu       sync.Mutex
 	seen     map[string]string
@@ -200,26 +285,30 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		}
 
 		if hasUnresolvedComments(o.Comments) {
-			comments := unresolvedReviewComments(o.Comments)
-			for _, comment := range comments {
-				if !comment.AutoInjectReview {
-					continue
+			// One digest per PR, not one message per comment: every nudge carries
+			// the full preamble and closing boilerplate, so N comments meant N
+			// separate walls in the agent's chat (#60). All injectable comments
+			// ride in one message, so the #5640 attempt-budget starvation (a
+			// shared slot starving later comments) cannot happen either.
+			injectable := make([]ports.PRCommentObservation, 0, len(o.Comments))
+			for _, comment := range unresolvedReviewComments(o.Comments) {
+				if comment.AutoInjectReview {
+					injectable = append(injectable, comment)
 				}
-				commentSlice := []ports.PRCommentObservation{comment}
-				msg := formatReviewCommentsMessage(commentSlice)
+			}
+			if len(injectable) > 0 {
+				msg := formatReviewCommentsMessage(injectable)
 				if ident != "your PR" {
 					msg = strings.Replace(msg, "your PR", ident, 1)
 				}
 				if o.URL != "" {
 					msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
 				}
-				sig := reviewCommentsSignature(commentSlice)
+				sig := reviewCommentsSignature(injectable)
 				if sig == "" {
 					sig = string(o.Review)
 				}
-				// Per comment, like the review loop below: a shared key is a
-				// shared signature slot and a shared attempt budget.
-				nudges = append(nudges, pendingNudge{key: commentNudgeKey(o.URL, comment), sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
+				nudges = append(nudges, pendingNudge{key: "review-comments:" + o.URL, sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
 			}
 		}
 
@@ -321,20 +410,6 @@ func (m *Manager) sessionComplete(ctx context.Context, id domain.SessionID) (boo
 		}
 	}
 	return merged, nil
-}
-
-// commentNudgeKey identifies one review comment's nudge. It must be unique per
-// comment, not per thread: the observer expands a thread into one comment row
-// each (observer.go), all sharing the thread id, so keying on the thread would
-// put several comments with several signatures back in one dedup slot -- the
-// rotation this key exists to prevent. A comment with no id falls back to its
-// thread, which is still better than colliding with every other comment.
-func commentNudgeKey(prURL string, comment ports.PRCommentObservation) string {
-	id := strings.TrimSpace(comment.ID)
-	if id == "" {
-		id = strings.TrimSpace(comment.ThreadID)
-	}
-	return "comment:" + prURL + ":" + id
 }
 
 // mergeConflictKey is the reaction-dedup key for a PR's merge-conflict nudge.
@@ -689,7 +764,7 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 // carve-out so the merge-conflict nudge alone can bypass the needs-input
 // condition below (see its needsInput comment), so it inlines the
 // terminated/exited half of this check and evaluates needs-input separately.
-// Every other nudge path in this package (ApplyTrackerFacts)
+// Every other nudge path in this package (ApplyReviewBatch, ApplyTrackerFacts)
 // still gates on the full condition here, unchanged.
 func cannotNudge(rec domain.SessionRecord) bool {
 	return rec.IsTerminated || rec.Activity.State.NeedsInput() || rec.Activity.State == domain.ActivityExited
@@ -850,7 +925,7 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 	if review.ID != "" {
 		fmt.Fprintf(&msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
 	}
-	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what AO has provided here.")
+	msg.WriteString("\n\nAddress the requested changes and push.")
 	return msg.String()
 }
 
@@ -859,7 +934,7 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here."
 	}
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
+	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR:\n", len(comments))
 	for i, c := range comments {
 		location := "(general)"
 		if c.File != "" {
@@ -885,7 +960,7 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		}
 		msg.WriteString("\n")
 	}
-	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
+	msg.WriteString("\nAddress each comment and push fixes, then resolve the threads by their IDs.")
 	return msg.String()
 }
 

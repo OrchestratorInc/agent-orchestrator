@@ -89,13 +89,21 @@ type SubmitReviewItem struct {
 	GithubReviewID string `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
 }
 
+// SubmitReviewComment is one inline finding of a submit request.
+type SubmitReviewComment struct {
+	Path string `json:"path" description:"Repository path the finding anchors to."`
+	Line int    `json:"line" description:"Line in the file's diff the finding anchors to."`
+	Body string `json:"body" description:"Single-line finding body. Multi-line prose belongs in the review body."`
+}
+
 // SubmitReviewInput is the body of POST /api/v1/sessions/{sessionId}/reviews/submit.
 type SubmitReviewInput struct {
-	RunID          string             `json:"runId,omitempty" description:"Review run id being completed."`
-	Verdict        string             `json:"verdict,omitempty" description:"Review verdict: approved or changes_requested."`
-	Body           string             `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
-	GithubReviewID string             `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
-	Reviews        []SubmitReviewItem `json:"reviews,omitempty" description:"Batched review results recorded by one reviewer CLI command."`
+	RunID          string                `json:"runId,omitempty" description:"Review run id being completed."`
+	Verdict        string                `json:"verdict,omitempty" description:"Review verdict: approved or changes_requested."`
+	Body           string                `json:"body,omitempty" description:"Review body recorded by AO and published to the provider. Required for changes_requested."`
+	GithubReviewID string                `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
+	Comments       []SubmitReviewComment `json:"comments,omitempty" description:"Inline findings published as the review's anchored comments."`
+	Reviews        []SubmitReviewItem    `json:"reviews,omitempty" description:"Batched review results recorded by one reviewer CLI command."`
 }
 
 // ReviewsController owns the session-scoped /reviews routes. A nil Svc returns 501.
@@ -399,6 +407,13 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_BODY", "Invalid request body", nil)
 		return
 	}
+	// AO publishes the provider review itself, so a caller-posted githubReviewId
+	// is an obsolete input: GitHub review ids are outputs of this call, never
+	// inputs. Reject it instead of silently ignoring it.
+	if strings.TrimSpace(in.GithubReviewID) != "" {
+		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEW_INPUT_OBSOLETE", "githubReviewId is no longer accepted: AO publishes the review and records its id", nil)
+		return
+	}
 	reviews := make([]reviewsvc.SubmittedReview, 0, len(in.Reviews))
 	if len(in.Reviews) > 0 {
 		for _, item := range in.Reviews {
@@ -411,10 +426,10 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		reviews = append(reviews, reviewsvc.SubmittedReview{
-			RunID:          in.RunID,
-			Verdict:        domain.ReviewVerdict(in.Verdict),
-			Body:           in.Body,
-			GithubReviewID: in.GithubReviewID,
+			RunID:    in.RunID,
+			Verdict:  domain.ReviewVerdict(in.Verdict),
+			Body:     in.Body,
+			Findings: findingsFromInput(in.Comments),
 		})
 	}
 	runs, err := c.Svc.SubmitMany(r.Context(), sessionID(r), reviews)
@@ -427,6 +442,17 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 		first = runs[0]
 	}
 	envelope.WriteJSON(w, http.StatusOK, ReviewRunResponse{Review: first, Reviews: runs})
+}
+
+func findingsFromInput(comments []SubmitReviewComment) []domain.ReviewFinding {
+	if len(comments) == 0 {
+		return nil
+	}
+	findings := make([]domain.ReviewFinding, 0, len(comments))
+	for _, comment := range comments {
+		findings = append(findings, domain.ReviewFinding{Path: comment.Path, Line: comment.Line, Body: comment.Body})
+	}
+	return findings
 }
 
 func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
@@ -446,6 +472,9 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_AUTH_REQUIRED", "The reviewer agent is installed but not authenticated", nil)
 	default:
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "REVIEW_OPERATION_FAILED", "Review operation failed", nil)
+		// The trigger error text is already persisted in review_run.body; repeating
+		// it here keeps the UI toast diagnosable without a DB query (issue #6099
+		// shipped as an opaque "Review operation failed" for exactly this reason).
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "REVIEW_OPERATION_FAILED", "Review operation failed", map[string]any{"detail": err.Error()})
 	}
 }

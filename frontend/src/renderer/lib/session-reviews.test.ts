@@ -133,6 +133,7 @@ const run = (
 	harness: "codex",
 	id: `run-${number}`,
 	prUrl: `https://github.com/o/r/pull/${number}`,
+	publishState: "published",
 	reviewId: `rev-${number}`,
 	sessionId: "session-1",
 	status: "complete",

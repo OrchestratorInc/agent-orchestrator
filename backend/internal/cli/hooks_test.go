@@ -21,6 +21,21 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
+func TestSessionIDPattern(t *testing.T) {
+	accept := []string{"ao-7", "my-project-16", "my.project-16", "a.b.c-1"}
+	for _, id := range accept {
+		if !sessionIDPattern.MatchString(id) {
+			t.Errorf("sessionIDPattern should accept project-derived id %q (dotted project ids must stay usable)", id)
+		}
+	}
+	reject := []string{"", ".hidden", "../evil", "a/b", "..%2f"}
+	for _, id := range reject {
+		if sessionIDPattern.MatchString(id) {
+			t.Errorf("sessionIDPattern should reject %q", id)
+		}
+	}
+}
+
 type activityCapture struct {
 	body string
 	path string
@@ -2308,36 +2323,20 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	// else is denied, and no blocked activity is reported either way.
 	// The shell literal, JSON-escaped for the hook payload; `it'\''s` is the
 	// prompt's shell-escaped single quote.
-	const submitJSON = `'{ \"reviews\": [ { \"runId\": \"run-1\", \"verdict\": \"approved\", \"body\": \"it'\\''s fine\" } ] }'`
+	const submitMarkdown = `'<review markdown with it'\\''s fine>'`
+	const findingBody = `'<single-line finding it'\\''s fine>'`
 	cases := []struct {
 		name    string
 		payload string
 		want    string
 	}{
-		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "allow"},
-		{"gh api review post", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "allow"},
-		// #6021 staged shapes: the base64 payload cannot quote or expand, the
-		// staging target is a per-worker /tmp path (parallel reviewers cannot
-		// stage over or consume each other's payloads), and the consuming
-		// commands carry no payload at all. Every captured session id — the
-		// submit flag and the file name — must match this reviewer's worker.
-		{"staged results staging", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJyZXZpZXdzIjpbXX0=' | base64 -d > /tmp/ao-review-worker-7-results.json"}}`, "allow"},
-		{"staged post staging", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJldmVudCI6IkNPTU1FTlQifQ==' | base64 -d > /tmp/ao-review-worker-7-post.json"}}`, "allow"},
-		{"staged gh api post", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input /tmp/ao-review-worker-7-post.json --jq '.id'"}}`, "allow"},
-		{"staged review submit", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-7-results.json"}}`, "allow"},
-		{"staged submit other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --reviews /tmp/ao-review-worker-7-results.json"}}`, "deny"},
-		{"staged submit foreign results file", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-9-results.json"}}`, "deny"},
-		{"staged post staging foreign session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJldmVudCI6IkNPTU1FTlQifQ==' | base64 -d > /tmp/ao-review-worker-9-post.json"}}`, "deny"},
-		{"staged gh api post foreign session", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input /tmp/ao-review-worker-9-post.json --jq '.id'"}}`, "deny"},
-		{"staged submit with unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-7-results.json"}}`, "deny"},
-		{"staged payload with embedded quote", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'ab'c' | base64 -d > /tmp/ao-review-worker-7-results.json"}}`, "deny"},
-		{"staged payload with command substitution", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'abc$(id)' | base64 -d > /tmp/ao-review-worker-7-results.json"}}`, "deny"},
-		{"staging to another path", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'abc=' | base64 -d > /tmp/other.json"}}`, "deny"},
-		{"staged submit from another file", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-7-results.json.bak"}}`, "deny"},
-		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
-		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"heredoc submit", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'EOF'\n{}\nEOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
+		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitMarkdown + ` | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "allow"},
+		{"submit with inline findings", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitMarkdown + ` | ao review submit --session worker-7 --run run-1 --verdict changes_requested --body - --comment-path src/auth.go --comment-line 42 --comment-body ` + findingBody + ` --comment-path src/x.go --comment-line 7 --comment-body 'second finding'"}}`, "allow"},
+		{"gh api review post is no longer allowed", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "deny"},
+		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"heredoc submit", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.md <<'EOF'\n{}\nEOF\nao review submit --session worker-7 --run run-1 --verdict approved --body - < /tmp/r.md"}}`, "deny"},
 		{"env inspection", `{"tool_name":"Bash","tool_input":{"command":"pip3 show pkg | sed -n 1p; cat \"$(pip3 show pkg)\" || python3 -c \"print(1)\""}}`, "deny"},
 		{"non-bash tool", `{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}`, "deny"},
 	}

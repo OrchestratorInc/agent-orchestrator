@@ -2,20 +2,24 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 )
 
 type fakeStore struct {
+	mu                      sync.Mutex
 	run                     domain.ReviewRun
 	ok                      bool
 	review                  domain.Review
@@ -26,10 +30,16 @@ type fakeStore struct {
 	prComments              map[string][]domain.PullRequestComment
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
+	getRunErr               error
+	getRunCalls             int
 
 	updateCalls        int
 	activityUpdates    int
+	markCalls          int
+	markedIDs          []string
 	resolvedCommentIDs []string
+	publishCalls       int
+	publishStates      []domain.ReviewRunPublishState
 }
 
 type fakeNotificationSink struct {
@@ -42,6 +52,8 @@ func (f *fakeNotificationSink) Notify(_ context.Context, intent ports.Notificati
 }
 
 func (f *fakeStore) GetReviewByID(_ context.Context, id string) (domain.Review, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.reviewOK && f.review.ID == id {
 		return f.review, true, nil
 	}
@@ -49,6 +61,8 @@ func (f *fakeStore) GetReviewByID(_ context.Context, id string) (domain.Review, 
 }
 
 func (f *fakeStore) UpdateReviewActivity(_ context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.reviewOK || f.review.ID != id {
 		return false, nil
 	}
@@ -72,6 +86,14 @@ func (f *fakeStore) UpdateReviewActivity(_ context.Context, id string, state dom
 }
 
 func (f *fakeStore) GetReviewRun(_ context.Context, id string) (domain.ReviewRun, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getRunCalls++
+	// getRunErr fails every read after the first: submitOne's entry read must
+	// succeed while publishOne's locked re-read sees the store failure.
+	if f.getRunErr != nil && f.getRunCalls > 1 {
+		return domain.ReviewRun{}, false, f.getRunErr
+	}
 	for _, run := range f.batchRuns {
 		if run.ID == id {
 			return run, true, nil
@@ -84,6 +106,8 @@ func (f *fakeStore) GetReviewRun(_ context.Context, id string) (domain.ReviewRun
 }
 
 func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	enabled := true
 	if f.sessionAutoInjectReview != nil {
 		enabled = *f.sessionAutoInjectReview
@@ -92,12 +116,16 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 }
 
 func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.SessionID, autoInject bool, _ time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.autoInjectSets = append(f.autoInjectSets, autoInject)
 	f.sessionAutoInjectReview = &autoInject
 	return true, nil
 }
 
-func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, findingsJSON, githubReviewID string, autoInjectReview bool) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := range f.batchRuns {
 		if f.batchRuns[i].ID == id {
 			if f.batchRuns[i].Status != domain.ReviewRunRunning {
@@ -109,6 +137,9 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 			f.batchRuns[i].Body = body
 			f.batchRuns[i].GithubReviewID = githubReviewID
 			f.batchRuns[i].AutoInjectReview = autoInjectReview
+			if err := json.Unmarshal([]byte(findingsJSON), &f.batchRuns[i].Findings); err != nil {
+				f.batchRuns[i].Findings = nil
+			}
 			if f.run.ID == id {
 				f.run = f.batchRuns[i]
 			}
@@ -124,30 +155,87 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 	f.run.Body = body
 	f.run.GithubReviewID = githubReviewID
 	f.run.AutoInjectReview = autoInjectReview
+	if err := json.Unmarshal([]byte(findingsJSON), &f.run.Findings); err != nil {
+		f.run.Findings = nil
+	}
+	return true, nil
+}
+
+func (f *fakeStore) UpdateReviewRunPublication(_ context.Context, id string, state domain.ReviewRunPublishState, githubReviewID, publishError string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publishCalls++
+	f.publishStates = append(f.publishStates, state)
+	apply := func(run *domain.ReviewRun) {
+		if run.ID != id {
+			return
+		}
+		run.PublishState = state
+		run.PublishError = publishError
+		if githubReviewID != "" {
+			run.GithubReviewID = githubReviewID
+		}
+	}
+	apply(&f.run)
+	for i := range f.batchRuns {
+		apply(&f.batchRuns[i])
+	}
+	return true, nil
+}
+
+func (f *fakeStore) MarkReviewRunDelivered(_ context.Context, id string, deliveredAt time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.markCalls++
+	f.markedIDs = append(f.markedIDs, id)
+	if f.run.ID == id && f.run.Status == domain.ReviewRunComplete && f.run.DeliveredAt == nil {
+		f.run.Status = domain.ReviewRunDelivered
+		f.run.DeliveredAt = &deliveredAt
+	}
+	for i := range f.batchRuns {
+		if f.batchRuns[i].ID == id && f.batchRuns[i].Status == domain.ReviewRunComplete && f.batchRuns[i].DeliveredAt == nil {
+			f.batchRuns[i].Status = domain.ReviewRunDelivered
+			f.batchRuns[i].DeliveredAt = &deliveredAt
+			return true, nil
+		}
+	}
+	if f.run.ID != id || f.run.Status != domain.ReviewRunDelivered {
+		return false, nil
+	}
 	return true, nil
 }
 
 func (f *fakeStore) ListReviewRunsByBatch(context.Context, domain.SessionID, string) ([]domain.ReviewRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := append([]domain.ReviewRun(nil), f.batchRuns...)
 	return out, nil
 }
 
 func (f *fakeStore) ListPRsBySession(context.Context, domain.SessionID) ([]domain.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := append([]domain.PullRequest(nil), f.prs...)
 	return out, nil
 }
 
 func (f *fakeStore) ListPRReviews(_ context.Context, prURL string) ([]domain.PullRequestReview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := append([]domain.PullRequestReview(nil), f.prReviews[prURL]...)
 	return out, nil
 }
 
 func (f *fakeStore) ListPRComments(_ context.Context, prURL string) ([]domain.PullRequestComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := append([]domain.PullRequestComment(nil), f.prComments[prURL]...)
 	return out, nil
 }
 
 func (f *fakeStore) MarkPRCommentResolved(_ context.Context, prURL, commentID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.resolvedCommentIDs = append(f.resolvedCommentIDs, commentID)
 	comments := f.prComments[prURL]
 	for i := range comments {
@@ -267,26 +355,81 @@ func TestRequestRereviewRejectsUnknownReviewer(t *testing.T) {
 	}
 }
 
-// AO never sends the worker a separate verdict message: the reviewer's posted
-// review reaches the worker through the SCM observer like any other review. A
-// submitted result is recorded and stays complete.
-func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
+// fakePublisher records daemon-side publication calls.
+type fakePublisher struct {
+	calls  int
+	last   ports.SCMReviewPublishRequest
+	result ports.SCMReviewPublishResult
+	err    error
+}
+
+func (p *fakePublisher) PublishReview(_ context.Context, request ports.SCMReviewPublishRequest) (ports.SCMReviewPublishResult, error) {
+	p.calls++
+	p.last = request
+	if p.err != nil {
+		return ports.SCMReviewPublishResult{}, p.err
+	}
+	if p.result.ReviewID == "" && p.result.HTMLURL == "" {
+		return ports.SCMReviewPublishResult{ReviewID: "gh-review-42"}, nil
+	}
+	return p.result, nil
+}
+
+// lookupPublisher layers the publication-lookup capability onto fakePublisher
+// so reconciliation tests control what the provider reports about a prior
+// attempt. Publishers without this type keep exercising the fallback path.
+type lookupPublisher struct {
+	*fakePublisher
+	result     ports.SCMReviewPublishResult
+	found      bool
+	err        error
+	calls      int
+	lastMarker string
+}
+
+func (p *lookupPublisher) FindPublishedReview(_ context.Context, _ ports.SCMPRRef, bodyMarker string) (ports.SCMReviewPublishResult, bool, error) {
+	p.calls++
+	p.lastMarker = bodyMarker
+	return p.result, p.found, p.err
+}
+
+type fakeReducer struct {
+	outcome    lifecycle.ReviewDeliveryOutcome
+	err        error
+	batchCalls int
+	gotBatchID string
+	gotBatch   []lifecycle.ReviewResult
+}
+
+func (f *fakeReducer) ApplyReviewBatch(_ context.Context, _ domain.SessionID, batchID string, results []lifecycle.ReviewResult) (lifecycle.ReviewDeliveryOutcome, error) {
+	f.batchCalls++
+	f.gotBatchID = batchID
+	f.gotBatch = append([]lifecycle.ReviewResult(nil), results...)
+	return f.outcome, f.err
+}
+
+func TestSubmitPersistsThenAppliesThenStampsDelivered(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
 	st := &fakeStore{
 		ok:  true,
 		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
 	}
-	svc := New(nil, st)
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
 
-	for _, verdict := range []domain.ReviewVerdict{domain.VerdictChangesRequested, domain.VerdictApproved} {
-		st.run.Status, st.run.Verdict, st.run.Body = domain.ReviewRunRunning, domain.VerdictNone, ""
-		run, err := svc.Submit(context.Background(), "mer-1", "run-1", verdict, "body", "987")
-		if err != nil {
-			t.Fatalf("%s: Submit: %v", verdict, err)
-		}
-		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
-			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
-		}
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if st.updateCalls != 1 || reducer.batchCalls != 1 || st.markCalls != 1 {
+		t.Fatalf("calls update/reducer/mark = %d/%d/%d", st.updateCalls, reducer.batchCalls, st.markCalls)
+	}
+	if reducer.gotBatch[0].Verdict != domain.VerdictChangesRequested || reducer.gotBatch[0].Body != "fix it" {
+		t.Fatalf("reducer saw wrong result: %+v", reducer.gotBatch)
+	}
+	if run.Status != domain.ReviewRunDelivered || run.DeliveredAt == nil || !run.DeliveredAt.Equal(now) {
+		t.Fatalf("run not stamped delivered: %+v", run)
 	}
 }
 
@@ -404,24 +547,25 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 		},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
 	}
-	svc := New(nil, st)
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer))
 
-	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
-		t.Fatalf("disabled review = %+v", run)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || reducer.batchCalls != 0 || st.markCalls != 0 {
+		t.Fatalf("disabled review = %+v reducerCalls=%d markCalls=%d", run, reducer.batchCalls, st.markCalls)
 	}
 
 	enabled := true
 	st.sessionAutoInjectReview = &enabled
-	run, err = svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
+	run, err = svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
-		t.Fatalf("retry rewrote disabled review = %+v", run)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || reducer.batchCalls != 0 || st.markCalls != 0 {
+		t.Fatalf("retry rewrote or delivered disabled review = %+v reducerCalls=%d markCalls=%d", run, reducer.batchCalls, st.markCalls)
 	}
 }
 
@@ -435,7 +579,7 @@ func TestSubmitEmitsIdempotentReviewResultNotification(t *testing.T) {
 	svc := New(nil, st, WithNotificationSink(sink))
 
 	for range 2 {
-		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", nil); err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
 	}
@@ -456,7 +600,7 @@ func TestSubmitEmitsChangesRequestedNotification(t *testing.T) {
 	sink := &fakeNotificationSink{}
 	svc := New(nil, st, WithNotificationSink(sink))
 
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictChangesRequested, "fix it", ""); err != nil {
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictChangesRequested, "fix it", nil); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	if len(sink.intents) != 1 || sink.intents[0].Type != domain.NotificationReviewChangesRequested {
@@ -464,7 +608,78 @@ func TestSubmitEmitsChangesRequestedNotification(t *testing.T) {
 	}
 }
 
-func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
+func TestSubmitBatchRunDoesNotWaitForOtherRunningRuns(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		batchRuns: []domain.ReviewRun{
+			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+		},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2"}},
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
+
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix pr1", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if run.Status != domain.ReviewRunDelivered || run.DeliveredAt == nil || !run.DeliveredAt.Equal(now) {
+		t.Fatalf("first submit status = %+v, want delivered", run)
+	}
+	if reducer.batchCalls != 1 || len(reducer.gotBatch) != 1 || reducer.gotBatch[0].RunID != "run-1" || st.markCalls != 1 {
+		t.Fatalf("submitted run should deliver independently: batchCalls=%d got=%+v markCalls=%d", reducer.batchCalls, reducer.gotBatch, st.markCalls)
+	}
+}
+
+func TestSubmitManySendsCombinedChangesRequested(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	st := &fakeStore{
+		ok: true,
+		batchRuns: []domain.ReviewRun{
+			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+			{ID: "run-3", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr3", TargetSHA: "sha3", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
+			{ID: "run-4", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr4", TargetSHA: "old", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, Body: "stale"},
+			{ID: "run-5", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr5", TargetSHA: "sha5", Status: domain.ReviewRunFailed},
+		},
+		prs: []domain.PullRequest{
+			{URL: "pr1", HeadSHA: "sha1"},
+			{URL: "pr2", HeadSHA: "sha2"},
+			{URL: "pr3", HeadSHA: "sha3"},
+			{URL: "pr4", HeadSHA: "new"},
+			{URL: "pr5", HeadSHA: "sha5"},
+		},
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
+
+	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{
+		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1"},
+		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2"},
+		{RunID: "run-3", Verdict: domain.VerdictApproved},
+	})
+	if err != nil {
+		t.Fatalf("SubmitMany: %v", err)
+	}
+	if reducer.batchCalls != 1 || reducer.gotBatchID != "batch-1" {
+		t.Fatalf("batch delivery calls/id = %d/%q", reducer.batchCalls, reducer.gotBatchID)
+	}
+	if len(reducer.gotBatch) != 2 || reducer.gotBatch[0].RunID != "run-1" || reducer.gotBatch[1].RunID != "run-2" {
+		t.Fatalf("delivered batch = %+v, want run-1 and run-2 only", reducer.gotBatch)
+	}
+	if st.markCalls != 2 {
+		t.Fatalf("markCalls = %d, want 2", st.markCalls)
+	}
+	if runs[0].Status != domain.ReviewRunDelivered || runs[0].DeliveredAt == nil || !runs[0].DeliveredAt.Equal(now) ||
+		runs[1].Status != domain.ReviewRunDelivered || runs[1].DeliveredAt == nil || !runs[1].DeliveredAt.Equal(now) {
+		t.Fatalf("submitted runs not stamped delivered: %+v", runs)
+	}
+}
+
+func TestSubmitManySkipsSupersededRunAndDeliversSiblings(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	st := &fakeStore{
 		ok: true,
@@ -476,17 +691,21 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 		},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2-new"}},
 	}
-	svc := New(nil, st, WithClock(func() time.Time { return now }))
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
 
 	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{
 		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1"},
 		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2"},
 	})
 	if err != nil {
-		t.Fatalf("SubmitMany must record valid siblings when one run was superseded: %v", err)
+		t.Fatalf("SubmitMany must deliver valid siblings when one run was superseded: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunComplete {
-		t.Fatalf("want only run-1 recorded, got %+v", runs)
+	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunDelivered {
+		t.Fatalf("want only run-1 delivered, got %+v", runs)
+	}
+	if reducer.batchCalls != 1 || len(reducer.gotBatch) != 1 || reducer.gotBatch[0].RunID != "run-1" {
+		t.Fatalf("want run-1 delivered independently; batchCalls=%d got=%+v", reducer.batchCalls, reducer.gotBatch)
 	}
 }
 
@@ -497,7 +716,8 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 			ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCancelled,
 		}},
 	}
-	svc := New(nil, st)
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer))
 
 	if _, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{{
 		RunID: "run-1", Verdict: domain.VerdictApproved,
@@ -506,31 +726,83 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "superseded: run-1") {
 		t.Fatalf("err = %v, want rejected run id", err)
 	}
+	if reducer.batchCalls != 0 {
+		t.Fatalf("only superseded runs must not trigger delivery: batchCalls=%d", reducer.batchCalls)
+	}
+}
+
+func TestSubmitBatchApprovedOnlySendsNothing(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+		batchRuns: []domain.ReviewRun{
+			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
+			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+		},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2"}},
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "ship it", nil); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if reducer.batchCalls != 0 || st.markCalls != 0 {
+		t.Fatalf("approved-only batch should not deliver: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
+	}
+}
+
+func TestSubmitDeliveryFailureLeavesCompletedUndeliveredForRetry(t *testing.T) {
+	sendErr := errors.New("dead pane")
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+	}
+	reducer := &fakeReducer{err: sendErr}
+	svc := New(nil, st, WithLifecycleReducer(reducer))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", nil); !errors.Is(err, sendErr) {
+		t.Fatalf("err = %v, want sendErr", err)
+	}
+	if st.run.Status != domain.ReviewRunComplete || st.run.DeliveredAt != nil || st.markCalls != 0 {
+		t.Fatalf("failed delivery should leave completed/undelivered without stamp: %+v markCalls=%d", st.run, st.markCalls)
+	}
+
+	reducer.err = nil
+	reducer.outcome = lifecycle.ReviewDeliverySent
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", nil); err != nil {
+		t.Fatalf("retry Submit: %v", err)
+	}
+	if st.updateCalls != 1 || reducer.batchCalls != 2 || st.run.Status != domain.ReviewRunDelivered || st.run.DeliveredAt == nil {
+		t.Fatalf("retry should not rewrite result and should stamp delivery: update=%d reducer=%d run=%+v", st.updateCalls, reducer.batchCalls, st.run)
+	}
 }
 
 func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 	tests := []struct {
-		name           string
-		body           string
-		githubReviewID string
+		name     string
+		body     string
+		findings []domain.ReviewFinding
 	}{
-		{name: "different body", body: "different", githubReviewID: "987"},
-		{name: "different review id", body: "fix it", githubReviewID: "654"},
+		{name: "different body", body: "different"},
+		{name: "different findings", body: "fix it", findings: []domain.ReviewFinding{{Path: "a.go", Line: 1, Body: "new finding"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &fakeStore{ok: true, run: domain.ReviewRun{
 				ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1",
 				Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
-				Body: "fix it", GithubReviewID: "987",
+				Body: "fix it",
 			}}
-			svc := New(nil, st)
+			reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+			svc := New(nil, st, WithLifecycleReducer(reducer))
 
-			if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, tt.body, tt.githubReviewID); !errors.Is(err, ErrInvalid) {
+			if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, tt.body, tt.findings); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("err = %v, want ErrInvalid", err)
 			}
-			if st.updateCalls != 0 {
-				t.Fatalf("mismatched retry should not rewrite: update=%d", st.updateCalls)
+			if st.updateCalls != 0 || st.markCalls != 0 || reducer.batchCalls != 0 {
+				t.Fatalf("mismatched retry should not rewrite or deliver: update=%d mark=%d reducer=%d", st.updateCalls, st.markCalls, reducer.batchCalls)
 			}
 		})
 	}
@@ -565,16 +837,18 @@ func TestSubmitReportsReviewOutcome(t *testing.T) {
 			Harness: "claude-code", CreatedAt: created,
 			PRURL: "https://github.com/acme/secret-repo/pull/7", TargetSHA: "deadbeefcafe",
 		},
+		prs: []domain.PullRequest{{URL: "https://github.com/acme/secret-repo/pull/7", Provider: "github", Host: "github.com", Repo: "acme/secret-repo", Number: 7, HeadSHA: "deadbeefcafe"}},
 	}
 	sink := &recordingSink{}
 	svc := New(nil, store,
 		WithTelemetry(sink),
 		WithClock(func() time.Time { return created.Add(90 * time.Second) }),
+		WithReviewPublisher(&fakePublisher{}),
 	)
 
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-1")
 	if _, err := svc.Submit(ctx, "worker-1", "run-1",
-		domain.VerdictChangesRequested, "please rename this", "gh-review-42"); err != nil {
+		domain.VerdictChangesRequested, "please rename this", nil); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -622,7 +896,7 @@ func TestSubmitNeverReportsReviewProseOrRepoIdentifiers(t *testing.T) {
 
 	body := "leaks credentials in src/config/prod.ts"
 	if _, err := svc.Submit(context.Background(), "worker-1", "run-1",
-		domain.VerdictChangesRequested, body, ""); err != nil {
+		domain.VerdictChangesRequested, body, nil); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -662,7 +936,7 @@ func TestResubmitDoesNotDoubleReport(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if _, err := svc.Submit(context.Background(), "worker-1", "run-1",
-			domain.VerdictApproved, "", ""); err != nil {
+			domain.VerdictApproved, "ok", nil); err != nil {
 			t.Fatalf("Submit %d: %v", i, err)
 		}
 	}
@@ -679,7 +953,7 @@ func TestServiceWithoutTelemetrySinkStaysSilent(t *testing.T) {
 		run: domain.ReviewRun{ID: "run-1", SessionID: "worker-1", Status: domain.ReviewRunRunning},
 	}
 	svc := New(nil, store)
-	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "", ""); err != nil {
+	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "ok", nil); err != nil {
 		t.Fatalf("Submit without a sink: %v", err)
 	}
 }
@@ -716,7 +990,7 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 		want string
 	}{
 		{"manual", func(s *Service) error {
-			_, err := s.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}})
+			_, err := s.TriggerRequested(context.Background(), "worker-1", TriggerRequest{})
 			return err
 		}, "manual"},
 		{"auto", func(s *Service) error {
@@ -822,7 +1096,7 @@ func TestSubmitReportsPassShapeNotItsContents(t *testing.T) {
 
 	body := "rename this symbol"
 	if _, err := svc.Submit(context.Background(), "worker-1", "run-1",
-		domain.VerdictChangesRequested, body, ""); err != nil {
+		domain.VerdictChangesRequested, body, nil); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	p := sink.named("ao.review.submitted")[0].Payload
@@ -846,7 +1120,7 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	}
 
 	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Model: "gpt-5-mini"}}); err != nil {
-		t.Fatalf("Trigger: %v", err)
+		t.Fatalf("TriggerRequested: %v", err)
 	}
 	got := sink.named("ao.review.triggered")
 	if len(got) != 1 {
@@ -867,7 +1141,7 @@ func TestReusedManualPassStaysATrigger(t *testing.T) {
 	}
 
 	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}}); err != nil {
-		t.Fatalf("Trigger: %v", err)
+		t.Fatalf("TriggerRequested: %v", err)
 	}
 	got := sink.named("ao.review.triggered")
 	if len(got) != 1 {
@@ -931,6 +1205,400 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 	}
 }
 
+// --- Publication state machine (issue #5701) ---
+
+func publicationTestService(t *testing.T, st *fakeStore, pub ports.SCMReviewPublisher) *Service {
+	t.Helper()
+	st.prs = []domain.PullRequest{{
+		URL: "https://github.com/acme/app/pull/9", Provider: "github", Host: "github.com",
+		Repo: "acme/app", Number: 9, HeadSHA: "sha1",
+	}}
+	return New(nil, st, WithReviewPublisher(pub))
+}
+
+func TestSubmitPublishesReviewOnceAndReturnsRecordedId(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", BatchID: "batch-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+	}}
+	pub := &fakePublisher{result: ports.SCMReviewPublishResult{ReviewID: "9001", HTMLURL: "https://github.com/acme/app/pull/9#review-9001"}}
+	svc := publicationTestService(t, st, pub)
+
+	findings := []domain.ReviewFinding{{Path: "src/auth.go", Line: 42, Body: "Missing authorization check."}}
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "needs auth", findings)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.calls != 1 {
+		t.Fatalf("publisher calls = %d, want 1", pub.calls)
+	}
+	if pub.last.CommitSHA != "sha1" || pub.last.Body != "needs auth\n\n<!-- ao-review-run:run-1 -->" || len(pub.last.Comments) != 1 || pub.last.Comments[0].Path != "src/auth.go" || pub.last.Comments[0].Line != 42 {
+		t.Fatalf("publish request = %+v", pub.last)
+	}
+	if run.PublishState != domain.ReviewPublishPublished || run.GithubReviewID != "9001" {
+		t.Fatalf("run = publish %q id %q, want published/9001", run.PublishState, run.GithubReviewID)
+	}
+
+	// An identical resubmission must return the recorded result without
+	// publishing again.
+	run, err = svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "needs auth", findings)
+	if err != nil {
+		t.Fatalf("resubmit: %v", err)
+	}
+	if pub.calls != 1 {
+		t.Fatalf("publisher calls after resubmit = %d, want 1", pub.calls)
+	}
+	if run.PublishState != domain.ReviewPublishPublished || run.GithubReviewID != "9001" {
+		t.Fatalf("resubmitted run = %q/%q", run.PublishState, run.GithubReviewID)
+	}
+}
+
+func TestSubmitZeroOneAndManyFindingsAllPublish(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		findings []domain.ReviewFinding
+	}{
+		{name: "zero findings"},
+		{name: "one finding", findings: []domain.ReviewFinding{{Path: "a.go", Line: 1, Body: "boom"}}},
+		{name: "many findings", findings: []domain.ReviewFinding{{Path: "a.go", Line: 1, Body: "boom"}, {Path: "b.go", Line: 2, Body: "also boom"}, {Path: "c.go", Line: 3, Body: "third"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &fakeStore{ok: true, run: domain.ReviewRun{
+				ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+				TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+			}}
+			pub := &fakePublisher{result: ports.SCMReviewPublishResult{ReviewID: "42"}}
+			svc := publicationTestService(t, st, pub)
+
+			run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "review body", tc.findings)
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			if len(run.Findings) != len(tc.findings) || run.PublishState != domain.ReviewPublishPublished {
+				t.Fatalf("run findings=%d publish=%q", len(run.Findings), run.PublishState)
+			}
+			if len(pub.last.Comments) != len(tc.findings) {
+				t.Fatalf("comments = %d, want %d", len(pub.last.Comments), len(tc.findings))
+			}
+		})
+	}
+}
+
+func TestSubmitProviderFailureRecordsFailedAndRetryRepublishes(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+	}}
+	pub := &fakePublisher{err: errors.New("422: pull request head changed")}
+	svc := publicationTestService(t, st, pub)
+
+	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "ship it", nil); err != nil {
+		t.Fatalf("provider failure must not fail the submission: %v", err)
+	}
+	if st.run.PublishState != domain.ReviewPublishFailed || st.run.PublishError == "" {
+		t.Fatalf("run = %+v, want failed with an error", st.run)
+	}
+
+	// The provider rejecting the request is definitive: the review was not
+	// created, so a repeated submission may publish again.
+	pub.err = nil
+	pub.result = ports.SCMReviewPublishResult{ReviewID: "77"}
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "ship it", nil)
+	if err != nil {
+		t.Fatalf("retry Submit: %v", err)
+	}
+	if pub.calls != 2 || run.PublishState != domain.ReviewPublishPublished || run.GithubReviewID != "77" {
+		t.Fatalf("retry: calls=%d publish=%q id=%q", pub.calls, run.PublishState, run.GithubReviewID)
+	}
+}
+
+func TestSubmitInterruptedPublicationStaysUncertainUntilConfirmed(t *testing.T) {
+	// Attempt interrupted mid-flight: the publishing state was persisted before
+	// the provider call, then the daemon died. A resubmission must report the
+	// uncertainty instead of blindly reposting.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishPublishing,
+	}}
+	pub := &fakePublisher{}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 for an uncertain prior attempt", pub.calls)
+	}
+	if run.PublishState != domain.ReviewPublishUncertain || run.PublishError == "" {
+		t.Fatalf("run = %q/%q, want uncertain with a reason", run.PublishState, run.PublishError)
+	}
+	if st.run.PublishState != domain.ReviewPublishUncertain {
+		t.Fatalf("persisted state = %q, want uncertain", st.run.PublishState)
+	}
+}
+
+func TestSubmitPublishingRunRecoversToPublishedWhenProviderHasReview(t *testing.T) {
+	// The publication succeeded but the final store write was lost, leaving
+	// the run in publishing. The provider lookup finds the run's marker in the
+	// published review, so the run is upgraded to published — no repost, no
+	// guess.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishPublishing,
+	}}
+	pub := &lookupPublisher{fakePublisher: &fakePublisher{}, found: true, result: ports.SCMReviewPublishResult{ReviewID: "9001", HTMLURL: "https://github.com/acme/app/pull/9#review-9001"}}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.calls != 1 {
+		t.Fatalf("lookup calls = %d, want 1", pub.calls)
+	}
+	if !strings.Contains(pub.lastMarker, "ao-review-run:run-1") {
+		t.Fatalf("lookup marker = %q, want the run's publication marker", pub.lastMarker)
+	}
+	if pub.fakePublisher.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 for a recovered publication", pub.fakePublisher.calls)
+	}
+	if run.PublishState != domain.ReviewPublishPublished || run.GithubReviewID != "9001" {
+		t.Fatalf("run = %q/%q, want published/9001", run.PublishState, run.GithubReviewID)
+	}
+	if st.run.PublishState != domain.ReviewPublishPublished {
+		t.Fatalf("persisted state = %q, want published", st.run.PublishState)
+	}
+}
+
+func TestSubmitPublishingRunRepublishesWhenProviderHasNoReview(t *testing.T) {
+	// A publishing state with a definitive "not found" from the provider
+	// proves the interrupted attempt never created a review, so the submission
+	// completes the publication instead of parking the run in uncertain.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishPublishing,
+	}}
+	pub := &lookupPublisher{fakePublisher: &fakePublisher{}}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.fakePublisher.calls != 1 {
+		t.Fatalf("publisher calls = %d, want 1 after a definitive not-found", pub.fakePublisher.calls)
+	}
+	if run.PublishState != domain.ReviewPublishPublished {
+		t.Fatalf("run = %q, want published", run.PublishState)
+	}
+}
+
+func TestSubmitUncertainRunRecoversToPublishedWhenProviderHasReview(t *testing.T) {
+	// An uncertain run is upgraded to published the moment the provider
+	// proves the review exists — recovery on evidence, never on a guess.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishUncertain,
+	}}
+	pub := &lookupPublisher{fakePublisher: &fakePublisher{}, found: true, result: ports.SCMReviewPublishResult{ReviewID: "9001"}}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.fakePublisher.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 for a recovered publication", pub.fakePublisher.calls)
+	}
+	if run.PublishState != domain.ReviewPublishPublished || run.GithubReviewID != "9001" {
+		t.Fatalf("run = %q/%q, want published/9001", run.PublishState, run.GithubReviewID)
+	}
+}
+
+func TestSubmitUncertainRunStaysUncertainWhenProviderHasNoReview(t *testing.T) {
+	// Without proof the review exists, an uncertain run keeps its absorbing
+	// contract: reported, never blindly reposted.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishUncertain,
+	}}
+	pub := &lookupPublisher{fakePublisher: &fakePublisher{}}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.fakePublisher.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 for an unconfirmed uncertain run", pub.fakePublisher.calls)
+	}
+	if run.PublishState != domain.ReviewPublishUncertain {
+		t.Fatalf("run = %q, want uncertain", run.PublishState)
+	}
+}
+
+func TestSubmitPublishingRunStaysUncertainWhenLookupFails(t *testing.T) {
+	// A failed provider lookup carries no information: the interrupted
+	// publication keeps the conservative downgrade to uncertain.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishPublishing,
+	}}
+	pub := &lookupPublisher{fakePublisher: &fakePublisher{}, err: errors.New("lookup unavailable")}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.fakePublisher.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 when the lookup fails", pub.fakePublisher.calls)
+	}
+	if run.PublishState != domain.ReviewPublishUncertain {
+		t.Fatalf("run = %q, want uncertain", run.PublishState)
+	}
+}
+
+func TestSubmitPublishStateReReadFailureRecordsUncertain(t *testing.T) {
+	// A store error while re-reading the publication state leaves the outcome
+	// unknown: never publish on a guess, and surface the reason to the CLI.
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Body: "fix it", PublishState: domain.ReviewPublishPending,
+	}}
+	st.getRunErr = errors.New("db unavailable")
+	pub := &fakePublisher{}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "fix it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if pub.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 when the state re-read fails", pub.calls)
+	}
+	if run.PublishState != domain.ReviewPublishUncertain || !strings.Contains(run.PublishError, "publication state re-read failed") {
+		t.Fatalf("run = %q/%q, want uncertain with a re-read reason", run.PublishState, run.PublishError)
+	}
+	if st.run.PublishState != domain.ReviewPublishUncertain {
+		t.Fatalf("persisted state = %q, want uncertain", st.run.PublishState)
+	}
+}
+
+// A transport outage or 5xx may have been processed by the provider: the run
+// must land in uncertain (never failed), so a rerun cannot post a duplicate
+// review. A definitive rejection stays failed and may republish.
+func TestSubmitUnknownOutcomePublicationRecordsUncertain(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+	}}
+	pub := &fakePublisher{err: fmt.Errorf("%w: POST repos/acme/app/pulls/9/reviews: TLS handshake timeout", ports.ErrSCMPublishOutcomeUnknown)}
+	svc := publicationTestService(t, st, pub)
+
+	run, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "ship it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if run.PublishState != domain.ReviewPublishUncertain || !strings.Contains(run.PublishError, "publication outcome unknown") {
+		t.Fatalf("run = %q/%q, want uncertain with an unknown-outcome reason", run.PublishState, run.PublishError)
+	}
+
+	// The uncertain outcome blocks a blind repost.
+	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "ship it", nil); err != nil {
+		t.Fatalf("resubmit: %v", err)
+	}
+	if pub.calls != 1 {
+		t.Fatalf("publisher calls after resubmit = %d, want 1", pub.calls)
+	}
+}
+
+// A vanished run row is the same never-publish-on-a-guess situation as a
+// re-read error: record uncertainty instead of trusting the stale snapshot.
+func TestPublishOneMissingRunRowRecordsUncertain(t *testing.T) {
+	st := &fakeStore{ok: false, run: domain.ReviewRun{ID: "run-1"}}
+	pub := &fakePublisher{}
+	svc := publicationTestService(t, st, pub)
+
+	run := domain.ReviewRun{ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9", TargetSHA: "sha1", PublishState: domain.ReviewPublishPending}
+	svc.publishOne(context.Background(), "worker-1", &run)
+
+	if pub.calls != 0 {
+		t.Fatalf("publisher calls = %d, want 0 when the run row is missing", pub.calls)
+	}
+	if run.PublishState != domain.ReviewPublishUncertain || !strings.Contains(run.PublishError, "row is missing") {
+		t.Fatalf("in-memory run = %q/%q, want uncertain", run.PublishState, run.PublishError)
+	}
+	if st.run.PublishState != domain.ReviewPublishUncertain {
+		t.Fatalf("persisted state = %q, want uncertain", st.run.PublishState)
+	}
+}
+
+func TestSubmitManyConcurrentIdenticalSubmissionsPublishOnce(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+	}}
+	pub := &fakePublisher{result: ports.SCMReviewPublishResult{ReviewID: "5"}}
+	svc := publicationTestService(t, st, pub)
+
+	const racers = 8
+	start := make(chan struct{})
+	results := make(chan error, racers)
+	for i := 0; i < racers; i++ {
+		go func() {
+			<-start
+			_, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictApproved, "ship it", nil)
+			results <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < racers; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent submit: %v", err)
+		}
+	}
+	if pub.calls != 1 {
+		t.Fatalf("publisher calls = %d, want exactly 1", pub.calls)
+	}
+}
+
+func TestSubmitFindingsSurviveInWorkerFeedbackBody(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-1", SessionID: "worker-1", BatchID: "batch-1", PRURL: "https://github.com/acme/app/pull/9",
+		TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+	}}
+	pub := &fakePublisher{result: ports.SCMReviewPublishResult{ReviewID: "8"}}
+	svc := publicationTestService(t, st, pub)
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc.lifecycle = reducer
+
+	findings := []domain.ReviewFinding{
+		{Path: "src/auth.go", Line: 42, Body: "Missing authorization check."},
+		{Path: "src/db.go", Line: 7, Body: "Unclosed transaction."},
+	}
+	if _, err := svc.Submit(context.Background(), "worker-1", "run-1", domain.VerdictChangesRequested, "two problems", findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(reducer.gotBatch) != 1 {
+		t.Fatalf("delivered batch = %+v", reducer.gotBatch)
+	}
+	body := reducer.gotBatch[0].Body
+	if !strings.HasPrefix(body, "two problems") || !strings.Contains(body, "`src/auth.go:42` — Missing authorization check.") || !strings.Contains(body, "`src/db.go:7` — Unclosed transaction.") {
+		t.Fatalf("worker feedback body lost findings: %q", body)
+	}
+	if reducer.gotBatch[0].GithubReviewID != "8" {
+		t.Fatalf("delivered run githubReviewId = %q, want the published id", reducer.gotBatch[0].GithubReviewID)
+	}
+}
 func TestTriggerRequestedEnablesAutoInjectOnlyAfterAPassStarts(t *testing.T) {
 	off := false
 	st := &fakeStore{sessionAutoInjectReview: &off}

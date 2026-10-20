@@ -103,7 +103,7 @@ func TestTriggerRerunReviewsAnApprovedHeadAgainWithTheSameReviewer(t *testing.T)
 	if err := store.InsertReviewRun(ctx, approved); err != nil {
 		t.Fatalf("seed run: %v", err)
 	}
-	if _, err := store.UpdateReviewRunResult(ctx, approved.ID, domain.ReviewRunComplete, domain.VerdictApproved, "", "", true); err != nil {
+	if _, err := store.UpdateReviewRunResult(ctx, approved.ID, domain.ReviewRunComplete, domain.VerdictApproved, "", "", "", true); err != nil {
 		t.Fatalf("approve seeded run: %v", err)
 	}
 	launcher := &fakeLauncher{handle: "claude-pane"}

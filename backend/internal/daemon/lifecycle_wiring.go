@@ -365,8 +365,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	})
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
-	// reviewer posts its review to the PR itself, so the service needs no SCM
-	// writer.
+	// reviewer submits its result to AO; the daemon publishes the provider
+	// review itself, so the service needs the SCM publisher.
 	if reviewers == nil {
 		if reviewers, err = reviewer.NewResolver(); err != nil {
 			return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
@@ -399,6 +399,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		reviewOpts = append(reviewOpts,
 			reviewsvc.WithReviewRequester(scmProvider),
 			reviewsvc.WithReviewResolver(scmProvider),
+			reviewsvc.WithReviewPublisher(scmProvider),
 		)
 	}
 	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))

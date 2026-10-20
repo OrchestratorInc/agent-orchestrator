@@ -21,36 +21,40 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 	prompt, _ := reviewTexts(spec)
 	for _, want := range []string{
 		"AO created 2 review tasks",
-		"Review every queued PR, then submit all results together",
+		"Review every queued PR, submitting each result with its own run id",
 		"Complete every review task in the queue autonomously",
 		"Do not ask the user whether to continue to the next PR",
 		"* 1. https://github.com/o/r/pull/1 (head commit sha1, run run-1)",
 		"* 2. https://github.com/o/r/pull/2 (head commit sha2, run run-2)",
-		"After every PR has its own GitHub review from step 1",
-		"printf '%s'",
-		"not use a heredoc",
-		`"reviews": [`,
-		"base64-encode",
-		// #6021: payloads are staged via base64 to per-worker /tmp paths and
-		// posted or submitted from the files. These exact lines are the shapes
-		// the cli permission hook auto-allows (hooks_test.go pins the same
-		// shapes), so the two sides must change together. The worker session
-		// in the file name keeps parallel reviewers' staging apart.
-		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-mer-1-post.json",
-		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/ao-review-mer-1-post.json --jq '.id'",
-		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-mer-1-results.json",
-		"ao review submit --session mer-1 --reviews /tmp/ao-review-mer-1-results.json",
+		"ao review submit",
+		"--body -",
+		"--comment-path",
+		"one command per queued PR",
+		"Never post to GitHub yourself",
+		"Never use a heredoc",
+		"single-line finding",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	// The inline stdin shapes and the apostrophe-escaping instruction are what
-	// #6021 replaced: a model that cannot emit multi-KB quoted arguments must
-	// never be pointed back at them.
-	for _, stale := range []string{"--reviews -", "shell-escape any single quotes"} {
-		if strings.Contains(prompt, stale) {
-			t.Fatalf("prompt still dictates the shape #6021 replaced (%q):\n%s", stale, prompt)
+	for _, legacy := range []string{"gh api", "--reviews -", "githubReviewId"} {
+		if strings.Contains(prompt, legacy) {
+			t.Fatalf("prompt still references legacy contract %q:\n%s", legacy, prompt)
+		}
+	}
+}
+
+func TestReviewSystemPromptOverridesInheritedHygieneRules(t *testing.T) {
+	system := reviewSystemPrompt()
+	for _, want := range []string{
+		"there is no human in this session to approve anything",
+		"those rules do not apply in this sandbox",
+		"emit it exactly as the task shows",
+		"it is the only channel that can deliver the review",
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, system)
 		}
 	}
 }
@@ -64,17 +68,17 @@ func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 		t.Fatalf("native review prompts must identify their owned implementation scope:\n%s\n%s", prompt, system)
 	}
 	for _, want := range []string{
-		"The worker receives only your inline comments, never the summary",
-		"Put every finding that requires a change in \"comments\" as its own inline comment",
+		"The worker receives only your inline findings, never the summary",
+		"Put every finding that requires a change in an inline finding",
 		"including design-level findings",
-		"Leave optional or nice-to-have suggestions out of \"comments\"",
-		"Omit \"comments\" only when nothing needs to change.",
+		"Leave optional or nice-to-have suggestions out of the inline findings",
+		"Omit the `--comment-*` flags entirely when nothing needs to change.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	if !strings.Contains(system, "Every finding that requires a change must be its own inline comment") {
+	if !strings.Contains(system, "Every finding that requires a change must be its own inline finding") {
 		t.Fatalf("reviewer system prompt must require inline findings:\n%s", system)
 	}
 	if strings.Contains(prompt, "omit the field for a review with no inline comments") {
