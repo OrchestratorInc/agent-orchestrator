@@ -978,6 +978,16 @@ func New(d Deps) *Manager {
 	m.messenger = sessionguard.New(d.Store, d.Messenger, m.logger)
 	m.messenger.SetInputLease(m)
 	m.messenger.SetStartupSignalGate(m.harnessStartupSignalGatesInput)
+	m.messenger.SetTerminalMessageEncoder(func(rec domain.SessionRecord, message string) (string, error) {
+		if m.agents != nil {
+			if agent, ok := m.agents.Agent(rec.Harness); ok {
+				if encoder, ok := agent.(ports.AgentTerminalMessageEncoder); ok {
+					return encoder.EncodeTerminalMessage(message)
+				}
+			}
+		}
+		return message, nil
+	})
 	return m
 }
 
@@ -6882,15 +6892,7 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 			return fmt.Errorf("prime first-turn input: %w", err)
 		}
 	}
-	input := prompt
-	if encoder, ok := agent.(ports.AgentAfterStartPromptEncoder); ok {
-		var err error
-		input, err = encoder.EncodeAfterStartPrompt(prompt)
-		if err != nil {
-			return fmt.Errorf("encode first-turn input: %w", err)
-		}
-	}
-	if err := m.deliverStartedInput(ctx, id, input); err != nil {
+	if err := m.deliverStartedInput(ctx, id, prompt); err != nil {
 		return fmt.Errorf("type first-turn input: %w", err)
 	}
 	if !confirms {
