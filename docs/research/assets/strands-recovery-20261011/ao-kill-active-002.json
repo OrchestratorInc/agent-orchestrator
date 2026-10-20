@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-10T21:02:09.208Z",
+  "scope": "independent AO Kill during an observed running native shell",
+  "status": "FAIL",
+  "control": {
+    "session": "audit-strands-daefeaa2-1",
+    "generation": "1dcba694-ef1b-4c71-83c2-513d5c691724",
+    "statusBefore": "idle"
+  },
+  "session": "audit-strands-daefeaa2-2",
+  "generation": "04c44181-fa10-4524-ba19-073db2f8cd9b",
+  "error": "fetch failed"
+}
