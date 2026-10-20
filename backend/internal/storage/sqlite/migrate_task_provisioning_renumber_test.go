@@ -3,10 +3,9 @@ package sqlite
 import (
 	"fmt"
 	"io/fs"
+	"math"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pressly/goose/v3"
 )
 
 func TestMigrateRepairsRenumberedTaskProvisioningHistory(t *testing.T) {
@@ -58,18 +57,9 @@ func TestMigrateRepairsRenumberedTaskProvisioningHistory(t *testing.T) {
 				legacyFS[legacyPath] = &fstest.MapFile{Data: contents}
 			}
 
-			gooseMu.Lock()
-			goose.SetBaseFS(legacyFS)
-			goose.SetLogger(goose.NopLogger())
-			if err := goose.SetDialect("sqlite3"); err != nil {
-				gooseMu.Unlock()
-				t.Fatalf("set goose dialect: %v", err)
-			}
-			if err := goose.Up(db, "migrations"); err != nil {
-				gooseMu.Unlock()
+			if err := migrateUpTo(db, legacyFS, math.MaxInt64); err != nil {
 				t.Fatalf("apply historical migrations: %v", err)
 			}
-			gooseMu.Unlock()
 
 			if err := migrate(db); err != nil {
 				t.Fatalf("migrate historical database: %v", err)

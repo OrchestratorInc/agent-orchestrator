@@ -3,11 +3,10 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pressly/goose/v3"
 )
 
 func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
@@ -63,14 +62,7 @@ func applyLegacyCodexProfileMigrations(t *testing.T, db *sql.DB, migrations []le
 		legacyFS[fmt.Sprintf("migrations/%04d_%s", migration.version, migration.legacyName)] = &fstest.MapFile{Data: contents}
 	}
 
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(legacyFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		t.Fatalf("set goose dialect: %v", err)
-	}
-	if err := goose.Up(db, "migrations"); err != nil {
+	if err := migrateUpTo(db, legacyFS, math.MaxInt64); err != nil {
 		t.Fatalf("apply legacy Codex profile migrations: %v", err)
 	}
 }

@@ -4,36 +4,20 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
-// upTo migrates the db to a specific goose version, sharing migrate()'s goose
-// global setup under gooseMu.
+// upTo migrates the db to a specific migration version with the in-repo
+// runner.
 func upTo(t *testing.T, db *sql.DB, version int64) {
 	t.Helper()
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.UpTo(db, "migrations", version); err != nil {
+	if err := migrateUpTo(db, migrationsFS, version); err != nil {
 		t.Fatalf("migrate to %d: %v", version, err)
 	}
 }
 
 func downTo(t *testing.T, db *sql.DB, version int64) {
 	t.Helper()
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.DownTo(db, "migrations", version); err != nil {
+	if err := migrateDownTo(db, migrationsFS, version); err != nil {
 		t.Fatalf("down to %d: %v", version, err)
 	}
 }

@@ -3,8 +3,6 @@ package sqlite
 import (
 	"strings"
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
 // forkReservedFloor is the first migration version reserved for fork-local
@@ -73,7 +71,7 @@ func TestForkMigrationsUseReservedRange(t *testing.T) {
 				continue
 			}
 			found[fork] = true
-			version, err := goose.NumericComponent(name)
+			version, err := migrationFileNameVersion(name)
 			if err != nil {
 				t.Errorf("fork migration %q has no version goose can parse: %v", name, err)
 				continue
@@ -110,7 +108,7 @@ func TestReservedRangeIsFreeOfUpstreamMigrations(t *testing.T) {
 			continue
 		}
 		name := e.Name()
-		version, err := goose.NumericComponent(name)
+		version, err := migrationFileNameVersion(name)
 		if err != nil {
 			continue // covered by TestMigrationVersionsAreUnique
 		}

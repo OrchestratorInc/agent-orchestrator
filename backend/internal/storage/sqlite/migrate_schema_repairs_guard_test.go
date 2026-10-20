@@ -3,8 +3,6 @@ package sqlite
 import (
 	"strings"
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
 // guardMigrationFiles indexes migration files by goose version.
@@ -19,7 +17,7 @@ func guardMigrationFiles(t *testing.T) map[int64]string {
 		if e.IsDir() {
 			continue
 		}
-		version, err := goose.NumericComponent(e.Name())
+		version, err := migrationFileNameVersion(e.Name())
 		if err != nil {
 			t.Fatalf("parse version from %q: %v", e.Name(), err)
 		}

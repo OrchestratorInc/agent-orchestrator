@@ -2,10 +2,9 @@ package sqlite
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pressly/goose/v3"
 )
 
 func TestMigrateRepairsAgentInstallJobsFromLegacyVersions(t *testing.T) {
@@ -17,20 +16,11 @@ func TestMigrateRepairsAgentInstallJobsFromLegacyVersions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read agent install jobs migration: %v", err)
 			}
-			gooseMu.Lock()
-			goose.SetBaseFS(fstest.MapFS{
+			if err := migrateUpTo(db, fstest.MapFS{
 				fmt.Sprintf("migrations/%04d_agent_install_jobs.sql", legacyVersion): &fstest.MapFile{Data: contents},
-			})
-			goose.SetLogger(goose.NopLogger())
-			if err := goose.SetDialect("sqlite3"); err != nil {
-				gooseMu.Unlock()
-				t.Fatalf("set goose dialect: %v", err)
-			}
-			if err := goose.Up(db, "migrations"); err != nil {
-				gooseMu.Unlock()
+			}, math.MaxInt64); err != nil {
 				t.Fatalf("apply legacy agent install migration: %v", err)
 			}
-			gooseMu.Unlock()
 
 			if err := migrate(db); err != nil {
 				t.Fatalf("migrate legacy agent install database: %v", err)

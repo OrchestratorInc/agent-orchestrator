@@ -2,8 +2,6 @@ package sqlite
 
 import (
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
 // The stale-binary columns and their change trigger apply and roll back
@@ -19,11 +17,7 @@ func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(migrationsFS)
-	defer goose.SetBaseFS(nil)
-	if err := goose.UpTo(db, "migrations", 214); err != nil {
+	if err := migrateUpTo(db, migrationsFS, 214); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 	var since any
@@ -45,13 +39,13 @@ func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM change_log WHERE session_id = 'session' AND event_type = 'session_updated'`).Scan(&changes); err != nil || changes != 1 {
 		t.Fatalf("change events = %d, %v", changes, err)
 	}
-	if err := goose.DownTo(db, "migrations", 212); err != nil {
+	if err := migrateDownTo(db, migrationsFS, 212); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
 	if _, err := db.Exec(`SELECT stale_binary_since FROM sessions`); err == nil {
 		t.Fatal("stale_binary_since survived the rollback")
 	}
-	if err := goose.UpTo(db, "migrations", 214); err != nil {
+	if err := migrateUpTo(db, migrationsFS, 214); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}
 }

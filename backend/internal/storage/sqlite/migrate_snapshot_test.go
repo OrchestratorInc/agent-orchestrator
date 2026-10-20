@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pressly/goose/v3"
 )
 
 // migrationSnapshots caches a database image for every goose version the
@@ -47,24 +45,22 @@ func migratedDatabaseSnapshot(t *testing.T, version int64) []byte {
 
 func buildMigrationSnapshots(t *testing.T, version int64, fsys fs.FS) []byte {
 	t.Helper()
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(fsys)
-	defer goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		t.Fatalf("set dialect: %v", err)
-	}
-	migrations, err := goose.CollectMigrations("migrations", 0, version)
+	all, err := loadMigrations(fsys, migrationsDir)
 	if err != nil {
 		t.Fatalf("collect migration checkpoints through %d: %v", version, err)
+	}
+	var migrations []migrationFile
+	for _, m := range all {
+		if m.version <= version {
+			migrations = append(migrations, m)
+		}
 	}
 	if migrationSnapshots.images == nil {
 		migrationSnapshots.images = map[int64][]byte{}
 	}
 	// Missing IDs mean the preceding schema, including existing callers that
 	// request latest-1 when the latest migration has a timestamp ID.
-	if snapshot, ok := migrationSnapshots.images[migrations[len(migrations)-1].Version]; ok {
+	if snapshot, ok := migrationSnapshots.images[migrations[len(migrations)-1].version]; ok {
 		migrationSnapshots.images[version] = snapshot
 		return snapshot
 	}
@@ -80,11 +76,11 @@ func buildMigrationSnapshots(t *testing.T, version int64, fsys fs.FS) []byte {
 	}
 	defer func() { _ = db.Close() }()
 	for _, migration := range migrations {
-		next := migration.Version
+		next := migration.version
 		if next <= migrationSnapshots.highest {
 			continue
 		}
-		if err := goose.UpTo(db, "migrations", next); err != nil {
+		if err := migrateUpTo(db, fsys, next); err != nil {
 			t.Fatalf("migrate to %d: %v", next, err)
 		}
 		snapshot, err := os.ReadFile(databasePath)

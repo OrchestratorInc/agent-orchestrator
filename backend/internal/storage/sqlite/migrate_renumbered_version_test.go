@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
 // TestMigrateRepairsRenumberedVersionAppliedByAnotherFile covers the failure a
@@ -162,7 +160,7 @@ func declaredColumns(t *testing.T) []declaredColumn {
 		if e.IsDir() {
 			continue
 		}
-		version, err := goose.NumericComponent(e.Name())
+		version, err := migrationFileNameVersion(e.Name())
 		if err != nil {
 			t.Fatalf("migration %q has no version goose can parse: %v", e.Name(), err)
 		}

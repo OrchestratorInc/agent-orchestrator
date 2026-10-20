@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pressly/goose/v3"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -743,7 +741,7 @@ VALUES ('codewhale-project-1', 'codewhale-project', 1, 'codewhale', ?, ?, ?);
 	if _, err := db.Exec(`DELETE FROM sessions WHERE id = 'codewhale-project-1'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := goose.DownTo(db, "migrations", 192); err != nil {
+	if err := migrateDownTo(db, migrationsFS, 192); err != nil {
 		t.Fatalf("down migration 193: %v", err)
 	}
 	if _, err := db.Exec(`

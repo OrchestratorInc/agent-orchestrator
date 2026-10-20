@@ -2,11 +2,10 @@ package sqlite
 
 import (
 	"database/sql"
+	"math"
 	"testing"
 	"testing/fstest"
 	"time"
-
-	"github.com/pressly/goose/v3"
 )
 
 // Main owns 159/160, while older PR builds may have applied automations at
@@ -35,13 +34,9 @@ func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read automations migration: %v", err)
 				}
-				gooseMu.Lock()
-				goose.SetBaseFS(fstest.MapFS{
+				err = migrateUpTo(db, fstest.MapFS{
 					"migrations/0159_automations.sql": &fstest.MapFile{Data: contents},
-				})
-				err = goose.Up(db, "migrations")
-				goose.SetBaseFS(migrationsFS)
-				gooseMu.Unlock()
+				}, math.MaxInt64)
 				if err != nil {
 					t.Fatalf("apply old automations migration: %v", err)
 				}

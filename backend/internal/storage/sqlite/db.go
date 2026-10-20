@@ -1,6 +1,6 @@
-// Package sqlite owns SQLite connection setup and goose-managed schema
-// migrations. Typed CRUD lives in the store subpackage; this package keeps the
-// public Open entrypoint and compatibility aliases for callers.
+// Package sqlite owns SQLite connection setup and schema migrations. Typed
+// CRUD lives in the store subpackage; this package keeps the public Open
+// entrypoint and compatibility aliases for callers.
 package sqlite
 
 import (
@@ -10,13 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/pressly/goose/v3"
 
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 
@@ -186,18 +185,9 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 	return sqlitestore.NewStore(writeDB, readDB), nil
 }
 
-// gooseMu serialises calls into goose. goose v3 keeps its baseFS / logger /
-// dialect as package-level globals (goose.SetBaseFS, goose.SetLogger,
-// goose.SetDialect), so two concurrent Open() calls — uncommon in production
-// but normal in -race test runs — race on those writes. The cost of holding the
-// mutex is one process-startup migration; readers and writers afterwards never
-// touch goose.
-var gooseMu sync.Mutex
-
 // cachedMigrationVersion holds the one-time computed expected migration version.
 // The first call to expectedMigrationVersion populates it; subsequent calls
-// return the cached value without re-scanning embedded files or touching goose
-// globals.
+// return the cached value without re-scanning embedded files.
 var cachedMigrationVersion struct {
 	sync.Once
 	version int64
@@ -217,21 +207,14 @@ func expectedMigrationVersion() (int64, error) {
 }
 
 func computeExpectedMigrationVersion() error {
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		return fmt.Errorf("set goose dialect: %w", err)
-	}
-	migrations, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	migrations, err := loadMigrations(migrationsFS, migrationsDir)
 	if err != nil {
 		return fmt.Errorf("collect migrations: %w", err)
 	}
 	if len(migrations) == 0 {
 		return fmt.Errorf("no embedded migrations found")
 	}
-	cachedMigrationVersion.version = migrations[len(migrations)-1].Version
+	cachedMigrationVersion.version = migrations[len(migrations)-1].version
 	return nil
 }
 
@@ -290,13 +273,6 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 }
 
 func migrate(db *sql.DB) error {
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		return fmt.Errorf("set goose dialect: %w", err)
-	}
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
@@ -351,17 +327,18 @@ func migrate(db *sql.DB) error {
 	if err := prepareGatewayEntriesMigration(db); err != nil {
 		return fmt.Errorf("prepare gateway entries migration: %w", err)
 	}
+	if err := prepareReviewRunPublicationMigration(db); err != nil {
+		return fmt.Errorf("prepare review-run publication migration: %w", err)
+	}
 	if err := prepareQueuedTurnPromotionMigration(db); err != nil {
 		return fmt.Errorf("prepare queued-turn promotion migration: %w", err)
 	}
 	if err := prepareSessionReviewerAgentConfigMigration(db); err != nil {
 		return fmt.Errorf("prepare session reviewer agent-config migration: %w", err)
 	}
-	// Builds can advance a database past a migration that is added or
-	// renumbered later (notably across fast-moving Nightly releases). Apply
-	// those embedded migrations instead of permanently wedging daemon startup
-	// on goose's out-of-order-history guard.
-	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
+	// Applies any embedded migration missing from the ledger, in file order —
+	// including fork-range (9000+) files landing below the applied frontier.
+	if err := migrateUpTo(db, migrationsFS, math.MaxInt64); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 	return reconcileSchema(db)
@@ -812,6 +789,57 @@ SELECT COALESCE((
 	}
 
 	_, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (9011, 1)`)
+	return err
+}
+
+// prepareReviewRunPublicationMigration preserves databases that already hold
+// the review_run publication columns while goose_db_version records no 9012
+// row: the columns shipped in self-builds as migration 9004 before the
+// 2026-10-13 delta drop removed the file, so the live install kept the schema
+// with no ledger entry for the 9012 re-introduction (PR #91). Replaying the
+// ALTER TABLE fails with "duplicate column name: findings" and wedges daemon
+// startup (observed 2026-10-20). Record the migration as applied and replay
+// its backfill so runs completed under the old reviewer-published contract
+// are marked published.
+func prepareReviewRunPublicationMigration(db *sql.DB) error {
+	var ledger int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&ledger); err != nil {
+		return err
+	}
+	if ledger == 0 {
+		return nil
+	}
+
+	var applied int
+	if err := db.QueryRow(`
+SELECT COALESCE((
+    SELECT is_applied FROM goose_db_version
+    WHERE version_id = 9012 ORDER BY id DESC LIMIT 1
+), 0)`).Scan(&applied); err != nil {
+		return err
+	}
+	if applied != 0 {
+		return nil
+	}
+
+	var columns int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('review_run') WHERE name IN ('findings', 'publish_state', 'publish_error')`,
+	).Scan(&columns); err != nil {
+		return err
+	}
+	if columns != 3 {
+		return nil
+	}
+
+	if _, err := db.Exec(`
+UPDATE review_run SET publish_state = 'published'
+WHERE github_review_id != '' AND publish_state = 'pending'`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (9012, 1)`)
 	return err
 }
 

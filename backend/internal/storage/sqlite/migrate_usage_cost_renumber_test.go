@@ -3,11 +3,10 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pressly/goose/v3"
 )
 
 func TestMigrateRepairsRenumberedUsageCostHistory(t *testing.T) {
@@ -106,14 +105,7 @@ func applyLegacyUsageCostMigrations(t *testing.T, db *sql.DB, firstVersion int64
 		legacyFS[legacyPath] = &fstest.MapFile{Data: contents}
 	}
 
-	gooseMu.Lock()
-	defer gooseMu.Unlock()
-	goose.SetBaseFS(legacyFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		t.Fatalf("set goose dialect: %v", err)
-	}
-	if err := goose.Up(db, "migrations"); err != nil {
+	if err := migrateUpTo(db, legacyFS, math.MaxInt64); err != nil {
 		t.Fatalf("apply %d legacy usage migrations: %v", count, err)
 	}
 }

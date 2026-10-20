@@ -2,11 +2,10 @@ package sqlite
 
 import (
 	"database/sql"
+	"math"
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pressly/goose/v3"
 )
 
 func TestMigrateRepairsLegacyAgentSwitchSchemas(t *testing.T) {
@@ -95,12 +94,7 @@ func applyLegacyAgentSwitchMigrations(t *testing.T, db *sql.DB, switchPath, hand
 	if handoffPath != "" {
 		legacyFS[handoffPath] = &fstest.MapFile{Data: []byte(preConsolidationFinalHandoffMigration)}
 	}
-	goose.SetBaseFS(legacyFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		t.Fatalf("set goose dialect: %v", err)
-	}
-	if err := goose.Up(db, "migrations"); err != nil {
+	if err := migrateUpTo(db, legacyFS, math.MaxInt64); err != nil {
 		t.Fatalf("apply legacy agent-switch migrations: %v", err)
 	}
 }

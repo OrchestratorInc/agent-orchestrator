@@ -2,11 +2,10 @@ package sqlite
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"testing/fstest"
 	"time"
-
-	"github.com/pressly/goose/v3"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -32,19 +31,14 @@ func TestMigratePRReviewPartialUpgrade(t *testing.T) {
 			db := openMigratedDatabaseCopyAt(t, dataDir, tt.baseVersion, pragmas)
 			if tt.legacyVersion != 0 {
 				// Reproduce the migration actually shipped in intermediate PR
-				// builds, including its applied Goose version and FALSE default.
-				func() {
-					gooseMu.Lock()
-					defer gooseMu.Unlock()
-					goose.SetBaseFS(fstest.MapFS{
-						fmt.Sprintf("migrations/%04d_pr_review_partial.sql", tt.legacyVersion): &fstest.MapFile{
-							Data: []byte("-- +goose Up\nALTER TABLE pr ADD COLUMN review_partial BOOLEAN NOT NULL DEFAULT FALSE;\n-- +goose Down\n"),
-						},
-					})
-					if err := goose.Up(db, "migrations"); err != nil {
-						t.Fatalf("apply intermediate migration: %v", err)
-					}
-				}()
+				// builds, including its applied version and FALSE default.
+				if err := migrateUpTo(db, fstest.MapFS{
+					fmt.Sprintf("migrations/%04d_pr_review_partial.sql", tt.legacyVersion): &fstest.MapFile{
+						Data: []byte("-- +goose Up\nALTER TABLE pr ADD COLUMN review_partial BOOLEAN NOT NULL DEFAULT FALSE;\n-- +goose Down\n"),
+					},
+				}, math.MaxInt64); err != nil {
+					t.Fatalf("apply intermediate migration: %v", err)
+				}
 			}
 			if tt.burned130 {
 				if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (130, 1)`); err != nil {

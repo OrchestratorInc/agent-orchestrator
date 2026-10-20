@@ -2,8 +2,6 @@ package sqlite
 
 import (
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
 // TestMigrationVersionsAreUnique scans the embedded migration filenames and
@@ -24,7 +22,7 @@ func TestMigrationVersionsAreUnique(t *testing.T) {
 			continue
 		}
 
-		version, err := goose.NumericComponent(name)
+		version, err := migrationFileNameVersion(name)
 		if err != nil {
 			t.Errorf("migration %q has no version goose can parse: %v", name, err)
 			continue

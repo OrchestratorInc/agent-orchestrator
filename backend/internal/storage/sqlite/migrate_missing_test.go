@@ -279,6 +279,64 @@ VALUES ('app', '', 'https://example.invalid', '', 'gateway-model', '2026-10-14T0
 	}
 }
 
+// TestMigrateRecognizesReviewRunPublicationFromEarlierBuild reproduces the
+// 2026-10-20 startup failure: the review_run publication columns shipped in
+// self-builds as migration 9004 before the 2026-10-13 delta drop removed the
+// file, so the live install holds the columns (and runs backfilled by nothing)
+// while the ledger records no 9012 row for the PR #91 re-introduction. The
+// runner replayed ALTER TABLE into "duplicate column name: findings" and the
+// daemon wedged at startup. Migration must recognize the existing columns,
+// replay only the backfill, record 9012, and start.
+func TestMigrateRecognizesReviewRunPublicationFromEarlierBuild(t *testing.T) {
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 9011)
+	if _, err := db.Exec(`
+ALTER TABLE review_run ADD COLUMN findings TEXT NOT NULL DEFAULT '';
+ALTER TABLE review_run ADD COLUMN publish_state TEXT NOT NULL DEFAULT 'pending' CHECK (publish_state IN ('pending', 'publishing', 'published', 'failed', 'uncertain'));
+ALTER TABLE review_run ADD COLUMN publish_error TEXT NOT NULL DEFAULT '';`); err != nil {
+		t.Fatalf("seed publication columns from earlier build: %v", err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO review_run (id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id)
+VALUES ('run-old', 'rev-1', 's1', 'claude-code', '', '', 'complete', '', '', '2026-10-01T00:00:00Z', '12345'),
+       ('run-new', 'rev-1', 's1', 'claude-code', '', '', 'running', '', '', '2026-10-02T00:00:00Z', '')`); err != nil {
+		t.Fatalf("seed review runs: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database with pre-existing publication columns: %v", err)
+	}
+
+	var applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 9012 AND is_applied = 1`,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("publication migration 9012 applied rows = %d, want 1", applied)
+	}
+	// The backfill marks reviewer-published runs (github_review_id set) as
+	// published and leaves everything else alone.
+	var published, pending int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM review_run WHERE id = 'run-old' AND publish_state = 'published'`,
+	).Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM review_run WHERE id = 'run-new' AND publish_state = 'pending'`,
+	).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if published != 1 || pending != 1 {
+		t.Fatalf("backfill result: published=%d pending=%d, want 1/1", published, pending)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate: %v", err)
+	}
+}
+
 func TestMigrateRepairsRetrySourceBeforeCancelledTurnRebuild(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 107)
 	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (108, 1)`); err != nil {

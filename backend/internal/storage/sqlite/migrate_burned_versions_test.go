@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pressly/goose/v3"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -259,7 +257,7 @@ func TestMigrationVersionLedger(t *testing.T) {
 		if e.IsDir() {
 			continue
 		}
-		version, err := goose.NumericComponent(e.Name())
+		version, err := migrationFileNameVersion(e.Name())
 		if err != nil {
 			t.Errorf("migration %q has no version goose can parse: %v", e.Name(), err)
 			continue
