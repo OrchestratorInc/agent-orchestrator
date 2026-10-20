@@ -97,6 +97,7 @@ import { useShellMaybe } from "../lib/shell-context";
 import { useSidebarUpdateDismissal } from "../hooks/useSidebarUpdateDismissal";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
+import { useSessionPreviewHover } from "../hooks/useSessionPreviewHover";
 import { effectiveShortcutBindings, shortcutBindingKeys } from "../../shared/shortcuts";
 import {
 	ContextMenu,
@@ -104,6 +105,8 @@ import {
 	ContextMenuItem,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { SessionPreviewCardAdapter } from "./SessionsBoardAdapters";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -2380,6 +2383,7 @@ const SessionRow = memo(function SessionRow({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
+	const preview = useSessionPreviewHover(Boolean(reorder?.isDragging || listIsDragging));
 	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
 	const switchLabel = switchPresentation
 		? t(switchPresentation.compactLabelKey, switchPresentation.values)
@@ -2461,12 +2465,15 @@ const SessionRow = memo(function SessionRow({
 
 	return (
 		<ContextMenu>
+			<HoverCard closeDelay={0} open={preview.open} openDelay={0}>
 			<ContextMenuTrigger asChild>
+				<HoverCardTrigger asChild>
 				<SidebarMenuSubItem
 					className={cn(indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
 					data-dragging={reorder?.isDragging ? "true" : undefined}
 					ref={reorder?.setNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
+					{...preview.triggerProps}
 				>
 			<motion.div
 				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
@@ -2570,7 +2577,20 @@ const SessionRow = memo(function SessionRow({
 				</div>
 			</motion.div>
 				</SidebarMenuSubItem>
+				</HoverCardTrigger>
 			</ContextMenuTrigger>
+			{/* The board card, static: hovering a row previews the session without opening it. */}
+			<HoverCardContent
+				align="start"
+				animation={preview.animation}
+				className="pointer-events-none w-[17rem] border-0 bg-transparent p-0"
+				collisionPadding={8}
+				side="right"
+				sideOffset={12}
+			>
+				<SessionPreviewCardAdapter session={session} />
+			</HoverCardContent>
+			</HoverCard>
 			<ContextMenuContent className="min-w-44">
 				<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={beginRename}>
 					<Pencil aria-hidden="true" />

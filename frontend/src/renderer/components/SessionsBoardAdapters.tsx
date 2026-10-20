@@ -128,6 +128,11 @@ export function BoardSessionCardAdapter({
 	);
 }
 
+/** The board card for a session, rendered static for a sidebar hover preview. */
+export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSession }) {
+	return <DesktopSessionCard interactive={false} session={session} still />;
+}
+
 export function ArchivedSessionCardAdapter({
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
@@ -184,6 +189,7 @@ function DesktopSessionCard({
 	onOpenArtifact,
 	onTerminate,
 	session,
+	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -196,6 +202,7 @@ function DesktopSessionCard({
 	onOpenArtifact?: (path: string) => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	still?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -309,6 +316,7 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
 					: toBoardSessionPresentation(session, t)
 			}
+			still={still}
 			translate={translate}
 		/>
 	);
