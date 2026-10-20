@@ -294,6 +294,40 @@ func TestVisibleBudgetKeepsOpeningPromptAndNewestMessages(t *testing.T) {
 	}
 }
 
+// Codex writes each message twice (event and response item) and injects
+// context as a first user item. A long read trims as it goes; that trim must
+// count each message once and keep the typed opening prompt.
+func TestCodexBudgetCountsEachMessageOnce(t *testing.T) {
+	limit := maxVisibleBytes
+	chunk := strings.Repeat("z", limit/4)
+	lines := []string{
+		`{"type":"session_meta","payload":{"id":"` + codexThread + `","cwd":"","source":"cli"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /work/repo"}]}}`,
+		`{"type":"event_msg","payload":{"type":"user_message","message":"opening prompt"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"opening prompt"}]}}`,
+	}
+	for i := range 8 {
+		text := string(rune('a'+i)) + chunk
+		lines = append(lines,
+			`{"type":"event_msg","payload":{"type":"agent_message","message":"`+text+`"}}`,
+			`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`+text+`"}]}}`)
+	}
+	root := t.TempDir()
+	path := writeFile(t, filepath.Join(root, "sessions", "rollout-2026-10-01T00-00-00-"+codexThread+".jsonl"), strings.Join(lines, "\n")+"\n")
+	got, err := readTranscript(context.Background(), domain.HarnessCodex, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, m := range got.messages {
+		kept = append(kept, string(m.Role)+": "+m.Text[:1])
+	}
+	// Three answers fit beside the prompt; a budget spent on duplicates keeps one.
+	if want := []string{"user: o", "assistant: f", "assistant: g", "assistant: h"}; strings.Join(kept, "|") != strings.Join(want, "|") || !got.shortened {
+		t.Fatalf("kept %q (shortened %v), want %q", kept, got.shortened, want)
+	}
+}
+
 func TestReadIgnoresRecordsAppendedDuringRead(t *testing.T) {
 	root := t.TempDir()
 	id := "6d842f77-b1fe-49f3-8585-8946df267bae"

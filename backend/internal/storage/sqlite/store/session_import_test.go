@@ -58,6 +58,8 @@ func TestImportedSessionArchiveIsAtomicAndPaged(t *testing.T) {
 	}
 }
 
+var importWorkspace = domain.SessionMetadata{Branch: "ao/import", WorkspacePath: "/workspace", WorkspaceRepoPath: "/repo", DiffBaseSHA: "0123abcd", DiffBaseRef: "HEAD"}
+
 func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -74,7 +76,7 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	}
 	next := *created.Metadata.ImportSource
 	next.Prepared = true
-	ok, err := s.SetSessionImportWorkspace(ctx, created.ID, created.Metadata.ImportSource, &next, "ao/import", "/workspace", "/repo", time.Now())
+	ok, err := s.SetSessionImportWorkspace(ctx, created.ID, created.Metadata.ImportSource, &next, importWorkspace, time.Now())
 	if err != nil || !ok {
 		t.Fatalf("publish: %v %v", ok, err)
 	}
@@ -82,11 +84,14 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	if got.DisplayName != renamed.DisplayName || !got.Metadata.ImportSource.Prepared {
 		t.Fatal("publication reverted concurrent session edits")
 	}
+	if got.Metadata.WorkspacePath != "/workspace" || got.Metadata.DiffBaseSHA != "0123abcd" || got.Metadata.DiffBaseRef != "HEAD" {
+		t.Fatalf("workspace not recorded: %+v", got.Metadata)
+	}
 	got.IsTerminated = true
 	if err := s.UpdateSession(ctx, got); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.SetSessionImportWorkspace(ctx, got.ID, &next, &next, "ao/import", "/workspace", "/repo", time.Now()); err != nil || ok {
+	if ok, err := s.SetSessionImportWorkspace(ctx, got.ID, &next, &next, importWorkspace, time.Now()); err != nil || ok {
 		t.Fatalf("published onto terminated session: %v %v", ok, err)
 	}
 }
@@ -179,7 +184,7 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 	older.DisplayName = "written from an older snapshot"
 	transferred := *created.Metadata.ImportSource
 	transferred.Transferred = true
-	if ok, err := s.SetSessionImportWorkspace(ctx, created.ID, created.Metadata.ImportSource, &transferred, "ao/import", "/workspace", "/repo", time.Now()); err != nil || !ok {
+	if ok, err := s.SetSessionImportWorkspace(ctx, created.ID, created.Metadata.ImportSource, &transferred, importWorkspace, time.Now()); err != nil || !ok {
 		t.Fatalf("transfer: %v %v", ok, err)
 	}
 	if err := s.UpdateSession(ctx, older); err != nil {

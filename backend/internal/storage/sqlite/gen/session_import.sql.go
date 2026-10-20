@@ -213,9 +213,10 @@ func (q *Queries) SeedImportedConversationSequence(ctx context.Context, arg Seed
 
 const setSessionImportWorkspace = `-- name: SetSessionImportWorkspace :execrows
 UPDATE sessions SET branch = ?1, workspace_path = ?2,
-    workspace_repo_path = ?3, import_source = ?4,
-    updated_at = ?5
-WHERE id = ?6 AND is_terminated = 0
+    workspace_repo_path = ?3, diff_base_sha = ?4,
+    diff_base_ref = ?5, import_source = ?6,
+    updated_at = ?7
+WHERE id = ?8 AND is_terminated = 0
     AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0
     AND (workspace_path = '' OR workspace_path = ?2)
 `
@@ -224,6 +225,8 @@ type SetSessionImportWorkspaceParams struct {
 	Branch            string
 	WorkspacePath     string
 	WorkspaceRepoPath string
+	DiffBaseSha       string
+	DiffBaseRef       string
 	NewSource         string
 	UpdatedAt         time.Time
 	ID                domain.SessionID
@@ -235,6 +238,8 @@ func (q *Queries) SetSessionImportWorkspace(ctx context.Context, arg SetSessionI
 		arg.Branch,
 		arg.WorkspacePath,
 		arg.WorkspaceRepoPath,
+		arg.DiffBaseSha,
+		arg.DiffBaseRef,
 		arg.NewSource,
 		arg.UpdatedAt,
 		arg.ID,

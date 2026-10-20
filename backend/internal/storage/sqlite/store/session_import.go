@@ -132,9 +132,9 @@ func (s *Store) LoadSessionImportMessages(ctx context.Context, id domain.Session
 }
 
 // SetSessionImportWorkspace changes only adoption facts, preserving concurrent
-// session edits. It compares decoded values, so rows written before a field was
-// added still match.
-func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, branch, path, repo string, now time.Time) (bool, error) {
+// session edits: the import source and workspace's branch, paths and diff base.
+// It compares decoded values, so rows written before a field was added still match.
+func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
 	if expected == nil || next == nil {
 		return false, errors.New("import source is required")
 	}
@@ -152,7 +152,10 @@ func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.Session
 		if current := unmarshalImportSource(raw); current == nil || *current != *expected {
 			return nil
 		}
-		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{ID: id, NewSource: marshalImportSource(next), Branch: branch, WorkspacePath: path, WorkspaceRepoPath: repo, UpdatedAt: now})
+		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{
+			ID: id, NewSource: marshalImportSource(next), Branch: workspace.Branch, WorkspacePath: workspace.WorkspacePath,
+			WorkspaceRepoPath: workspace.WorkspaceRepoPath, DiffBaseSha: workspace.DiffBaseSHA, DiffBaseRef: workspace.DiffBaseRef, UpdatedAt: now,
+		})
 		updated = rows > 0
 		return err
 	})

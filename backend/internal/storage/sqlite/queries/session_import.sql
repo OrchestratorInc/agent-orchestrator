@@ -23,7 +23,8 @@ SELECT import_source FROM sessions WHERE id = sqlc.arg(id);
 -- The caller compares the stored source with its expectation in the same transaction.
 -- name: SetSessionImportWorkspace :execrows
 UPDATE sessions SET branch = sqlc.arg(branch), workspace_path = sqlc.arg(workspace_path),
-    workspace_repo_path = sqlc.arg(workspace_repo_path), import_source = sqlc.arg(new_source),
+    workspace_repo_path = sqlc.arg(workspace_repo_path), diff_base_sha = sqlc.arg(diff_base_sha),
+    diff_base_ref = sqlc.arg(diff_base_ref), import_source = sqlc.arg(new_source),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND is_terminated = 0
     AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0

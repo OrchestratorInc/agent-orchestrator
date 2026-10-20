@@ -385,6 +385,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		if strings.Contains(text, omittedText) {
 			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
 		}
+		if harness == domain.HarnessCodex && role == "user" {
+			text = codexPrompt(text)
+		}
 		if strings.TrimSpace(text) == "" {
 			return
 		}
@@ -406,6 +409,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		items = append(items, msg)
 	}
 	trim := func() {
+		if harness == domain.HarnessCodex {
+			// Budget each message once and keep the typed opening prompt.
+			items = codexVisible(items)
+		}
 		n := len(items)
 		items = trimVisible(items)
 		t.shortened = t.shortened || len(items) < n
@@ -584,7 +591,6 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		t.title = customTitle
 	}
 	if harness == domain.HarnessCodex {
-		items = codexVisible(items)
 		prompted = true
 	}
 	trim()
@@ -625,6 +631,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 
 // codexVisible keeps one representation per role: Codex writes prompts as
 // events and/or response items, and only events exclude injected context.
+// Prompts are already unwrapped, so running it again changes nothing.
 func codexVisible(items []tagged) []tagged {
 	pick := func(kinds ...string) string {
 		for _, kind := range kinds {
@@ -640,11 +647,6 @@ func codexVisible(items []tagged) []tagged {
 	for _, item := range items {
 		if item.kind != user && item.kind != assistant {
 			continue
-		}
-		if item.Role == domain.MessageRoleUser {
-			if item.Text = codexPrompt(item.Text); strings.TrimSpace(item.Text) == "" {
-				continue
-			}
 		}
 		out = append(out, item)
 	}

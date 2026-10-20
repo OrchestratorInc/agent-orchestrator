@@ -85,8 +85,12 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 					return
 				}
 				if rel, err := filepath.Rel(source.ConfigDir, rec.Metadata.NativeTranscriptPath); err == nil && filepath.IsLocal(rel) {
-					if _, err := os.Stat(filepath.Join(current, rel)); err == nil {
-						return
+					// Codex compresses an inactive rollout in place and restores it on resume.
+					plain := strings.TrimSuffix(rel, ".zst")
+					for _, name := range []string{plain, plain + ".zst"} {
+						if _, err := os.Stat(filepath.Join(current, name)); err == nil {
+							return
+						}
 					}
 				}
 			}
@@ -120,7 +124,8 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 			return true
 		}
 	}
-	return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
+	// A writer holds the plain file; Codex restores a compressed one on resume.
+	return writableTranscriptOwner(ctx, strings.TrimSuffix(rec.Metadata.NativeTranscriptPath, ".zst"))
 }
 
 // adoptedOwnedElsewhere keeps the open-elsewhere rule after adoption without
@@ -275,6 +280,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		branch := "ao/" + string(rec.ID) + "/import"
 		var err error
 		var workspaceProject *ports.WorkspaceProjectInfo
+		var diffSHA, diffRef string
 		switch projectKindForSession(project, rec.ProjectID) {
 		case domain.ProjectKindSingleRepo:
 			gitRoot := copyFrom
@@ -311,22 +317,29 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				if err != nil {
 					return rec, err
 				}
+				// Like a session started from a feature branch, show only this
+				// session's own changes: compare with the commit the chat continued
+				// from, following the default branch while that commit is on it.
+				diffSHA, diffRef = resolveSpawnDiffBase(ctx, ws.Path, project.Config.WorktreeBaseBranch())
+				if diffSHA != sha {
+					diffSHA, diffRef = sha, "HEAD"
+				}
 			}
 		case domain.ProjectKindWorkspace:
-			if _, err := os.Stat(source.CWD); errors.Is(err, os.ErrNotExist) {
-				return rec, fmt.Errorf("the conversation's folder %s no longer exists; restore it to continue here", source.CWD)
-			}
 			copyFrom = project.Path
 			repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
 			if err != nil {
 				return rec, err
 			}
-			top, err := importGit(ctx, source.CWD, "rev-parse", "--show-toplevel")
-			if err != nil {
+			_, statErr := os.Stat(source.CWD)
+			gone := errors.Is(statErr, os.ErrNotExist)
+			if gone {
+				// As for a single repository: continue from the registered
+				// checkouts, with nothing left to copy.
+				m.logger.Info("imported session folder is gone; continuing from the project checkout", "sessionID", rec.ID)
+			} else if top, err := importGit(ctx, source.CWD, "rev-parse", "--show-toplevel"); err != nil {
 				return rec, err
-			}
-			nativeRoot := strings.TrimSpace(string(top))
-			if sessionimport.SameRepository(ctx, nativeRoot, project.Path) {
+			} else if nativeRoot := strings.TrimSpace(string(top)); sessionimport.SameRepository(ctx, nativeRoot, project.Path) {
 				copyFrom = nativeRoot
 			} else {
 				for _, repo := range repos {
@@ -378,6 +391,9 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					return rec, err
 				}
 			}
+			if gone {
+				copyFrom = ""
+			}
 		default:
 			// A standalone chat's folder is the home or a provider scratch folder, never a tree to copy.
 			copyFrom = ""
@@ -417,7 +433,12 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		}
 		if created {
 			// Publish the clean workspace before moving any source edits into it.
-			updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, ws.Branch, ws.Path, ws.RepoPath, m.clock())
+			workspace := rec.Metadata
+			workspace.Branch, workspace.WorkspacePath, workspace.WorkspaceRepoPath = ws.Branch, ws.Path, ws.RepoPath
+			if diffSHA != "" {
+				workspace.DiffBaseSHA, workspace.DiffBaseRef = diffSHA, diffRef
+			}
+			updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, workspace, m.clock())
 			if err != nil || !updated {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				defer cancel()
@@ -433,8 +454,8 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				return rec, errors.Join(err, cleanupErr)
 			}
 			stored := next
-			rec.Metadata.ImportSource = &stored
-			rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath, rec.Metadata.Branch = ws.Path, ws.RepoPath, ws.Branch
+			workspace.ImportSource = &stored
+			rec.Metadata = workspace
 			source = rec.Metadata.ImportSource
 		}
 		if copyFrom != "" {
@@ -445,7 +466,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	}
 	if !source.Transferred {
 		next.Transferred = true
-		updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, ws.Branch, ws.Path, ws.RepoPath, m.clock())
+		updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
 		if err != nil {
 			return rec, err
 		}
@@ -464,7 +485,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		}
 		prepared := *rec.Metadata.ImportSource
 		prepared.Prepared = true
-		updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, rec.Metadata.ImportSource, &prepared, ws.Branch, ws.Path, ws.RepoPath, m.clock())
+		updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, rec.Metadata.ImportSource, &prepared, rec.Metadata, m.clock())
 		if err != nil {
 			return rec, err
 		}

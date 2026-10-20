@@ -340,7 +340,7 @@ type failingImportWorkspaceStore struct {
 	cancel        context.CancelFunc
 }
 
-func (s *failingImportWorkspaceStore) SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, branch, path, repo string, now time.Time) (bool, error) {
+func (s *failingImportWorkspaceStore) SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
 	s.calls++
 	if s.calls == s.failAt {
 		if s.cancel != nil {
@@ -349,7 +349,7 @@ func (s *failingImportWorkspaceStore) SetSessionImportWorkspace(ctx context.Cont
 		}
 		return false, errors.New("injected database write failure")
 	}
-	return s.fakeStore.SetSessionImportWorkspace(ctx, id, expected, next, branch, path, repo, now)
+	return s.fakeStore.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
 }
 
 func TestImportedWorkspaceTransferRetriesAfterMetadataFailure(t *testing.T) {
@@ -518,6 +518,14 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	if env["CLAUDE_CONFIG_DIR"] != account {
 		t.Fatalf("account folder replaced: %v", env)
 	}
+	// Codex compresses an inactive rollout in place; the account keeps it.
+	if err := os.Rename(transcript, transcript+".zst"); err != nil {
+		t.Fatal(err)
+	}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["CLAUDE_CONFIG_DIR"] != account {
+		t.Fatalf("account folder replaced after compression: %v", env)
+	}
 	// A home that cannot reach the conversation is pointed at its source.
 	rec.Metadata.ImportSource.ConfigDir = "/other-provider-home"
 	rec.Metadata.NativeTranscriptPath = "/other-provider-home/projects/-elsewhere/native.jsonl"
@@ -561,6 +569,71 @@ func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T)
 	}
 	if got, want := runManagerGit(t, ready.Metadata.WorkspacePath, "rev-parse", "HEAD"), runManagerGit(t, root, "rev-parse", "HEAD"); got != want {
 		t.Fatalf("workspace HEAD = %s, want project HEAD %s", got, want)
+	}
+}
+
+// The changes view shows what this session adds: a chat that continued a
+// feature branch does not list that branch's earlier commits as its own, and a
+// chat on the default branch keeps following it.
+func TestImportedWorkspaceComparesWithTheCommitTheChatContinued(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	project := st.projects["mer"]
+	importOn := func(id domain.SessionID) domain.SessionRecord {
+		t.Helper()
+		rec := domain.SessionRecord{ID: id, ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+		rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-" + string(id), ImportSource: &domain.SessionImportSource{NativeID: "thread-" + string(id), ConfigDir: "/provider", CWD: root}}
+		st.sessions[rec.ID] = rec
+		ready, err := m.prepareImportedWorkspace(context.Background(), rec, project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ready
+	}
+	onMain := importOn("mer-1")
+	if head := strings.TrimSpace(runManagerGit(t, root, "rev-parse", "HEAD")); onMain.Metadata.DiffBaseSHA != head || onMain.Metadata.DiffBaseRef != "main" {
+		t.Fatalf("default-branch import base = %s %s, want %s main", onMain.Metadata.DiffBaseSHA, onMain.Metadata.DiffBaseRef, head)
+	}
+	runManagerGit(t, root, "checkout", "-q", "-b", "feature")
+	runManagerGit(t, root, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "earlier feature work")
+	onFeature := importOn("mer-2")
+	if head := strings.TrimSpace(runManagerGit(t, root, "rev-parse", "HEAD")); onFeature.Metadata.DiffBaseSHA != head || onFeature.Metadata.DiffBaseRef != "HEAD" {
+		t.Fatalf("feature import base = %s %s, want %s HEAD", onFeature.Metadata.DiffBaseSHA, onFeature.Metadata.DiffBaseRef, head)
+	}
+	if got := st.sessions["mer-2"].Metadata; got.DiffBaseSHA != onFeature.Metadata.DiffBaseSHA || got.DiffBaseRef != "HEAD" {
+		t.Fatalf("stored base = %s %s", got.DiffBaseSHA, got.DiffBaseRef)
+	}
+}
+
+// As for a single repository, a workspace chat whose folder was deleted
+// continues from the registered checkouts with nothing copied.
+func TestImportedWorkspaceWhoseFolderIsGoneStartsFromRegisteredCheckouts(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	child := filepath.Join(root, "child")
+	runManagerGit(t, root, "clone", newManagerGitRepo(t), child)
+	if err := os.WriteFile(filepath.Join(child, "registered-edit"), []byte("not part of the chat"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	project := st.projects["mer"]
+	project.Kind = domain.ProjectKindWorkspace
+	st.projects["mer"] = project
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "child", RelativePath: "child", GitStatus: domain.GitStatusReady}}
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider", CWD: filepath.Join(t.TempDir(), "removed-worktree")}}
+	st.sessions[rec.ID] = rec
+	ready, err := m.prepareImportedWorkspace(context.Background(), rec, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := ready.Metadata.ImportSource
+	if !source.Transferred || source.WorkingSubdir != "" {
+		t.Fatalf("import = %+v", source)
+	}
+	target := filepath.Join(ready.Metadata.WorkspacePath, "child")
+	if got, want := runManagerGit(t, target, "rev-parse", "HEAD"), runManagerGit(t, child, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("child HEAD = %s, want the registered %s", got, want)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "registered-edit")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the registered checkout's own edits were copied into the session")
 	}
 }
 

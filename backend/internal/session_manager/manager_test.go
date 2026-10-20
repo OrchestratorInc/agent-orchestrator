@@ -12152,13 +12152,15 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 }
 
 func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, branch, path, repo string, now time.Time) (bool, error) {
+func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
-	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != path {
+	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != workspace.WorkspacePath {
 		return false, nil
 	}
 	copied := *next
 	rec.Metadata.ImportSource = &copied
-	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = branch, path, repo
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = workspace.Branch, workspace.WorkspacePath, workspace.WorkspaceRepoPath
+	rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef = workspace.DiffBaseSHA, workspace.DiffBaseRef
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
