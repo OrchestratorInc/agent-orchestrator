@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -46,6 +47,13 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	// locked CLI cannot hide it behind a probe timeout.
 	if oauthAuthStatus(dataDir) == ports.AgentAuthStatusConfigured {
 		return ports.AgentAuthStatusConfigured, nil
+	}
+	// Windows cannot deliver os.Interrupt to mcode.cmd's child CLI. Starting
+	// provider list could therefore orphan its profile lock on timeout. Keep
+	// non-OAuth credentials unknown instead of taking that lock just to inspect
+	// them; unknown does not mean that the user must log in again.
+	if runtime.GOOS == "windows" {
+		return ports.AgentAuthStatusUnknown, nil
 	}
 	probe, cancel := context.WithTimeout(ctx, authProbeTimeout)
 	defer cancel()

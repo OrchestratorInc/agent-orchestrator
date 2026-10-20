@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
@@ -100,8 +101,12 @@ func TestAuthStatusTrustsOAuthStateWithoutProbe(t *testing.T) {
 	profile := t.TempDir()
 	t.Setenv("MINIMAX_DATA_DIR", profile)
 	plugin := New()
-	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "unknown" || probes != 1 {
-		t.Fatalf("signed out with failing probe = (%q, %v), probes=%d; want unknown after one probe", got, err, probes)
+	wantProbes := 1
+	if runtime.GOOS == "windows" {
+		wantProbes = 0
+	}
+	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "unknown" || probes != wantProbes {
+		t.Fatalf("signed out with failing probe = (%q, %v), probes=%d; want unknown, probes=%d", got, err, probes, wantProbes)
 	}
 	state := filepath.Join(profile, "auth", "prod", "en", "mcode-public", "auth-state.json")
 	if err := os.MkdirAll(filepath.Dir(state), 0o700); err != nil {
@@ -110,7 +115,7 @@ func TestAuthStatusTrustsOAuthStateWithoutProbe(t *testing.T) {
 	if err := os.WriteFile(state, []byte(`{"status":"authenticated"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "configured" || probes != 1 {
+	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "configured" || probes != wantProbes {
 		t.Fatalf("signed in = (%q, %v), probes=%d; want configured without probing", got, err, probes)
 	}
 }
