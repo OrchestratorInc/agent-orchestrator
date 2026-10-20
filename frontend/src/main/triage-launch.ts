@@ -64,25 +64,23 @@ export async function launchTriageInTerminal(
 			process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
 		if (!launch) throw new Error("The bundled binary is unavailable.");
 		const args = ["triage"];
-		const env = {
-			...Object.fromEntries(Object.entries(stateEnv).filter(([key, value]) => value !== process.env[key])),
-			...(stateEnv.PATH ? { PATH: stateEnv.PATH } : {}),
-			AO_DATA_DIR: stateEnv.AO_DATA_DIR || path.join(os.homedir(), ".ao"),
-			AO_RUN_FILE: stateEnv.AO_RUN_FILE || path.join(os.homedir(), ".ao", "running.json"),
-		};
-		const manualEnv = { AO_DATA_DIR: env.AO_DATA_DIR, AO_RUN_FILE: env.AO_RUN_FILE, ...(env.PATH ? { PATH: env.PATH } : {}) };
+		// Terminal command text is visible and may enter shell history. Only state
+		// paths belong here; the terminal's shell supplies credentials and PATH.
+		const env: Record<string, string> = {};
+		if (stateEnv.AO_DATA_DIR && stateEnv.AO_DATA_DIR !== path.join(os.homedir(), ".ao", "data")) env.AO_DATA_DIR = stateEnv.AO_DATA_DIR;
+		if (stateEnv.AO_RUN_FILE && stateEnv.AO_RUN_FILE !== path.join(os.homedir(), ".ao", "running.json")) env.AO_RUN_FILE = stateEnv.AO_RUN_FILE;
+		const overrides = Object.entries(env);
 		let argv: string[];
 		if (process.platform === "win32") {
 			// Encode paths before passing through cmd.exe, which expands %variables%
 			// even inside quotes. PowerShell receives only a base64 argument.
 			const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
-			const script = `${Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined).map(([key, value]) => `$env:${key}=${quote(value)}`).join("; ")}; & ${[launch.command, ...args].map(quote).join(" ")}`;
-			manualCommand = `${Object.entries(manualEnv).map(([key, value]) => `$env:${key}=${quote(value)}`).join("; ")}; & ${[launch.command, ...args].map(quote).join(" ")}`;
-			argv = [path.win32.join(stateEnv.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+			manualCommand = [...overrides.map(([key, value]) => `$env:${key}=${quote(value)}`), `& ${[launch.command, ...args].map(quote).join(" ")}`].join("; ");
+			argv = [path.win32.join(stateEnv.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-EncodedCommand", Buffer.from(manualCommand, "utf16le").toString("base64")];
 		} else {
-			argv = ["/usr/bin/env", ...Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined).map(([key, value]) => `${key}=${value}`), launch.command, ...args];
+			argv = [...(overrides.length ? ["/usr/bin/env", ...overrides.map(([key, value]) => `${key}=${value}`)] : []), launch.command, ...args];
 			const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
-			manualCommand = `${Object.entries(manualEnv).map(([key, value]) => `${key}=${quote(value)}`).join(" ")} ${[launch.command, ...args].map(quote).join(" ")}`;
+			manualCommand = [...overrides.map(([key, value]) => `${key}=${quote(value)}`), ...[launch.command, ...args].map(quote)].join(" ");
 		}
 		const terminal = terminalCommand(argv, process.platform, stateEnv, (candidate) => {
 			try { accessSync(candidate, constants.X_OK); return true; } catch { return false; }
