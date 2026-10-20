@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useMatchRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { writeChatComposerText } from "../lib/chat-drafts";
+import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -27,10 +27,10 @@ export function NewTaskNavigator() {
 		if (!newTaskRequest || newTaskRequest.nonce === lastNonce.current) return;
 		lastNonce.current = newTaskRequest.nonce;
 		const { projectId, hostId, initialPrompt } = newTaskRequest;
-		// The new chat page reads its composer from this per-host draft (NewChatPage's draftId).
-		if (initialPrompt) {
-			const draftId = `new-chat:${hostId ?? "local"}`;
-			writeChatComposerText({ sessionId: draftId, incarnation: draftId }, initialPrompt);
+		// The new chat page reads its composer from this per-host draft. A report
+		// never replaces text the user already typed (the Report button checks too).
+		if (initialPrompt && !readChatSessionDraft(newChatDraftScope(hostId)).composer.text.trim()) {
+			writeChatComposerText(newChatDraftScope(hostId), initialPrompt);
 		}
 		const workspaces = (hostId ? remoteWorkspaces?.filter((workspace) => workspace.hostId === hostId) : localWorkspaces) ?? [];
 		if (workspaces.some((workspace) => workspace.id === projectId && workspace.kind === CLOUD_PROJECT_KIND)) {

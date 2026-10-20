@@ -7,8 +7,8 @@ export const aoBridge: AoBridge =
 	window.ao ??
 	({
 		triage: {
-			launch: async () => ({ ok: false, error: "Open the desktop app to report a problem." }),
-			prepare: async () => ({ ok: false, error: "Open the desktop app to report a problem." }),
+			launch: async () => ({ ok: false, error: "report.desktopRequired" }),
+			prepare: async () => ({ ok: false, error: "report.desktopRequired" }),
 		},
 		app: {
 			getVersion: async () => "0.0.0-preview",

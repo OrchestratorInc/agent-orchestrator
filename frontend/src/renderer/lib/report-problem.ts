@@ -19,13 +19,14 @@ const GITHUB_NEW_ISSUE_URL = "https://github.com/OrchestratorInc/agent-orchestra
 const LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const LOCAL_PATH_PATTERN = /(?:\/Users\/|\/home\/|\/tmp\/|\/private\/var\/|\/var\/folders\/)\S+|\b[A-Za-z]:[/\\][^\s)]+|\$HOME\b/gi;
-const QUERY_SECRET_PATTERN =
-	/([?&](?:api[_-]?key|token|secret|password|passwd|authorization|access[_-]?token|refresh[_-]?token|auth)=)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^&\s#)]+)/gi;
-const JSON_SECRET_PATTERN =
-	/((["'])(?:api[_-]?key|token|secret|password|passwd|authorization|access[_-]?token|refresh[_-]?token|auth)\2\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]]+)/gi;
+const SECRET_KEY = String.raw`(?:client_?secret|refresh_?token|access_?token|id_?token|private_?key|pairing[_ -]?(?:code|password)|session[_ -]?secret|[A-Z0-9_-]*(?:TOKEN|SECRET|PASSWORD|API[_-]?KEY)[A-Z0-9_-]*|passwd|authorization|auth)`;
+const QUOTED_VALUE = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`;
+const QUERY_SECRET_PATTERN = new RegExp(String.raw`([?&]${SECRET_KEY}=)(?:${QUOTED_VALUE}|[^&\s#)]+)`, "gi");
+const ESCAPED_JSON_SECRET_PATTERN = new RegExp(String.raw`^.*\\"${SECRET_KEY}\\"\s*:.*$`, "gim");
+const JSON_SECRET_PATTERN = new RegExp(String.raw`((?:"${SECRET_KEY}"|'${SECRET_KEY}')\s*:\s*)(?:${QUOTED_VALUE}|[^\s,}\]]+)`, "gi");
 const AUTHORIZATION_HEADER_PATTERN = /(\bAuthorization\s*:\s*)[^\r\n]+/gi;
-const ASSIGNMENT_SECRET_PATTERN =
-	/(\b[A-Z0-9_-]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTHORIZATION|AUTH)[A-Z0-9_-]*\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"';&)]+)/gi;
+const ASSIGNMENT_SECRET_PATTERN = new RegExp(String.raw`((?:\b|--)${SECRET_KEY}\s*(?:[:=]\s*|\s+))(?:${QUOTED_VALUE}|[^\s"';&)},\]]+)`, "gi");
+const PAIRING_CODE_PATTERN = /(\b(?:pairing(?:[_ -]?code)?|code)\s*[:= -]?\s*)[0-9]{6,8}\b/gi;
 const URL_USERINFO_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]+@/gi;
 const BEARER_SECRET_PATTERN = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
 const OPENAI_KEY_PATTERN = /\bsk-[A-Za-z0-9_-]+/g;
@@ -38,9 +39,11 @@ export function sanitizeReportText(value: string): string {
 		.replace(LOCAL_URL_PATTERN, REDACTED_LOCAL_URL)
 		.replace(LOCAL_PATH_PATTERN, REDACTED_LOCAL_PATH)
 		.replace(QUERY_SECRET_PATTERN, `$1${REDACTED_SECRET}`)
+		.replace(ESCAPED_JSON_SECRET_PATTERN, REDACTED_SECRET)
 		.replace(JSON_SECRET_PATTERN, `$1"${REDACTED_SECRET}"`)
 		.replace(AUTHORIZATION_HEADER_PATTERN, `$1${REDACTED_SECRET}`)
 		.replace(ASSIGNMENT_SECRET_PATTERN, `$1${REDACTED_SECRET}`)
+		.replace(PAIRING_CODE_PATTERN, `$1${REDACTED_SECRET}`)
 		.replace(BEARER_SECRET_PATTERN, `$1${REDACTED_SECRET}`)
 		.replace(OPENAI_KEY_PATTERN, REDACTED_SECRET)
 		.replace(GITHUB_TOKEN_PATTERN, REDACTED_SECRET);

@@ -52,6 +52,7 @@ export function launchCommand(
 		try {
 			child = spawnProcess(spec.command, spec.args, {
 				cwd,
+				...(options.env ? { env: options.env } : {}),
 				detached: true,
 				stdio: "ignore",
 				windowsHide: false,
