@@ -132,7 +132,7 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-func documentationPlan(agentID string, title, guidance, docs string) Plan {
+func documentationPlan(agentID, title, guidance, docs string) Plan {
 	p := plan(agentID, ActionSetup, title, nil, guidance, docs)
 	p.LaunchMode = LaunchDocumentation
 	return p
