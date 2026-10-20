@@ -218,8 +218,41 @@ func TestParseHermesModelsReportsNativeDefault(t *testing.T) {
 func TestHermesModelConfigFollowsHermesHome(t *testing.T) {
 	home := t.TempDir()
 	paths := modelConfigPaths("hermes", "", map[string]string{"HERMES_HOME": home})
-	if len(paths) != 1 || paths[0] != filepath.Join(home, "config.yaml") {
+	if len(paths) != 2 || paths[0] != filepath.Join(home, "config.yaml") || paths[1] != filepath.Join(home, "provider_models_cache.json") {
 		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestDiscoverHermesCatalogListsConfiguredProviderModels(t *testing.T) {
+	home := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.yaml", "model:\n  default: glm-5.2\n  provider: zai\n")
+	write("provider_models_cache.json", `{"zai":{"models":["glm-4.6","glm-5.2"]},"anthropic":{"models":["claude-opus-5-5"]}}`)
+	catalog, err := discoverConfigCatalog("hermes", "", map[string]string{"HERMES_HOME": home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, model := range catalog.Models {
+		ids[model.ID] = model.IsDefault
+		if model.Provider != "zai" || len(model.Efforts) == 0 {
+			t.Fatalf("model %+v, want zai with reasoning levels", model)
+		}
+	}
+	if len(ids) != 2 || !ids["glm-5.2"] || ids["glm-4.6"] {
+		t.Fatalf("models = %+v, want glm-4.6 and default glm-5.2 only", catalog.Models)
+	}
+
+	// With provider auto, Hermes chooses at run time, so only the default is listed.
+	write("config.yaml", "model:\n  default: glm-5.2\n  provider: auto\n")
+	catalog, err = discoverConfigCatalog("hermes", "", map[string]string{"HERMES_HOME": home})
+	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "glm-5.2" {
+		t.Fatalf("auto provider catalog = %+v, %v", catalog.Models, err)
 	}
 }
 
