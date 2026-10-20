@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -50,10 +53,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	// Windows cannot deliver os.Interrupt to mcode.cmd's child CLI. Starting
 	// provider list could therefore orphan its profile lock on timeout. Keep
-	// non-OAuth credentials unknown instead of taking that lock just to inspect
-	// them; unknown does not mean that the user must log in again.
+	// ambiguous credentials unknown instead of taking that lock to inspect them.
 	if runtime.GOOS == "windows" {
-		return ports.AgentAuthStatusUnknown, nil
+		return localAuthStatus(dataDir), nil
 	}
 	probe, cancel := context.WithTimeout(ctx, authProbeTimeout)
 	defer cancel()
@@ -65,6 +67,53 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	return providerAuthStatus(out, dataDir), nil
+}
+
+var authCredentialEnvNames = [...]string{
+	"MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+	"MAVIS_ACCESS_TOKEN", "__MAVIS_PARENT_ACCESS_TOKEN",
+}
+
+// localAuthStatus can confirm a credential-free OAuth logout without starting
+// MiniMax. BYOK config, alternate credentials, and unreadable state stay unknown.
+func localAuthStatus(dataDir string) ports.AgentAuthStatus {
+	status := oauthAuthStatus(dataDir)
+	if status != ports.AgentAuthStatusUnauthorized {
+		return status
+	}
+	for _, name := range authCredentialEnvNames {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return ports.AgentAuthStatusUnknown
+		}
+	}
+	for _, name := range []string{"codex-auth.json", "local-runtime.auth.json"} {
+		if _, err := os.Lstat(filepath.Join(dataDir, name)); !os.IsNotExist(err) {
+			return ports.AgentAuthStatusUnknown
+		}
+	}
+	data, err := readPrivateConfig(filepath.Join(dataDir, "config.yaml"))
+	if err != nil {
+		return ports.AgentAuthStatusUnknown
+	}
+	var config map[string]any
+	if yaml.Unmarshal(data, &config) != nil {
+		return ports.AgentAuthStatusUnknown
+	}
+	for _, key := range []string{"minimax_api", "custom_provider", "provider"} {
+		if config[key] != nil {
+			return ports.AgentAuthStatusUnknown
+		}
+	}
+	if source, ok := config["minimaxModelSource"]; ok && source != "token_plan" {
+		return ports.AgentAuthStatusUnknown
+	}
+	if model, ok := config["defaultModel"]; ok {
+		value, valid := model.(string)
+		if !valid || (value != "" && !strings.HasPrefix(value, "minimax/")) {
+			return ports.AgentAuthStatusUnknown
+		}
+	}
+	return ports.AgentAuthStatusUnauthorized
 }
 
 // providerAuthStatus combines `mcode provider list --json` with MiniMax's

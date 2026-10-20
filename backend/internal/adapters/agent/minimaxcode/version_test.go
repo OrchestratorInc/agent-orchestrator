@@ -89,6 +89,7 @@ func TestSupportsVersionAcceptsQualifiedAndNewerReleases(t *testing.T) {
 // A held profile lock makes `mcode provider list` outlive the probe timeout,
 // so a signed-in account must not depend on the probe at all.
 func TestAuthStatusTrustsOAuthStateWithoutProbe(t *testing.T) {
+	clearAuthCredentialEnv(t)
 	versionProbeFixture(t)
 	runVersionProbe = func(context.Context, string) ([]byte, error) { return []byte("0.6.12"), nil }
 	previousAuth := runAuthProbe
@@ -102,11 +103,13 @@ func TestAuthStatusTrustsOAuthStateWithoutProbe(t *testing.T) {
 	t.Setenv("MINIMAX_DATA_DIR", profile)
 	plugin := New()
 	wantProbes := 1
+	wantStatus := "unknown"
 	if runtime.GOOS == "windows" {
 		wantProbes = 0
+		wantStatus = "unauthorized"
 	}
-	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "unknown" || probes != wantProbes {
-		t.Fatalf("signed out with failing probe = (%q, %v), probes=%d; want unknown, probes=%d", got, err, probes, wantProbes)
+	if got, err := plugin.AuthStatus(context.Background()); err != nil || string(got) != wantStatus || probes != wantProbes {
+		t.Fatalf("signed out = (%q, %v), probes=%d; want %s, probes=%d", got, err, probes, wantStatus, wantProbes)
 	}
 	state := filepath.Join(profile, "auth", "prod", "en", "mcode-public", "auth-state.json")
 	if err := os.MkdirAll(filepath.Dir(state), 0o700); err != nil {
