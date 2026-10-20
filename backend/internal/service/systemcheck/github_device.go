@@ -36,8 +36,13 @@ const (
 )
 
 var (
-	githubDeviceCodePattern = regexp.MustCompile(`one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})`)
+	// gh's wording around the code changes between releases ("First copy your
+	// one-time code: ABCD-1234", "One-time code (ABCD-1234) copied to
+	// clipboard"), so the code is found by its shape alone.
+	githubDeviceCodePattern = regexp.MustCompile(`\b([A-Z0-9]{4}-[A-Z0-9]{4})\b`)
 	githubDeviceURLPattern  = regexp.MustCompile(`https://\S+`)
+	// gh colors its output when the environment forces it (CLICOLOR_FORCE).
+	ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 )
 
 // GitHubDeviceLogin is a snapshot of the device sign-in. The code is the
@@ -59,6 +64,7 @@ type githubDeviceLogin struct {
 	readyOnce sync.Once
 	lastLine  string
 	partial   string
+	urlSeen   bool
 }
 
 func (l *githubDeviceLogin) markReady() { l.readyOnce.Do(func() { close(l.ready) }) }
@@ -80,7 +86,7 @@ func (l *githubDeviceLogin) Write(p []byte) (int, error) {
 		if idx < 0 {
 			break
 		}
-		line := strings.TrimSpace(l.partial[:idx])
+		line := strings.TrimSpace(ansiEscapePattern.ReplaceAllString(l.partial[:idx], ""))
 		l.partial = l.partial[idx+1:]
 		l.consumeLine(line)
 	}
@@ -92,18 +98,23 @@ func (l *githubDeviceLogin) consumeLine(line string) {
 		return
 	}
 	l.lastLine = line
-	if m := githubDeviceCodePattern.FindStringSubmatch(line); m != nil {
+	// The first link gh prints is the verification page; later lines are not.
+	url := githubDeviceURLPattern.FindString(line)
+	if url != "" && !l.urlSeen {
+		l.urlSeen = true
+		l.snap.VerificationURL = url
+	}
+	// The first code-shaped token outside a link is the code; once it is known,
+	// nothing later replaces it.
+	if l.snap.UserCode != "" {
+		return
+	}
+	if m := githubDeviceCodePattern.FindStringSubmatch(strings.Replace(line, url, "", 1)); m != nil {
 		l.snap.UserCode = m[1]
 		if l.snap.State == GitHubDeviceLoginStarting {
 			l.snap.State = GitHubDeviceLoginAwaitingApproval
 		}
 		l.markReady()
-		return
-	}
-	if strings.Contains(line, "URL") {
-		if url := githubDeviceURLPattern.FindString(line); strings.HasPrefix(url, "https://") {
-			l.snap.VerificationURL = url
-		}
 	}
 }
 

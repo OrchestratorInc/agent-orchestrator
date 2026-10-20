@@ -74,6 +74,59 @@ func TestStartGitHubDeviceLogin_ReturnsCodeWithoutTerminal(t *testing.T) {
 	waitForDeviceState(t, svc, GitHubDeviceLoginSucceeded)
 }
 
+func TestStartGitHubDeviceLogin_ParsesClipboardCodeFormat(t *testing.T) {
+	output := "! One-time code (5D0D-70F8) copied to clipboard\nOpen this URL to continue in your web browser: https://github.com/login/device\n"
+	runner := &deviceRunner{output: output, release: make(chan error, 1)}
+	svc := newDeviceService(runner)
+
+	got, err := svc.StartGitHubDeviceLogin(context.Background())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got.State != GitHubDeviceLoginAwaitingApproval || got.UserCode != "5D0D-70F8" {
+		t.Fatalf("login = %+v", got)
+	}
+	runner.release <- nil
+	waitForDeviceState(t, svc, GitHubDeviceLoginSucceeded)
+}
+
+func TestStartGitHubDeviceLogin_FindsCodeByShapeOnly(t *testing.T) {
+	// Unknown wording, a code-shaped token inside a link, and a later
+	// code-shaped token: only the first one outside a link is the code.
+	output := "Visit https://example.com/AAAA-BBBB/x first\nYour code is WXYZ-9876 thanks\nref QQQQ-1111\n"
+	runner := &deviceRunner{output: output, release: make(chan error, 1)}
+	svc := newDeviceService(runner)
+
+	got, err := svc.StartGitHubDeviceLogin(context.Background())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got.UserCode != "WXYZ-9876" {
+		t.Fatalf("code = %q, want WXYZ-9876", got.UserCode)
+	}
+	if got.VerificationURL != "https://example.com/AAAA-BBBB/x" {
+		t.Fatalf("url = %q", got.VerificationURL)
+	}
+	runner.release <- nil
+	waitForDeviceState(t, svc, GitHubDeviceLoginSucceeded)
+}
+
+func TestStartGitHubDeviceLogin_IgnoresColorCodes(t *testing.T) {
+	output := "\x1b[0;33m!\x1b[0m One-time code (\x1b[0;1;39m5D0D-70F8\x1b[0m) copied to clipboard\r\n\x1b[0;1;39mOpen this URL\x1b[0m to continue in your web browser: https://github.com/login/device\r\n"
+	runner := &deviceRunner{output: output, release: make(chan error, 1)}
+	svc := newDeviceService(runner)
+
+	got, err := svc.StartGitHubDeviceLogin(context.Background())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got.UserCode != "5D0D-70F8" || got.VerificationURL != "https://github.com/login/device" {
+		t.Fatalf("login = %+v", got)
+	}
+	runner.release <- nil
+	waitForDeviceState(t, svc, GitHubDeviceLoginSucceeded)
+}
+
 func TestStartGitHubDeviceLogin_ReportsFailure(t *testing.T) {
 	runner := &deviceRunner{output: deviceOutput + "failed to authenticate: expired_token\n", release: make(chan error, 1)}
 	svc := newDeviceService(runner)
