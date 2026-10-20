@@ -643,8 +643,6 @@
 	"editor.openInTarget": "Open in {{name}}",
 	"editor.openOptionsAria": "Open workspace options",
 	"editor.copyPath": "Copy path",
-	"editor.openIn": "Open in",
-	"editor.openWith": "Open with",
 	"editor.openWorkspaceInTitle": "Open this session's workspace in {{name}}",
 	"editor.workspaceUnavailable": "Session workspace is not available.",
 	"inspector.activity": "Activity",
