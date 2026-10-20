@@ -39,7 +39,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
 	provider := ""
-	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 8*time.Second, func(output []byte) (ports.AgentAuthStatus, bool) {
+	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 30*time.Second, func(output []byte) (ports.AgentAuthStatus, bool) {
 		var status ports.AgentAuthStatus
 		provider, status = providerFromStatus(string(output))
 		return status, true
