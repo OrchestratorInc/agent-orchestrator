@@ -837,3 +837,24 @@ func TestManagedCopilotInstallsTheLauncherNotThePlatformBinary(t *testing.T) {
 		t.Fatalf("copilot launcher=%q,%v; want 1.0.101", out, err)
 	}
 }
+
+func TestManagedInstallWithoutTheExpectedExecutableListsTheBinDirectory(t *testing.T) {
+	s := newManagedNPMExecService(t, func(prefix string) error {
+		return writeVersionScript(filepath.Join(prefix, "bin", "something-else"), "1.1.0")
+	})
+	plan := Plan{Target: TargetCodex, Method: "npm", Package: "@openai/codex"}
+	err := s.runManagedInstall(context.Background(), plan, &installedBaseline{path: "/usr/local/bin/codex", expected: "1.1.0"}, nil, io.Discard)
+	if err == nil {
+		t.Fatal("install without the executable succeeded")
+	}
+	if err.Error() != "Installed, but codex was not found." {
+		t.Fatalf("summary = %q; want it short, with the path in diagnostics", err.Error())
+	}
+	detail := errors.Unwrap(err)
+	if detail == nil || !strings.Contains(detail.Error(), filepath.Join("v1", "bin", "codex")) || !strings.Contains(detail.Error(), "contains: something-else") {
+		t.Fatalf("detail = %v; want the missing path and what the install linked", detail)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(s.managedRoot, string(TargetCodex), "versions")); len(entries) != 0 {
+		t.Fatalf("failed release was kept: %v", entries)
+	}
+}
