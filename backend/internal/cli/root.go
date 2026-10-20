@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -73,10 +75,6 @@ func ExitCode(err error) int {
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return exitDataDirLocked
 	}
-	var child *triageExitError
-	if errors.As(err, &child) {
-		return child.code
-	}
 	return 1
 }
 
@@ -92,6 +90,7 @@ type Deps struct {
 	StartProcess          func(processStartConfig) error
 	ProcessAlive          func(pid int) bool
 	LookPath              func(file string) (string, error)
+	ResolveAgentBinary    func(context.Context, string) (string, error)
 	CommandOutput         func(ctx context.Context, name string, args ...string) ([]byte, error)
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
@@ -125,6 +124,13 @@ func DefaultDeps() Deps {
 		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
 		Now:                   time.Now,
 		Sleep:                 time.Sleep,
+
+		ResolveAgentBinary: func(ctx context.Context, name string) (string, error) {
+			if name == "claude" {
+				return claudecode.ResolveClaudeBinary(ctx)
+			}
+			return codex.ResolveCodexBinary(ctx)
+		},
 	}
 }
 
@@ -162,6 +168,9 @@ func (d Deps) withDefaults() Deps {
 		d.ProcessAlive = def.ProcessAlive
 	}
 	if d.LookPath == nil {
+		if d.ResolveAgentBinary == nil {
+			d.ResolveAgentBinary = def.ResolveAgentBinary
+		}
 		d.LookPath = def.LookPath
 	}
 	if d.CommandOutput == nil {

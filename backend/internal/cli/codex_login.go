@@ -207,6 +207,7 @@ func readCodexLoginSelection(in io.Reader) (string, error) {
 func runInteractiveCommand(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec,forbidigo // interactive login must inherit the caller's console.
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
+	configureCLIBatch(cmd)
 	cmd.Dir = dir
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
