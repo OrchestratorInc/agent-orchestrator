@@ -31,6 +31,7 @@ type hibernationConversation struct {
 	backgroundRunning bool
 	backgroundErr     error
 	backgroundChecks  atomic.Int32
+	launchRefresh     atomic.Bool
 	onBackgroundCheck func(context.Context)
 }
 
@@ -85,6 +86,8 @@ func (c *hibernationConversation) Hibernate() error {
 }
 
 func (c *hibernationConversation) SetTitle(context.Context, string) error { return nil }
+
+func (c *hibernationConversation) NeedsLaunchRefresh() bool { return c.launchRefresh.Load() }
 
 func (c *hibernationConversation) Compact(context.Context) (ports.ChatCompactionResult, error) {
 	return ports.ChatCompactionResult{}, nil

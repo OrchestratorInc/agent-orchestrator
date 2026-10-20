@@ -1188,9 +1188,8 @@ func Run() error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if !settingsSvc.ChatHibernationEnabled() {
-						continue
-					}
+					// Launch compatibility refreshes also run while optional idle
+					// hibernation is off; the service gates ordinary hibernation.
 					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("idle Chat hibernation failed", "err", err)
 					}

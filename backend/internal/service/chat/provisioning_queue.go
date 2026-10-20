@@ -42,7 +42,13 @@ func (s *Service) queueWithoutController(
 		}
 	}
 	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
-		return domain.ConversationTurn{}, ErrNotProvisioning
+		pending, err := s.launchRefreshPending(ctx, record.ID)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		if !pending {
+			return domain.ConversationTurn{}, ErrNotProvisioning
+		}
 	}
 	conversation, err := s.ensureConversation(ctx, record)
 	if err != nil {

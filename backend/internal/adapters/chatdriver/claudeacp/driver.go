@@ -34,6 +34,8 @@ const minimumNodeMajor = 22
 // claudeTodoToolsEnv switches on Claude Code's to-do tools in SDK sessions.
 const claudeTodoToolsEnv = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
 
+const claudeTodoToolsLaunchRevision = "claude-task-tools-v1"
+
 // claudePlanGuidance asks Claude to plan multi-step work with its to-do tools.
 // Claude Code defers TaskCreate and TaskUpdate until ToolSearch loads them and
 // does not look for them on an ordinary request, so without this line the chat's
@@ -148,6 +150,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			}, nil
 		},
 		SessionMeta:    claudeSessionMeta,
+		LaunchRevision: claudeLaunchRevision,
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
 	}, log)}
@@ -260,6 +263,10 @@ func claudeACPLaunchEnv(
 	// value the user already chose, in the project env or the daemon's own, wins.
 	if _, chosen := claudeTodoToolsChoice(input); !chosen {
 		env[claudeTodoToolsEnv] = "1"
+	} else if strings.TrimSpace(input[claudeTodoToolsEnv]) == "" {
+		// A blank project value is no choice: let the selected daemon value
+		// reach the child instead of masking it with an empty overlay.
+		delete(env, claudeTodoToolsEnv)
 	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
@@ -380,6 +387,13 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 			"type": "preset", "preset": "claude_code", "append": standing,
 		},
 	}
+}
+
+func claudeLaunchRevision(cfg acpdriver.LaunchConfig) string {
+	if !claudeTodoToolsEnabled(cfg.Env) {
+		return ""
+	}
+	return claudeTodoToolsLaunchRevision
 }
 
 func claudeSessionMode(permission ports.PermissionMode) string {

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestListChatHibernationCandidatesFiltersInSQL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if i == 0 {
+		if i <= 1 {
 			want = append(want, created.ID)
 		}
 	}
@@ -40,10 +41,12 @@ func TestListChatHibernationCandidatesFiltersInSQL(t *testing.T) {
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("candidates = %v, %v; want %v", got, err, want)
 	}
-	current, _, _ := s.GetSession(ctx, want[0])
-	now := time.Now().UTC()
-	if applied, err := s.SetSessionHibernated(ctx, current.ID, current.Revision, &now); err != nil || !applied {
-		t.Fatalf("mark asleep = %v, %v", applied, err)
+	for _, id := range want {
+		current, _, _ := s.GetSession(ctx, id)
+		now := time.Now().UTC()
+		if applied, err := s.SetSessionHibernated(ctx, current.ID, current.Revision, &now); err != nil || !applied {
+			t.Fatalf("mark asleep = %v, %v", applied, err)
+		}
 	}
 	if got, err := s.ListChatHibernationCandidates(ctx); err != nil || len(got) != 0 {
 		t.Fatalf("already sleeping candidates = %v, %v", got, err)
@@ -167,5 +170,62 @@ func TestSessionHibernationMarkerEmitsOneChangePerTransition(t *testing.T) {
 	payload.ID, payload.ConversationID = "", ""
 	if err := json.Unmarshal(events[1].Payload, &payload); err != nil || payload.ConversationID != "hibernate-cdc" {
 		t.Fatalf("wake event payload = %+v, %v", payload, err)
+	}
+}
+
+func TestLaunchRefreshIntentSurvivesWakeAndOrdinaryUpdates(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "mer")
+	created, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _, _ := s.GetSession(ctx, created.ID)
+	current.DisplayName = "newer state"
+	if err := s.UpdateSession(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := s.BeginSessionLaunchRefresh(ctx, created.ID, current.Revision, time.Now()); err != nil || applied {
+		t.Fatalf("stale intent=%v err=%v", applied, err)
+	}
+	pending, err := s.SessionLaunchRefreshPending(ctx, created.ID)
+	if err != nil || pending {
+		t.Fatalf("stale write persisted intent=%v err=%v", pending, err)
+	}
+	current, _, _ = s.GetSession(ctx, created.ID)
+	if applied, err := s.BeginSessionLaunchRefresh(ctx, created.ID, current.Revision, time.Now()); err != nil || !applied {
+		t.Fatalf("intent=%v err=%v", applied, err)
+	}
+	current, _, _ = s.GetSession(ctx, created.ID)
+	if current.HibernatedAt == nil {
+		t.Fatal("refresh did not atomically fence intake")
+	}
+	if applied, err := s.SetSessionHibernated(ctx, created.ID, current.Revision, nil); err != nil || !applied {
+		t.Fatalf("wake=%v err=%v", applied, err)
+	}
+	current, _, _ = s.GetSession(ctx, created.ID)
+	if err := s.UpdateSession(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = s.SessionLaunchRefreshPending(ctx, created.ID)
+	if err != nil || !pending {
+		t.Fatalf("wake lost intent=%v err=%v", pending, err)
+	}
+	if _, err := s.CreateConversation(ctx, "refresh-queue", domain.ConversationScopeSession, created.ProjectID, created.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := s.AppendUserMessage(ctx, "refresh-queue", created.ID, "", domain.ConversationMessage{ID: "refresh-message", Text: "during failed wake", Origin: domain.MessageOriginHuman}, "refresh-turn", time.Now()); err != nil || !accepted {
+		t.Fatalf("pending refresh queue admission=%v err=%v", accepted, err)
+	}
+	if err := s.ClearSessionLaunchRefresh(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := s.AppendUserMessage(ctx, "refresh-queue", created.ID, "", domain.ConversationMessage{ID: "after-refresh-message", Text: "after admission closes", Origin: domain.MessageOriginHuman}, "after-refresh-turn", time.Now()); !errors.Is(err, domain.ErrSessionNotProvisioning) || accepted {
+		t.Fatalf("completed refresh admitted cold work=%v err=%v", accepted, err)
+	}
+	pending, err = s.SessionLaunchRefreshPending(ctx, created.ID)
+	if err != nil || pending {
+		t.Fatalf("clear intent=%v err=%v", pending, err)
 	}
 }

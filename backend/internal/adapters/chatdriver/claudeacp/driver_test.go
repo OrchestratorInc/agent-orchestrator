@@ -283,6 +283,34 @@ func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	}
 }
 
+func TestClaudeLaunchRevisionRespectsTodoToolsOptOut(t *testing.T) {
+	t.Setenv(claudeTodoToolsEnv, "")
+	if got := claudeLaunchRevision(acpdriver.LaunchConfig{}); got != claudeTodoToolsLaunchRevision {
+		t.Fatalf("default launch revision = %q", got)
+	}
+	for _, off := range []string{"0", "false", "off", "no"} {
+		if got := claudeLaunchRevision(acpdriver.LaunchConfig{Env: map[string]string{claudeTodoToolsEnv: off}}); got != "" {
+			t.Fatalf("opt-out %q requires refresh: %q", off, got)
+		}
+	}
+	t.Setenv(claudeTodoToolsEnv, "0")
+	if got := claudeLaunchRevision(acpdriver.LaunchConfig{}); got != "" {
+		t.Fatalf("inherited opt-out requires refresh: %q", got)
+	}
+}
+
+func TestClaudeTodoToolsBlankProjectValueInheritsDaemonChoice(t *testing.T) {
+	for _, value := range []string{"1", "0"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(claudeTodoToolsEnv, value)
+			env := claudeACPLaunchEnv(map[string]string{claudeTodoToolsEnv: ""}, "/opt/claude", "", nil)
+			if _, present := env[claudeTodoToolsEnv]; present {
+				t.Fatal("blank project env masks inherited task-tool choice")
+			}
+		})
+	}
+}
+
 func TestClaudeSessionMetaNeverIncludesReplayContext(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"})

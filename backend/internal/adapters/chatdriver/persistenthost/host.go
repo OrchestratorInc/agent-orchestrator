@@ -63,6 +63,9 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
+	// ACPLaunchRevisionMetaKey records adapter launch compatibility without
+	// changing stable host ownership or preventing adoption of live work.
+	ACPLaunchRevisionMetaKey = "ao.launchRevision"
 )
 
 var (
@@ -118,6 +121,7 @@ type PreparedProvider struct {
 // without initializing or resuming the same live provider a second time.
 type ACPState struct {
 	InitialPermissions   string          `json:"initialPermissions,omitempty"`
+	LaunchRevision       string          `json:"launchRevision,omitempty"`
 	InitializeResult     json.RawMessage `json:"initializeResult,omitempty"`
 	SessionResult        json.RawMessage `json:"sessionResult,omitempty"`
 	SessionID            string          `json:"sessionId,omitempty"`

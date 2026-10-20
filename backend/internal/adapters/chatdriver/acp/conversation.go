@@ -90,6 +90,7 @@ type conversation struct {
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
 	unadoptedForkID      string
+	needsLaunchRefresh   bool
 
 	mu                sync.Mutex
 	sessionID         string
@@ -392,6 +393,8 @@ func (c *conversation) PreservesProviderOnClose() bool { return c.proc.terminate
 // ReconnectedLive distinguishes the same initialized ACP connection from a
 // replacement process recovered with session/load or session/resume.
 func (c *conversation) ReconnectedLive() bool { return c.proc.reconnected }
+
+func (c *conversation) NeedsLaunchRefresh() bool { return c.needsLaunchRefresh }
 
 // ActivateLiveReconnect installs the durable turn correlation before releasing
 // replayed ACP updates to the SDK. This prevents a replacement daemon from

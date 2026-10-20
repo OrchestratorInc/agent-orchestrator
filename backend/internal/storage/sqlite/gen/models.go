@@ -723,6 +723,7 @@ type Session struct {
 	StaleBinaryVersion               string
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
+	LaunchRefreshPending             int64
 }
 
 type SessionAgentAccount struct {

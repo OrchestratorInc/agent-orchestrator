@@ -13,6 +13,16 @@ stop an in-flight turn. The ACP host also preserves connection setup, JSON-RPC
 correlation, pending interactions, and acknowledged prompt replay while the
 replacement daemon rebuilds its typed controller.
 
+Adapter launch revisions are separate from stable host ownership. AO first
+adopts a surviving host, preserving any active turn and pending interaction.
+When Claude's required task-tool launch revision is missing, a quiet session
+is refreshed through the hibernation/native-resume boundary, even if optional
+idle hibernation is disabled. The idle sweep respects open views; a new message
+can refresh a viewed session before delivery. Running or queued turns, pending
+decisions, and unknown or active background work defer the refresh. An explicit
+task-tool opt-out requires no refresh. Accepted messages remain queued if the
+replacement cannot resume.
+
 A durable handoff can move a compatible native conversation between TUI and
 Chat, but both controllers are never live at once. The daemon coordinates both
 modes through the same session, lifecycle, workspace, storage, and observation

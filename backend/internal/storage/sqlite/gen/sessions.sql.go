@@ -56,6 +56,26 @@ func (q *Queries) ActivateConversationBranchSession(ctx context.Context, arg Act
 	return result.RowsAffected()
 }
 
+const beginSessionLaunchRefresh = `-- name: BeginSessionLaunchRefresh :execrows
+UPDATE sessions
+SET hibernated_at = ?1, launch_refresh_pending = 1
+WHERE id = ?2 AND revision = ?3
+`
+
+type BeginSessionLaunchRefreshParams struct {
+	HibernatedAt     sql.NullTime
+	ID               domain.SessionID
+	ExpectedRevision int64
+}
+
+func (q *Queries) BeginSessionLaunchRefresh(ctx context.Context, arg BeginSessionLaunchRefreshParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, beginSessionLaunchRefresh, arg.HibernatedAt, arg.ID, arg.ExpectedRevision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const claimChatControllerGeneration = `-- name: ClaimChatControllerGeneration :execrows
 UPDATE sessions
 SET controller_generation = ?
@@ -77,6 +97,15 @@ func (q *Queries) ClaimChatControllerGeneration(ctx context.Context, arg ClaimCh
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const clearSessionLaunchRefresh = `-- name: ClearSessionLaunchRefresh :exec
+UPDATE sessions SET launch_refresh_pending = 0 WHERE id = ? AND launch_refresh_pending <> 0
+`
+
+func (q *Queries) ClearSessionLaunchRefresh(ctx context.Context, id domain.SessionID) error {
+	_, err := q.db.ExecContext(ctx, clearSessionLaunchRefresh, id)
+	return err
 }
 
 const commitClientRequestSession = `-- name: CommitClientRequestSession :execrows
@@ -938,7 +967,6 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 const listChatHibernationCandidates = `-- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
-    AND kind <> 'orchestrator'
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
     AND trim(provider_conversation_id) <> ''
@@ -1586,6 +1614,17 @@ func (q *Queries) SessionIsSeed(ctx context.Context, id domain.SessionID) (bool,
 	var is_seed bool
 	err := row.Scan(&is_seed)
 	return is_seed, err
+}
+
+const sessionLaunchRefreshPending = `-- name: SessionLaunchRefreshPending :one
+SELECT launch_refresh_pending FROM sessions WHERE id = ?
+`
+
+func (q *Queries) SessionLaunchRefreshPending(ctx context.Context, id domain.SessionID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, sessionLaunchRefreshPending, id)
+	var launch_refresh_pending int64
+	err := row.Scan(&launch_refresh_pending)
+	return launch_refresh_pending, err
 }
 
 const setSessionAutoInjectCI = `-- name: SetSessionAutoInjectCI :execrows

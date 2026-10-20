@@ -54,6 +54,9 @@ type Config struct {
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
 	Launch       func(context.Context, LaunchConfig) (Launch, error)
+	// LaunchRevision opts a binding into safe refresh of older adopted hosts.
+	// Empty means no refresh is required for this launch configuration.
+	LaunchRevision func(LaunchConfig) string
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -646,15 +649,23 @@ func (d *Driver) initialize(
 			}
 		}
 		conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+		if d.cfg.LaunchRevision != nil {
+			required := d.cfg.LaunchRevision(cfg)
+			conv.needsLaunchRefresh = required != "" && state.LaunchRevision != required
+		}
 		return conv, init, state, nil
 	}
 
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	meta := map[string]any{
+		persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
+	}
+	if d.cfg.LaunchRevision != nil {
+		meta[persistenthost.ACPLaunchRevisionMetaKey] = d.cfg.LaunchRevision(cfg)
+	}
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
-		Meta: map[string]any{
-			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
-		},
+		Meta:            meta,
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		ClientInfo: &acpsdk.Implementation{
 			Name:    "agent-orchestrator",

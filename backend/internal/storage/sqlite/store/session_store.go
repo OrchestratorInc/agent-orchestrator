@@ -350,6 +350,31 @@ func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, e
 	return rows > 0, nil
 }
 
+// BeginSessionLaunchRefresh fences intake and persists queue preservation in
+// one revision-checked write, before any provider shutdown is attempted.
+func (s *Store) BeginSessionLaunchRefresh(ctx context.Context, id domain.SessionID, expectedRevision int64, at time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.BeginSessionLaunchRefresh(ctx, gen.BeginSessionLaunchRefreshParams{
+		HibernatedAt: sql.NullTime{Time: at, Valid: true}, ID: id, ExpectedRevision: expectedRevision,
+	})
+	return rows > 0, err
+}
+
+// SessionLaunchRefreshPending reads recovery intent independently of the UI sleep marker.
+func (s *Store) SessionLaunchRefreshPending(ctx context.Context, id domain.SessionID) (bool, error) {
+	pending, err := s.qr.SessionLaunchRefreshPending(ctx, id)
+	return pending != 0, err
+}
+
+// ClearSessionLaunchRefresh completes a refresh or explicit controller teardown.
+// Callers serialize this with the session controller gate.
+func (s *Store) ClearSessionLaunchRefresh(ctx context.Context, id domain.SessionID) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.ClearSessionLaunchRefresh(ctx, id)
+}
+
 // MarkHarnessSessionsStale marks the live launches of harness as running a
 // release that version replaced, and returns how many it marked.
 func (s *Store) MarkHarnessSessionsStale(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) (int64, error) {

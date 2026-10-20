@@ -538,6 +538,7 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 		}
 		_ = json.Unmarshal(request.params, &params)
 		r.state.InitialPermissions = params.Meta[ACPInitialPermissionsMetaKey]
+		r.state.LaunchRevision = params.Meta[ACPLaunchRevisionMetaKey]
 		r.state.InitializeResult = append(json.RawMessage(nil), result...)
 	case "session/new", "session/load", "session/resume", "session/fork":
 		var response struct {

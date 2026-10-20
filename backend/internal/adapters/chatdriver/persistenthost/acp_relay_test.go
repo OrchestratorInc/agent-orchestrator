@@ -29,6 +29,15 @@ func TestACPRelayCapturesIndependentForkForReconnect(t *testing.T) {
 	}
 }
 
+func TestACPRelayRetainsLaunchRevisionAcrossAttachments(t *testing.T) {
+	relay := newTestACPRelay(t)
+	provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"ao.launchRevision":"claude-task-tools-v1","ao.initialPermissions":"auto"}}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, provider)+`,"result":{"protocolVersion":1}}`+"\n"), 1, true)
+	if state := relay.snapshot(); state.LaunchRevision != "claude-task-tools-v1" || state.InitialPermissions != "auto" {
+		t.Fatalf("launch settings lost: %+v", state)
+	}
+}
+
 func TestACPRelayReclaimsPromptAcrossAttachment(t *testing.T) {
 	relay := newTestACPRelay(t)
 

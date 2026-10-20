@@ -69,6 +69,17 @@ UPDATE sessions
 SET hibernated_at = sqlc.narg(hibernated_at)
 WHERE id = sqlc.arg(id) AND revision = sqlc.arg(expected_revision);
 
+-- name: BeginSessionLaunchRefresh :execrows
+UPDATE sessions
+SET hibernated_at = sqlc.arg(hibernated_at), launch_refresh_pending = 1
+WHERE id = sqlc.arg(id) AND revision = sqlc.arg(expected_revision);
+
+-- name: SessionLaunchRefreshPending :one
+SELECT launch_refresh_pending FROM sessions WHERE id = ?;
+
+-- name: ClearSessionLaunchRefresh :exec
+UPDATE sessions SET launch_refresh_pending = 0 WHERE id = ? AND launch_refresh_pending <> 0;
+
 -- name: MarkHarnessSessionsStale :execrows
 -- Marks the live launches of a harness an update just replaced. A launch that
 -- was already marked keeps when it first went stale; the version moves on.
@@ -364,7 +375,6 @@ FROM sessions ORDER BY project_id, num;
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
-    AND kind <> 'orchestrator'
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
     AND trim(provider_conversation_id) <> ''

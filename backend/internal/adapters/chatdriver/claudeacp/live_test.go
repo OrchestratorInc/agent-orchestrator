@@ -56,7 +56,7 @@ func TestLiveClaudeACP(t *testing.T) {
 	const standing = "This is an AO live hibernation check. Keep answers short."
 	conversation, err := driver.Start(ctx, ports.ChatStartConfig{
 		SessionID: domain.SessionID("live-claude-acp"), DataDir: dataDir, WorkspacePath: workspace,
-		SystemPrompt: standing,
+		SystemPrompt: standing, Env: map[string]string{claudeTodoToolsEnv: "0"},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -66,6 +66,28 @@ func TestLiveClaudeACP(t *testing.T) {
 		t.Fatalf("new-session answer = %q", answer)
 	}
 	providerID := conversation.ProviderConversationID()
+	// Simulate a warm host from before task-tool enablement. Adoption must
+	// preserve it first, then native resume replaces its launch configuration.
+	if err := conversation.Close(); err != nil {
+		t.Fatalf("detach legacy host: %v", err)
+	}
+	driver = New(claudecode.New(), nil, nil)
+	conversation, err = driver.(ports.ChatDriverReconnector).Reconnect(ctx, ports.ChatResumeConfig{
+		SessionID: domain.SessionID("live-claude-acp"), ProviderConversationID: providerID,
+		DataDir: dataDir, WorkspacePath: workspace, SystemPrompt: standing,
+	})
+	if err != nil {
+		t.Fatalf("adopt legacy host: %v", err)
+	}
+	if !conversation.(ports.ChatLiveReconnector).ReconnectedLive() || !conversation.(ports.ChatProviderLaunchRefresher).NeedsLaunchRefresh() {
+		t.Fatal("legacy launch was replaced before a safe refresh boundary")
+	}
+	if err := conversation.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(ctx, ""); err != nil {
+		t.Fatalf("activate legacy attachment: %v", err)
+	}
+	if ready, err := conversation.(ports.ChatProviderHibernator).CanHibernate(ctx); err != nil || !ready {
+		t.Fatalf("legacy host quiescence=%v err=%v", ready, err)
+	}
 	if err := conversation.(ports.ChatProviderHibernator).Hibernate(); err != nil {
 		t.Fatalf("Hibernate fresh host: %v", err)
 	}
@@ -82,7 +104,7 @@ func TestLiveClaudeACP(t *testing.T) {
 		t.Fatalf("Resume: %v", err)
 	}
 	defer conversation.(ports.ChatProviderTerminator).Terminate()
-	if conversation.ProviderConversationID() != providerID || conversation.(ports.ChatLiveReconnector).ReconnectedLive() {
+	if conversation.ProviderConversationID() != providerID || conversation.(ports.ChatLiveReconnector).ReconnectedLive() || conversation.(ports.ChatProviderLaunchRefresher).NeedsLaunchRefresh() {
 		t.Fatal("Claude ACP did not resume the same session in a replacement bridge process")
 	}
 	answer = sendLiveTurn(ctx, t, conversation, "live-2", "What exact marker did I ask you to remember before hibernation? Reply with only that marker.")

@@ -1209,6 +1209,13 @@ type ChatLiveReconnector interface {
 	ReconnectedLive() bool
 }
 
+// ChatProviderLaunchRefresher identifies an adopted process whose launch-only
+// configuration predates a required adapter revision. Refresh must use the
+// normal quiescence and native-resume boundary, never interrupt live work.
+type ChatProviderLaunchRefresher interface {
+	NeedsLaunchRefresh() bool
+}
+
 // ChatLiveReconnectActivator releases provider replay only after the service
 // has restored the durable active-turn correlation for the same live process.
 type ChatLiveReconnectActivator interface {
