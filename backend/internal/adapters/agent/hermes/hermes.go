@@ -97,8 +97,10 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		firstLine, _, _ := strings.Cut(string(b), "\n")
 		return err == nil && supportedNativeVersion(strings.TrimSuffix(firstLine, "\r"))
 	}})
+	// A slow probe is not proof of absence: report the timeout so readiness
+	// retries instead of recording Hermes as not installed.
 	if err != nil && timedOut {
-		return "", fmt.Errorf("hermes: native identity check timed out: %w", err)
+		return "", fmt.Errorf("hermes: native identity check timed out: %w", context.DeadlineExceeded)
 	}
 	return path, err
 }
