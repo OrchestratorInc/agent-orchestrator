@@ -23,6 +23,19 @@ describe("theme tokens", () => {
 		expect(css).not.toContain('"orchestrate"');
 	});
 
+	it("keeps the Validating lane off the yellow that In review already uses", () => {
+		for (const theme of THEMES.slice(1)) {
+			for (const mode of ["dark", "light"] as const) {
+				const tokens = deriveThemeTokens(theme[mode], mode);
+				const validating = tokens["--color-status-validating"];
+				expect(validating, `${theme.id}/${mode}`).not.toBe(theme[mode].yellow);
+				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-in-review"]);
+				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-working"]);
+				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-ready"]);
+			}
+		}
+	});
+
 	it("resolves every derived value to a concrete hex color for xterm", () => {
 		for (const theme of THEMES) {
 			for (const mode of ["dark", "light"] as const) {

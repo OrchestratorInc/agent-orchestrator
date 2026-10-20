@@ -140,7 +140,7 @@ Status is derived from durable runtime, PR, CI, and review facts. The renderer c
 | --- | --- | --- |
 | Working | `--color-status-working` / #60a5fa | active spinner, live activity, progress that is currently observed |
 | Needs human input | `--color-status-needs-you` / #f06445 | blocked, question, actionable interruption |
-| Validating | `--color-status-validating` / #facc15 | checks or verification in progress |
+| Validating | `--color-status-validating` / #22d3ee | AO is turning the PR: checks, review pass, or fixing feedback |
 | Review / caution | `--color-status-in-review` / #f59e0b | review pending, changes requested |
 | Ready / success | `--color-status-ready` / #4ade80 | mergeable, approved, completed actionable success |
 | Merged | `--color-status-merged` / #c084fc | historical terminal completion state |
