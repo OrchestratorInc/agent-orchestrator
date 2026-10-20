@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/dockeragentacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
@@ -516,6 +517,9 @@ func Run() error {
 					Args:    []string{"--profile", "acp"},
 					Env:     request.Env,
 				}, request.WorkingDir, log)
+			},
+			"docker-agent": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return dockeragentacp.DiscoverConfigOptions(listCtx, request.Binary, request.WorkingDir, cfg.DataDir, request.Env, log)
 			},
 			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{

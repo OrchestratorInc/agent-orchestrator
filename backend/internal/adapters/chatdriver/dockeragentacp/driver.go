@@ -178,6 +178,52 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	return args, env, nil
 }
 
+// DiscoverConfigOptions lists the model choices Docker Agent advertises for
+// the effective config, launching it against a throwaway runtime directory
+// under dataDir that is removed afterwards.
+func DiscoverConfigOptions(ctx context.Context, binary, workingDir, dataDir string, env map[string]string, log *slog.Logger) ([]ports.ChatConfigOption, error) {
+	if err := preflight(ctx); err != nil {
+		return nil, err
+	}
+	config, defaultConfig, err := nativeConfig(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(binary) == "" || !filepath.IsAbs(dataDir) {
+		return nil, fmt.Errorf("docker agent discovery requires an installed binary and an absolute AO data directory")
+	}
+	root := filepath.Join(dataDir, "agent-runtime", "docker-agent")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(root, "discovery-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	if config == "" {
+		config = filepath.Join(dir, "agent.yaml")
+		if err := os.WriteFile(config, defaultConfig, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(workingDir) == "" {
+		workingDir = dir
+	}
+	launchEnv := dockeragent.ProviderEnv(env)
+	for key, value := range env {
+		if _, aliased := launchEnv[key]; !aliased {
+			launchEnv[key] = value
+		}
+	}
+	launchEnv["TELEMETRY_ENABLED"] = "false"
+	return acpdriver.DiscoverConfigOptions(ctx, acpdriver.Launch{
+		Command: binary,
+		Args:    []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", workingDir},
+		Env:     launchEnv,
+	}, workingDir, log)
+}
+
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
 func sessionMode(mode ports.PermissionMode) string {
