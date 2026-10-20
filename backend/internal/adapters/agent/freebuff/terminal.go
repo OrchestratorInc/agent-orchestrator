@@ -19,6 +19,9 @@ const (
 	activePlaceholder = "Add to the current task"
 )
 
+// tailLines covers Freebuff's composer, status bar and footer chrome.
+const tailLines = 12
+
 var activeStatus = []string{"thinking...", "working...", "■ Esc", "high demand — in line"}
 
 // PromptReadinessHints waits for the idle composer before typing the first turn.
@@ -35,7 +38,7 @@ func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (
 
 // ComposerIsEmpty reports whether Freebuff's composer shows its idle placeholder.
 func (*Plugin) ComposerIsEmpty(output string) bool {
-	return tailContains(output, 12, idlePlaceholder)
+	return tailContains(output, idlePlaceholder)
 }
 
 // ContinuouslyDetectTerminalActivity samples Freebuff's screen every tick: it
@@ -44,15 +47,15 @@ func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
 // DetectTerminalActivity reads Freebuff's current composer and status bar.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	if tailContains(output, 12, activePlaceholder) {
+	if tailContains(output, activePlaceholder) {
 		return domain.ActivityActive, true
 	}
 	for _, marker := range activeStatus {
-		if tailContains(output, 12, marker) {
+		if tailContains(output, marker) {
 			return domain.ActivityActive, true
 		}
 	}
-	if tailContains(output, 12, idlePlaceholder) {
+	if tailContains(output, idlePlaceholder) {
 		return domain.ActivityIdle, true
 	}
 	return "", false
@@ -60,10 +63,10 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 
 // tailContains looks only at the bottom of the screen, where Freebuff draws its
 // composer and status bar, so transcript text never counts as current state.
-func tailContains(output string, lines int, marker string) bool {
+func tailContains(output, marker string) bool {
 	all := strings.Split(strings.TrimSpace(terminalui.PlainTerminalText(output)), "\n")
-	if len(all) > lines {
-		all = all[len(all)-lines:]
+	if len(all) > tailLines {
+		all = all[len(all)-tailLines:]
 	}
 	for _, line := range all {
 		if strings.Contains(line, marker) {

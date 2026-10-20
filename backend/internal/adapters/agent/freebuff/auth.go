@@ -53,22 +53,9 @@ func credentialsAuthStatus(ctx context.Context, path string) (ports.AgentAuthSta
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	var profiles map[string]json.RawMessage
-	if json.Unmarshal(data, &profiles) != nil {
-		// Freebuff treats an unparsable file as signed out too.
-		return ports.AgentAuthStatusUnauthorized, nil
-	}
-	var profile struct {
-		Name       string `json:"name"`
-		Email      string `json:"email"`
-		AuthToken  string `json:"authToken"`
-		TokenStore string `json:"tokenStore"`
-	}
-	raw, ok := profiles["default"]
-	if !ok || json.Unmarshal(raw, &profile) != nil {
-		return ports.AgentAuthStatusUnauthorized, nil
-	}
-	if strings.TrimSpace(profile.AuthToken) == "" && profile.TokenStore != "keychain" {
+	profile, ok := defaultProfile(data)
+	if !ok || (strings.TrimSpace(profile.AuthToken) == "" && profile.TokenStore != "keychain") {
+		// Freebuff treats a missing, unparsable or tokenless profile as signed out.
 		return ports.AgentAuthStatusUnauthorized, nil
 	}
 	evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
@@ -76,4 +63,25 @@ func credentialsAuthStatus(ctx context.Context, path string) (ports.AgentAuthSta
 	evidence.Name = strings.TrimSpace(profile.Name)
 	ports.RecordAuthEvidence(ctx, evidence)
 	return ports.AgentAuthStatusAuthorized, nil
+}
+
+type credentialsProfile struct {
+	Name       string `json:"name"`
+	Email      string `json:"email"`
+	AuthToken  string `json:"authToken"`
+	TokenStore string `json:"tokenStore"`
+}
+
+// defaultProfile reads the "default" profile `freebuff login` writes.
+func defaultProfile(data []byte) (credentialsProfile, bool) {
+	var profiles map[string]json.RawMessage
+	var profile credentialsProfile
+	if json.Unmarshal(data, &profiles) != nil {
+		return profile, false
+	}
+	raw, ok := profiles["default"]
+	if !ok || json.Unmarshal(raw, &profile) != nil {
+		return profile, false
+	}
+	return profile, true
 }
