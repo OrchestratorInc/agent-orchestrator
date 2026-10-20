@@ -74,7 +74,9 @@ func TestLaunchPreservesDomainInstructionsAndDefaults(t *testing.T) {
 }
 
 func TestPermissionModesFailClosed(t *testing.T) {
-	for _, mode := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+	// Bypass still requires explicit native bypassPermissions; it must never be
+	// inferred from AO's launch mode against a default native config.
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeBypassPermissions} {
 		t.Run(string(mode), func(t *testing.T) {
 			p, cfg := setup(t, `{}`)
 			cfg.Permissions = mode
@@ -88,6 +90,22 @@ func TestPermissionModesFailClosed(t *testing.T) {
 		if _, err := p.GetLaunchCommand(context.Background(), cfg); err == nil {
 			t.Fatalf("unsafe config accepted: %s", config)
 		}
+	}
+}
+
+func TestAutoAndAcceptEditsMapToAsk(t *testing.T) {
+	// AO's Auto and Accept Edits have no native Strands equivalent, so they must
+	// launch under Strands' default Ask policy (every action confirmed) rather
+	// than being rejected. This is what lets Strands spawn from the standalone
+	// composer, whose default launch mode is Auto.
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeAcceptEdits} {
+		t.Run(string(mode), func(t *testing.T) {
+			p, cfg := setup(t, `{}`)
+			cfg.Permissions = mode
+			if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
+				t.Fatalf("mode %s rejected: %v", mode, err)
+			}
+		})
 	}
 }
 

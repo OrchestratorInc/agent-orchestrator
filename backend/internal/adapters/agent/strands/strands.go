@@ -419,7 +419,14 @@ func (cfg nativeConfig) validate(mode ports.PermissionMode, model string) error 
 		return errors.New("strands: configured model module takes precedence over --model; leave model override empty")
 	}
 	switch mode {
-	case "", ports.PermissionModeDefault:
+	// Strands' native CLI exposes only two permission policies: Ask (its default,
+	// which confirms every action) and bypassPermissions (auto-approve all). It
+	// has no classifier-driven auto mode and no edits-only auto-approval, so the
+	// closest safe equivalent of AO's Auto and Accept Edits is Ask: the agent
+	// still confirms each action rather than silently escalating. Mapping them
+	// here (instead of rejecting) lets Strands spawn under AO's default launch
+	// modes, including the standalone composer's Auto.
+	case "", ports.PermissionModeDefault, ports.PermissionModeAuto, ports.PermissionModeAcceptEdits:
 		if cfg.Permissions.Mode != "" && cfg.Permissions.Mode != "default" || len(cfg.Permissions.Allow) > 0 {
 			return errors.New("strands: Ask Permissions requires native default mode with no always-allowed tools")
 		}
