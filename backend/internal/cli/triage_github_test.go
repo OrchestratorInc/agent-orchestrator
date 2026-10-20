@@ -17,11 +17,12 @@ import (
 func fakeTriageGH(t *testing.T, script string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("shell fixture")
+		t.Skip("POSIX fake-gh scripts use shell case/printf and /bin/sleep; batch execution has a native Windows fixture")
 	}
 	bin := t.TempDir()
 	path := filepath.Join(bin, "gh")
 	t.Setenv("GH_HOST", "other.example")
+	t.Setenv("GH_DEBUG", "api")
 	script = "#!/bin/sh\n[ \"$GH_HOST\" = github.com ] || exit 91\n[ \"$GH_PROMPT_DISABLED\" = 1 ] && [ \"$GH_NO_UPDATE_NOTIFIER\" = 1 ] || exit 90\n" + script
 	script = strings.Replace(script, "#!/bin/sh\n", "#!/bin/sh\nif [ \"$1\" != auth ]; then\ncase \" $* \" in *\" --repo OrchestratorInc/agent-orchestrator \"*) ;; *) exit 92;; esac\nfi\n", 1)
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
@@ -138,11 +139,14 @@ func TestTriageDuplicateEvidence(t *testing.T) {
 	for _, tc := range []struct{ name, script, want string }{
 		{"candidate", `printf '[{"number":12,"title":"Stream breaks","state":"OPEN","url":"https://github.com/OrchestratorInc/agent-orchestrator/issues/12"}]'`, "  - issue #12 [OPEN] Stream breaks\n"},
 		{"none", "printf '[]'", "  - none found\n"},
-		{"unavailable", "exit 1", "  - unavailable: issue daemon stopped: search failed\n  - unavailable: pr daemon stopped: search failed\n"},
+		{"unavailable", "exit 1", "  - unavailable: issue stream connection failed: search failed\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, _, dir := triageTestDeps(t)
 			path := fakeTriageGH(t, tc.script)
+			if err := os.WriteFile(filepath.Join(dir, "daemon.log"), []byte("ERROR stream connection failed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			deps.LookPath = func(name string) (string, error) {
 				if name == "gh" {
 					return path, nil
@@ -162,6 +166,7 @@ func TestTriageDuplicateEvidence(t *testing.T) {
 func TestTriagePreflightFakeGH(t *testing.T) {
 	for _, tc := range []struct{ name, auth, labels, wantAuth, wantLabel, filing string }{
 		{"present", "exit 0", `printf '[{"name":"needs-triage"}]'`, "ok", "present", "available"},
+		{"stderr beside JSON", "exit 0", `echo warning >&2; printf '[{"name":"needs-triage"}]'`, "ok", "present", "available"},
 		{"absent label", "exit 0", "printf '[]'", "ok", "absent", "available"},
 		{"failed auth", "echo raw-auth-secret; exit 1", "printf '[]'", "failed", "absent", "unavailable"},
 		{"label failure", "exit 0", "exit 1", "ok", "unknown", "available"},
@@ -203,20 +208,20 @@ func TestTriagePreflightFakeGH(t *testing.T) {
 func TestTriageKeywords(t *testing.T) {
 	for _, tc := range []struct {
 		name, logs string
-		state      daemonState
 		want       []string
 	}{
-		{"empty ready", "", stateReady, []string{}},
-		{"stopped", "INFO all good", stateStopped, []string{"daemon stopped"}},
-		{"plain strips metadata", "2026-10-20 ERROR session_id=abc123 /Users/name/file 503 connection refused by remote peer", stateReady, []string{"connection refused remote peer"}},
-		{"slog", `time=2026 level=WARN msg="terminal launch failed" id=42`, stateReady, []string{"terminal launch failed"}},
-		{"json", `{"level":"ERROR","msg":"session stream disconnected","id":123}`, stateReady, []string{"session stream disconnected"}},
-		{"recent distinct", "ERROR old connection refused\nWARN terminal launch failed\nWARN terminal launch failed", stateUnhealthy, []string{"terminal launch failed", "old connection refused", "daemon unhealthy"}},
-		{"limit", "ERROR first signal failed\nERROR second signal failed\nERROR third signal failed\nERROR fourth signal failed", stateReady, []string{"fourth signal failed", "third signal failed", "second signal failed"}},
-		{"redacted before search", redactTriage("ERROR API_TOKEN=private path /home/person/file connection refused 123", "/home/person"), stateReady, []string{"path connection refused"}},
+		{"empty ready", "", []string{}},
+		{"short error", "ERROR connection failed", []string{}},
+		{"stopped", "INFO all good", []string{}},
+		{"plain strips metadata", "2026-10-20 ERROR session_id=abc123 /Users/name/file 503 connection refused by remote peer", []string{"connection refused remote peer"}},
+		{"slog", `time=2026 level=WARN msg="terminal launch failed" id=42`, []string{"terminal launch failed"}},
+		{"json", `{"level":"ERROR","msg":"session stream disconnected","id":123}`, []string{"session stream disconnected"}},
+		{"recent distinct", "ERROR old connection refused\nWARN terminal launch failed\nWARN terminal launch failed", []string{"terminal launch failed", "old connection refused"}},
+		{"limit", "ERROR first signal failed\nERROR second signal failed\nERROR third signal failed\nERROR fourth signal failed", []string{"fourth signal failed", "third signal failed", "second signal failed"}},
+		{"redacted before search", redactTriage("ERROR API_TOKEN=private path /home/person/file connection refused 123", "/home/person"), []string{"path connection refused"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := triageKeywords(tc.logs, tc.state); !reflect.DeepEqual(got, tc.want) {
+			if got := triageKeywords(tc.logs); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %#v want %#v", got, tc.want)
 			}
 		})
@@ -229,16 +234,15 @@ func TestTriageDuplicateSearchFakeGH(t *testing.T) {
 		count              int
 	}{
 		{"results deduped", `printf '[{"number":12,"title":"Stream breaks","state":"OPEN","url":"https://github.com/OrchestratorInc/agent-orchestrator/issues/12"}]'`, "- issue #12 [OPEN] Stream breaks", 1},
-		{"none", "printf '[]'", "none found for: stream disconnected; terminal failure", 0},
-		{"issue timeout", `if [ "$1" = issue ]; then exec /bin/sleep 10; fi; printf '[]'`, "unavailable: issue stream disconnected: timeout", 0},
-		{"pr timeout", `if [ "$1" = pr ]; then exec /bin/sleep 10; fi; printf '[]'`, "unavailable: pr stream disconnected: timeout", 0},
+		{"none", "printf '[]'", "none found for: session stream disconnected; terminal launch failure", 0},
+		{"issue timeout", `if [ "$1" = issue ]; then exec /bin/sleep 10; fi; printf '[]'`, "unavailable: issue session stream disconnected: timeout", 0},
 		{"failed", "echo raw-secret; exit 1", "search failed", 0},
 		{"malformed", "printf '[broken'", "search failed", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := fakeTriageGH(t, tc.script)
 			start := time.Now()
-			got := triageDuplicates(context.Background(), path, []string{"stream disconnected", "terminal failure"})
+			got := triageDuplicates(context.Background(), path, []string{"session stream disconnected", "terminal launch failure"})
 			if !strings.Contains(got, tc.want) || strings.Count(got, "- issue #")+strings.Count(got, "- pr #") != tc.count || strings.Contains(got, "raw-secret") {
 				t.Fatal(got)
 			}
@@ -257,15 +261,19 @@ func TestTriageDuplicateSearchFakeGH(t *testing.T) {
 			rows = append(rows, row{i, "Candidate", "CLOSED", fmt.Sprintf("https://github.com/%s/issues/%d", triageRepo, i)})
 		}
 		raw, _ := json.Marshal(rows)
-		prs := strings.ReplaceAll(string(raw), "/issues/", "/pull/")
-		path := fakeTriageGH(t, "if [ \"$1\" = issue ]; then printf '%s' '"+string(raw)+"'; else printf '%s' '"+prs+"'; fi")
-		got := triageDuplicates(context.Background(), path, []string{"first query", "second query", "third query"})
-		if strings.Count(got, "- issue #") != 5 || strings.Count(got, "- pr #") != 5 {
+		for i := range rows {
+			rows[i].Number += 5
+			rows[i].URL = fmt.Sprintf("https://github.com/%s/issues/%d", triageRepo, rows[i].Number)
+		}
+		more, _ := json.Marshal(rows)
+		path := fakeTriageGH(t, "case \"$*\" in *\"first query words\"*) printf '%s' '"+string(raw)+"';; *) printf '%s' '"+string(more)+"';; esac")
+		got := triageDuplicates(context.Background(), path, []string{"first query words", "second query words", "third query words"})
+		if strings.Count(got, "- issue #") != 5 || strings.Count(got, "- pr #") != 0 {
 			t.Fatal(got)
 		}
 	})
 	t.Run("missing gh", func(t *testing.T) {
-		if got := triageDuplicates(context.Background(), "", []string{"daemon stopped"}); !strings.Contains(got, "unavailable: gh missing") {
+		if got := triageDuplicates(context.Background(), "", []string{"daemon connection failed"}); !strings.Contains(got, "unavailable: gh missing") {
 			t.Fatal(got)
 		}
 	})
@@ -311,5 +319,39 @@ func TestTriageRetention(t *testing.T) {
 	}
 	if _, err := os.Stat(external); err != nil {
 		t.Fatal("symlink target deleted", err)
+	}
+}
+
+func TestTriageSearchUsesRedactedLogs(t *testing.T) {
+	deps, _, dir := triageTestDeps(t)
+	calls := filepath.Join(dir, "queries")
+	t.Setenv("GH_TEST_CALLS", calls)
+	path := fakeTriageGH(t, `printf '%s\n' "$*" >> "$GH_TEST_CALLS"; echo '[]'`)
+	deps.LookPath = func(name string) (string, error) {
+		if name == "gh" {
+			return path, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	raw := "ERROR connection handshake failed {\"client_secret\":\"SENTINELVALUE\"}\nERROR pairing code 12345678\nERROR spawn timed out runtime handshake\n"
+	if err := os.WriteFile(filepath.Join(dir, "daemon.log"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
+	queryBytes, _ := os.ReadFile(calls)
+	queries := string(queryBytes)
+	for _, text := range []string{snapshot, draft, queries} {
+		if strings.Contains(strings.ToLower(text), "sentinelvalue") || strings.Contains(text, "12345678") {
+			t.Fatal(text)
+		}
+	}
+	if strings.Contains(queries, "pr list") || strings.Contains(queries, "daemon stopped") || !strings.Contains(queries, "--search connection handshake failed") || !strings.Contains(snapshot, `keyword search: "spawn timed out runtime"; "connection handshake failed client"; candidates, not confirmed`) {
+		t.Fatal(queries, snapshot)
+	}
+}
+
+func TestTriageNoErrorSearch(t *testing.T) {
+	if got := triageDuplicates(context.Background(), "unused", []string{"connection failed"}); got != "none: no error lines to search from\n" {
+		t.Fatal(got)
 	}
 }

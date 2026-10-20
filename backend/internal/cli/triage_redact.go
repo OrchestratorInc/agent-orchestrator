@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const triageSecretKey = `(?:api[_-]?key|token|secret|password|passwd|authorization|access[_-]?token|refresh[_-]?token|auth)`
+const triageSensitiveFieldPattern = `(?:client_?secret|refresh_?token|access_?token|id_?token|private_?key|pairing[_ -]?(?:code|password)|session[_ -]?secret|[A-Z0-9_-]*(?:TOKEN|SECRET|PASSWORD|API[_-]?KEY)[A-Z0-9_-]*|passwd|authorization|auth)`
 const triageQuotedValue = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`
 
 var triageRedactions = []struct {
@@ -13,10 +13,12 @@ var triageRedactions = []struct {
 	replacement string
 }{
 	{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/?#]+@`), `${1}***@`},
-	{regexp.MustCompile(`(?i)([?&]` + triageSecretKey + `=)(?:` + triageQuotedValue + `|[^&\s#)]+)`), `${1}[redacted-secret]`},
-	{regexp.MustCompile(`(?i)((?:"` + triageSecretKey + `"|'` + triageSecretKey + `')\s*:\s*)(?:` + triageQuotedValue + `|[^\s,}\]]+)`), `${1}"[redacted-secret]"`},
+	{regexp.MustCompile(`(?i)([?&]` + triageSensitiveFieldPattern + `=)(?:` + triageQuotedValue + `|[^&\s#)]+)`), `${1}[redacted-secret]`},
+	{regexp.MustCompile(`(?im)^.*\\"` + triageSensitiveFieldPattern + `\\"\s*:.*$`), `[redacted-secret]`},
+	{regexp.MustCompile(`(?i)((?:"` + triageSensitiveFieldPattern + `"|'` + triageSensitiveFieldPattern + `')\s*:\s*)(?:` + triageQuotedValue + `|[^\s,}\]]+)`), `${1}"[redacted-secret]"`},
 	{regexp.MustCompile(`(?i)(\bauthorization\s*:\s*)[^\r\n]+`), `${1}[redacted-secret]`},
-	{regexp.MustCompile(`(?i)(\b(?:pairing[_ -]?(?:code|password)|[A-Z0-9_-]*` + triageSecretKey + `[A-Z0-9_-]*)\s*[:=]\s*)(?:` + triageQuotedValue + `|[^\s"';&)]+)`), `${1}[redacted-secret]`},
+	{regexp.MustCompile(`(?i)((?:\b|--)` + triageSensitiveFieldPattern + `\s*(?:[:=]\s*|\s+))(?:` + triageQuotedValue + `|[^\s"';&)},\]]+)`), `${1}[redacted-secret]`},
+	{regexp.MustCompile(`(?i)(\b(?:pairing(?:[_ -]?code)?|code)\s*[:= -]?\s*)[0-9]{6,8}\b`), `${1}[redacted-secret]`},
 	{regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+`), `${1}[redacted-secret]`},
 	{regexp.MustCompile(`\bsk-[A-Za-z0-9_-]+`), `[redacted-secret]`},
 	{regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b`), `[redacted-secret]`},

@@ -14,9 +14,10 @@ import (
 )
 
 const triageEvidenceHeading = "## Agent-collected evidence"
+const triageCommentHeading = "## Comment"
 
-var triageRelated = regexp.MustCompile(`Related: #([1-9][0-9]*)\b`)
-var triageIssueURL = regexp.MustCompile(`^https://github\.com/OrchestratorInc/agent-orchestrator/issues/([1-9][0-9]*)(?:#issuecomment-[0-9]+)?$`)
+var triageRelated = regexp.MustCompile(`Related: #([1-9]\d*)\b`)
+var triageIssueURL = regexp.MustCompile(`^https://github\.com/OrchestratorInc/agent-orchestrator/issues/([1-9]\d*)(?:#issuecomment-\d+)?$`)
 
 func triageTTY(in io.Reader, out io.Writer) bool {
 	i, iok := in.(*os.File)
@@ -48,29 +49,37 @@ func finishTriage(ctx context.Context, in io.Reader, out io.Writer, dir string, 
 	if first != "status: ready" && first != "status: duplicate" {
 		return nil
 	}
+	sections := make([][]int, 2)
+	for i, heading := range []string{triageCommentHeading, triageEvidenceHeading} {
+		matches := regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(heading)+`$`).FindAllStringIndex(rest, -1)
+		if len(matches) != 1 {
+			return fmt.Errorf("draft %s requires exactly one %s heading", report, heading)
+		}
+		sections[i] = matches[0]
+	}
+	if sections[0][0] >= sections[1][0] {
+		return fmt.Errorf("draft %s requires %s before %s", report, triageCommentHeading, triageEvidenceHeading)
+	}
+	human := rest[:sections[0][0]]
+	comment := rest[sections[0][1]:sections[1][0]]
+	evidence := rest[sections[1][1]:]
 	status = "skipped"
 	if !tty || github.Path == "" || github.Auth != "ok" {
 		return nil
-	}
-	human, evidence, hasEvidence := strings.Cut(rest, triageEvidenceHeading)
-	if !hasEvidence {
-		return fmt.Errorf("draft is missing the evidence section")
 	}
 	title, body, _ := strings.Cut(strings.TrimSpace(human), "\n")
 	if !strings.HasPrefix(title, "Title:") {
 		return fmt.Errorf("draft is missing Title")
 	}
 	title = strings.TrimSpace(strings.TrimPrefix(title, "Title:"))
-	mainBody, comment, _ := strings.Cut(body, "## Comment")
-	body = strings.TrimSpace(mainBody)
+	body = strings.TrimSpace(body)
 	number := ""
 	if first == "status: duplicate" {
-		related := triageRelated.FindStringSubmatch(mainBody)
+		related := triageRelated.FindStringSubmatch(body)
 		if related == nil {
 			return fmt.Errorf("duplicate draft requires Related: #n")
 		}
 		number = related[1]
-		_, comment, _ = strings.Cut(comment, "\n")
 		body = strings.TrimSpace(comment)
 	}
 	if title == "" || body == "" {
@@ -123,7 +132,7 @@ func finishTriage(ctx context.Context, in io.Reader, out io.Writer, dir string, 
 	}
 	url = strings.TrimSpace(output)
 	match := triageIssueURL.FindStringSubmatch(url)
-	if match == nil || (number != "" && match[1] != number) {
+	if len(match) < 2 || (number != "" && match[1] != number) {
 		url = ""
 		return fmt.Errorf("GitHub returned no issue URL; outcome unknown, check GitHub before retrying")
 	}
