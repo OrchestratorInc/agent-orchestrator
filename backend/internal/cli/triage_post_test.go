@@ -158,7 +158,7 @@ func TestTriageDefaultModelAndAgentExit(t *testing.T) {
 				return "", exec.ErrNotFound
 			}
 			deps.RunInteractiveCommand = func(_ context.Context, _ string, dir string, args []string, _ io.Reader, _, _ io.Writer) error {
-				if len(args) != 1 || args[0] != triagePrompt(dir, true) || strings.Contains(args[0], "--model") {
+				if len(args) != 1 || !strings.Contains(args[0], filepath.Join(dir, "prompt.md")) || strings.Contains(args[0], "--model") {
 					t.Fatal(args)
 				}
 				if fail {

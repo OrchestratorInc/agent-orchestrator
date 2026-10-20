@@ -125,8 +125,19 @@ func TestTriageLaunchArgvAndCwd(t *testing.T) {
 			called := false
 			deps.RunInteractiveCommand = func(_ context.Context, name, dir string, args []string, in io.Reader, stdout, stderr io.Writer) error {
 				called = true
-				if name != "/missing/"+agent || filepath.Dir(dir) != filepath.Join(state, "triage") || !reflect.DeepEqual(args, []string{"--model", "example-model", triagePrompt(dir, true)}) {
+				for _, arg := range args {
+					if strings.ContainsAny(arg, "\r\n") {
+						t.Fatalf("argument contains a newline: %q", arg)
+					}
+				}
+				promptPath := filepath.Join(dir, "prompt.md")
+				wantPrompt := fmt.Sprintf(`Read the file "%s" and follow its instructions exactly: it is your bug-triage playbook, and it starts with asking the user what went wrong.`, promptPath)
+				if name != "/missing/"+agent || filepath.Dir(dir) != filepath.Join(state, "triage") || !reflect.DeepEqual(args, []string{"--model", "example-model", wantPrompt}) {
 					t.Fatalf("launch: %s %q cwd=%s", name, args, dir)
+				}
+				prompt, err := os.ReadFile(promptPath)
+				if err != nil || string(prompt) != triagePrompt(dir, true) {
+					t.Fatalf("prompt file: %q, %v", prompt, err)
 				}
 				if in != deps.In || stdout != out || stderr != out {
 					t.Fatal("stdio not inherited")
