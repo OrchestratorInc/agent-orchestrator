@@ -37,6 +37,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
@@ -215,6 +216,7 @@ func Run() error {
 	}
 	browserAuthority := browsersvc.NewAuthority()
 	browserBroker := browserruntime.New(log, browserRuntimeToken)
+	browserStreamBroker := browserstream.New(log, browserRuntimeToken)
 
 	// Fail fast only if a daemon is genuinely still serving the recorded port.
 	// CheckStale confirms the run-file's PID is alive, but that alone is not
@@ -629,6 +631,7 @@ func Run() error {
 	})
 	sessMgr = wiredSessMgr
 	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
 	}); ok {
@@ -786,6 +789,11 @@ func Run() error {
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	browserLive := httpd.NewBrowserLiveHub(browserStreamBroker, sessionSvc, func() bool {
+		state, err := mobilebridge.Load(bs.ConfigPath)
+		return err == nil && state.Enabled && state.BrowserRemoteAccess
+	}, log)
+	bs.OnBrowserRemoteAccessDisabled = browserLive.CloseAll
 
 	// Standalone shell terminals: user-opened shells with no agent session
 	// behind them. They reuse the same runtime adapter (and therefore the same
@@ -885,7 +893,10 @@ func Run() error {
 			Reader:       prReader,
 			Resolver:     prReader,
 			Writer:       store,
+			MergeWriter:  store,
 			ThreadWriter: store,
+			Lifecycle:    lcStack.LCM,
+			Logger:       log,
 		})
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")
@@ -1064,6 +1075,7 @@ func Run() error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		Mobile:             mc,
+		BrowserLive:        browserLive,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -1086,6 +1098,7 @@ func Run() error {
 		}
 		return err
 	}
+	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
@@ -1099,6 +1112,21 @@ func Run() error {
 		go func() {
 			if err := browserBroker.Serve(ctx, ln); err != nil {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
+			}
+		}()
+	}
+	_ = os.Unsetenv(browserstream.RuntimeAddressEnv)
+	if ln, addr, err := browserstream.Listen(cfg.RunFilePath); err != nil {
+		log.Warn("browser stream: listener unavailable; mobile live browser disabled", "err", err)
+	} else {
+		if err := os.Setenv(browserstream.RuntimeAddressEnv, addr); err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("publish browser stream address: %w", err)
+		}
+		log.Info("browser stream: listening", "addr", addr)
+		go func() {
+			if err := browserStreamBroker.Serve(ctx, ln); err != nil {
+				log.Warn("browser stream: serve stopped with error", "err", err)
 			}
 		}()
 	}
@@ -1142,6 +1170,7 @@ func Run() error {
 	}
 
 	var startupReconcileDone <-chan struct{}
+	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
 		// Agent-readiness warming is advisory and idempotent, and request paths
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
@@ -1194,6 +1223,39 @@ func Run() error {
 				}
 			}
 		}()
+		resumeDone := make(chan struct{})
+		usageLimitResumeDone = resumeDone
+		go func() {
+			defer close(resumeDone)
+			var sweeps sync.WaitGroup
+			defer sweeps.Wait()
+			// Recovery must attach existing provider work before scheduled retries
+			// inspect controller readiness. The durable opt-in survives shutdown.
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return
+			}
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				// The service bounds overlapping scans and provider attempts. A wake
+				// must not stop the next tick discovering another session's deadline.
+				sweeps.Go(func() {
+					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit auto-resume failed", "err", err)
+					}
+				})
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
 		go runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
 	})
 
@@ -1208,6 +1270,9 @@ func Run() error {
 	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
 	// runs before the cancel: a non-signal exit path would hang otherwise.
 	stop()
+	if usageLimitResumeDone != nil {
+		<-usageLimitResumeDone
+	}
 	if agentSwitchDispatcher != nil {
 		dispatcherStopContext, dispatcherStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		if err := agentSwitchDispatcher.Stop(dispatcherStopContext); err != nil {

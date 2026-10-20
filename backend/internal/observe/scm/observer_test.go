@@ -501,6 +501,46 @@ func TestPoll_ReconcilesBranchStatesWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestPoll_LogsStartAndCompletionTiming(t *testing.T) {
+	store := &fakeStore{
+		sessions: nil,
+		projects: map[string]domain.ProjectRecord{},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	var logs bytes.Buffer
+	obs := New(&fakeProvider{}, store, &fakeLifecycle{}, Config{
+		Tick:   time.Hour,
+		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logged := logs.String()
+	for _, field := range []string{"scm observer: poll started", "scm observer: poll completed", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in poll timing log:\n%s", field, logged)
+		}
+	}
+}
+
+func TestLogProviderRequest_WarnsForRequestLongerThanPollCadence(t *testing.T) {
+	var logs bytes.Buffer
+	obs := &Observer{
+		tick:   30 * time.Second,
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	obs.logProviderRequest("repo_pr_list_guard", "acme/widgets", time.Now().Add(-31*time.Second), nil)
+
+	logged := logs.String()
+	for _, field := range []string{"slow provider request completed", "stage=repo_pr_list_guard", "repository=acme/widgets", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in provider timing log:\n%s", field, logged)
+		}
+	}
+}
+
 func TestPoll_ResumesAfterCredentialsBecomeAvailable(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{

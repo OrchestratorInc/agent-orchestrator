@@ -99,6 +99,13 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 }
 
+export interface ConversationUsageLimit {
+	/** Absolute provider reset time, when it can be determined safely. */
+	resetsAt?: string;
+	autoResume: boolean;
+	resumeError?: string;
+}
+
 export interface ConversationTurn {
 	id: string;
 	state: TurnState;
@@ -114,7 +121,10 @@ export interface ConversationTurn {
 	retryOfTurnId?: string;
 	/** A retry attempt exists, even if that child is outside the active branch. */
 	hasRetryAttempt?: boolean;
+	/** Durable human-prompt fact, independent of the loaded history page. */
+	hasHumanPrompt?: boolean;
 	errorMessage?: string;
+	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
 	completedAt?: string;

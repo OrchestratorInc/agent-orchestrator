@@ -700,6 +700,19 @@ describe("SessionInspector PR section", () => {
   });
 
   it("merges a ready pull request directly through the daemon", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/merge" ? {
+      data: {
+        ok: true,
+        prNumber: 7,
+        method: "squash",
+        state: "merged",
+        stateChangedAt: "2026-10-19T11:06:22Z",
+      },
+      error: undefined,
+    } : {
+      data: { ok: true, sessionId: "sess-1" },
+      error: undefined,
+    });
     const readyPR = prSummary(7, "open", {
       url: "https://example.com/pr/7",
       headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -709,7 +722,11 @@ describe("SessionInspector PR section", () => {
         unresolvedBy: [],
       },
     });
-    renderWithQuery(
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [readyPR], linkedPrs: [] } }
+      : respond(path));
+    const { queryClient } = renderWithQuery(
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
@@ -730,6 +747,13 @@ describe("SessionInspector PR section", () => {
         },
       }),
     );
+    await waitFor(() =>
+      expect(queryClient.getQueryData<{ prs: SessionPRSummary[] }>(sessionScmSummaryQueryKey("sess-1"))?.prs[0]?.state).toBe("merged"),
+    );
+    await waitFor(() =>
+      expect(prSection("Pull request").getByText("merged")).toBeInTheDocument(),
+    );
+    expect(prSection("Pull request").queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 

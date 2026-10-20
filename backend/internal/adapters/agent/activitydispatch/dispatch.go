@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/auggie"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
@@ -72,7 +73,7 @@ var Derivers = map[string]DeriveFunc{
 	"gemini":       gemini.DeriveActivityState,
 	"copilot":      activitystate.StandardDeriveActivityState,
 	"kimi":         activitystate.StandardDeriveActivityState,
-	"cline":        activitystate.StandardDeriveActivityState,
+	"cline":        cline.DeriveActivityState,
 	"kiro":         kiro.DeriveActivityState,
 	"kilocode":     activitystate.StandardDeriveActivityState,
 	"autohand":     activitystate.StandardDeriveActivityState,

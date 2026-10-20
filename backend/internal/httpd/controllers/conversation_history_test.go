@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -23,16 +24,19 @@ import (
 // are different instructions, and a generic internal error is neither.
 
 type fakeChatService struct {
-	discarded   int
-	title       string
-	rollback    error
-	setTitle    error
-	edit        chatsvc.EditMessageResult
-	editErr     error
-	activate    string
-	activateErr error
-	retryTurn   domain.ConversationTurn
-	retryErr    error
+	discarded     int
+	title         string
+	rollback      error
+	setTitle      error
+	edit          chatsvc.EditMessageResult
+	editErr       error
+	activate      string
+	activateErr   error
+	retryTurn     domain.ConversationTurn
+	retryErr      error
+	autoResumeErr error
+	gotAutoResume *bool
+	snapshot      chatsvc.Snapshot
 
 	gotTurnID      string
 	gotTitle       string
@@ -53,7 +57,7 @@ func (f *fakeChatService) ActivateBranch(_ context.Context, _ domain.SessionID, 
 }
 
 func (f *fakeChatService) Snapshot(context.Context, domain.SessionID) (chatsvc.Snapshot, error) {
-	return chatsvc.Snapshot{}, nil
+	return f.snapshot, nil
 }
 
 func (f *fakeChatService) Send(context.Context, domain.SessionID, ports.ChatUserMessage) (domain.ConversationTurn, error) {
@@ -100,6 +104,74 @@ func (f *fakeChatService) RetryTurn(_ context.Context, _ domain.SessionID, turnI
 		return domain.ConversationTurn{}, f.retryErr
 	}
 	return f.retryTurn, nil
+}
+
+func (f *fakeChatService) SetTurnAutoResume(_ context.Context, _ domain.SessionID, turnID string, enabled bool) error {
+	f.gotTurnID = turnID
+	f.gotAutoResume = &enabled
+	return f.autoResumeErr
+}
+
+func TestSetTurnAutoResumeRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		enabled    *bool
+		err        error
+	}{
+		{"enable", `{"enabled":true}`, http.StatusNoContent, boolPointer(true), nil},
+		{"cancel", `{"enabled":false}`, http.StatusNoContent, boolPointer(false), nil},
+		{"missing", `{}`, http.StatusBadRequest, nil, nil},
+		{"null", `{"enabled":null}`, http.StatusBadRequest, nil, nil},
+		{"wrong type", `{"enabled":"yes"}`, http.StatusBadRequest, nil, nil},
+		{"unknown reset", `{"enabled":true}`, http.StatusConflict, boolPointer(true), chatsvc.ErrUsageLimitResetUnknown},
+		{"superseded", `{"enabled":true}`, http.StatusConflict, boolPointer(true), chatsvc.ErrUsageLimitAutoResumeInvalid},
+		{"account changed", `{"enabled":true}`, http.StatusConflict, boolPointer(true), ports.ErrAgentAccountChanged},
+		{"wrong turn", `{"enabled":true}`, http.StatusNotFound, boolPointer(true), domain.ErrNoConversationTurn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeChatService{autoResumeErr: tc.err}
+			srv := newChatTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, http.MethodPatch, "/api/v1/sessions/ao-1/conversation/turns/turn-7/auto-resume", tc.body)
+			if status != tc.status {
+				t.Fatalf("status = %d, want %d: %s", status, tc.status, body)
+			}
+			if (svc.gotAutoResume == nil) != (tc.enabled == nil) || (tc.enabled != nil && *svc.gotAutoResume != *tc.enabled) {
+				t.Fatalf("auto-resume = %v, want %v", svc.gotAutoResume, tc.enabled)
+			}
+			if tc.enabled != nil && svc.gotTurnID != "turn-7" {
+				t.Fatalf("turn = %q", svc.gotTurnID)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func TestConversationUsageLimitWireProjection(t *testing.T) {
+	reset := time.Date(2026, 10, 14, 16, 50, 0, 0, time.UTC)
+	svc := &fakeChatService{snapshot: chatsvc.Snapshot{Turns: []domain.ConversationTurn{{
+		ID: "limited", State: domain.TurnStateFailed,
+		UsageLimit: &domain.ConversationUsageLimit{ResetsAt: &reset, AutoResume: true, ResumeError: "Auto-resume stopped"},
+	}}}}
+	srv := newChatTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/conversation", "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var payload struct {
+		Turns []struct {
+			UsageLimit struct {
+				ResetsAt    string `json:"resetsAt"`
+				AutoResume  bool   `json:"autoResume"`
+				ResumeError string `json:"resumeError"`
+			} `json:"usageLimit"`
+		} `json:"turns"`
+	}
+	mustJSON(t, body, &payload)
+	if len(payload.Turns) != 1 || payload.Turns[0].UsageLimit.ResetsAt != "2026-10-14T16:50:00Z" || !payload.Turns[0].UsageLimit.AutoResume || payload.Turns[0].UsageLimit.ResumeError != "Auto-resume stopped" {
+		t.Fatalf("projection = %+v", payload)
+	}
 }
 
 // Compaction belongs to a sibling slice; this fake only has to satisfy the
@@ -428,6 +500,7 @@ func TestConversationHistoryRoutesStubWithoutAService(t *testing.T) {
 	for _, tc := range []struct{ method, path, body string }{
 		{"POST", "/api/v1/sessions/ao-1/conversation/turns/turn-1/rollback", ""},
 		{"POST", "/api/v1/sessions/ao-1/conversation/turns/turn-1/retry", ""},
+		{"PATCH", "/api/v1/sessions/ao-1/conversation/turns/turn-1/auto-resume", `{"enabled":true}`},
 		{"PUT", "/api/v1/sessions/ao-1/conversation/title", `{"title":"A Name"}`},
 	} {
 		body, status, headers := doRequest(t, srv, tc.method, tc.path, tc.body)

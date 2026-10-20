@@ -140,6 +140,7 @@ import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
 	activityPlan,
@@ -163,6 +164,7 @@ import {
 	type ConversationItem,
 	type ConversationMessage,
 	type ConversationTurn,
+	type ConversationUsageLimit,
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
@@ -220,6 +222,10 @@ export interface ChatRetryControl {
 	pending?: boolean;
 	error?: string;
 	turnId?: string;
+	setAutoResume?: (turnId: string, enabled: boolean) => void | Promise<unknown>;
+	autoResumePending?: boolean;
+	autoResumeError?: string;
+	autoResumeTurnId?: string;
 }
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
@@ -745,6 +751,14 @@ function ChatWorkspaceContent({
 	);
 	const turn = activeTurn(snapshot);
 	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
+	const latestSettledTurn = snapshot.turns.findLast((entry) =>
+		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
+	);
+	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
+		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
+		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
+		latestSettledTurn.hasHumanPrompt
+		? latestSettledTurn : undefined;
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -1739,6 +1753,7 @@ function ChatWorkspaceContent({
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
 									retryControl={retryControl}
+									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
 									editBusy={Boolean(turn)}
@@ -1762,6 +1777,20 @@ function ChatWorkspaceContent({
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
+								{limitedTurn?.usageLimit && retryControl ? (
+									<UsageLimitNotice
+										key={limitedTurn.id}
+										usageLimit={limitedTurn.usageLimit}
+										onResume={() => { void Promise.resolve(retryControl.retry(limitedTurn.id)).catch(() => undefined); }}
+										onAutoResumeChange={retryControl.setAutoResume
+											? (enabled) => { void Promise.resolve(retryControl.setAutoResume?.(limitedTurn.id, enabled)).catch(() => undefined); }
+											: undefined}
+										pending={retryControl.pending || retryControl.autoResumePending}
+										disabled={Boolean(turn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
+										error={(retryControl.turnId === limitedTurn.id ? retryControl.error : undefined) ??
+											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
+									/>
+								) : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
@@ -2430,6 +2459,7 @@ export function Timeline({
 	onOpenFiles,
 	onOpenFile,
 	retryControl,
+	composerRecoveryTurnId,
 	onEditHumanMessage,
 	editPending,
 	editBusy,
@@ -2465,6 +2495,7 @@ export function Timeline({
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
 	retryControl?: ChatRetryControl;
+	composerRecoveryTurnId?: string;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
 	editBusy?: boolean;
@@ -2898,7 +2929,7 @@ export function Timeline({
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
 	const retryableTurns = useMemo(
 		() =>
-			new Set(
+			new Map(
 				snapshot.turns
 					.filter(
 						(turn) =>
@@ -2906,7 +2937,7 @@ export function Timeline({
 							Boolean(turn.providerTurnId) &&
 							!consumedRetrySources.has(turn.id),
 					)
-					.map((turn) => turn.id),
+					.map((turn) => [turn.id, turn]),
 			),
 		[snapshot.turns, consumedRetrySources],
 	);
@@ -3876,11 +3907,13 @@ export function Timeline({
 						style={virtualized ? { height: virtualHeight } : undefined}>
 					{renderedGroups.map(({ group, row, index }) => {
 						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
+						const retryableTurn = group.turnId ? retryableTurns.get(group.turnId) : undefined;
 						const retry =
 							group.turnId &&
 							retryControl &&
-							retryableTurns.has(group.turnId) &&
-							groupHasHumanPrompt(group)
+							retryableTurn &&
+							group.turnId !== composerRecoveryTurnId &&
+							(groupHasHumanPrompt(group) || Boolean(retryableTurn.usageLimit && retryableTurn.hasHumanPrompt))
 								? {
 										onRetry: () => {
 											void Promise.resolve(retryTurn(group.turnId as string)).catch(
@@ -4379,6 +4412,7 @@ const TurnGroup = memo(function TurnGroup({
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
+					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
 				/>
 			) : null}
@@ -4711,6 +4745,7 @@ type TimelineGroup = {
 		state: "completed" | "recovered" | "interrupted" | "failed";
 		durationMs?: number;
 		error?: string;
+		usageLimit?: ConversationUsageLimit;
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -4912,6 +4947,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
 			state: turn.state,
+			usageLimit: turn.usageLimit,
 			durationMs: settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(

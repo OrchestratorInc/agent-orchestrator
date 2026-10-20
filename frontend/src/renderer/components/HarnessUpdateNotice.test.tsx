@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -74,6 +74,51 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+		expect(notice).toHaveClass("fixed", "right-4");
+	});
+
+	it("keeps the app corner, hides for browser overlap, and returns after the inspector closes", async () => {
+		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
+		let browserRect = new DOMRect();
+		const originalRect = HTMLElement.prototype.getBoundingClientRect;
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this.classList.contains("harness-update-notice")) return new DOMRect(964, 72, 300, 200);
+			if (this.classList.contains("workspace-topbar-container")) return new DOMRect(0, 0, 1280, 60);
+			if (this.classList.contains("browser-panel__viewport")) return browserRect;
+			return originalRect.call(this);
+		});
+		const topbar = document.createElement("div");
+		topbar.className = "workspace-topbar-container";
+		document.body.append(topbar);
+		mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		const browser = document.createElement("div");
+		browser.className = "browser-panel";
+		browser.dataset.browserNativePage = "live";
+		const viewport = document.createElement("div");
+		viewport.className = "browser-panel__viewport";
+		browser.append(viewport);
+		try {
+			for (const [left, top, visible] of [[820, 400, true], [820, 100, false], [600, 400, true], [0, 40, false]] as const) {
+				browserRect = new DOMRect(left, top, 1280 - left, 800 - top);
+				await act(async () => {
+					document.body.append(browser);
+					window.dispatchEvent(new Event("resize"));
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+				});
+				await waitFor(() => {
+					const notice = screen.queryByRole("region", { name: "Agent updates available" });
+					if (!visible) { expect(notice).toBeNull(); return; }
+					expect(notice, `browser left=${left}, top=${top}`).toHaveClass("fixed", "right-4");
+					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+				});
+			}
+			await act(async () => { browser.remove(); });
+			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("fixed", "right-4"));
+		} finally {
+			browser.remove();
+			topbar.remove();
+		}
 	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
@@ -581,25 +626,27 @@ describe("harness updates while sessions run", () => {
 	});
 });
 
-describe("noticePlacement", () => {
-	// 1280px window, notice 300px wide starting 72px down and 200px tall.
-	const place = (browser: Parameters<typeof noticePlacement>[0]) => noticePlacement(browser, 72, 200, 1280);
+describe("noticeCoversLiveBrowser", () => {
+	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], top = 72, height = 200, width = 1280) => noticeCoversLiveBrowser(browser, top, height, width);
 
-	it("keeps the default corner without a live browser page", () => {
-		expect(place(null)).toEqual({ right: 16 });
+	it("returns false when no live page overlaps the app corner", () => {
+		expect(covers(null)).toBe(false);
+		expect(covers({ left: 200, top: 60, right: 700, bottom: 800 })).toBe(false);
+		expect(covers({ left: 820, top: 400, right: 1280, bottom: 800 })).toBe(false);
 	});
 
-	it("keeps the default corner when the page is elsewhere", () => {
-		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
-		expect(place({ left: 800, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
+	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
+		expect(covers({ left, top: 100, right: 1280, bottom: 800 })).toBe(true);
 	});
 
-	it("moves beside a docked page it would cover", () => {
-		expect(place({ left: 820, top: 100, right: 1270, bottom: 800 })).toEqual({ right: 1280 - 808 });
+	it("hides when expanding the stack reaches the browser page", () => {
+		const browser = { left: 820, top: 400, right: 1280, bottom: 800 };
+		expect(covers(browser)).toBe(false);
+		expect(covers(browser, 72, 500)).toBe(true);
 	});
 
-	it("steps aside while the page leaves no room beside it", () => {
-		expect(place({ left: 0, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
-		expect(place({ left: 300, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
+	it("keeps the corner above the page but hides overlap in a narrow window", () => {
+		expect(covers(null, 72, 200, 280)).toBe(false);
+		expect(covers({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe(true);
 	});
 });

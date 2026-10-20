@@ -182,10 +182,10 @@ func (s *Service) needsReading(id string, refresh bool) bool {
 }
 
 // read asks the provider's CLI for the account's identity and limits.
-func (s *Service) read(ctx context.Context, account domain.AgentAccount) {
+func (s *Service) read(ctx context.Context, account domain.AgentAccount) *reading {
 	provider := s.providers[account.Provider]
 	if provider == nil {
-		return
+		return nil
 	}
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -223,11 +223,12 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) {
 	// about the account; caching its failure would refuse the account for the
 	// rest of the cache window.
 	if caller.Err() != nil {
-		return
+		return r
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
 	s.mu.Unlock()
+	return r
 }
 
 // accounts is the computer's own account per provider, then the saved ones.
@@ -805,6 +806,69 @@ func (s *Service) SessionAccountID(ctx context.Context, id domain.SessionID, har
 	}
 	account, _, err := s.SessionAccount(ctx, id, p)
 	return account.ID, err
+}
+
+// SessionLimits reads only the session's pinned account. A refresh bypasses the
+// display cache; a binding or identity change never falls back to the default.
+func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, refresh bool) (string, domain.AgentAccountLimits, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", domain.AgentAccountLimits{}, ports.ErrAgentAccountProviderMismatch
+	}
+	account, err := s.boundAccount(ctx, id, p)
+	if err != nil {
+		return "", domain.AgentAccountLimits{}, err
+	}
+	s.mu.Lock()
+	r := s.readings[account.ID]
+	s.mu.Unlock()
+	if refresh || r == nil || s.now().Sub(r.at) > freshFor {
+		r = s.read(ctx, account)
+	}
+	if err := ctx.Err(); err != nil {
+		return account.ID, domain.AgentAccountLimits{}, err
+	}
+	current, err := s.boundAccount(ctx, id, p)
+	if err != nil {
+		return account.ID, domain.AgentAccountLimits{}, err
+	}
+	if current.ID != account.ID || current.Home != account.Home {
+		return account.ID, domain.AgentAccountLimits{}, ports.ErrAgentAccountChanged
+	}
+	if r != nil && r.mismatch {
+		return account.ID, domain.AgentAccountLimits{}, ports.ErrAgentAccountChanged
+	}
+	if r == nil {
+		return account.ID, domain.AgentAccountLimits{}, errors.New("account limits are unavailable")
+	}
+	if r.identityErr != "" {
+		return account.ID, domain.AgentAccountLimits{}, fmt.Errorf("read account identity: %s", r.identityErr)
+	}
+	if !r.identity.SignedIn {
+		return account.ID, domain.AgentAccountLimits{}, ports.ErrAgentAccountSignedOut
+	}
+	if r.limitsErr != "" {
+		return account.ID, domain.AgentAccountLimits{}, fmt.Errorf("read account limits: %s", r.limitsErr)
+	}
+	if r.limits == nil {
+		return account.ID, domain.AgentAccountLimits{}, errors.New("account limits are unavailable")
+	}
+	return account.ID, *r.limits, nil
+}
+
+func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
+	accountID, bound, err := s.store.GetSessionAgentAccount(ctx, id, p)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	if !bound || s.beingRemoved(accountID) {
+		return domain.AgentAccount{}, ports.ErrAgentAccountChanged
+	}
+	account, err := s.find(ctx, accountID)
+	if errors.Is(err, ports.ErrAgentAccountUnknown) || (err == nil && account.Provider != p) {
+		return domain.AgentAccount{}, ports.ErrAgentAccountChanged
+	}
+	return account, err
 }
 
 // SessionAccount is the account a session uses for the provider now: its

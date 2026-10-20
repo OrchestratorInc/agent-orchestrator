@@ -902,6 +902,20 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 	});
 
+	const autoResume = useMutation({
+		mutationFn: async ({ targetSessionId, sourceTurnId, enabled }: ConversationSessionMutationInput & { sourceTurnId: string; enabled: boolean }) => {
+			const { error } = await clientForSessionHost(hostId).PATCH(
+				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume",
+				{
+					params: { path: { sessionId: targetSessionId, turnId: sourceTurnId } },
+					body: { enabled },
+				},
+			);
+			if (error) throw error;
+		},
+		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
+	});
+
 	const editMessage = useMutation({
 		mutationFn: async ({
 			targetSessionId,
@@ -980,6 +994,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
+	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
 
 	return {
@@ -1044,6 +1059,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		rollbackPending: rollback.isPending,
 		rollbackError: rollback.error ? apiErrorMessage(rollback.error) : undefined,
 		retryControl: {
+			setAutoResume: (turnId: string, enabled: boolean) => {
+				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+				return autoResume.mutateAsync({ targetSessionId: sessionId, sourceTurnId: turnId, enabled });
+			},
+			autoResumePending: autoResume.isPending && autoResumeTargetsCurrentSession,
+			autoResumeError: autoResumeTargetsCurrentSession && autoResume.error
+				? apiErrorMessage(autoResume.error) : undefined,
+			autoResumeTurnId: autoResumeTargetsCurrentSession ? autoResume.variables?.sourceTurnId : undefined,
 			retry: (turnId: string) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 				const requestId = crypto.randomUUID();
@@ -1573,7 +1596,13 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			providerTurnId: turn.providerTurnId,
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
+			hasHumanPrompt: turn.hasHumanPrompt,
 			errorMessage: turn.errorMessage,
+			usageLimit: turn.usageLimit ? {
+				resetsAt: turn.usageLimit.resetsAt ?? undefined,
+				autoResume: turn.usageLimit.autoResume,
+				resumeError: turn.usageLimit.resumeError,
+			} : undefined,
 			requestedAt: turn.requestedAt,
 			startedAt: turn.startedAt ?? undefined,
 			completedAt: turn.completedAt ?? undefined,

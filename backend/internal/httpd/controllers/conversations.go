@@ -79,6 +79,10 @@ type chatViewService interface {
 	SetChatView(context.Context, domain.SessionID, string, bool) error
 }
 
+type turnAutoResumeService interface {
+	SetTurnAutoResume(context.Context, domain.SessionID, string, bool) error
+}
+
 // ConversationsController owns the Chat routes for a session.
 //
 // Every route dispatches from the session's persisted mode inside the service, so
@@ -136,6 +140,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/edit", c.editMessage)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/retry", c.retryTurn)
+	r.Patch("/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume", c.setTurnAutoResume)
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
@@ -397,6 +402,28 @@ func (c *ConversationsController) retryTurn(w http.ResponseWriter, r *http.Reque
 		ProviderTurnID: turn.ProviderTurnID,
 		State:          turn.State,
 	})
+}
+
+func (c *ConversationsController) setTurnAutoResume(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(turnAutoResumeService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodPatch, "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume")
+		return
+	}
+	var req SetTurnAutoResumeRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil || req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_AUTO_RESUME_INVALID", "enabled must be a boolean", nil)
+		return
+	}
+	if err := svc.SetTurnAutoResume(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"), *req.Enabled); err != nil {
+		if errors.Is(err, chatsvc.ErrUsageLimitAutoResumeInvalid) || errors.Is(err, chatsvc.ErrUsageLimitResetUnknown) || errors.Is(err, ports.ErrAgentAccountChanged) {
+			envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_AUTO_RESUME_UNAVAILABLE", err.Error(), nil)
+		} else {
+			writeConversationRetryError(w, r, err)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeConversationRetryError maps retry refusals to their HTTP meanings.
@@ -1223,7 +1250,9 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			ProviderTurnID:  turn.ProviderTurnID,
 			RetryOfTurnID:   turn.RetryOfTurnID,
 			HasRetryAttempt: turn.HasRetryAttempt,
+			HasHumanPrompt:  turn.HasHumanPrompt,
 			ErrorMessage:    turn.ErrorMessage,
+			UsageLimit:      usageLimitPayload(turn.UsageLimit),
 			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
 			StartedAt:       optionalTimestamp(turn.StartedAt),
 			CompletedAt:     optionalTimestamp(turn.CompletedAt),
@@ -1279,6 +1308,13 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		})
 	}
 	return out
+}
+
+func usageLimitPayload(limit *domain.ConversationUsageLimit) *ConversationUsageLimitResponse {
+	if limit == nil {
+		return nil
+	}
+	return &ConversationUsageLimitResponse{ResetsAt: optionalTimestamp(limit.ResetsAt), AutoResume: limit.AutoResume, ResumeError: limit.ResumeError}
 }
 
 func branchMaterializationPayload(branch domain.ConversationBranch) *ConversationBranchMaterializationResponse {

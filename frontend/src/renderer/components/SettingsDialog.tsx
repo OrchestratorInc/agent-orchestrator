@@ -1,4 +1,4 @@
-import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -260,7 +260,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		cueBusy,
 		close: closeSettingsDialog,
 		title: activeLabel,
-		titleIcon: !isProjectSettings && activeSection === "stayAwake",
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
@@ -429,7 +428,6 @@ export function SettingsPane() {
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
 						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
-							{entry.titleIcon && <Coffee aria-hidden="true" className="size-6" />}
 							{entry.title}
 							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
 						</h1>

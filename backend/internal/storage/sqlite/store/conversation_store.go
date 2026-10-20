@@ -1148,13 +1148,13 @@ func (s *Store) AppendUserMessage(
 	turnID string,
 	now time.Time,
 ) (created bool, err error) {
-	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", now)
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", false, now)
 }
 
 // AppendReviewUserMessage preserves the worker session needed for lifecycle
 // projection while recording the typed reviewer that owns the turn.
 func (s *Store) AppendReviewUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID string, now time.Time) (bool, error) {
-	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, "", now)
+	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, "", false, now)
 }
 
 // AppendRetryUserMessage records a retry and its source as one transaction.
@@ -1170,12 +1170,18 @@ func (s *Store) AppendRetryUserMessage(
 	retryOfTurnID string,
 	now time.Time,
 ) (created bool, err error) {
-	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, now)
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, false, now)
+}
+
+// AppendAutoResumeRetryUserMessage consumes due consent in the retry transaction.
+// Cancellation and account binding changes use the same writer boundary.
+func (s *Store) AppendAutoResumeRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, true, now)
 }
 
 // AppendReviewRetryUserMessage atomically persists a retry for a reviewer chat.
 func (s *Store) AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
-	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, retryOfTurnID, now)
+	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, retryOfTurnID, false, now)
 }
 
 func (s *Store) appendUserMessage(
@@ -1187,6 +1193,7 @@ func (s *Store) appendUserMessage(
 	msg domain.ConversationMessage,
 	turnID string,
 	retryOfTurnID string,
+	autoResume bool,
 	now time.Time,
 ) (created bool, err error) {
 	s.writeMu.Lock()
@@ -1250,6 +1257,33 @@ func (s *Store) appendUserMessage(
 	}
 
 	err = s.inTx(ctx, "append user message", func(q *gen.Queries) error {
+		if autoResume {
+			source, err := q.SelectConversationTurnByID(ctx, retryOfTurnID)
+			if err != nil {
+				return fmt.Errorf("read auto-resume source: %w", err)
+			}
+			changed, err := q.SessionAgentAccountChangedSince(ctx, gen.SessionAgentAccountChangedSinceParams{
+				SessionID: source.HandledBySessionID, RequestedAt: source.RequestedAt,
+			})
+			if err != nil {
+				return fmt.Errorf("read auto-resume account binding: %w", err)
+			}
+			if changed {
+				return ports.ErrAgentAccountChanged
+			}
+			consumed, err := q.ConsumeConversationTurnAutoResume(ctx, gen.ConsumeConversationTurnAutoResumeParams{
+				ID: retryOfTurnID, ConversationID: conversationID, SessionID: session, Now: timeToNullTime(now),
+			})
+			if err != nil {
+				return fmt.Errorf("consume due auto-resume consent: %w", err)
+			}
+			if consumed == 0 {
+				if source.UsageLimitAutoResume != 0 && source.UsageLimitResetsAt.Valid && source.UsageLimitResetsAt.Time.After(now) {
+					return domain.ErrConversationAutoResumeNotDue
+				}
+				return domain.ErrNoConversationTurn
+			}
+		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 			UpdatedAt: now,
 			ID:        conversationID,
@@ -1264,6 +1298,13 @@ func (s *Store) appendUserMessage(
 			}
 		} else if err := q.InsertReviewConversationTurn(ctx, gen.InsertReviewConversationTurnParams{ID: turnID, ConversationID: conversationID, HandledBySessionID: session, HandledByReviewID: nullableString(reviewID), ControllerGeneration: generation, RetryOfTurnID: nullableString(retryOfTurnID), State: domain.TurnStateQueued, RequestedAt: now}); err != nil {
 			return fmt.Errorf("insert reviewer turn: %w", err)
+		}
+		if retryOfTurnID != "" && !autoResume {
+			if _, err := q.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
+				ID: retryOfTurnID, ConversationID: conversationID,
+			}); err != nil {
+				return fmt.Errorf("consume source auto-resume: %w", err)
+			}
 		}
 
 		if err := q.InsertConversationMessage(ctx, gen.InsertConversationMessageParams{
@@ -3053,6 +3094,106 @@ func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.Conversatio
 	return turnToDomain(row), nil
 }
 
+// SetTurnAutoResume keeps user consent on the failed source, separate from the
+// new attempt. The retry transaction consumes it before provider dispatch.
+func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID string, resetsAt *time.Time, enabled bool, resumeError string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if enabled || resumeError != "" {
+		turn, err := s.qw.SelectConversationTurnByID(ctx, turnID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrNoConversationTurn
+		}
+		if err != nil {
+			return fmt.Errorf("read turn auto-resume consent: %w", err)
+		}
+		if turn.ConversationID != conversationID {
+			return domain.ErrNoConversationTurn
+		}
+		// A manual retry or cancellation may have consumed the scanned intent.
+		if !enabled && turn.UsageLimitAutoResume == 0 {
+			return nil
+		}
+		if enabled {
+			_, retryErr := s.qw.SelectConversationRetryTurnIDBySource(ctx, gen.SelectConversationRetryTurnIDBySourceParams{
+				ConversationID: conversationID, RetryOfTurnID: sql.NullString{String: turnID, Valid: true},
+			})
+			if retryErr == nil {
+				return domain.ErrNoConversationTurn
+			}
+			if !errors.Is(retryErr, sql.ErrNoRows) {
+				return fmt.Errorf("read turn retry receipt: %w", retryErr)
+			}
+			changed, err := s.qw.SessionAgentAccountChangedSince(ctx, gen.SessionAgentAccountChangedSinceParams{
+				SessionID: turn.HandledBySessionID, RequestedAt: turn.RequestedAt,
+			})
+			if err != nil {
+				return fmt.Errorf("read turn account binding: %w", err)
+			}
+			if changed {
+				return ports.ErrAgentAccountChanged
+			}
+		}
+	}
+	var armed int64
+	if enabled {
+		armed = 1
+	}
+	var reset sql.NullTime
+	if resetsAt != nil {
+		reset = timeToNullTime(*resetsAt)
+	}
+	n, err := s.qw.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
+		ID: turnID, ConversationID: conversationID, ResetsAt: reset, Enabled: armed, ResumeError: resumeError,
+	})
+	if err != nil {
+		return fmt.Errorf("set turn auto-resume: %w", err)
+	}
+	if n == 0 {
+		return domain.ErrNoConversationTurn
+	}
+	return nil
+}
+
+// PostponeTurnAutoResume moves an armed deadline without restoring consumed consent.
+func (s *Store) PostponeTurnAutoResume(ctx context.Context, conversationID, turnID string, resetAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.PostponeConversationTurnAutoResume(ctx, gen.PostponeConversationTurnAutoResumeParams{
+		ID: turnID, ConversationID: conversationID, ResetsAt: timeToNullTime(resetAt),
+	})
+	if err != nil {
+		return false, fmt.Errorf("postpone turn auto-resume: %w", err)
+	}
+	return n > 0, nil
+}
+
+// AutoResumeTurns reads durable intent and deadlines so a sweep can skip future
+// turns cheaply and validate their eligibility when due.
+func (s *Store) AutoResumeTurns(ctx context.Context) ([]domain.ConversationTurn, error) {
+	rows, err := s.qr.SelectAutoResumeConversationTurns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read auto-resume turns: %w", err)
+	}
+	turns := make([]domain.ConversationTurn, 0, len(rows))
+	for _, row := range rows {
+		turns = append(turns, turnToDomain(row))
+	}
+	return turns, nil
+}
+
+// LatestAutoResumeTurn finds the latest visible turn that has left the queue.
+func (s *Store) LatestAutoResumeTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectLatestAutoResumeConversationTurn(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("read latest auto-resume source: %w", err)
+	}
+	return turnToDomain(row), nil
+}
+
 // RollbackTurns records that a rollback discarded the named turn and everything
 // after it, and returns how many turns that was.
 //
@@ -3353,6 +3494,10 @@ func (s *Store) LoadConversationSnapshotPage(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
+	humanPromptTurns, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
 
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
@@ -3370,6 +3515,7 @@ func (s *Store) LoadConversationSnapshotPage(
 		}
 		turn := turnToDomain(row)
 		turn.HasRetryAttempt = retriedSources[turn.ID]
+		turn.HasHumanPrompt = humanPromptTurns[turn.ID]
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
@@ -3488,6 +3634,10 @@ func (s *Store) LoadConversationSnapshot(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
+	humanPromptTurns, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
 	// Messages and activities exclude anything attached to a rolled-back turn: the
 	// agent has forgotten those, and a timeline that still showed them would be
 	// describing a conversation the agent is not in.
@@ -3512,6 +3662,7 @@ func (s *Store) LoadConversationSnapshot(
 	for _, row := range turnRows {
 		turn := turnToDomain(row)
 		turn.HasRetryAttempt = retriedSources[turn.ID]
+		turn.HasHumanPrompt = humanPromptTurns[turn.ID]
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
@@ -3534,6 +3685,18 @@ func (s *Store) conversationRetriedSources(ctx context.Context, conversationID s
 		sources[sourceTurnID] = true
 	}
 	return sources, nil
+}
+
+func (s *Store) conversationHumanPromptTurns(ctx context.Context, conversationID string) (map[string]bool, error) {
+	rows, err := s.qr.SelectConversationHumanPromptTurnIDs(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("select conversation human prompts: %w", err)
+	}
+	turns := make(map[string]bool, len(rows))
+	for _, turnID := range rows {
+		turns[turnID] = true
+	}
+	return turns, nil
 }
 
 type conversationHistoryPresentation struct {
@@ -3847,6 +4010,17 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 		completed := row.CompletedAt.Time
 		turn.CompletedAt = &completed
 	}
+	if turn.State == domain.TurnStateFailed {
+		turn.UsageLimit = domain.ParseConversationUsageLimit(turn.ErrorMessage, turn.CompletedAt)
+		if turn.UsageLimit != nil {
+			if row.UsageLimitResetsAt.Valid {
+				reset := row.UsageLimitResetsAt.Time
+				turn.UsageLimit.ResetsAt = &reset
+			}
+			turn.UsageLimit.AutoResume = row.UsageLimitAutoResume != 0
+			turn.UsageLimit.ResumeError = row.UsageLimitResumeError
+		}
+	}
 	if row.DiffJson != "" {
 		var diff domain.ConversationTurnDiff
 		// A payload this build cannot parse is dropped rather than surfaced half
@@ -3954,8 +4128,11 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 	row, err := s.qr.SelectRetryableConversationPrompt(ctx, gen.SelectRetryableConversationPromptParams{
 		ID: turnID, ConversationID: conversationID,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.RetryPrompt{}, fmt.Errorf("%w: %s", domain.ErrNoConversationTurn, turnID)
+	}
 	if err != nil {
-		return domain.RetryPrompt{}, err
+		return domain.RetryPrompt{}, fmt.Errorf("read retry prompt %s: %w", turnID, err)
 	}
 	return domain.RetryPrompt{
 		Continuation:        row.Continuation != 0,
