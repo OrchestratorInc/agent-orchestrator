@@ -8,6 +8,7 @@ import {
 	readUpdateSettings,
 	updateUpdateSettings,
 	writeUpdateSettings,
+	updatesDisabled,
 	UPDATE_SETTINGS_FILE_NAME,
 } from "./update-settings";
 
@@ -99,6 +100,33 @@ describe("update-settings", () => {
 			"utf8",
 		);
 		expect((await readUpdateSettings(dir)).channel).toBe("latest");
+	});
+
+	it("accepts channel \"none\" as a persisted value", async () => {
+		await writeFile(
+			path.join(dir, UPDATE_SETTINGS_FILE_NAME),
+			JSON.stringify({ enabled: true, channel: "none", nightlyAck: false }),
+			"utf8",
+		);
+		expect((await readUpdateSettings(dir)).channel).toBe("none");
+		await writeUpdateSettings(dir, { enabled: false, channel: "none", nightlyAck: false, feature: null });
+		expect((await readUpdateSettings(dir)).channel).toBe("none");
+	});
+
+	it.each([
+		["opt-out flag", { enabled: false, channel: "latest", nightlyAck: false, feature: null }],
+		["channel none with the opt-in flag on", { enabled: true, channel: "none", nightlyAck: false, feature: null }],
+		["missing enabled flag", { enabled: undefined, channel: "latest", nightlyAck: false, feature: null }],
+	] as const)("marks updates disabled for %s", (_label, settings) => {
+		expect(updatesDisabled(settings)).toBe(true);
+	});
+
+	it.each([
+		["stable", { enabled: true, channel: "latest", nightlyAck: false, feature: null }],
+		["nightly", { enabled: true, channel: "nightly", nightlyAck: true, feature: null }],
+		["feature pin", { enabled: true, channel: "latest", nightlyAck: false, feature: { pr: 2270 } }],
+	] as const)("marks updates enabled for %s", (_label, settings) => {
+		expect(updatesDisabled(settings)).toBe(false);
 	});
 
 	it("legacy file without feature key defaults feature to null", async () => {

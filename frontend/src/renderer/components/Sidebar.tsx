@@ -2899,6 +2899,9 @@ type SidebarUpdateAction =
 	| null;
 
 function sidebarUpdateAction(status: UpdateStatus, availableDismissed: boolean): SidebarUpdateAction {
+	// Updates are hard-disabled: no banner in any state, whatever the status
+	// carried before the setting flipped (#87).
+	if (status.updatesDisabled === true) return null;
 	if (status.state === "downloading") {
 		return { kind: "downloading", percent: Math.min(100, Math.max(0, status.percent ?? 0)) };
 	}

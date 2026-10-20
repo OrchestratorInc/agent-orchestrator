@@ -18,6 +18,7 @@ import {
   macDifferentialUpdatesEnabled,
   updateUpdateSettings,
   writeUpdateSettings,
+  updatesDisabled,
   UPDATE_SETTINGS_FILE_NAME,
   type UpdateChannel,
   type UpdateSettings,
@@ -606,6 +607,9 @@ function broadcast(
     ...statusWithCheckTime,
     ...stagedStamp(),
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
+    // #87: every status says so while updates are hard-disabled, so renderer
+    // surfaces can suppress stale offers even before they re-read the state.
+    ...(updatesDisabled(lastAppliedUpdateSettings) ? { updatesDisabled: true } : {}),
     // Only on statuses that actually describe a build on offer: "not-available"
     // carrying notes for a build the user already has would read as news.
     ...(describesAnOffer &&
@@ -1267,7 +1271,9 @@ async function runEscalationCheck(): Promise<void> {
   }
   if (escalationStateDir === undefined) return;
   // A newer build is being pulled; let its progress own the status stream.
-  if (lastStatus.state === "downloading" || lastStatus.state === "preparing" || nativePreparationBlocked) return;
+  // A terminal error keeps the stream too: the escalation stamp must never
+  // overwrite the failure the user is being shown.
+  if (["downloading", "preparing", "error"].includes(lastStatus.state) || nativePreparationBlocked) return;
   const evaluatedVersion = stagedVersion;
   const evaluatedAt = stagedAtMs;
   try {
@@ -2095,6 +2101,7 @@ export function getUpdateStatus(): UpdateStatus {
     ...lastStatus,
     ...stagedStamp(),
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
+    ...(updatesDisabled(lastAppliedUpdateSettings) ? { updatesDisabled: true } : {}),
     ...(offeredReleaseNotes !== undefined && lastStatus.releaseNotes === undefined &&
       !hasStagedBuild() &&
       (lastStatus.state === "available" || lastStatus.state === "downloading" || lastStatus.state === "downloaded")
@@ -2157,6 +2164,17 @@ async function awaitStartedDownload(result: UpdateCheckOutcome): Promise<void> {
   }
 }
 
+// Hard-off state for updatesDisabled settings (#87): nothing staged, nothing
+// armed, nothing advertised. The persisted staged provenance is dropped too, so
+// "Update installed" cannot survive a restart while updates are off. Idempotent;
+// call it wherever freshly-read settings turn out disabled.
+function applyHardDisabledState(): void {
+  discardStagedBuild();
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  if (lastStatus.state !== "idle") broadcast({ state: "idle" });
+}
+
 async function runAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number> {
@@ -2168,9 +2186,19 @@ async function runAutomaticUpdateCheck(
         stateDir,
         await readUpdateSettings(stateDir),
       );
-      nextIntervalMs = automaticUpdateCheckInterval(settings);
 
       escalationStateDir = stateDir;
+      if (updatesDisabled(settings)) {
+        // enabled:false is a hard gate on check/download/install, not just on
+        // auto-download (#87). The periodic timer keeps running — a tick costs
+        // one settings read — so re-enabling in update-settings.json self-heals
+        // without a settings write.
+        applyUpdaterPolicy(settings);
+        applyHardDisabledState();
+        return;
+      }
+      nextIntervalMs = automaticUpdateCheckInterval(settings);
+
       wireUpdaterEvents();
       applyUpdaterPolicy(settings);
       configureFeed(settings);
@@ -2289,6 +2317,13 @@ function reconcileAutomaticUpdateSchedule(
   stateDir: string,
   settings: UpdateSettings,
 ): void {
+  // A settings write that turns updates off stops the periodic timer; the
+  // launch-time gate keeps it armed so a hand-edited update-settings.json
+  // self-heals on the next tick without a settings write (#87).
+  if (updatesDisabled(settings)) {
+    stopPeriodicAutomaticUpdateCheck();
+    return;
+  }
   schedulePeriodicAutomaticUpdateCheck(
     stateDir,
     automaticUpdateCheckInterval(settings),
@@ -2313,7 +2348,22 @@ async function requestAutomaticUpdateCheck(
 // Caller guards on app.isPackaged.
 export async function startAutoUpdates(stateDir: string): Promise<void> {
   escalationStateDir = stateDir;
-  restoreStagedBuild(stateDir);
+  // #87: with updates disabled, a remembered staged build must not resurface —
+  // its persisted provenance is dropped with the in-memory state. A failed
+  // settings read falls back to the fail-closed defaults; the launch check
+  // below retries the read and logs.
+  let settings: UpdateSettings;
+  try {
+    settings = await readUpdateSettings(stateDir);
+  } catch {
+    settings = { ...FAIL_CLOSED_UPDATE_SETTINGS };
+  }
+  if (updatesDisabled(settings)) {
+    applyUpdaterPolicy(settings);
+    applyHardDisabledState();
+  } else {
+    restoreStagedBuild(stateDir);
+  }
   startRetirementPollTimer(stateDir);
   const intervalMs = await requestAutomaticUpdateCheck(stateDir);
   if (intervalMs !== undefined)
@@ -2338,6 +2388,14 @@ async function persistUpdaterSettings(
 ): Promise<void> {
   const next = await persistRendererUpdateSettings(stateDir, settings);
   applyUpdaterPolicy(next);
+  if (updatesDisabled(next)) {
+    // #87: a write that turns updates off drops staged state and disarms
+    // download/install immediately, not just on the next check; the feed
+    // configuration is left untouched as well.
+    applyHardDisabledState();
+    reconcileAutomaticUpdateSchedule(stateDir, next);
+    return;
+  }
   configureFeed(next);
   reconcileAutomaticUpdateSchedule(stateDir, next);
 }
@@ -2399,6 +2457,16 @@ export async function checkForUpdatesNow(
           : await readUpdateSettings(stateDir);
         const settings = await reconcileAndPersist(stateDir, requested);
         applyUpdaterPolicy(settings);
+        if (updatesDisabled(settings)) {
+          // #87: a manual check is feed access like any other. The settings
+          // write above still landed, so re-enabling from Settings works.
+          broadcastUpdaterStatus({
+            state: "unsupported",
+            message: "Updates are disabled in update settings.",
+            ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
+          });
+          return;
+        }
         reconcileAutomaticUpdateSchedule(stateDir, settings);
         configureFeed(settings);
         // Same reason as the automatic path: a channel switch leaves the old
@@ -2502,6 +2570,15 @@ export async function returnToHome(
         );
         const settings = await reconcileAndPersist(stateDir, cleared);
         applyUpdaterPolicy(settings);
+        if (updatesDisabled(settings)) {
+          // #87: same hard gate as a manual check; the pin still cleared above.
+          broadcastUpdaterStatus({
+            state: "unsupported",
+            message: "Updates are disabled in update settings.",
+            ...(requestId === undefined ? {} : { requestId }),
+          });
+          return;
+        }
         reconcileAutomaticUpdateSchedule(stateDir, settings);
         configureFeed(settings);
         // Leaving a pinned PR build is the same class of switch: its build is
@@ -2538,6 +2615,9 @@ export async function returnToHome(
 
 // downloadUpdateNow starts downloading the update found by checkForUpdatesNow.
 export async function downloadUpdateNow(requestId?: string): Promise<void> {
+  // #87: hard gate. With updates off there is no banner to click, so a quiet
+  // no-op matches the other redundant-request guards above.
+  if (updatesDisabled(lastAppliedUpdateSettings)) return;
   if (manualDownloadPending || lastStatus.state === "downloading" || lastStatus.state === "preparing") return;
   const version = lastStatus.version;
   wireUpdaterEvents();
@@ -2711,6 +2791,11 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
     throw new Error("A valid confirmed update version is required.");
   }
   if (!app.isPackaged) return;
+  // #87: installing replaces this build outright; with updates disabled the only
+  // sanctioned path is a manual rebuild from the fork.
+  if (updatesDisabled(lastAppliedUpdateSettings)) {
+    throw new Error("Updates are disabled in update settings.");
+  }
   if (awaitingStagedReplacement) {
     throw new Error("Check for updates and download an update before restarting to install.");
   }

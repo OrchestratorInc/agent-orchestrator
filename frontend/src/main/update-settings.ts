@@ -8,7 +8,16 @@ export type UpdateInstallResult = void | {
 	releaseNotes?: string;
 };
 
-export type UpdateChannel = "latest" | "nightly";
+/**
+ * Update feed channel.
+ *
+ * "none" is a config-only value meaning fully off: it disables update checks,
+ * downloads and installs (and hides the update banner) even when `enabled` is
+ * true. The Settings UI does not offer it; set it by editing
+ * update-settings.json directly. Updates for this installation are then done
+ * only by manual rebuild.
+ */
+export type UpdateChannel = "latest" | "nightly" | "none";
 
 /** A pinned PR feature build. `channel` stays as the home channel; this is a separate overlay. */
 export interface FeaturePin {
@@ -71,6 +80,12 @@ export interface UpdateStatus {
 	// with Chromium network-stack errors (net::ERR_*) — the app's network stack
 	// is wedged and restarting the app usually fixes it (#3526).
 	staleCheckNudge?: boolean;
+	/**
+	 * True while updates are hard-disabled (`enabled: false` or
+	 * `channel: "none"`). Stamped on every status, so a surface can suppress
+	 * update offers even from a stale status it is still holding (#87).
+	 */
+	updatesDisabled?: boolean;
 	// Present when several automatic checks in a row have failed, whatever the
 	// reason. Distinct from staleCheckNudge, which is specifically about a wedged
 	// network stack and tells the user to restart; this one only says update
@@ -108,12 +123,21 @@ function coerce(raw: unknown): UpdateSettings {
 	const o = (raw ?? {}) as Record<string, unknown>;
 	return {
 		enabled: o.enabled === true,
-		channel: o.channel === "nightly" ? "nightly" : "latest",
+		channel: o.channel === "nightly" ? "nightly" : o.channel === "none" ? "none" : "latest",
 		nightlyAck: o.nightlyAck === true,
 		// Legacy files with no `feature` key default to null (migration-safe).
 		feature: coerceFeature(o.feature),
 		macDifferentialUpdates: o.macDifferentialUpdates === true && (o.feature === null || coerceFeature(o.feature) !== null),
 	};
+}
+
+/**
+ * True when updates must not touch the feed at all: no background or manual
+ * check, no download, no install, no banner. `enabled: false` is a hard gate on
+ * the whole updater (not just auto-download), and so is `channel: "none"`.
+ */
+export function updatesDisabled(settings: { enabled?: boolean; channel: UpdateChannel }): boolean {
+	return settings.enabled !== true || settings.channel === "none";
 }
 
 /** Enables differential transfer only inside the approved guarded rollout. */
