@@ -22,8 +22,18 @@ type previewSet struct {
 	url string
 }
 
-func (f *fakePreviewSessions) ListAllSessions(_ context.Context) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), f.sessions...), nil
+func (f *fakePreviewSessions) ListPreviewPollSessions(_ context.Context) ([]domain.PreviewPollSession, error) {
+	var out []domain.PreviewPollSession
+	for _, sess := range f.sessions {
+		if sess.IsTerminated || sess.Kind != domain.KindWorker {
+			continue
+		}
+		out = append(out, domain.PreviewPollSession{
+			ID: sess.ID, WorkspacePath: sess.Metadata.WorkspacePath,
+			PreviewURL: sess.Metadata.PreviewURL, PreviewRevision: sess.Metadata.PreviewRevision,
+		})
+	}
+	return out, nil
 }
 
 func (f *fakePreviewSessions) SetPreview(_ context.Context, id domain.SessionID, previewURL string) (domain.Session, error) {
@@ -304,6 +314,49 @@ func TestPollerSkipsNonWorkerSessions(t *testing.T) {
 
 	if len(svc.sets) != 0 {
 		t.Fatalf("sets = %#v, want no preview updates for orchestrator sessions", svc.sets)
+	}
+}
+
+func TestPollerKeepsManualClear(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "index.html")
+	writeFile(t, path, "<main>hello</main>")
+	svc := &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", workspace, "index.html")}}
+	poller := NewPoller(svc, svc, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.sets) != 1 {
+		t.Fatal("selected preview was not loaded")
+	}
+	svc.sessions[0].Metadata.PreviewURL = ""
+	svc.sessions[0].Metadata.PreviewRevision++
+	writeFile(t, path, "<main>changed after manual clear</main>")
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.sets) != 1 || svc.sessions[0].Metadata.PreviewURL != "" {
+		t.Fatalf("manually cleared preview restored: updates=%v", svc.sets)
+	}
+}
+
+func TestPollerForgetsTerminatedSession(t *testing.T) {
+	workspace := t.TempDir()
+	writeFile(t, filepath.Join(workspace, "index.html"), "<main>hello</main>")
+	svc := &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", workspace, "index.html")}}
+	poller := NewPoller(svc, svc, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(poller.seen) != 1 {
+		t.Fatal("active preview was not tracked")
+	}
+	svc.sessions[0].IsTerminated = true
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(poller.seen) != 0 || len(svc.sets) != 1 {
+		t.Fatalf("terminated preview: seen=%v, updates=%v", poller.seen, svc.sets)
 	}
 }
 

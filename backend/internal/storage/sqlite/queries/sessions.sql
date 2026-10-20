@@ -362,6 +362,12 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_released_launch_id
 FROM sessions ORDER BY project_id, num;
 
+-- name: ListPreviewPollSessions :many
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY project_id, num;
+
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0

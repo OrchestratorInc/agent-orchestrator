@@ -875,6 +875,22 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	return mapListAllSessionsRows(rows), nil
 }
 
+// ListPreviewPollSessions reads only the active workers' preview state.
+func (s *Store) ListPreviewPollSessions(ctx context.Context) ([]domain.PreviewPollSession, error) {
+	rows, err := s.qr.ListPreviewPollSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list preview poll sessions: %w", err)
+	}
+	out := make([]domain.PreviewPollSession, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.PreviewPollSession{
+			ID: row.ID, WorkspacePath: row.WorkspacePath,
+			PreviewURL: row.PreviewURL, PreviewRevision: row.PreviewRevision,
+		})
+	}
+	return out, nil
+}
+
 // ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.
 func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
 	ids, err := s.qr.ListChatHibernationCandidates(ctx)

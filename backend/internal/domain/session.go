@@ -268,6 +268,14 @@ type SessionMetadata struct {
 	ProviderModel   string `json:"-"`
 }
 
+// PreviewPollSession avoids loading prompts and history for preview polling.
+type PreviewPollSession struct {
+	ID              SessionID
+	WorkspacePath   string
+	PreviewURL      string
+	PreviewRevision int64
+}
+
 // SessionRecord is the persistence shape. It intentionally stores only durable
 // facts: identity, agent harness, activity_state, is_terminated, and operational
 // metadata. The user-facing Status is derived from these facts plus PR facts.
