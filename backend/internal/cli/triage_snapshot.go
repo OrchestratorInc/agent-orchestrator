@@ -74,8 +74,9 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 		fmt.Fprintf(&evidence, "- Log excerpt: %.240s\n", message)
 	}
 	ghPath, _ := c.deps.LookPath("gh")
+	queries := triageKeywords(logs.String())
 	duplicatesCh := make(chan string, 1)
-	go func() { duplicatesCh <- triageDuplicates(ctx, ghPath, triageKeywords(logs.String(), st.State)) }()
+	go func() { duplicatesCh <- triageDuplicates(ctx, ghPath, queries) }()
 	versions := make([]struct{ details, evidence strings.Builder }, 2)
 	var wg sync.WaitGroup
 	for i, name := range []string{"claude", "codex"} {
@@ -93,6 +94,7 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 			probe, cancel := context.WithTimeout(ctx, 6*time.Second)
 			output := &triageOutput{remaining: 1024}
 			cmd := aoprocess.CommandContext(probe, path, "--version")
+			configureCLIBatch(cmd)
 			cmd.Stdout, cmd.Stderr = output, output
 			cmd.WaitDelay = 100 * time.Millisecond
 			err = cmd.Run()
@@ -142,12 +144,16 @@ Title: <one line, the symptom as the user sees it>
 
 Seen on %s, %s/%s, daemon %s. Related: none.
 
-## Comment (fill only if this is a duplicate of an existing issue)
+## Comment
 <two or three sentences with the new observation>
 
-## Agent-collected evidence (posted as a separate comment; do not edit)
+## Agent-collected evidence
 %s`, Version, runtime.GOOS, runtime.GOARCH, st.State, evidence.String())
-	text := redactTriage(b.String(), home) + "\n" + github.summary() + "\n## Possible duplicates (candidates found by keyword search; not confirmed)\n" + redactTriage(duplicates, home)
+	quoted := make([]string, len(queries))
+	for i, query := range queries {
+		quoted[i] = fmt.Sprintf("%q", query)
+	}
+	text := redactTriage(b.String(), home) + "\n" + github.summary() + fmt.Sprintf("\n## Possible duplicates (keyword search: %s; candidates, not confirmed)\n", strings.Join(quoted, "; ")) + redactTriage(duplicates, home)
 	if len(text) > triageMaxBytes {
 		text = text[:triageMaxBytes-len("\n[truncated]\n")] + "\n[truncated]\n"
 	}

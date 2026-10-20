@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -57,8 +58,8 @@ else echo https://github.com/OrchestratorInc/agent-orchestrator/issues/12#issuec
 `)
 			human := "The view closed. It should have stayed open.\n\nSeen on dev, test OS, daemon stopped. Related: " + tc.related + "."
 			comment := "The view closed again today. I saw it after opening a session."
-			evidence := triageEvidenceHeading + " (posted as a separate comment; do not edit)\n- App: dev\n"
-			report := "status: " + tc.state + "\n\nTitle: View closes\n\n" + human + "\n\n## Comment (fill only if this is a duplicate of an existing issue)\n" + comment + "\n\n" + evidence
+			evidence := triageEvidenceHeading + "\n- App: dev\n"
+			report := "status: " + tc.state + "\n\nTitle: View closes\n\n" + human + "\n\n## Comment\n" + comment + "\n\n" + evidence
 			if tc.crlf {
 				report = strings.ReplaceAll(report, "\n", "\r\n")
 			}
@@ -161,7 +162,7 @@ func TestTriageDefaultModelAndAgentExit(t *testing.T) {
 					t.Fatal(args)
 				}
 				if fail {
-					return exec.Command("/bin/sh", "-c", "exit 7").Run()
+					return fmt.Errorf("agent exited with status 7")
 				}
 				return nil
 			}
@@ -169,7 +170,7 @@ func TestTriageDefaultModelAndAgentExit(t *testing.T) {
 			cmd.SetArgs([]string{"triage", "--agent", "codex"})
 			err := cmd.Execute()
 			if fail {
-				if ExitCode(err) != 7 {
+				if ExitCode(err) != 1 {
 					t.Fatal(err)
 				}
 			} else if err != nil {
@@ -182,5 +183,55 @@ func TestTriageDefaultModelAndAgentExit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTriageHeadingLines(t *testing.T) {
+	for _, tc := range []struct{ name, body, comment, evidence, want string }{
+		{"similar human heading", "Observed.\n## Comments from the reporter\nKeep this detail.\nQuoted `## Comment` is prose.", "## Comment\nUnused", triageEvidenceHeading + "\n- App: dev\n", ""},
+		{"missing comment", "Observed.", "", triageEvidenceHeading, triageCommentHeading},
+		{"duplicate comment", "Observed.", "## Comment\n## Comment", triageEvidenceHeading, triageCommentHeading},
+		{"missing evidence", "Observed.", "## Comment", "", triageEvidenceHeading},
+		{"duplicate evidence", "Observed.", "## Comment", triageEvidenceHeading + "\n" + triageEvidenceHeading, triageEvidenceHeading},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			report := "status: ready\n\nTitle: Symptom\n\n" + tc.body + "\n" + tc.comment + "\n" + tc.evidence
+			if err := os.WriteFile(filepath.Join(dir, "bug-report.md"), []byte(report), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err := finishTriage(context.Background(), strings.NewReader("n\n"), &out, dir, triageGitHub{Path: "unused", Auth: "ok"}, true)
+			if tc.want == "" {
+				if err != nil || !strings.Contains(out.String(), "Keep this detail.") || !strings.Contains(out.String(), "Quoted `## Comment`") {
+					t.Fatal(err, out.String())
+				}
+			} else {
+				receipt, _ := os.ReadFile(filepath.Join(dir, "result.json"))
+				if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(string(receipt), `"status":"draft"`) || strings.Contains(out.String(), "Post this") {
+					t.Fatal(err, string(receipt), out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestTriagePostIgnoresStderr(t *testing.T) {
+	old := stdinIsInteractive
+	stdinIsInteractive = func(io.Reader) bool { return true }
+	t.Cleanup(func() { stdinIsInteractive = old })
+	path := fakeTriageGH(t, `echo warning >&2; echo https://github.com/OrchestratorInc/agent-orchestrator/issues/12`)
+	dir := t.TempDir()
+	report := "status: ready\n\nTitle: Symptom\n\nObservation.\n## Comment\nUnused\n" + triageEvidenceHeading + "\nEvidence."
+	if err := os.WriteFile(filepath.Join(dir, "bug-report.md"), []byte(report), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := finishTriage(context.Background(), strings.NewReader("y\n"), &out, dir, triageGitHub{Path: path, Auth: "ok"}, true); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "result.json"))
+	if !strings.Contains(string(raw), `"status":"filed"`) || strings.Contains(out.String(), "warning") {
+		t.Fatal(string(raw), out.String())
 	}
 }

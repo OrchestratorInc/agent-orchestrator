@@ -272,7 +272,7 @@ func TestTriageSessionsOnlyIncludesRecentSafeFields(t *testing.T) {
 		if r.URL.String() != "http://127.0.0.1:1234/api/v1/sessions" {
 			t.Errorf("unexpected URL %s", r.URL)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body.String()))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body.String()))}, nil
 	})}
 	c := &commandContext{deps: deps}
 	var out bytes.Buffer
@@ -338,6 +338,84 @@ func TestTriageBuildMetadata(t *testing.T) {
 			snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
 			if strings.Contains(snapshot, "Commit: "+metadata+"\n") != (metadata != "") || strings.Contains(snapshot, "Build date: "+metadata+"\n") != (metadata != "") || strings.Contains(draft, ", commit "+metadata+",") != (metadata != "") {
 				t.Fatal(snapshot, draft)
+			}
+		})
+	}
+}
+
+func TestTriageSensitiveKeyForms(t *testing.T) {
+	for _, key := range []string{"client_secret", "clientSecret", "refresh_token", "accessToken", "id_token", "private_key", "pairing_code", "pairing password", "session-secret", "GH_TOKEN", "MY_API_KEY_VALUE", "apiToken"} {
+		for _, value := range []string{"SENTINELVALUE", strings.Repeat("abCDEF0123+/", 4), strings.Repeat("abcdef0123456789", 3)} {
+			for _, input := range []string{
+				`{"` + key + `":"` + value + `"}`, `{"` + key + `":` + value + `}`,
+				key + `="` + value + `"`, key + `=` + value, key + `: '` + value + `'`, key + `: ` + value,
+				`--` + key + ` "` + value + `"`, `--` + key + ` ` + value, `--` + key + `="` + value + `"`, `--` + key + `=` + value,
+				`error="{\"` + key + `\":\"` + value + `\"}"`,
+			} {
+				t.Run(input, func(t *testing.T) {
+					got := redactTriage(input, "")
+					if strings.Contains(got, value) || !strings.Contains(got, "[redacted-secret]") {
+						t.Fatalf("%s => %s", input, got)
+					}
+					for _, query := range triageKeywords("ERROR connection handshake failed " + input) {
+						if strings.Contains(query, strings.ToLower(value)) {
+							t.Fatalf("secret in query: %s", query)
+						}
+					}
+				})
+			}
+		}
+	}
+	for _, input := range []string{"pairing 123456", "pairing code 1234567", "code: 12345678"} {
+		if got := redactTriage(input, ""); strings.ContainsAny(got, "0123456789") {
+			t.Fatal(got)
+		}
+	}
+}
+
+func TestTriageManagedAgentMatchesProbeAndLaunch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			deps, _, data := triageTestDeps(t)
+			t.Setenv("AO_MANAGED_HARNESS_INSTALLS", map[bool]string{true: "on", false: "off"}[enabled])
+			bin := filepath.Join(data, "harnesses", "bin")
+			if err := os.MkdirAll(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			name, script := "codex", "#!/bin/sh\necho managed-version\n"
+			if runtime.GOOS == "windows" {
+				name, script = "codex.cmd", "@echo managed-version\r\n"
+			}
+			managed := filepath.Join(bin, name)
+			if err := os.WriteFile(managed, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fallback := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(fallback, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", filepath.Dir(fallback))
+			t.Setenv("APPDATA", t.TempDir())
+			t.Setenv("LOCALAPPDATA", t.TempDir())
+			deps.ResolveAgentBinary = DefaultDeps().ResolveAgentBinary
+			deps.RunInteractiveCommand = func(_ context.Context, path, dir string, _ []string, _ io.Reader, _, _ io.Writer) error {
+				want := fallback
+				if enabled {
+					want = managed
+				}
+				if path != want {
+					t.Fatalf("launched %q, want %q", path, want)
+				}
+				raw, err := os.ReadFile(filepath.Join(dir, "context.md"))
+				if err != nil || !strings.Contains(string(raw), "codex: "+path) {
+					t.Fatal(err, string(raw))
+				}
+				return nil
+			}
+			cmd := NewRootCommand(deps)
+			cmd.SetArgs([]string{"triage", "--agent", "codex"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

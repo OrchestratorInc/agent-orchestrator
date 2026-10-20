@@ -23,9 +23,11 @@ func triageGH(ctx context.Context, path string, args ...string) (string, error) 
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	out := &triageOutput{remaining: 32 << 10}
+	stderr := &triageOutput{remaining: 4096}
 	cmd := aoprocess.CommandContext(ctx, path, args...)
-	cmd.Env = append(os.Environ(), "GH_HOST=github.com", "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1")
-	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = out, out, 100*time.Millisecond
+	cmd.Env = append(os.Environ(), "GH_HOST=github.com", "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1", "GH_DEBUG=", "DEBUG=", "NO_COLOR=1", "CLICOLOR_FORCE=0")
+	configureCLIBatch(cmd)
+	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = out, stderr, 100*time.Millisecond
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		err = ctx.Err()
@@ -79,9 +81,10 @@ func (g triageGitHub) summary() string {
 	if g.Path != "" {
 		gh = "present"
 		filing = "unknown"
-		if g.Auth == "ok" {
+		switch g.Auth {
+		case "ok":
 			filing = "available"
-		} else if g.Auth == "failed" {
+		case "failed":
 			filing = "unavailable"
 		}
 	}
@@ -90,7 +93,7 @@ func (g triageGitHub) summary() string {
 
 var triageLevel = regexp.MustCompile(`(?i)\b(?:ERROR|WARN|WARNING)\b`)
 var triageMessage = regexp.MustCompile(`(?:msg|message)"?\s*[:=]\s*"([^"]*)"`)
-var triageNoise = regexp.MustCompile(`\[[^\]]*\]|\S*[/\\]\S*|\b\S*[0-9]\S*|\b\w+=\S+`)
+var triageNoise = regexp.MustCompile(`\[[^\]]*\]|\S*[/\\]\S*|\b\S*\d\S*|\b\w+=\S+`)
 var triageWord = regexp.MustCompile(`[a-z]{3,}`)
 
 func triageLogMessages(logs string) []string {
@@ -114,17 +117,14 @@ func triageLogMessages(logs string) []string {
 	return messages
 }
 
-func triageKeywords(logs string, state daemonState) []string {
+func triageKeywords(logs string) []string {
 	queries := []string{}
 	seen := map[string]bool{}
-	limit := 3
-	if state != stateReady {
-		limit = 2
-	}
-	for _, message := range triageLogMessages(logs) {
+	for _, message := range triageLogMessages(redactTriage(logs, "")) {
 		words := []string{}
 		for _, word := range triageWord.FindAllString(strings.ToLower(triageNoise.ReplaceAllString(message, " ")), -1) {
-			if strings.Contains(" the and for with from this that was were has have not msg level time error warn warning redacted secret ", " "+word+" ") {
+			switch word {
+			case "the", "and", "for", "with", "from", "this", "that", "was", "were", "has", "have", "not", "msg", "level", "time", "error", "warn", "warning", "redacted", "secret":
 				continue
 			}
 			if !slices.Contains(words, word) {
@@ -135,56 +135,49 @@ func triageKeywords(logs string, state daemonState) []string {
 			}
 		}
 		query := strings.Join(words, " ")
-		if len(words) >= 2 && !seen[query] {
+		if len(words) >= 3 && !seen[query] {
 			seen[query] = true
 			queries = append(queries, query)
 		}
-		if len(queries) == limit {
+		if len(queries) == 3 {
 			break
 		}
-	}
-	if state != stateReady {
-		if state == "" {
-			state = "unavailable"
-		}
-		queries = append(queries, "daemon "+string(state))
 	}
 	return queries
 }
 
 func triageDuplicates(ctx context.Context, path string, queries []string) string {
+	queries = slices.DeleteFunc(slices.Clone(queries), func(query string) bool { return len(strings.Fields(query)) < 3 })
+	if len(queries) == 0 {
+		return "none: no error lines to search from\n"
+	}
 	if path == "" {
 		return "unavailable: gh missing\n"
-	}
-	if len(queries) == 0 {
-		return "unavailable: no search keywords\n"
 	}
 	type candidate struct {
 		Number            int
 		Title, State, URL string
 	}
-	results := make([]string, len(queries)*2)
+	results := make([]string, len(queries))
 	var wg sync.WaitGroup
 	for i, query := range queries {
-		for j, kind := range []string{"issue", "pr"} {
-			wg.Add(1)
-			go func(i int, query, kind string) {
-				defer wg.Done()
-				raw, err := triageGH(ctx, path, kind, "list", "--repo", triageRepo, "--state", "all", "--search", query, "--limit", "5", "--json", "number,title,state,url")
-				var rows []candidate
-				if err != nil || json.Unmarshal([]byte(raw), &rows) != nil {
-					reason := "search failed"
-					if errors.Is(err, context.DeadlineExceeded) {
-						reason = "timeout"
-					}
-					results[i] = "unavailable: " + kind + " " + query + ": " + reason + "\n"
-					return
+		wg.Add(1)
+		go func(i int, query string) {
+			defer wg.Done()
+			raw, err := triageGH(ctx, path, "issue", "list", "--repo", triageRepo, "--state", "all", "--search", query, "--limit", "5", "--json", "number,title,state,url")
+			var rows []candidate
+			if err != nil || json.Unmarshal([]byte(raw), &rows) != nil {
+				reason := "search failed"
+				if errors.Is(err, context.DeadlineExceeded) {
+					reason = "timeout"
 				}
-				for _, row := range rows[:min(5, len(rows))] {
-					results[i] += fmt.Sprintf("- %s #%d [%s] %s %s\n", kind, row.Number, row.State, strings.Join(strings.Fields(row.Title), " "), row.URL)
-				}
-			}(i*2+j, query, kind)
-		}
+				results[i] = "unavailable: issue " + query + ": " + reason + "\n"
+				return
+			}
+			for _, row := range rows[:min(5, len(rows))] {
+				results[i] += fmt.Sprintf("- issue #%d [%s] %s %s\n", row.Number, row.State, strings.Join(strings.Fields(row.Title), " "), row.URL)
+			}
+		}(i, query)
 	}
 	wg.Wait()
 	var b strings.Builder
@@ -197,7 +190,7 @@ func triageDuplicates(ctx context.Context, path string, queries []string) string
 			key := line
 			if strings.HasPrefix(line, "- ") {
 				key = line[strings.LastIndex(line, " ")+1:]
-				if count == 10 {
+				if count == 5 {
 					continue
 				}
 			}
