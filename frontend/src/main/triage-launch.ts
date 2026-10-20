@@ -7,8 +7,9 @@ import { resolveDaemonLaunch } from "../shared/daemon-launch";
 import { launchCommand } from "./launch-command";
 import { terminalCommand } from "./terminal-command";
 
-export type TriageResult = { ok: true } | { ok: false; error: string; command?: string };
-export type TriagePrepareResult = { ok: true; prompt: string; dir: string } | { ok: false; error: string; command?: string };
+export type TriageErrorKey = "report.prepareFailed" | "report.timedOut" | "report.tooLarge" | "report.terminalFailed" | "report.desktopRequired";
+export type TriageResult = { ok: true } | { ok: false; error: TriageErrorKey; command?: string };
+export type TriagePrepareResult = { ok: true; prompt: string; dir: string } | { ok: false; error: TriageErrorKey; command?: string };
 
 export async function prepareTriage(stateEnv: NodeJS.ProcessEnv): Promise<TriagePrepareResult> {
 	try {
@@ -28,7 +29,7 @@ export async function prepareTriage(stateEnv: NodeJS.ProcessEnv): Promise<Triage
 				clearTimeout(timeout);
 				resolve(result);
 			};
-			const stop = (error: string) => {
+			const stop = (error: TriageErrorKey) => {
 				finish({ ok: false, error });
 				child.kill("SIGKILL");
 			};
@@ -40,7 +41,7 @@ export async function prepareTriage(stateEnv: NodeJS.ProcessEnv): Promise<Triage
 				if (bytes > 1024 * 1024) stop("report.tooLarge");
 				else stdout += chunk;
 			});
-			child.on("error", () => finish({ ok: false, error: "report.prepareFailed" }));
+			child.on("error", () => finish({ ok: false, error: "report.prepareFailed" as const }));
 			child.on("close", (code) => {
 				if (settled) return;
 				try {
@@ -48,10 +49,10 @@ export async function prepareTriage(stateEnv: NodeJS.ProcessEnv): Promise<Triage
 					const result = JSON.parse(stdout);
 					if (!result || !["dir", "prompt", "context", "report", "playbook"].every((key) => typeof result[key] === "string")) throw new Error();
 					finish({ ok: true, prompt: result.prompt, dir: result.dir });
-				} catch { finish({ ok: false, error: "report.prepareFailed" }); }
+				} catch { finish({ ok: false, error: "report.prepareFailed" as const }); }
 			});
 		});
-	} catch { return { ok: false, error: "report.prepareFailed" }; }
+	} catch { return { ok: false, error: "report.prepareFailed" as const }; }
 }
 
 export async function launchTriageInTerminal(
@@ -89,6 +90,6 @@ export async function launchTriageInTerminal(
 		await launchCommand(terminal.command, terminal.args, os.homedir(), { env: stateEnv });
 		return { ok: true };
 	} catch {
-		return { ok: false, error: "report.terminalFailed", ...(manualCommand ? { command: manualCommand } : {}) };
+		return { ok: false, error: "report.terminalFailed" as const, ...(manualCommand ? { command: manualCommand } : {}) };
 	}
 }
