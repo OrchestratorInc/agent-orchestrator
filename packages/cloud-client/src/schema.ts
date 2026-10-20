@@ -2143,6 +2143,8 @@ export interface components {
             capabilities: string[];
         };
         WorkerOutputPayload: {
+            /** @description Provider message identity within this turn attempt. */
+            itemId?: string;
             /** Format: uuid */
             turnId: string;
             attempt: number;
@@ -2799,6 +2801,20 @@ export interface components {
             type: "chat.user_message";
             payload: {
                 text: string;
+                /**
+                 * @description Server-owned message attribution; absent on older events.
+                 * @enum {string}
+                 */
+                origin?: "human" | "automation";
+                /**
+                 * Format: uuid
+                 * @description Source agent session for automation messages.
+                 */
+                senderSessionId?: string;
+                /** @description Server-owned display label for an automation sender. */
+                senderLabel?: string;
+                /** @description Display text for an automation message; text retains the full agent prompt. */
+                displayText?: string;
                 /** Format: uuid */
                 turnId?: string;
             };
