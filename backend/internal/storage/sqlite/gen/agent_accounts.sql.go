@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const agentAccountUsageSince = `-- name: AgentAccountUsageSince :many
@@ -103,6 +105,27 @@ func (q *Queries) BindSessionAgentAccount(ctx context.Context, arg BindSessionAg
 		arg.AccountID,
 		arg.BoundAt,
 	)
+	return err
+}
+
+const cancelSessionTurnAutoResume = `-- name: CancelSessionTurnAutoResume :exec
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE handled_by_session_id = ?1 AND usage_limit_auto_resume = 1
+  AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = conversation_turns.handled_by_session_id
+        AND CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END = CAST(?2 AS TEXT)
+  )
+`
+
+type CancelSessionTurnAutoResumeParams struct {
+	SessionID domain.SessionID
+	Provider  string
+}
+
+// Account changes invalidate only this session's active provider's pending work.
+func (q *Queries) CancelSessionTurnAutoResume(ctx context.Context, arg CancelSessionTurnAutoResumeParams) error {
+	_, err := q.db.ExecContext(ctx, cancelSessionTurnAutoResume, arg.SessionID, arg.Provider)
 	return err
 }
 
@@ -214,6 +237,38 @@ func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error)
 		return nil, err
 	}
 	return items, nil
+}
+
+const sessionAgentAccountChangedSince = `-- name: SessionAgentAccountChangedSince :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions s
+    JOIN session_agent_accounts source ON source.session_id = s.id
+      AND source.provider = CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END
+    WHERE s.id = ?1
+      AND source.bound_at = (
+          SELECT MAX(a.bound_at) FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+            AND a.bound_at <= ?2
+      )
+      AND source.account_id <> (
+          SELECT a.account_id FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+          ORDER BY a.bound_at DESC LIMIT 1
+      )
+)
+`
+
+type SessionAgentAccountChangedSinceParams struct {
+	SessionID   domain.SessionID
+	RequestedAt time.Time
+}
+
+// Only a known source-time binding can prove that a turn used another account.
+func (q *Queries) SessionAgentAccountChangedSince(ctx context.Context, arg SessionAgentAccountChangedSinceParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, sessionAgentAccountChangedSince, arg.SessionID, arg.RequestedAt)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const setAgentAccountDefault = `-- name: SetAgentAccountDefault :exec

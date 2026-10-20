@@ -3185,6 +3185,16 @@ func newHarnessWithConversationAndStoreForHarness(
 ) *harness {
 	t.Helper()
 	st := openStore(t)
+	if agentHarness != domain.HarnessCodex {
+		record, found, err := st.GetSession(context.Background(), testSession)
+		if err != nil || !found {
+			t.Fatalf("read seeded session: found=%v, err=%v", found, err)
+		}
+		record.Harness = agentHarness
+		if err := st.UpdateSession(context.Background(), record); err != nil {
+			t.Fatalf("set seeded harness: %v", err)
+		}
+	}
 	base := newFakeConversation()
 	if conv == nil {
 		conv = base

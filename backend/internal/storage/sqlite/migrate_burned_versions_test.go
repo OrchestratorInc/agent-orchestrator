@@ -214,6 +214,8 @@ var shippedMigrations = map[int64]string{
 	215: "0215_session_harness_releases.sql",
 
 	20261019142324385: "20261019142324385_allow_hermes_harness.sql",
+	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
+	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

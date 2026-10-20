@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -15,7 +15,6 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
-import { StayAwakeSection } from "./StayAwakeSection";
 
 /** The memory window's own blocks, loaded only when the page is opened: it
  * samples the machine every two seconds while it is on screen. */
@@ -128,12 +127,6 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 				<MobileDevicesSection />
 			</>
 		),
-	},
-	{
-		id: "stayAwake",
-		icon: Coffee,
-		label: (t) => t("awake.title", "Stay Awake"),
-		render: (_t, titleHidden) => <StayAwakeSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "shortcuts",

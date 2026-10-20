@@ -32,6 +32,13 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	if response := os.Getenv("AO_TEST_CLAUDE_USAGE_LIMIT_RESPONSE"); response != "" {
+		if err := serveClaudeUsageLimitFixture(response); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 

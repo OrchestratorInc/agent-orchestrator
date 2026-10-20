@@ -89,7 +89,7 @@ func TestFailedSetupIsReportedAsTheWorkspaceStartupError(t *testing.T) {
 	}
 	report := reports[0]
 	if report.Status != worker.WorkspaceStartupFailed || report.Code != domain.WorkspaceStartupErrorProjectSetup ||
-		!strings.HasPrefix(report.Message, "Setup step 1 failed: exit status 4.") ||
+		!strings.HasPrefix(report.Message, "The project's Setup script failed at step 1 (exit status 4), so the agent did not start.") ||
 		!strings.Contains(report.Message, "Project settings > Scripts") ||
 		!strings.Contains(report.Detail, "missing secret") || strings.Contains(report.Message, "missing secret") {
 		t.Fatalf("report = %+v", report)
@@ -130,5 +130,19 @@ func TestReadyWorkspaceIsReported(t *testing.T) {
 	reports := recorder.startup(t)
 	if len(reports) != 1 || reports[0].Status != worker.WorkspaceStartupReady || reports[0].Code != "" {
 		t.Fatalf("reports = %+v", reports)
+	}
+}
+
+// A session opened while Setup was still running must not count as a retry
+// once that Setup fails, or Setup silently runs again and the agent starts.
+func TestAnOpenSavedBeforeAFailedStartIsNotARetry(t *testing.T) {
+	reopen := make(chan struct{}, 1)
+	dropPendingReopen(reopen) // nothing saved: returns at once
+	reopen <- struct{}{}      // opened while the failed attempt ran
+	dropPendingReopen(reopen)
+	select {
+	case <-reopen:
+		t.Fatal("an open saved before the failure was read as a retry")
+	default:
 	}
 }

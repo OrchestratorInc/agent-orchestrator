@@ -16,6 +16,7 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { ThisComputerAccess } from "./ThisComputerAccess";
 
 type SavedHost = { hostId: string; label: string; url: string };
 
@@ -152,6 +153,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 				<Switch aria-label={t("remote.enable")} checked={enabled} onCheckedChange={setEnabled} />
 			</SettingsRow>
 		</SettingsSection>
+
+		<ThisComputerAccess />
 
 		<SettingsSection title={t("remote.savedHosts")} grouped>
 			{loading && saved.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted" role="status">{t("remote.loadingHosts")}</div> : null}
