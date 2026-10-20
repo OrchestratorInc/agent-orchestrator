@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -28,6 +28,7 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.UpdatedAt,
 		&i.CloudOffering,
 		&i.HarnessDefaults,
+		&i.VersionRefresh,
 	)
 	return i, err
 }
@@ -92,5 +93,19 @@ type SetHarnessDefaultParams struct {
 
 func (q *Queries) SetHarnessDefault(ctx context.Context, arg SetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setHarnessDefault, arg.HarnessPath, arg.Config, arg.UpdatedAt)
+	return err
+}
+
+const setVersionRefresh = `-- name: SetVersionRefresh :exec
+UPDATE app_settings SET version_refresh = ?, updated_at = ? WHERE id = 1
+`
+
+type SetVersionRefreshParams struct {
+	VersionRefresh bool
+	UpdatedAt      time.Time
+}
+
+func (q *Queries) SetVersionRefresh(ctx context.Context, arg SetVersionRefreshParams) error {
+	_, err := q.db.ExecContext(ctx, setVersionRefresh, arg.VersionRefresh, arg.UpdatedAt)
 	return err
 }

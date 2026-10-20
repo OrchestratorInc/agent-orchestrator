@@ -62,6 +62,7 @@ import {
 	mobileStatusQueryKey,
 	mobileStatusRefetchInterval,
 	pairingPayload,
+	localOnlyReason,
 	qrIsReady,
 	qrValueFor,
 } from "./settings/ConnectMobileContent";
@@ -296,9 +297,9 @@ test.skip("keeps the connection-method dropdown at its fixed width", async () =>
 	expect(screen.getByRole("menu")).toHaveClass("!w-44", "!min-w-0");
 });
 
-// The QR is withheld until the tunnel is ready, so a scannable code already
-// carries a tunnel endpoint and the phone need not be on this network. The
-// no-connector case is stated separately by remoteAccessUnavailable.
+// A code without a tunnel says so itself (localOnlyReason) and the
+// no-connector case is stated by remoteAccessUnavailable, so the generic
+// intro must not tell everyone to join the same Wi-Fi.
 test("does not tell LAN users to join the same Wi-Fi", async () => {
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
@@ -627,6 +628,87 @@ test("shows the LAN QR before a supported tunnel starts", () => {
 			tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "" },
 		}),
 	).toBe(true);
+});
+
+// The QR shows before the tunnel is up, so a code scanned or photographed in
+// that window carries no tunnel and fails away from home. Seen in the field: a
+// photographed code held only the LAN and Tailscale addresses, and the phone
+// reported "same Wi-Fi?" from mobile data with nothing on the desktop to warn.
+test("labels a LAN-only code while remote access is still starting", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/remote access is still starting/i);
+});
+
+// Tailscale reaches this machine from another network once both devices are
+// on the tailnet, so a code carrying one must not be called "this network only".
+test("keeps Tailscale as the remote path while the public tunnel is missing", async () => {
+	mobileStatus.endpoints = [
+		{ kind: "lan", host: "192.168.88.7", port: 3011, secure: false },
+		{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false },
+	];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	const note = screen.getByTestId("mobile-local-only");
+	expect(note).toHaveTextContent(/No public tunnel yet/);
+	expect(note).toHaveTextContent(/only over Tailscale/);
+	expect(note).not.toHaveTextContent(/this network only/i);
+});
+
+test("keeps Tailscale as the remote path when remote access failed", async () => {
+	mobileStatus.endpoints = [{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false }];
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/No public tunnel — remote access couldn't start.*only over Tailscale/);
+});
+
+test("drops the label once the code carries the tunnel", async () => {
+	mobileStatus.endpoints = [
+		{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+		{ kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true },
+	];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: true, hostname: "abc.trycloudflare.com", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
+});
+
+test("says a LAN-only code stays local when remote access failed", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/remote access couldn't start/i);
+});
+
+test("reports why a code has no public tunnel", () => {
+	const lan = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
+	const starting = { supported: true, running: true, ready: false, lastError: "" };
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: starting })).toBe("starting");
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, running: false, lastError: "boom" } })).toBe("failed");
+	// Covered by remoteAccessUnavailable, or the user's own choice.
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, supported: false, running: false } })).toBeNull();
+	expect(localOnlyReason({ enabled: true, noPublicTunnel: true, endpoints: lan, tunnel: starting })).toBeNull();
+	// Nothing on screen to judge.
+	expect(localOnlyReason({ enabled: true, endpoints: [], tunnel: starting })).toBeNull();
+	expect(localOnlyReason({ enabled: false, endpoints: lan, tunnel: starting })).toBeNull();
 });
 
 test("holds the QR back when nothing is reachable yet", () => {

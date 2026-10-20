@@ -169,6 +169,10 @@ func TestReviewProviderEventsUseReviewControllerFence(t *testing.T) {
 	if err != nil || len(events) != 1 {
 		t.Fatalf("review event archive = %+v, err=%v", events, err)
 	}
+	if events[0].BranchID != conversation.ActiveBranchID {
+		t.Fatalf("review event archived on branch %q, want the reviewer conversation's %q",
+			events[0].BranchID, conversation.ActiveBranchID)
+	}
 }
 
 func TestCleanupOwnedReviewControllerWorkSettlesItsTurn(t *testing.T) {

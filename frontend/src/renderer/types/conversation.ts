@@ -437,7 +437,10 @@ export interface SystemEventDetail {
 		| "context.boundary"
 		| "render"
 		| "artifact"
-		| "workspace.setup";
+		| "workspace.setup"
+		| "account.switched";
+	/** account.switched: the account a stopped turn's conversation continues on. */
+	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */

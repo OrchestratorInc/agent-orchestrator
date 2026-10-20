@@ -549,6 +549,28 @@ func TestMuseReturnsStaticCatalogWithoutStartingAgent(t *testing.T) {
 	}
 }
 
+func TestMemcodeReturnsNativePickerLabelsWithoutStartingAgent(t *testing.T) {
+	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "memcode",
+		Binary:  "/missing/memcode",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != "official-catalog" || got.AllowCustom || len(got.Models) != 16 {
+		t.Fatalf("memcode catalog = %#v", got)
+	}
+	byID := map[string]string{}
+	for _, model := range got.Models {
+		byID[model.ID] = model.Label
+	}
+	for id, label := range map[string]string{"opus": "Opus 5.5", "sonnet": "Sonnet 5", "glm-5p3-flash": "GLM-5.3 Flash"} {
+		if byID[id] != label {
+			t.Fatalf("memcode catalog model %q = %q, want %q", id, byID[id], label)
+		}
+	}
+}
+
 func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
 	t.Setenv("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex")
 	t.Setenv("UNREAL_HARNESS_LLM_MODEL", "gpt-6-sol")
@@ -1331,5 +1353,12 @@ func TestParseAiderModelsGroupsByLiteLLMProvider(t *testing.T) {
 		if !ok || model.Provider != expected[0] || model.Label != expected[1] {
 			t.Fatalf("model %q = provider %q label %q, want %v", model.ID, model.Provider, model.Label, expected)
 		}
+	}
+}
+
+func TestMemcodeCatalogFingerprintInvalidatesFormerEmptyCatalog(t *testing.T) {
+	got := CatalogFingerprint(context.Background(), "memcode", "", "", nil)
+	if got == BinaryVersion(context.Background(), "") {
+		t.Fatal("Memcode catalog fingerprint matches the old executable-only cache key")
 	}
 }

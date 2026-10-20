@@ -6216,3 +6216,40 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	mask-repeat: no-repeat;
 	mask-composite: exclude;
 }
+
+/* Nightly build-info tooltip: a fixed deep-indigo card (theme independent) with a
+   purple-blue mist and a few stars, so the nightly channel reads as its own place. */
+.build-info-nightly {
+	background-color: oklch(0.2 0.05 285);
+	background-image:
+		radial-gradient(1px 1px at 14% 26%, oklch(0.98 0.02 280 / 0.95), transparent),
+		radial-gradient(1px 1px at 38% 72%, oklch(0.98 0.02 280 / 0.7), transparent),
+		radial-gradient(1.5px 1.5px at 62% 20%, oklch(0.98 0.02 280 / 0.9), transparent),
+		radial-gradient(1px 1px at 84% 58%, oklch(0.98 0.02 280 / 0.8), transparent),
+		radial-gradient(1px 1px at 92% 18%, oklch(0.98 0.02 280 / 0.6), transparent),
+		radial-gradient(1px 1px at 52% 88%, oklch(0.98 0.02 280 / 0.55), transparent),
+		radial-gradient(90% 120% at 8% 0%, oklch(0.5 0.2 305 / 0.55), transparent 70%),
+		radial-gradient(90% 120% at 100% 100%, oklch(0.55 0.17 250 / 0.5), transparent 70%);
+	color: oklch(0.96 0.01 285);
+	box-shadow: 0 0 0 1px oklch(0.6 0.15 285 / 0.28), 0 6px 18px oklch(0.15 0.08 285 / 0.45);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.build-info-nightly::after {
+		animation: build-info-twinkle 3.6s ease-in-out infinite;
+		background-image:
+			radial-gradient(1px 1px at 28% 40%, oklch(0.98 0.02 280), transparent),
+			radial-gradient(1.5px 1.5px at 74% 78%, oklch(0.98 0.02 280), transparent),
+			radial-gradient(1px 1px at 46% 12%, oklch(0.98 0.02 280), transparent);
+		border-radius: inherit;
+		content: "";
+		inset: 0;
+		pointer-events: none;
+		position: absolute;
+	}
+}
+
+@keyframes build-info-twinkle {
+	0%, 100% { opacity: 0.15; }
+	50% { opacity: 1; }
+}

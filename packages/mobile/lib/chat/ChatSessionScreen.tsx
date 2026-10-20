@@ -49,6 +49,12 @@ import { conversationMarkers } from "./timelineModel";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
+import { SessionStartupStatus } from "./SessionStartup";
+import type { TimelineStartup } from "./ChatTimeline";
+import { sessionStartupView, startupVisible } from "../session/sessionStartup";
+import { startSerialPoll } from "../session/serialPoll";
+import { STARTUP_POLL_MS } from "../session/startupPoll";
+import { useStartupSession } from "../session/useStartupSession";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
@@ -56,7 +62,7 @@ import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
-import { archiveSessionMessage } from "../worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -78,7 +84,7 @@ async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<voi
 	});
 }
 
-export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
+export function ChatSessionScreen({ session: boardSession }: { session: MobileChatSession }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
@@ -95,6 +101,8 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		[navigation],
 	);
 	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
+	// The board's row, with its provisioning facts re-read every second while it starts.
+	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
 	useChatViewLease(config, session.id);
 	// A load that failed while the desktop was unreachable retries as soon as the
@@ -394,6 +402,42 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		} finally { setResuming(false); }
 	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
 
+	const startupView = useMemo(
+		() => ("projectName" in session ? undefined : sessionStartupView(session, conversation.snapshot)),
+		[conversation.snapshot, session],
+	);
+	const startupShown = startupVisible(startupView, conversation.snapshot);
+	// The agent coming up is not a conversation event, so over the direct link
+	// nothing tells the screen. With an opening brief the turn's own events cover
+	// it; a promptless start stayed on "Connecting to the agent…". Once
+	// provisioning settles, re-read the conversation until it reports the agent
+	// connected, so one failed read cannot leave the screen waiting.
+	const provisionState = "projectName" in session ? undefined : session.provisionState;
+	const previousProvisionState = useRef(provisionState);
+	const [awaitingAgent, setAwaitingAgent] = useState(false);
+	useEffect(() => {
+		const before = previousProvisionState.current;
+		previousProvisionState.current = provisionState;
+		if (before === "provisioning" && provisionState === "ready") setAwaitingAgent(true);
+	}, [provisionState]);
+	const agentConnecting = conversation.snapshot?.controller.state === "connecting";
+	const hasSnapshot = Boolean(conversation.snapshot);
+	useEffect(() => {
+		if (!awaitingAgent) return;
+		if (hasSnapshot && !agentConnecting) {
+			setAwaitingAgent(false);
+			return;
+		}
+		// One read at a time: the refresh keeps only its newest request, so a
+		// fixed interval faster than the link discards every response.
+		return startSerialPoll(refreshConversation, STARTUP_POLL_MS);
+	}, [agentConnecting, awaitingAgent, hasSnapshot, refreshConversation]);
+	const retryStart = useCallback(() => void resume(), [resume]);
+	const timelineStartup = useMemo<TimelineStartup | undefined>(
+		() => (startupView ? { view: startupView, visible: startupShown, onRetry: retryStart, retrying: resuming } : undefined),
+		[resuming, retryStart, startupShown, startupView],
+	);
+
 	// The daemon leaves agents stopped after a restart; opening the session here
 	// starts them, as the desktop does. One attempt per opening: a failure or a
 	// later exit stays stopped behind the Resume banner, which shows the reason.
@@ -496,13 +540,13 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onDelete: () => {
 				haptics.warning();
 				Alert.alert(
-					"Archive session?",
-					archiveSessionMessage(sessionName),
+					ARCHIVE_SESSION_CONFIRM.title,
+					ARCHIVE_SESSION_CONFIRM.message,
 					[
-						{ text: "Cancel", style: "cancel" },
+						{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Archive session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+						{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
 					],
 				);
 			},
@@ -546,6 +590,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	};
 
 	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
+	// A session that is still starting shows its checklist straight away rather than a bare spinner.
+	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
+		return <View style={styles.startupLoading}><SessionStartupStatus startup={startupView} /></View>;
+	}
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
 	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	// The board's poll is the app's view of the link: when it is down, say so in
@@ -605,7 +653,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			) : null}
 			<ConversationBanners
 				snapshot={snapshot}
-				startFailure={failedStart}
+				// The checklist reports setup, and a failed start with its Retry, in place.
+				startFailure={startupShown ? undefined : failedStart}
+				starting={startupShown}
 				brokenServers={brokenServers}
 				resuming={resuming}
 				resumeError={resumeError}
@@ -638,6 +688,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 					jumpToSequence={jumpToSequence}
 					onJumpHandled={clearJumpToSequence}
 					answeredBelow={answeredBelow}
+					startup={timelineStartup}
 				/>
 			</ChatLinkProvider>
 			<ChatComposer
@@ -682,19 +733,21 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				onSettings={conversation.chooseSettings}
 				onConfigOption={conversation.setConfigOption}
 				restingInset={dockRestingInset(insets.bottom)}
+				openingTurnId={startupView?.openingTurnId}
+				startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
 			/>
 		</KeyboardAvoidingView>
 	);
 }
 
-function ConversationBanners({ snapshot, startFailure, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+function ConversationBanners({ snapshot, startFailure, starting, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; starting: boolean; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
 		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !starting && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
-		{!startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
+		{!startFailure && !starting && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
 		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}
 		{brokenServers.length ? <DismissibleBanner copy={mcpBanner(brokenServers, mcpError)!} dismissed={dismissed} onDismiss={onDismiss} tone="warning" icon="tool" action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
 	</>;
@@ -756,6 +809,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	bannerSecondary: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	reviewHeaderPRButton: { width: 44, height: 44, borderRadius: 22, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderStrong, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.huge, backgroundColor: t.bgBase },
+	// Where the timeline will draw the checklist, so the handoff to it does not move it.
+	startupLoading: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.xl, paddingTop: space.md },
 	centerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },
 	centerCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
 	centerAction: { minHeight: 42, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: space.lg, marginTop: space.xxs },

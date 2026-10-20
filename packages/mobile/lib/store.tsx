@@ -253,6 +253,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const promotedConfigRef = useRef<ServerConfig | null>(null);
 	const primarySnapshotRef = useRef<HostSnapshot | null>(null);
 	const configResolution = useRef(0);
+	// The machine the board was showing when the app went to the background.
+	// Backgrounding drops the connection (see the AppState effect), and without
+	// this the board hid its rows until the endpoint race finished, so a
+	// one-second trip to another app came back to a full-screen loader. Rows
+	// are still keyed to this machine, so they show only while it is the one
+	// selected. "" means nothing is held. The ref keeps the host id for
+	// reloadConfig, which must not wipe rows for the same host on resume.
+	const [heldMachine, setHeldMachine] = useState("");
+	const heldHostIdRef = useRef<string | null>(null);
+	const releaseHeld = useCallback(() => {
+		heldHostIdRef.current = null;
+		setHeldMachine("");
+	}, []);
 	// Gate for the connected event: emit only on the not-open -> open transition,
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
@@ -341,7 +354,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (resolution !== configResolution.current) return null;
 			setSelectedHostName(selected?.name ?? null);
 			setSelectedHostId(selected?.id ?? null);
-			if ((selected?.id ?? "") !== (cfgRef.current?.hostId ?? "")) {
+			const currentHostId = cfgRef.current ? cfgRef.current.hostId : heldHostIdRef.current;
+			if ((selected?.id ?? "") !== (currentHostId ?? "")) {
+				releaseHeld();
 				// Hide the previous machine's board and stop its in-flight polls
 				// before waiting for the newly selected machine to answer.
 				cfgRef.current = null;
@@ -378,6 +393,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (next !== prev) primaryLoadRef.current?.controller.abort();
 			cfgRef.current = next;
 			setConfig(next);
+			// Connected again: the live config names the machine from here on.
+			if (next && isConfigured(next)) releaseHeld();
 			// Read alongside the config so a failure can be explained: a stored
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
@@ -390,6 +407,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (!(cause instanceof IncompatibleHostVersionError)) throw cause;
 			if (resolution !== configResolution.current) return null;
 			cfgRef.current = null;
+			releaseHeld();
 			setConfig(null);
 			setError(cause.message);
 			setErrorStatus(426);
@@ -405,7 +423,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				}
 			}
 		}
-	}, []);
+	}, [releaseHeld]);
 
 	useEffect(() => {
 		const sub = RNAppState.addEventListener("change", (state) => {
@@ -419,6 +437,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				// Keep display rows, but never reuse its old bearer connection.
 				configResolution.current++;
 				promotedConfigRef.current = null;
+				if (cfgRef.current && isConfigured(cfgRef.current)) {
+					heldHostIdRef.current = cfgRef.current.hostId ?? "";
+					setHeldMachine(machineIdentity(cfgRef.current));
+				}
 				cfgRef.current = null;
 				setConfig(null);
 				setConfigResolved(false);
@@ -484,6 +506,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		primaryLoadRef.current?.controller.abort();
 		promotedConfigRef.current = null;
 		cfgRef.current = null;
+		releaseHeld();
 		setConfig(null);
 		setConfigResolved(false);
 		try {
@@ -493,7 +516,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			throw error;
 		}
 		await reloadConfig();
-	}, [otherHosts.adoptPrimary, otherHosts.claimPrimary, otherHosts.snapshots, reloadConfig]);
+	}, [otherHosts.adoptPrimary, otherHosts.claimPrimary, otherHosts.snapshots, reloadConfig, releaseHeld]);
 
 	useEffect(() => {
 		void reloadConfig();
@@ -767,7 +790,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	// During a re-pair, the previous machine's retained list is not evidence
 	// about the new machine. Keep it hidden until the active machine answers.
-	const activeMachine = config && isConfigured(config) ? machineIdentity(config) : "";
+	// While resuming, the held machine stands in so the rows already on screen
+	// stay up instead of a loader (see heldMachine).
+	const activeMachine = config && isConfigured(config) ? machineIdentity(config) : heldMachine;
 	const visibleSessions = useMemo(
 		() => sessionRowsForMachine(sessions, sessionMachine, activeMachine),
 		[sessions, sessionMachine, activeMachine],

@@ -12,6 +12,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+type AgentAccount struct {
+	ID        string
+	Provider  string
+	Home      string
+	Email     string
+	Plan      string
+	CreatedAt time.Time
+}
+
+type AgentAccountDefault struct {
+	Provider  string
+	AccountID string
+}
+
 type AgentInstallJob struct {
 	Target              string
 	Status              string
@@ -156,6 +170,7 @@ type AppSetting struct {
 	UpdatedAt          time.Time
 	CloudOffering      bool
 	HarnessDefaults    string
+	VersionRefresh     bool
 }
 
 type Automation struct {
@@ -408,6 +423,12 @@ type GatewayEntry struct {
 	BaseURL   string
 	AuthToken string
 	Model     string
+	UpdatedAt time.Time
+}
+
+type ManagedHarnessRelease struct {
+	Harness   string
+	Release   string
 	UpdatedAt time.Time
 }
 
@@ -706,8 +727,20 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	RuntimeReleasedLaunchID          string
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 	ProviderBaseURL                  string
 	ProviderModel                    string
+}
+
+type SessionAgentAccount struct {
+	SessionID string
+	Provider  string
+	AccountID string
+	BoundAt   time.Time
 }
 
 type SessionArtifactVersion struct {
@@ -735,6 +768,13 @@ type SessionCleanupFact struct {
 	FailureCode          string
 }
 
+type SessionHarnessRelease struct {
+	SessionID string
+	Launch    string
+	Harness   string
+	Release   string
+}
+
 type SessionInterfaceTransition struct {
 	ID                   string
 	SessionID            domain.SessionID
@@ -750,6 +790,8 @@ type SessionInterfaceTransition struct {
 	CompletedAt          sql.NullTime
 	NoticeAcknowledgedAt sql.NullTime
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
+	SourceAccountID      string
+	TargetAccountID      string
 }
 
 type SessionInterfaceTransitionMessage struct {

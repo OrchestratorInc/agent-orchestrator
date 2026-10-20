@@ -25,12 +25,9 @@ import (
 
 const (
 	// ProtocolVersion identifies the daemon-to-Electron browser bridge contract.
-	// v3 adds broker-issued ping frames answered by pong; v2 peers (desktop
-	// builds older than the heartbeat) are still accepted and simply not probed.
+	// v3 adds broker-issued ping frames answered by pong; helloRejection accepts
+	// exactly this version and answers every hello explicitly (#6466).
 	ProtocolVersion = 3
-	// minSupportedProtocolVersion is the oldest hello the broker accepts, so a
-	// freshly built daemon keeps working against a not-yet-upgraded desktop app.
-	minSupportedProtocolVersion = 2
 	// RuntimeTokenStdinEnv tells an app-spawned daemon to read its token once
 	// from the inherited private stdin pipe instead of an environment variable.
 	RuntimeTokenStdinEnv = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
@@ -38,6 +35,7 @@ const (
 	// Electron never has to duplicate the backend's platform-specific naming.
 	RuntimeAddressEnv     = "AO_BROWSER_RUNTIME_ADDRESS"
 	helloTimeout          = 5 * time.Second
+	helloReplyTimeout     = time.Second
 	runtimeReconnectGrace = 2 * time.Second
 	maxRuntimeFrameBytes  = 8 << 20
 )
@@ -295,17 +293,25 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Now().Add(helloTimeout))
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 64*1024), maxRuntimeFrameBytes)
-	var hello wireMessage
-	if !scanner.Scan() ||
-		json.Unmarshal(scanner.Bytes(), &hello) != nil ||
-		hello.Type != "hello" ||
-		hello.Version < minSupportedProtocolVersion ||
-		hello.Version > ProtocolVersion ||
-		!validRuntimeToken(b.token, hello.Token) {
+	if !scanner.Scan() {
+		_ = conn.Close()
+		return
+	}
+	// Answer every hello explicitly, so the runtime knows whether it was accepted
+	// instead of guessing from how long the socket stays open (#6466). Older
+	// runtimes ignore both frames.
+	if rejection := helloRejection(scanner.Bytes(), b.token); rejection != nil {
+		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: rejection})
 		_ = conn.Close()
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
+	// Nothing else can write to conn until it is published below, so hello-ok is
+	// always the first frame the runtime reads.
+	if err := writeHelloReply(conn, wireMessage{Type: "hello-ok"}); err != nil {
+		_ = conn.Close()
+		return
+	}
 
 	b.mu.Lock()
 	old := b.conn
@@ -320,12 +326,12 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	failPending(pending, ErrUnavailable)
 	b.log.Info("browser runtime connected")
 
-	if hello.Version >= ProtocolVersion {
-		b.mu.Lock()
-		b.pongAt = time.Now()
-		b.mu.Unlock()
-		go b.runLiveness(ctx, conn)
-	}
+	// helloRejection enforces an exact protocol match, so every accepted
+	// runtime speaks ProtocolVersion and gets liveness probes.
+	b.mu.Lock()
+	b.pongAt = time.Now()
+	b.mu.Unlock()
+	go b.runLiveness(ctx, conn)
 
 	go func() {
 		<-ctx.Done()
@@ -446,6 +452,40 @@ func (b *Broker) write(ctx context.Context, conn net.Conn, msg wireMessage) erro
 	if requested, ok := ctx.Deadline(); ok && !time.Now().Before(requested) {
 		return context.DeadlineExceeded
 	}
+	return err
+}
+
+// helloRejection reports why a runtime's first frame is not an acceptable hello,
+// or nil if it is.
+func helloRejection(frame []byte, token string) *CommandError {
+	var hello wireMessage
+	switch {
+	case json.Unmarshal(frame, &hello) != nil || hello.Type != "hello":
+		return &CommandError{Code: "BROWSER_RUNTIME_BAD_HELLO", Message: "first frame was not a hello"}
+	case hello.Version != ProtocolVersion:
+		return &CommandError{
+			Code:    "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
+			Message: fmt.Sprintf("daemon speaks browser runtime protocol %d, runtime sent %d", ProtocolVersion, hello.Version),
+		}
+	case !validRuntimeToken(token, hello.Token):
+		return &CommandError{
+			Code:    "BROWSER_RUNTIME_TOKEN_REJECTED",
+			Message: "browser runtime token does not match the one this daemon was started with",
+		}
+	}
+	return nil
+}
+
+func writeHelloReply(conn net.Conn, msg wireMessage) error {
+	frame, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(helloReplyTimeout)); err != nil {
+		return err
+	}
+	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	_, err = conn.Write(append(frame, '\n'))
 	return err
 }
 

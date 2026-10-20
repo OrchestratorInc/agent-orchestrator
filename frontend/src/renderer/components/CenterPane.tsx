@@ -104,6 +104,8 @@ type CenterPaneProps = {
 	agentInputDisabled?: boolean;
 	/** The agent terminal is coming up after an interface switch. */
 	terminalBooting?: boolean;
+	/** An account move is restarting the worker agent; see TerminalPane. */
+	terminalSwitchingLabel?: string;
 	/** Reports attachment of the session's own agent terminal. */
 	onSessionTerminalAttached?: (attached: boolean) => void;
 };
@@ -183,6 +185,7 @@ export function CenterPane({
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
 	terminalBooting = false,
+	terminalSwitchingLabel,
 	onSessionTerminalAttached,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
@@ -773,6 +776,7 @@ export function CenterPane({
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
 							booting={terminalBooting && target.kind === "worker"}
+							switchingLabel={target.kind === "worker" ? terminalSwitchingLabel : undefined}
 							onChangeFontSize={updateFontSize}
 							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
 							onToggleFullscreen={toggleFullscreen}

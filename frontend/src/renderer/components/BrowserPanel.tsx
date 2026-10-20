@@ -65,6 +65,7 @@ import {
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
+import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
@@ -438,8 +439,6 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
-		browserRuntimeConnected,
-		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -935,15 +934,20 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
-	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const runtimeState = useBrowserRuntimeState();
+	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
+	// not a disconnect yet; alarming then would flash the alert on every relink.
+	const runtimeDisconnected =
+		hasNativeBrowser && runtimeState !== null && !runtimeState.connected && !runtimeState.connecting;
+	const runtimeRejectedMessage = runtimeState?.rejected ? t(browserRuntimeRejectedKey(runtimeState.rejectionCode)) : null;
 	const reconnectRuntime = useCallback(async () => {
 		setRuntimeReconnectPending(true);
 		try {
-			await reconnectBrowserRuntime();
+			await window.ao?.browser.reconnectRuntime();
 		} finally {
 			setRuntimeReconnectPending(false);
 		}
-	}, [reconnectBrowserRuntime]);
+	}, []);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -1291,17 +1295,22 @@ export function BrowserPanelView({
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
 							{runtimeDisconnected ? (
 								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
-									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
-									<Button
-										className="shrink-0"
-										disabled={runtimeReconnectPending}
-										onClick={() => void reconnectRuntime()}
-										size="sm"
-										type="button"
-										variant="outline"
-									>
-										{t("browser.reconnectRuntime")}
-									</Button>
+									<span className="truncate" title={runtimeRejectedMessage ?? undefined}>
+										{runtimeRejectedMessage ?? t("browser.runtimeDisconnected")}
+									</span>
+									{/* Reconnecting sends the same token, which the daemon would refuse again. */}
+									{runtimeState.rejected ? null : (
+										<Button
+											className="shrink-0"
+											disabled={runtimeReconnectPending}
+											onClick={() => void reconnectRuntime()}
+											size="sm"
+											type="button"
+											variant="outline"
+										>
+											{t("browser.reconnectRuntime")}
+										</Button>
+									)}
 								</div>
 							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
@@ -1925,6 +1934,19 @@ function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], 
 	const action = activity?.active ? activity.action : "";
 	if (!action) return appI18n.t("browser.agentUsing");
 	return appI18n.t("browser.agentAction", { verb: browserActionVerb(action) });
+}
+
+// The daemon's refusal codes (backend/internal/browserruntime/broker.go). Name a
+// cause only for a code that identifies one; any other refusal stays generic.
+function browserRuntimeRejectedKey(code: string | undefined): MessageKey {
+	switch (code) {
+		case "BROWSER_RUNTIME_TOKEN_REJECTED":
+			return "browser.runtimeRejectedToken";
+		case "BROWSER_RUNTIME_PROTOCOL_MISMATCH":
+			return "browser.runtimeRejectedVersion";
+		default:
+			return "browser.runtimeRejected";
+	}
 }
 
 function browserActionVerb(action: string): string {

@@ -202,6 +202,8 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[] }) {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// Developer mode moves account management to the Harness page.
+	const agentsSection = useUiStore((state) => state.developerMode) ? "harness" : "agents";
 	const { agentReady, create, pending } = useCreateArtifactSession();
 
 	if (!agentReady) {
@@ -209,7 +211,7 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
 				<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.noAgent.title")}</h2>
 				<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.noAgent.description")}</p>
-				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings("agents")}>
+				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings(agentsSection)}>
 					{t("artifacts.noAgent.action")}
 				</Button>
 			</div>

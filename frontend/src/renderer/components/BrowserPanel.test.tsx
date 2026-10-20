@@ -20,6 +20,7 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserDownloadsState } from "../../shared/browser-downloads";
+import type { BrowserRuntimeState } from "../../main/browser-view-host";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
@@ -55,13 +56,13 @@ const hookState = vi.hoisted(() => ({
 	reopenClosedTab: vi.fn(),
 	openDevTools: vi.fn(),
 	closeDevTools: vi.fn(),
-	reconnectBrowserRuntime: vi.fn(),
+	reconnectRuntime: vi.fn(),
 	devtoolsState: { viewId: "42:sess-1", open: false, activeTabId: "t1" },
 	setAnnotationMode: vi.fn(),
 	annotationAction: vi.fn(),
 	annotationMode: false,
 	annotationState: { count: 0, screenshotCount: 0, hasDraft: false },
-	browserRuntimeConnected: true as boolean | null,
+	runtimeState: { connected: true, connecting: false, rejected: false } as BrowserRuntimeState | null,
 	tabs: [{ id: "t1", url: "", title: "", active: true }],
 	activeTabId: "t1",
 	tabNotice: "",
@@ -77,6 +78,10 @@ const hookState = vi.hoisted(() => ({
 		canGoForward: false,
 		isLoading: false,
 	} as BrowserNavState,
+}));
+
+vi.mock("../hooks/useBrowserRuntimeState", () => ({
+	useBrowserRuntimeState: () => hookState.runtimeState,
 }));
 
 vi.mock("../hooks/useBrowserView", () => ({
@@ -110,8 +115,6 @@ vi.mock("../hooks/useBrowserView", () => ({
 			devtoolsState: hookState.devtoolsState,
 			openDevTools: hookState.openDevTools,
 			closeDevTools: hookState.closeDevTools,
-			browserRuntimeConnected: hookState.browserRuntimeConnected,
-			reconnectBrowserRuntime: hookState.reconnectBrowserRuntime,
 			annotationMode: hookState.annotationMode,
 			annotationState: hookState.annotationState,
 			setAnnotationMode: hookState.setAnnotationMode,
@@ -267,8 +270,8 @@ describe("BrowserPanel", () => {
 		hookState.closedTabs = [];
 		hookState.openDevTools.mockReset();
 		hookState.closeDevTools.mockReset();
-		hookState.reconnectBrowserRuntime.mockReset();
-		hookState.reconnectBrowserRuntime.mockResolvedValue(undefined);
+		hookState.reconnectRuntime.mockReset();
+		hookState.reconnectRuntime.mockResolvedValue(undefined);
 		hookState.devtoolsState = { viewId: "42:sess-1", open: false, activeTabId: "t1" };
 		hookState.navState = {
 			viewId: "42:sess-1",
@@ -284,7 +287,7 @@ describe("BrowserPanel", () => {
 		hookState.annotationAction.mockResolvedValue(undefined);
 		hookState.annotationMode = false;
 		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
-		hookState.browserRuntimeConnected = true;
+		hookState.runtimeState = { connected: true, connecting: false, rejected: false };
 		postMock.mockReset();
 		postMock.mockResolvedValue({ data: {} });
 		annotationSubmitListeners.clear();
@@ -307,6 +310,7 @@ describe("BrowserPanel", () => {
 				annotationCancelListeners.delete(listener);
 			};
 		});
+		window.ao!.browser.reconnectRuntime = hookState.reconnectRuntime;
 		window.ao!.browser.historySuggestions = vi.fn(async () => []);
 		window.ao!.browser.historyFavicon = vi.fn(async () => undefined);
 		window.ao!.browser.captureScreenshot = vi.fn(async () => undefined);
@@ -1500,13 +1504,55 @@ describe("BrowserPanel", () => {
 	});
 
 	it("offers to reconnect when the browser runtime is disconnected", async () => {
-		hookState.browserRuntimeConnected = false;
+		hookState.runtimeState = { connected: false, connecting: false, rejected: false };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
 		expect(screen.getByTestId("browser-runtime-alert")).toHaveTextContent("Browser runtime disconnected.");
 		await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
 
-		expect(hookState.reconnectBrowserRuntime).toHaveBeenCalledOnce();
+		expect(hookState.reconnectRuntime).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		{
+			rejectionCode: "BROWSER_RUNTIME_TOKEN_REJECTED",
+			message:
+				"The AO daemon refused the browser runtime because another AO launch started it. Run `ao stop`, then reopen AO.",
+		},
+		{
+			rejectionCode: "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
+			message:
+				"The AO daemon refused the browser runtime because it comes from a different AO version than this app. Run `ao stop`, then reopen AO.",
+		},
+		// A malformed hello, a code this app doesn't know, or none: no cause is claimed.
+		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
+		{ rejectionCode: undefined, message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
+	])(
+		"says why the daemon refused the runtime ($rejectionCode), without a Reconnect that can't help (#6466)",
+		({ rejectionCode, message }) => {
+			hookState.runtimeState = { connected: false, connecting: false, rejected: true, rejectionCode };
+			render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+			const alert = screen.getByTestId("browser-runtime-alert");
+			expect(alert).toHaveTextContent(message);
+			expect(alert.querySelector("span")).toHaveAttribute("title", message);
+			// Reconnecting resends the same token, which the daemon would refuse again.
+			expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+		},
+	);
+
+	it("shows no runtime alert while a handshake is in flight", () => {
+		hookState.runtimeState = { connected: false, connecting: true, rejected: false };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.queryByTestId("browser-runtime-alert")).not.toBeInTheDocument();
+	});
+
+	it("shows no runtime alert before the first state arrives", () => {
+		hookState.runtimeState = null;
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.queryByTestId("browser-runtime-alert")).not.toBeInTheDocument();
 	});
 
 	it("does not render a globe icon in the URL input", () => {
