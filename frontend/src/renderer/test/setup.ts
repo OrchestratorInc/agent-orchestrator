@@ -128,6 +128,7 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		triage: { launch: async () => ({ ok: true }), prepare: async () => ({ ok: false, error: "Unavailable in tests" }) },
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,

@@ -1,3 +1,4 @@
+import { Button } from "./ui/button";
 import { AlertTriangle, Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,6 +18,17 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	const [copied, setCopied] = useState(false);
 	const [restarting, setRestarting] = useState(false);
 	const [restartError, setRestartError] = useState<string | null>(null);
+	const [reporting, setReporting] = useState(false);
+	const [reportError, setReportError] = useState<string | null>(null);
+	const report = async () => {
+		setReporting(true);
+		setReportError(null);
+		try {
+			const result = await aoBridge.triage.launch();
+			if (!result.ok) setReportError(result.error);
+		} catch (error) { setReportError(error instanceof Error ? error.message : t("report.failed")); }
+		finally { setReporting(false); }
+	};
 	const copiedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const slowStartup = isSlowDaemonStartupStatus(status);
 	const details = status.details?.trim();
@@ -95,6 +107,8 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 							{restarting ? t("daemon.restarting") : t("daemon.restart")}
 						</button>
 					) : null}
+					<Button variant="ghost" size="sm" disabled={reporting} onClick={() => void report()}>{t(reporting ? "report.opening" : "report.action")}</Button>
+					{reportError ? <p className="mt-2 text-error">{reportError}</p> : null}
 					{restartError ? <p className="mt-2 text-error">{restartError}</p> : null}
 					{details ? (
 						<div className="mt-2 flex items-center gap-3">

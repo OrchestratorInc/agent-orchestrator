@@ -200,7 +200,9 @@ export type UiState = {
 	// every request so a repeat press (even for the same project) still re-fires;
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// initialPrompt prefills the composer; displayName names the session when
+	// that prompt is sent unchanged.
+	newTaskRequest: { projectId: string; hostId?: string; nonce: number; initialPrompt?: string; displayName?: string } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -282,7 +284,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestNewTask: (projectId: string, hostId?: string, prefill?: { initialPrompt?: string; displayName?: string }) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -762,7 +764,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId, hostId) => {
+	requestNewTask: (projectId, hostId, prefill) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
@@ -774,7 +776,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, ...prefill, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
