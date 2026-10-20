@@ -1726,9 +1726,24 @@ function toActivity(wire: WireActivity): ConversationActivity {
 		// Rendering from this is what keeps the card from drawing a button the
 		// provider will reject.
 		decisions: readDecisions(detail),
+		inputResponse: wire.activityKind === "user_input" ? readInputResponse(detail) : undefined,
 		detail: detail as ConversationActivity["detail"],
 		createdAt: wire.createdAt,
 	};
+}
+
+function readInputResponse(detail: Record<string, unknown>): ConversationActivity["inputResponse"] {
+	const action = detail.action;
+	if (action !== "accept" && action !== "decline" && action !== "cancel") return undefined;
+	const content = detail.content;
+	return {
+		action,
+		content: isInputContent(content) ? content : undefined,
+	};
+}
+
+function isInputContent(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readDecisions(detail: Record<string, unknown>): DecisionOption[] | undefined {

@@ -138,7 +138,7 @@ import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
-import { ElicitationDock } from "./ElicitationDock";
+import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import {
 	activeTurn,
@@ -1416,7 +1416,7 @@ function ChatWorkspaceContent({
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
-				<ElicitationDock activity={stablePendingUserInput} onResolve={onResolveInput} />
+				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} onResolve={onResolveInput} />
 			) : undefined,
 		[onResolveInput, stablePendingUserInput],
 	);
@@ -4235,8 +4235,7 @@ const TurnGroup = memo(function TurnGroup({
 		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
 	);
 	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
-	// Errors and system warnings stay readable after the turn settles instead of
-	// folding away with the routine work.
+	// Questions, errors, and system warnings stay readable after the turn settles.
 	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
@@ -4557,9 +4556,9 @@ function TimelineItem({
 		if (item.status === "pending") return null;
 		return <ApprovalCard activity={item} onDecide={onDecide} busy={busy} />;
 	}
-	// A question is answered on the composer, never in the transcript: pending, it
-	// owns the dock above the input, and once answered it leaves nothing behind.
-	if (item.activityKind === "user_input") return null;
+	if (item.activityKind === "user_input") {
+		return item.status === "pending" ? null : <ElicitationHistory activity={item} />;
+	}
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
 	}
@@ -4930,11 +4929,12 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 	return (item?.kind === "message" && item.role === "user") || (item?.kind === "activity" && isSteer(item));
 }
 
-/** An error or stamped system warning, which a settled turn keeps outside its folded work. */
+/** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
 	const item = run.items[0];
 	if (run.kind !== "single" || item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
+	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
 
@@ -4943,7 +4943,7 @@ function rendersNothing(run: TimelineRun): boolean {
 	const item = run.items[0];
 	if (run.kind !== "single" || !item) return false;
 	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
-	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
+	return (item.activityKind === "user_input" || item.activityKind === "approval") && item.status === "pending";
 }
 
 const ARTIFACT_PROMPT_KEYS = [

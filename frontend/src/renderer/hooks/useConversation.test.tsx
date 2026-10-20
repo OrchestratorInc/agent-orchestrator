@@ -1234,6 +1234,28 @@ describe("useConversationSkills polling", () => {
 
 
 describe("toSnapshot", () => {
+	it.each([
+		{ action: "accept", content: { question_0: "keep", question_0_custom: "Tell me the names first" }, expectedAction: "accept" },
+		{ action: "decline", content: undefined, expectedAction: "decline" },
+		{ action: "cancel", content: undefined, expectedAction: "cancel" },
+		{ action: "unknown", content: {}, expectedAction: undefined },
+	])("decodes structured input resolution $action from persisted activity details", ({ action, content, expectedAction }) => {
+		const snapshot = toSnapshot({
+			conversationId: "c1", sessionId: "s1", harness: "claude-code", mode: "chat", controller: "ready",
+			latestSequence: 1, oldestSequence: 1, hasMoreBefore: false, turns: [], messages: [], settings: {},
+			branchedFromEarlierMessage: false, continueTurnId: "", nativeForkAvailableAfterSequence: 0,
+			activities: [{
+				kind: "activity", id: "input-1", sequence: 1, revision: 1, activityKind: "user_input",
+				status: "resolved", summary: "Choose worktrees", createdAt: "2026-10-19T00:00:00Z",
+				detail: { action, content },
+			}],
+		});
+		const item = snapshot.items[0];
+		if (item?.kind !== "activity") throw new Error("missing input activity");
+		expect(item.inputResponse?.action).toBe(expectedAction);
+		if (expectedAction) expect(item.inputResponse?.content).toEqual(content);
+	});
+
 	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
 		const snapshot = toSnapshot({
 			conversationId: "c1",

@@ -588,6 +588,11 @@ export interface ConversationActivity {
 	 * card left on screen cannot answer a request that replaced it.
 	 */
 	requestId?: string;
+	/** Structured-input resolution decoded from the daemon's detail payload. */
+	inputResponse?: {
+		action: "accept" | "decline" | "cancel";
+		content?: Record<string, unknown>;
+	};
 	/** Provider correlation key used to attach nested agent activity to its parent. */
 	providerItemId?: string;
 	/**
