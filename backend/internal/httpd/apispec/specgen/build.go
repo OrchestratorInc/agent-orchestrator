@@ -577,18 +577,19 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDevImportProjectsRequest":  "DevImportProjectsRequest",
 	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
 	// httpd/controllers: mobile wire envelopes
-	"ControllersMobileStatusResponse":  "MobileStatusResponse",
-	"MobilebridgeEndpoint":             "MobileEndpoint",
-	"MobilebridgeTunnelStatus":         "MobileTunnelStatus",
-	"ControllersIdentityResponse":      "IdentityResponse",
-	"ControllersEndpointsResponse":     "EndpointsResponse",
-	"ControllersLinkPreviewQuery":      "LinkPreviewQuery",
-	"ControllersLinkPreviewResponse":   "LinkPreviewResponse",
-	"ControllersMobileDeviceResponse":  "MobileDeviceResponse",
-	"ControllersMobileDevicesResponse": "MobileDevicesResponse",
-	"ControllersMuteDeviceRequest":     "MuteDeviceRequest",
-	"ControllersInstallIDParam":        "InstallIDParam",
-	"ControllersPushPairingIDParam":    "PushPairingIDParam",
+	"ControllersMobileStatusResponse":          "MobileStatusResponse",
+	"ControllersSetBrowserRemoteAccessRequest": "SetBrowserRemoteAccessRequest",
+	"MobilebridgeEndpoint":                     "MobileEndpoint",
+	"MobilebridgeTunnelStatus":                 "MobileTunnelStatus",
+	"ControllersIdentityResponse":              "IdentityResponse",
+	"ControllersEndpointsResponse":             "EndpointsResponse",
+	"ControllersLinkPreviewQuery":              "LinkPreviewQuery",
+	"ControllersLinkPreviewResponse":           "LinkPreviewResponse",
+	"ControllersMobileDeviceResponse":          "MobileDeviceResponse",
+	"ControllersMobileDevicesResponse":         "MobileDevicesResponse",
+	"ControllersMuteDeviceRequest":             "MuteDeviceRequest",
+	"ControllersInstallIDParam":                "InstallIDParam",
+	"ControllersPushPairingIDParam":            "PushPairingIDParam",
 	// devimport report
 	"DevimportReport":   "DevImportProjectsReport",
 	"DevimportConflict": "DevImportProjectsConflict",
@@ -2122,6 +2123,17 @@ func mobileOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 			},
 		},
+		{
+			method: http.MethodPost, path: "/api/v1/mobile/browser-control", id: "setMobileBrowserRemoteAccess", tag: "mobile",
+			summary: "Allow or deny paired-device access to the desktop browser",
+			reqBody: controllers.SetBrowserRemoteAccessRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MobileStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
 	}
 }
 
@@ -2760,6 +2772,18 @@ func sessionOperations() []operation {
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/preview/files/*", id: "getSessionPreviewFile", tag: "sessions",
 			summary:    "Serve a static browser preview file from a session workspace or artifact directory",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.PreviewFileQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/preview/artifacts/*", id: "getSessionPreviewArtifact", tag: "sessions",
+			summary:    "Serve a selected static browser preview file from the session artifact directory",
+			pathParams: []any{controllers.SessionIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, ""},
 				{http.StatusNotFound, envelope.APIError{}},

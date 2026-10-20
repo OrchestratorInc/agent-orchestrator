@@ -1,4 +1,7 @@
 {
+	"awake.stopReason.low_battery": "Gestoppt, weil der Akku den eingestellten Sicherheitsgrenzwert erreicht hat. Lade deinen Mac auf und schalte Stay Awake anschließend aus und wieder ein.",
+	"awake.stopReason.critical_heat": "Gestoppt, weil der Mac abkühlen muss. Schalte Stay Awake nach dem Abkühlen aus und wieder ein.",
+	"awake.stopReason.battery_unknown": "Gestoppt, weil der Akkustand nicht gelesen werden konnte. Schalte Stay Awake aus und wieder ein, um es erneut zu versuchen.",
 	"session.generatingBranchName": "Branch-Name wird generiert",
 	"session.preparingBranch": "Branch wird vorbereitet",
 	"session.initializingBranch": "Branch wird initialisiert",
@@ -1270,7 +1273,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "Erstelle und verwalte Agent Orchestrator-Sitzungen im Terminal mit dem Befehl ao. Er wird mit der App aktualisiert.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Remote-Hosts",
 	"settings.terminalCopyOnSelect": "Bei Auswahl kopieren",

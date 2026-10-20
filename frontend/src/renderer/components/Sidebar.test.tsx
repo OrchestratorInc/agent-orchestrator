@@ -740,6 +740,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
+		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "0");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "0");
 		expect(expandedButton?.parentElement).not.toHaveAttribute("aria-hidden");
@@ -754,6 +755,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
+		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "-1");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();

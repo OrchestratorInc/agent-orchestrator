@@ -1,4 +1,7 @@
 {
+	"awake.stopReason.low_battery": "バッテリー残量が設定された安全基準に達したため停止しました。Mac を充電してから、Stay Awake をオフにして再度オンにしてください。",
+	"awake.stopReason.critical_heat": "Mac の冷却が必要なため停止しました。冷却後、Stay Awake をオフにして再度オンにしてください。",
+	"awake.stopReason.battery_unknown": "バッテリーの状態を読み取れなかったため停止しました。Stay Awake をオフにして再度オンにすると再試行できます。",
 	"session.generatingBranchName": "ブランチ名を生成中",
 	"session.preparingBranch": "ブランチを準備中",
 	"session.initializingBranch": "ブランチを初期化中",
@@ -1270,7 +1273,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "ao コマンドで、ターミナルから Agent Orchestrator のセッションを作成・管理できます。コマンドはアプリとともに更新されます。",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "リモートホスト",
 	"settings.terminalCopyOnSelect": "選択時にコピー",

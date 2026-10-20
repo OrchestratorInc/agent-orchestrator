@@ -1,4 +1,3 @@
-import { AwakeControl } from "./AwakeControl";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
@@ -253,7 +252,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					<div className="min-w-0 flex-1" />
 					{actions ? (
 						<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
-						<AwakeControl compact />
 							{actions}
 						</div>
 					) : null}

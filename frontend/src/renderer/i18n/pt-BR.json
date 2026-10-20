@@ -1,4 +1,7 @@
 {
+	"awake.stopReason.low_battery": "Interrompido porque a bateria atingiu o limite de segurança configurado. Carregue o Mac e desative e ative novamente o Stay Awake para reiniciar.",
+	"awake.stopReason.critical_heat": "Interrompido porque o Mac precisa esfriar. Depois que esfriar, desative e ative novamente o Stay Awake para reiniciar.",
+	"awake.stopReason.battery_unknown": "Interrompido porque não foi possível ler o estado da bateria. Desative e ative novamente o Stay Awake para tentar de novo.",
 	"session.generatingBranchName": "Gerando nome da branch",
 	"session.preparingBranch": "Preparando branch",
 	"session.initializingBranch": "Inicializando branch",
@@ -1296,7 +1299,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "Crie e gerencie sessões do Agent Orchestrator pelo terminal com o comando ao. Ele é atualizado junto com o aplicativo.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Hosts remotos",
 	"settings.terminalCopyOnSelect": "Copiar ao selecionar",

@@ -220,6 +220,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
 	r.Delete("/sessions/{sessionId}/preview/server", c.stopPreviewServer)
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
+	r.Get("/sessions/{sessionId}/preview/artifacts/*", c.previewArtifactFile)
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
@@ -506,17 +507,55 @@ func (c *SessionsController) preview(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	entry, ok := discoverPreviewEntry(sess.Metadata.WorkspacePath)
+	// Selection is session-owned. Discovering a repository index here can
+	// replace a running app (or an empty selection) with unrelated source HTML.
 	res := SessionPreviewResponse{SessionID: sessionID(r)}
-	if ok {
-		res.Entry = entry
-		res.PreviewURL, err = previewFileURL(r, sessionID(r), entry)
-		if err != nil {
-			writePreviewResolveError(w, r, err)
+	if selected, ok := previewutil.StoredEntryFromPreview(sess.Metadata.PreviewURL, sess.ID); ok {
+		root := sess.Metadata.WorkspacePath
+		if selected.Scope == previewutil.StoredEntryScopeArtifact {
+			root = sess.Metadata.ArtifactDir
+		}
+		if _, exists := previewutil.EntryAtPath(root, selected.Path); exists {
+			res.Entry = selected.Path
+			res.Source = string(selected.Scope)
+			if selected.Scope == previewutil.StoredEntryScopeArtifact {
+				res.PreviewURL, err = previewutil.ArtifactFileURL("http://"+r.Host, sessionID(r), selected.Path)
+			} else {
+				res.PreviewURL, err = previewFileURL(r, sessionID(r), selected.Path)
+			}
+			if err != nil {
+				writePreviewResolveError(w, r, err)
+				return
+			}
+		}
+	} else if target, parseErr := url.Parse(strings.TrimSpace(sess.Metadata.PreviewURL)); parseErr == nil &&
+		(target.Scheme == "http" || target.Scheme == "https") && target.Host != "" {
+		res.PreviewURL = target.String()
+	}
+
+	envelope.WriteJSON(w, http.StatusOK, res)
+}
+
+// previewArtifactFile keeps artifact scope in the route so relative CSS,
+// scripts, and images cannot fall back to same-named workspace files.
+func (c *SessionsController) previewArtifactFile(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/artifacts/*")
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	asset := chi.URLParam(r, "*")
+	if r.URL.RawPath != "" {
+		if asset, err = url.PathUnescape(asset); err != nil {
+			envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
 			return
 		}
 	}
-	envelope.WriteJSON(w, http.StatusOK, res)
+	c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
 }
 
 func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request) {

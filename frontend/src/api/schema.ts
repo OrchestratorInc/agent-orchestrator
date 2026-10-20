@@ -1254,6 +1254,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mobile/browser-control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Allow or deny paired-device access to the desktop browser */
+        post: operations["setMobileBrowserRemoteAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mobile/devices": {
         parameters: {
             query?: never;
@@ -3200,6 +3217,23 @@ export interface paths {
         head: operations["headSessionPreviewApp"];
         /** Send a request to the running session-owned application preview */
         patch: operations["patchSessionPreviewApp"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/preview/artifacts/*": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Serve a selected static browser preview file from the session artifact directory */
+        get: operations["getSessionPreviewArtifact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/sessions/{sessionId}/preview/files/*": {
@@ -5899,6 +5933,10 @@ export interface components {
             method: string;
             ok: boolean;
             prNumber: number;
+            /** @enum {string} */
+            state: "merged";
+            /** Format: date-time */
+            stateChangedAt: string;
         };
         MobileDeviceResponse: {
             /** Format: date-time */
@@ -5926,6 +5964,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            browserRemoteAccess: boolean;
             enabled: boolean;
             endpoints: components["schemas"]["MobileEndpoint"][];
             host: string;
@@ -6573,6 +6612,11 @@ export interface components {
             entry?: string;
             previewUrl?: string;
             sessionId: string;
+            /**
+             * @description Root containing the selected static entry; omitted for external app URLs.
+             * @enum {string}
+             */
+            source?: "workspace" | "artifact";
         };
         SessionProvisionStep: {
             /** Format: date-time */
@@ -6668,6 +6712,9 @@ export interface components {
             ok: boolean;
             sessionId: string;
             state: string;
+        };
+        SetBrowserRemoteAccessRequest: {
+            enabled: boolean;
         };
         SetChatViewRequest: {
             active: boolean;
@@ -11548,6 +11595,57 @@ export interface operations {
             };
             /** @description Bad Gateway */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setMobileBrowserRemoteAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetBrowserRemoteAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19111,6 +19209,56 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionPreviewArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

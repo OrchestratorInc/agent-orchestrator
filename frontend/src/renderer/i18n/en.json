@@ -1,4 +1,7 @@
 {
+	"awake.stopReason.low_battery": "Stopped because the battery reached the configured safety limit. Charge your Mac, then turn Stay Awake off and on to restart.",
+	"awake.stopReason.critical_heat": "Stopped because the Mac needs to cool down. After it cools, turn Stay Awake off and on to restart.",
+	"awake.stopReason.battery_unknown": "Stopped because battery state could not be read. Turn Stay Awake off and on to retry.",
 	"session.generatingBranchName": "Generating branch name",
 	"session.preparingBranch": "Preparing branch",
 	"session.initializingBranch": "Initializing branch",
@@ -1272,7 +1275,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "Create and manage Agent Orchestrator sessions from your terminal with the ao command. It stays up to date with the app.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Remote hosts",
 	"settings.terminalCopyOnSelect": "Copy on select",

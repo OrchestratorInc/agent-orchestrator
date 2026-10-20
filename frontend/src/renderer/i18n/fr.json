@@ -1,4 +1,7 @@
 {
+	"awake.stopReason.low_battery": "Arrêté car la batterie a atteint le seuil de sécurité configuré. Rechargez votre Mac, puis désactivez et réactivez Stay Awake pour le relancer.",
+	"awake.stopReason.critical_heat": "Arrêté car le Mac doit refroidir. Une fois refroidi, désactivez et réactivez Stay Awake pour le relancer.",
+	"awake.stopReason.battery_unknown": "Arrêté car l’état de la batterie n’a pas pu être lu. Désactivez et réactivez Stay Awake pour réessayer.",
 	"session.generatingBranchName": "Génération du nom de branche",
 	"session.preparingBranch": "Préparation de la branche",
 	"session.initializingBranch": "Initialisation de la branche",
@@ -1296,7 +1299,7 @@
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
-	"settings.cliLink.linked": "Linked. {{version}}",
+	"settings.cliLink.linked": "Créez et gérez vos sessions Agent Orchestrator depuis le terminal avec la commande ao. Elle se met à jour avec l'application.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Hôtes distants",
 	"settings.terminalCopyOnSelect": "Copier lors de la sélection",

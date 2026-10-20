@@ -32,7 +32,6 @@ export type GlobalSettingsSection =
 	| "remoteHosts"
 	| "coder"
 	| "mobile"
-	| "stayAwake"
 	| "shortcuts"
 	| "browserProfiles"
 	| "diagnostics"

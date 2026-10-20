@@ -45,6 +45,13 @@ const { mobileStatus } = vi.hoisted(() => ({
 	},
 }));
 
+// This suite exercises the mobile UI; shared desktop/mobile ownership is
+// covered with the real useAwake hook in AwakeControl.test.tsx.
+vi.mock("../hooks/useAwake", () => ({
+	useAwake: () => ({ state: { sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: vi.fn().mockResolvedValue({ active: true }), busy: false }),
+	awakeCapability: () => ({ available: true }),
+}));
+
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
@@ -52,7 +59,7 @@ vi.mock("../lib/api-client", () => ({
 			path === "/api/v1/mobile/devices"
 				? { data: { devices: [] }, error: undefined }
 				: { data: mobileStatus, error: undefined },
-		POST: vi.fn(async () => ({ data: {}, error: undefined })),
+		POST: vi.fn(async () => ({ data: structuredClone(mobileStatus), error: undefined })),
 	},
 	apiErrorMessage: () => "failed",
 }));
@@ -259,7 +266,7 @@ test.each([
 		mobileStatus.enabled = serverEnabled;
 		return failed
 			? { data: undefined, error: { message: "shutdown failed" } }
-			: { data: {}, error: undefined };
+			: { data: structuredClone(mobileStatus), error: undefined };
 	});
 
 	try {
@@ -854,7 +861,7 @@ test("turns the keep-awake option on", async () => {
 	// The daemon persists the choice, so the refetch after the POST reads it back.
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
-		return { data: {}, error: undefined } as never;
+		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
 	await userEvent.click(toggle);
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: false } });
@@ -876,7 +883,7 @@ test("turning on closed-lid mode also enables idle wake in one request", async (
 	mobileStatus.keepAwake = { supported: true, enabled: false, active: false, hasBattery: true, lidSupported: true, lidClosed: false };
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		Object.assign(mobileStatus.keepAwake!, { enabled: true, lidClosed: true });
-		return { data: {}, error: undefined };
+		return { data: structuredClone(mobileStatus), error: undefined };
 	});
 	renderMobileSettings();
 	const toggle = await screen.findByRole("switch", { name: "Keep awake with lid closed" });
@@ -935,7 +942,7 @@ test("turning off Keep awake clears closed-lid mode in the same request", async 
 	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: true, lidSupported: true, lidClosed: true };
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		Object.assign(mobileStatus.keepAwake!, { enabled: false, active: false, lidClosed: false, lidActive: false });
-		return { data: {}, error: undefined };
+		return { data: structuredClone(mobileStatus), error: undefined };
 	});
 	renderMobileSettings();
 	await userEvent.click(await screen.findByRole("switch", { name: "Keep this Mac awake" }));
@@ -970,7 +977,7 @@ test("enabling idle wake never restores an unchecked legacy lid choice", async (
 	vi.mocked(apiClient.POST).mockImplementationOnce(() => new Promise((resolve) => {
 		finishPost = () => {
 			Object.assign(mobileStatus.keepAwake!, { enabled: true, active: true, lidClosed: false });
-			resolve({ data: {}, error: undefined });
+			resolve({ data: structuredClone(mobileStatus), error: undefined });
 		};
 	}));
 	renderMobileSettings();
@@ -1011,7 +1018,7 @@ test("renders cached state on first paint, with no transition on the code", asyn
 	const before = qrPayload();
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.password = "regenerated-password";
-		return { data: {}, error: undefined } as never;
+		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
 	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
 	await waitFor(() => expect(qrPayload()).not.toBe(before));
