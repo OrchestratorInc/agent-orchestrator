@@ -1,6 +1,7 @@
 package systeminstall
 
 import (
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -39,6 +40,30 @@ func versionSchemeFor(target Target) versionScheme {
 	default:
 		return versionSemver
 	}
+}
+
+var hermesVersionToken = regexp.MustCompile(`^Hermes Agent (v[0-9][^ \r\n]*)`)
+
+// installedVersionText narrows a version probe's output to the text naming the
+// installed release. Hermes's --version also prints its release date and its
+// Python and SDK versions, and its Homebrew build reports a stale built-in
+// version, so a Homebrew Cellar path's version wins, then the banner's token.
+func installedVersionText(target Target, resolvedPath, output string) string {
+	if target != TargetHermes {
+		return output
+	}
+	if real, err := filepath.EvalSymlinks(resolvedPath); err == nil {
+		parts := strings.Split(filepath.ToSlash(real), "/")
+		for i := 0; i+2 < len(parts); i++ {
+			if parts[i] == "Cellar" && parts[i+1] == "hermes-agent" {
+				return parts[i+2]
+			}
+		}
+	}
+	if m := hermesVersionToken.FindStringSubmatch(output); m != nil {
+		return m[1]
+	}
+	return output
 }
 
 func (scheme versionScheme) find(text string) (updateVersion, bool) {
