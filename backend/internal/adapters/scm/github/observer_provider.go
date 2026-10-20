@@ -78,7 +78,10 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		if !updatedAfter.IsZero() {
 			q.Set("since", updatedAfter.UTC().Format(time.RFC3339Nano))
 		}
-		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
+		// The (page, since) cursor differs on every call, so the shared ETag
+		// cache would retain one full response body per cursor (issue #97).
+		// doRESTWithETag skips that cache; the list is never 304-guarded.
+		resp, err := p.client.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "pulls"), q, "")
 		if err != nil {
 			return nil, err
 		}
