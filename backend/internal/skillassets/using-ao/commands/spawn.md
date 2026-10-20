@@ -31,6 +31,8 @@ ao spawn [flags]
 
 `--agent` is an alias for `--harness`.
 
+For a project session, omit `--agent`/`--harness` so the session inherits the project's configured agent: a worker uses the project's Worker agent and an orchestrator (`--kind orchestrator`) uses the project's Orchestrator agent. Pass `--agent` only to deliberately override that configured agent for one session — do not copy it from the standalone example below, which needs it because standalone sessions have no project to inherit from.
+
 Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
 
 `fx` is experimental and Terminal UI only: spawn it with `--agent fx --mode tui`.
@@ -61,7 +63,9 @@ ao spawn --project agent-orchestrator --kind orchestrator --name "coordinate-fix
 ```
 
 ```bash
-# Spawn a standalone worker whose deliverable is an artifact file, not a PR
+# Spawn a standalone worker whose deliverable is an artifact file, not a PR.
+# --agent is required here only because standalone sessions have no project
+# Worker agent to inherit; project spawns above omit it on purpose.
 ao spawn --standalone --agent claude-code --output artifact --name "q3-report" \
   --prompt "Write a one-page summary of Q3 incidents."
 ```
