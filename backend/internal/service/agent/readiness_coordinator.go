@@ -21,9 +21,12 @@ const (
 	defaultLaunchReadinessTTL   = 30 * time.Second
 	defaultInstallCheckTimeout  = 2 * time.Second
 	opencodeInstallCheckTimeout = 12 * time.Second
-	opencodeV2MigrationTimeout  = 30 * time.Minute
-	defaultAuthCheckTimeout     = 10 * time.Second
-	defaultReadinessWorkers     = 4
+	// Hermes is a Python CLI: a warm --version identity probe takes about two
+	// seconds, and the first run after an install compiles its bytecode.
+	hermesInstallCheckTimeout  = 60 * time.Second
+	opencodeV2MigrationTimeout = 30 * time.Minute
+	defaultAuthCheckTimeout    = 10 * time.Second
+	defaultReadinessWorkers    = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -533,8 +536,13 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
 	timeout := c.installTimeout
-	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2) {
-		timeout = opencodeInstallCheckTimeout
+	if timeout == defaultInstallCheckTimeout {
+		switch item.Harness {
+		case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
+			timeout = opencodeInstallCheckTimeout
+		case domain.HarnessHermes:
+			timeout = hermesInstallCheckTimeout
+		}
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
