@@ -2,6 +2,7 @@ package modelcatalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -141,6 +142,82 @@ func TestFXCatalogLegacySavedModels(t *testing.T) {
 						}
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestFXCatalogScopedSelections(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		settings    string
+		provider    string
+		model       string
+		inheritEnv  bool
+		unavailable string
+	}{
+		{"environment selection", `{}`, "codex", "gpt-5.4-mini", false, "codex"},
+		{"environment provider only", `{}`, "grok", "", false, "grok"},
+		{"inherited environment", `{}`, "codex", "gpt-5.4-mini", true, "codex"},
+		{"workspace selection", `{"workspaces":{"WORKSPACE":{"provider":"codex","models":{"codex":"gpt-5.4-mini"}}}}`, "", "", false, "codex"},
+		{"workspace model only", `{"workspaces":{"WORKSPACE":{"models":{"grok":"grok-4"}}}}`, "", "", false, "grok"},
+		{"workspace legacy model", `{"workspaces":{"WORKSPACE":{"codex_model":"gpt-5.4-mini"}}}`, "", "", false, "codex"},
+		{"environment model with workspace provider", `{"workspaces":{"WORKSPACE":{"provider":"codex"}}}`, "", "gpt-5.4-mini", false, "codex"},
+		{"unrelated workspace", `{"workspaces":{"/other/workspace":{"provider":"codex","models":{"codex":"gpt-5.4-mini"}}}}`, "", "", false, ""},
+		{"environment model uses default gateway", `{}`, "", "openai/gpt-5.2", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FX_PROVIDER", "")
+			t.Setenv("FX_MODEL", "")
+			home, workspace := t.TempDir(), t.TempDir()
+			canonical, err := filepath.EvalSymlinks(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := json.Marshal(canonical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(home, ".fx"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".fx", "settings.json"), []byte(strings.ReplaceAll(tc.settings, `"WORKSPACE"`, string(key))), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			env := map[string]string{"HOME": home, "FX_PROVIDER": tc.provider, "FX_MODEL": tc.model}
+			if tc.inheritEnv {
+				t.Setenv("FX_PROVIDER", tc.provider)
+				t.Setenv("FX_MODEL", tc.model)
+				delete(env, "FX_PROVIDER")
+				delete(env, "FX_MODEL")
+			}
+			t.Chdir(workspace)
+			for _, statusFails := range []bool{false, true} {
+				run := func(_ context.Context, _ string, args []string, _ string, _ map[string]string) ([]byte, error) {
+					if strings.Join(args, " ") == "status --json" && !statusFails {
+						return []byte(`{"auth":"missing","connected_providers":[]}`), nil
+					}
+					return nil, errors.New("AuthenticationRejected")
+				}
+				// FX resolves explicit and inherited cwd before looking up its workspace entry.
+				for _, dir := range []string{workspace + string(filepath.Separator) + ".", ""} {
+					got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", WorkingDir: dir, Env: env}, run)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := "gateway"
+					if tc.unavailable != "" {
+						want += "," + tc.unavailable
+					}
+					if got.Metadata["unavailableProviders"] != want {
+						t.Fatalf("dir=%q statusFails=%v: unavailable = %q, want %q", dir, statusFails, got.Metadata["unavailableProviders"], want)
+					}
+					for _, provider := range []string{"codex", "grok"} {
+						if strings.Contains(got.Warning, provider) != strings.Contains(tc.unavailable, provider) {
+							t.Fatalf("dir=%q statusFails=%v: warning = %q, want unavailable %q", dir, statusFails, got.Warning, want)
+						}
+					}
+				}
 			}
 		})
 	}
