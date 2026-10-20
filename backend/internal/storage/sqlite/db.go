@@ -2359,14 +2359,14 @@ WHERE type = 'table' AND name = 'sessions'`,
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
 	}
-	if !strings.Contains(schema, "'minimax-code'") {
-		return fmt.Errorf("schema repair: sessions harness constraint is missing MiniMax Code")
-	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'minimax-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing MiniMax Code and did not match known pre-MiniMax-Code schema")
 	}
 	return nil
 }
