@@ -346,11 +346,11 @@ describe("ActivityRow", () => {
 		render(
 			<ActivityRow activity={{
 				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
-				activityKind: "system", status: "completed", summary: "Setup finished",
+				activityKind: "system", status: "completed", summary: "Setup passed",
 				detail: { event: "workspace.setup", setupStatus: "succeeded", exitCode: 0, durationMs: 12_400, output: "compose up\nready" },
 			}} />,
 		);
-		expect(screen.getByText("Setup finished in 12s")).toBeInTheDocument();
+		expect(screen.getByText("Setup passed in 12s")).toBeInTheDocument();
 		expect(screen.queryByText(/compose up/)).toBeNull();
 		act(() => screen.getByRole("button", { name: "Show output" }).click());
 		expect(screen.getByRole("button", { name: "Hide output" })).toHaveAttribute("aria-expanded", "true");

@@ -132,3 +132,17 @@ func TestReadyWorkspaceIsReported(t *testing.T) {
 		t.Fatalf("reports = %+v", reports)
 	}
 }
+
+// A session opened while Setup was still running must not count as a retry
+// once that Setup fails, or Setup silently runs again and the agent starts.
+func TestAnOpenSavedBeforeAFailedStartIsNotARetry(t *testing.T) {
+	reopen := make(chan struct{}, 1)
+	dropPendingReopen(reopen) // nothing saved: returns at once
+	reopen <- struct{}{}      // opened while the failed attempt ran
+	dropPendingReopen(reopen)
+	select {
+	case <-reopen:
+		t.Fatal("an open saved before the failure was read as a retry")
+	default:
+	}
+}

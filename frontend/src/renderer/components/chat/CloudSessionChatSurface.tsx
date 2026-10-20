@@ -137,7 +137,7 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 	return {
 		kind: "activity", id: `cloud-project-setup-${event.sequence}`, sequence: event.sequence, revision: 1,
 		activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
-		summary: status === "succeeded" ? "Setup finished" : status === "timed_out" ? "Setup timed out" : "Setup failed",
+		summary: status === "succeeded" ? "Setup passed" : status === "timed_out" ? "Setup timed out" : "Setup failed",
 		detail: { event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output },
 		createdAt: event.createdAt,
 	};

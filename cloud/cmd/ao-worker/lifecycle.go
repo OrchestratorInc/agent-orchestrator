@@ -181,3 +181,13 @@ func reportWorkspaceStartup(ctx context.Context, logger *slog.Logger, client *cl
 		logger.Warn("publish workspace startup outcome", "status", event.Status, "error", err)
 	}
 }
+
+// dropPendingReopen discards a session open saved while a failed start was
+// still running. It came before the failure, so it is not a retry: the start
+// waits for the session to be opened again after the failure is reported.
+func dropPendingReopen(reopen <-chan struct{}) {
+	select {
+	case <-reopen:
+	default:
+	}
+}
