@@ -107,7 +107,7 @@ func newTriageCommand(c *commandContext) *cobra.Command {
 			if model != "" {
 				args = append(args, "--model", model)
 			}
-			args = append(args, prompt)
+			args = append(args, fmt.Sprintf(`Read the file "%s" and follow its instructions exactly: it is your bug-triage playbook, and it starts with asking the user what went wrong.`, filepath.Join(dir, "prompt.md")))
 			path, err := c.deps.LookPath(selected)
 			if err != nil {
 				return err

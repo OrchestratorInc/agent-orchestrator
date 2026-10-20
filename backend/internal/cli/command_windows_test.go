@@ -22,7 +22,8 @@ func TestCLIBatchArguments(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("AO_CLI_BATCH_HELPER", "1")
-			args := []string{"space in argument", "%PATH%", "first line\nsecond line", `quoted "text" & data`}
+			// Batch shims cannot forward newlines, so the launcher passes a one-line prompt pointer.
+			args := []string{"space in argument", "%PATH%", `quoted "text" & data`}
 			var out bytes.Buffer
 			if err := runInteractiveCommand(t.Context(), shim, dir, args, bytes.NewReader(nil), &out, &out); err != nil {
 				t.Fatal(err, out.String())
