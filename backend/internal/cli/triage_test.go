@@ -407,7 +407,8 @@ func TestTriageManagedAgentMatchesProbeAndLaunch(t *testing.T) {
 					t.Fatalf("launched %q, want %q", path, want)
 				}
 				raw, err := os.ReadFile(filepath.Join(dir, "context.md"))
-				if err != nil || !strings.Contains(string(raw), "codex: "+path) {
+				home, _ := os.UserHomeDir()
+				if err != nil || !strings.Contains(string(raw), "codex: "+redactTriage(path, home)) {
 					t.Fatal(err, string(raw))
 				}
 				return nil
