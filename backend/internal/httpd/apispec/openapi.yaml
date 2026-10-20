@@ -12065,6 +12065,76 @@ paths:
         target
       tags:
       - system
+  /api/v1/system/processes:
+    get:
+      operationId: getSystemProcesses
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessInventoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Snapshot AO-owned processes: control plane, tmux server, session trees,
+        orphans'
+      tags:
+      - system
+  /api/v1/system/processes/kill:
+    post:
+      operationId: killSystemProcesses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessKillRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessKillResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Kill orphaned process trees (re-validated against a fresh snapshot;
+        only orphans are signalled)
+      tags:
+      - system
   /api/v1/system/requirements:
     get:
       operationId: getSystemRequirements
@@ -17649,6 +17719,229 @@ components:
       - agent
       - supported
       - installed
+      type: object
+    ProcessGroupSummary:
+      properties:
+        pid:
+          type: integer
+        present:
+          type: boolean
+        rssBytes:
+          format: int64
+          type: integer
+      required:
+      - pid
+      - present
+      - rssBytes
+      type: object
+    ProcessHostMemory:
+      properties:
+        appBytes:
+          format: int64
+          type: integer
+        cachedBytes:
+          format: int64
+          type: integer
+        compressedBytes:
+          format: int64
+          type: integer
+        freeBytes:
+          format: int64
+          type: integer
+        pressureFreePercent:
+          type:
+          - "null"
+          - integer
+        swapFreeBytes:
+          format: int64
+          type: integer
+        swapMaxBytes:
+          format: int64
+          type: integer
+        swapTotalBytes:
+          format: int64
+          type: integer
+        swapUsedBytes:
+          format: int64
+          type: integer
+        totalBytes:
+          format: int64
+          type: integer
+        usedBytes:
+          format: int64
+          type: integer
+        wiredBytes:
+          format: int64
+          type: integer
+      required:
+      - totalBytes
+      - usedBytes
+      - freeBytes
+      - cachedBytes
+      - swapTotalBytes
+      - swapUsedBytes
+      - swapFreeBytes
+      - swapMaxBytes
+      type: object
+    ProcessInventoryResponse:
+      properties:
+        daemon:
+          $ref: '#/components/schemas/ProcessGroupSummary'
+        disabled:
+          type: boolean
+        generatedAt:
+          format: date-time
+          type: string
+        host:
+          $ref: '#/components/schemas/ProcessHostMemory'
+        remnants:
+          items:
+            $ref: '#/components/schemas/ProcessRemnant'
+          type: array
+        tmux:
+          $ref: '#/components/schemas/ProcessGroupSummary'
+        totals:
+          $ref: '#/components/schemas/ProcessTotals'
+        trees:
+          items:
+            $ref: '#/components/schemas/ProcessTree'
+          type: array
+      required:
+      - disabled
+      - generatedAt
+      - daemon
+      - tmux
+      - trees
+      - remnants
+      - totals
+      type: object
+    ProcessKillRequest:
+      properties:
+        targets:
+          items:
+            $ref: '#/components/schemas/ProcessKillTarget'
+          type: array
+      required:
+      - targets
+      type: object
+    ProcessKillResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/ProcessKillResult'
+          type: array
+      required:
+      - results
+      type: object
+    ProcessKillResult:
+      properties:
+        detail:
+          type: string
+        rootPid:
+          type: integer
+        sessionId:
+          type: string
+        status:
+          type: string
+      required:
+      - sessionId
+      - rootPid
+      - status
+      type: object
+    ProcessKillTarget:
+      properties:
+        rootLstart:
+          type: string
+        rootPid:
+          type: integer
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - rootPid
+      - rootLstart
+      type: object
+    ProcessRemnant:
+      properties:
+        pid:
+          type: integer
+        rssBytes:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - pid
+      - rssBytes
+      type: object
+    ProcessTotals:
+      properties:
+        daemonRssBytes:
+          format: int64
+          type: integer
+        foreignCount:
+          type: integer
+        foreignRssBytes:
+          format: int64
+          type: integer
+        orphansCount:
+          type: integer
+        orphansRssBytes:
+          format: int64
+          type: integer
+        sessionsCount:
+          type: integer
+        sessionsRssBytes:
+          format: int64
+          type: integer
+        tmuxRssBytes:
+          format: int64
+          type: integer
+      required:
+      - sessionsCount
+      - sessionsRssBytes
+      - orphansCount
+      - orphansRssBytes
+      - foreignCount
+      - foreignRssBytes
+      - daemonRssBytes
+      - tmuxRssBytes
+      type: object
+    ProcessTree:
+      properties:
+        activityState:
+          type: string
+        attached:
+          type: boolean
+        kind:
+          type: string
+        lastActivityAt:
+          format: date-time
+          type: string
+        pidCount:
+          type: integer
+        rootLstart:
+          type: string
+        rootPid:
+          type: integer
+        rssBytes:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        state:
+          type: string
+      required:
+      - sessionId
+      - rootPid
+      - rootLstart
+      - pidCount
+      - rssBytes
+      - kind
+      - state
+      - attached
+      - lastActivityAt
       type: object
     Project:
       properties:

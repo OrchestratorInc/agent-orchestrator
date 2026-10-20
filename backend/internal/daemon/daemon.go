@@ -31,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
@@ -52,6 +53,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/procinventory"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -1049,6 +1051,31 @@ func Run() error {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
 	}
 
+	// Process footprint: a stateless scanner over the live process table. The
+	// live-session set comes straight from the DB with the same
+	// IsTerminated == false predicate the session manager's reconcile pass
+	// uses, so a session adopted after a daemon restart classifies as owned —
+	// never an orphan the status bar may offer to kill.
+	processInventory := procinventory.New(procinventory.Deps{
+		DaemonPID: os.Getpid(),
+		LiveSessions: func(ctx context.Context) (map[domain.SessionID]domain.SessionRecord, error) {
+			rows, err := store.ListAllSessions(ctx)
+			if err != nil {
+				return nil, err
+			}
+			live := make(map[domain.SessionID]domain.SessionRecord, len(rows))
+			for _, row := range rows {
+				if !row.IsTerminated {
+					live[row.ID] = row
+				}
+			}
+			return live, nil
+		},
+		TmuxSocketName: os.Getenv("AO_TMUX_SOCKET_NAME"),
+		Unregister:     ptyregistry.Unregister,
+		Log:            log,
+	})
+
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Awake:              awakeSvc,
 		Projects:           projectSvc,
@@ -1060,6 +1087,7 @@ func Run() error {
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      agentAccountSvc,
 		SystemChecks:       systemChecks,
+		Processes:          processInventory,
 		Installer:          systemInstall,
 		Sessions:           sessionSvc,
 		Automations:        automationSvc,

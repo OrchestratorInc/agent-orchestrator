@@ -150,6 +150,9 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions/{sessionId}/workspace/file",
 	"/api/v1/sessions/{sessionId}/workspace/files",
 	"/api/v1/sessions/cleanup",
+	// Fork delta: process footprint surface.
+	"/api/v1/system/processes",
+	"/api/v1/system/processes/kill",
 	"/api/v1/user-config",
 ] as const;
 

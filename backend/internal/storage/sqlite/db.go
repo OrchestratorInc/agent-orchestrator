@@ -330,6 +330,9 @@ func migrate(db *sql.DB) error {
 	if err := prepareReviewRunPublicationMigration(db); err != nil {
 		return fmt.Errorf("prepare review-run publication migration: %w", err)
 	}
+	if err := prepareProcessInventoryMigration(db); err != nil {
+		return fmt.Errorf("prepare process-inventory migration: %w", err)
+	}
 	if err := prepareQueuedTurnPromotionMigration(db); err != nil {
 		return fmt.Errorf("prepare queued-turn promotion migration: %w", err)
 	}
@@ -840,6 +843,56 @@ WHERE github_review_id != '' AND publish_state = 'pending'`); err != nil {
 		return err
 	}
 	_, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (9012, 1)`)
+	return err
+}
+
+// prepareProcessInventoryMigration preserves databases from the parked
+// proc-inventory line that already hold the app_settings.process_inventory
+// column (applied there as fork migration 9002, renumbered 9003, both numbers
+// burned by later delta squashes) while the ledger records no 9013 row for the
+// return of the feature (issue #40). Replaying the ALTER TABLE fails with
+// "duplicate column name: process_inventory" and wedges daemon startup, so a
+// physically present column is recorded as applied. The reverse foreign record
+// — a 9013 ledger entry not backed by the column — is released so the runner
+// can apply the real migration.
+func prepareProcessInventoryMigration(db *sql.DB) error {
+	var ledger int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&ledger); err != nil {
+		return err
+	}
+	if ledger == 0 {
+		return nil
+	}
+
+	var applied int
+	if err := db.QueryRow(`
+SELECT COALESCE((
+    SELECT is_applied FROM goose_db_version
+    WHERE version_id = 9013 ORDER BY id DESC LIMIT 1
+), 0)`).Scan(&applied); err != nil {
+		return err
+	}
+
+	var columns int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('app_settings') WHERE name = 'process_inventory'`,
+	).Scan(&columns); err != nil {
+		return err
+	}
+
+	if applied != 0 {
+		if columns != 0 {
+			return nil
+		}
+		_, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 9013`)
+		return err
+	}
+	if columns == 0 {
+		return nil
+	}
+	_, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (9013, 1)`)
 	return err
 }
 

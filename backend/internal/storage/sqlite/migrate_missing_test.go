@@ -337,6 +337,76 @@ VALUES ('run-old', 'rev-1', 's1', 'claude-code', '', '', 'complete', '', '', '20
 	}
 }
 
+// TestMigrateRecognizesProcessInventoryFromEarlierBuild covers databases from
+// the parked proc-inventory line: they hold the app_settings.process_inventory
+// column (applied there as fork migration 9002, renumbered 9003, both burned)
+// while the ledger records no 9013 row for the feature's return (issue #40).
+// Replaying the ALTER TABLE would fail with "duplicate column name:
+// process_inventory" and wedge daemon startup; the prepare repair must record
+// 9013 instead.
+func TestMigrateRecognizesProcessInventoryFromEarlierBuild(t *testing.T) {
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 9012)
+	if _, err := db.Exec(`
+ALTER TABLE app_settings ADD COLUMN process_inventory INTEGER NOT NULL DEFAULT 1
+    CHECK (process_inventory IN (0, 1))`); err != nil {
+		t.Fatalf("seed process_inventory column from earlier build: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database with pre-existing process_inventory column: %v", err)
+	}
+
+	var columns, applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('app_settings') WHERE name = 'process_inventory'`,
+	).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 9013 AND is_applied = 1`,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 1 || applied != 1 {
+		t.Fatalf("process inventory state = columns %d, applied rows %d; want 1, 1", columns, applied)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate: %v", err)
+	}
+}
+
+// TestMigrateReleasesForeignProcessInventoryLedgerEntry covers a database that
+// records 9013 as applied without holding the column — a foreign version-table
+// record left by a build that claimed the number for something else. The
+// repair must release the entry so the real migration applies and the column
+// appears.
+func TestMigrateReleasesForeignProcessInventoryLedgerEntry(t *testing.T) {
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 9012)
+	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (9013, 1)`); err != nil {
+		t.Fatalf("seed foreign 9013 ledger entry: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database with foreign 9013 record: %v", err)
+	}
+
+	var columns, applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('app_settings') WHERE name = 'process_inventory'`,
+	).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(
+		`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 9013 ORDER BY id DESC LIMIT 1), 0)`,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 1 || applied != 1 {
+		t.Fatalf("process inventory state after release = columns %d, applied %d; want 1, 1", columns, applied)
+	}
+}
+
 func TestMigrateRepairsRetrySourceBeforeCancelledTurnRebuild(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 107)
 	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (108, 1)`); err != nil {

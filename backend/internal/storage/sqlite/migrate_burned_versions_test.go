@@ -217,6 +217,7 @@ var shippedMigrations = map[int64]string{
 	9006: "9006_session_provider_stamp.sql",
 	9011: "9011_gateway_entries.sql",
 	9012: "9012_review_run_publication.sql",
+	9013: "9013_app_settings_process_inventory.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

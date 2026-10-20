@@ -4073,6 +4073,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/processes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Snapshot AO-owned processes: control plane, tmux server, session trees, orphans */
+        get: operations["getSystemProcesses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/processes/kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Kill orphaned process trees (re-validated against a fresh snapshot; only orphans are signalled) */
+        post: operations["killSystemProcesses"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/requirements": {
         parameters: {
             query?: never;
@@ -6196,6 +6230,100 @@ export interface components {
             agent: components["schemas"]["AgentInfo"];
             installed: boolean;
             supported: boolean;
+        };
+        ProcessGroupSummary: {
+            pid: number;
+            present: boolean;
+            /** Format: int64 */
+            rssBytes: number;
+        };
+        ProcessHostMemory: {
+            /** Format: int64 */
+            appBytes?: number;
+            /** Format: int64 */
+            cachedBytes: number;
+            /** Format: int64 */
+            compressedBytes?: number;
+            /** Format: int64 */
+            freeBytes: number;
+            pressureFreePercent?: null | number;
+            /** Format: int64 */
+            swapFreeBytes: number;
+            /** Format: int64 */
+            swapMaxBytes: number;
+            /** Format: int64 */
+            swapTotalBytes: number;
+            /** Format: int64 */
+            swapUsedBytes: number;
+            /** Format: int64 */
+            totalBytes: number;
+            /** Format: int64 */
+            usedBytes: number;
+            /** Format: int64 */
+            wiredBytes?: number;
+        };
+        ProcessInventoryResponse: {
+            daemon: components["schemas"]["ProcessGroupSummary"];
+            disabled: boolean;
+            /** Format: date-time */
+            generatedAt: string;
+            host?: components["schemas"]["ProcessHostMemory"];
+            remnants: components["schemas"]["ProcessRemnant"][];
+            tmux: components["schemas"]["ProcessGroupSummary"];
+            totals: components["schemas"]["ProcessTotals"];
+            trees: components["schemas"]["ProcessTree"][];
+        };
+        ProcessKillRequest: {
+            targets: components["schemas"]["ProcessKillTarget"][];
+        };
+        ProcessKillResponse: {
+            results: components["schemas"]["ProcessKillResult"][];
+        };
+        ProcessKillResult: {
+            detail?: string;
+            rootPid: number;
+            sessionId: string;
+            status: string;
+        };
+        ProcessKillTarget: {
+            rootLstart: string;
+            rootPid: number;
+            sessionId: string;
+        };
+        ProcessRemnant: {
+            pid: number;
+            /** Format: int64 */
+            rssBytes: number;
+            sessionId: string;
+        };
+        ProcessTotals: {
+            /** Format: int64 */
+            daemonRssBytes: number;
+            foreignCount: number;
+            /** Format: int64 */
+            foreignRssBytes: number;
+            orphansCount: number;
+            /** Format: int64 */
+            orphansRssBytes: number;
+            sessionsCount: number;
+            /** Format: int64 */
+            sessionsRssBytes: number;
+            /** Format: int64 */
+            tmuxRssBytes: number;
+        };
+        ProcessTree: {
+            activityState?: string;
+            attached: boolean;
+            kind: string;
+            /** Format: date-time */
+            lastActivityAt: string;
+            pidCount: number;
+            rootLstart: string;
+            rootPid: number;
+            /** Format: int64 */
+            rssBytes: number;
+            sessionId: string;
+            state: string;
         };
         Project: {
             agent?: string;
@@ -22629,6 +22757,104 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSystemProcesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessInventoryResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    killSystemProcesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProcessKillRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessKillResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

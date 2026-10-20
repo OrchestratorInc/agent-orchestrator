@@ -199,6 +199,8 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
+	// GET answers no data: the status bar's process-inventory query settles
+	// on null and renders nothing, which is what these tests expect.
 	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
@@ -240,6 +242,9 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null }));
+// The status bar's query needs a QueryClientProvider these tests don't mount;
+// stub it out like every other shell peripheral.
+vi.mock("../components/StatusBar", () => ({ StatusBar: () => null }));
 vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,

@@ -625,6 +625,17 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers: GitHub PAT wire envelopes
 	"ControllersPutGitHubPATRequest": "PutGitHubPATRequest",
 	"GithubpatRepo":                  "GitHubRepo",
+	// controller/processes wire envelopes (fork delta)
+	"ControllersProcessInventoryResponse": "ProcessInventoryResponse",
+	"ControllersProcessHostMemoryDTO":     "ProcessHostMemory",
+	"ControllersProcessGroupSummaryDTO":   "ProcessGroupSummary",
+	"ControllersProcessTreeDTO":           "ProcessTree",
+	"ControllersProcessRemnantDTO":        "ProcessRemnant",
+	"ControllersProcessTotalsDTO":         "ProcessTotals",
+	"ControllersProcessKillRequest":       "ProcessKillRequest",
+	"ControllersProcessKillResponse":      "ProcessKillResponse",
+	"ControllersProcessKillTargetDTO":     "ProcessKillTarget",
+	"ControllersProcessKillResultDTO":     "ProcessKillResult",
 }
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
@@ -738,6 +749,7 @@ func operations() []operation {
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
+	ops = append(ops, processOperations()...)
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
@@ -2556,6 +2568,35 @@ func userConfigOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.UserConfigResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// processOperations declares the process-footprint surface (fork delta). The
+// set must stay 1:1 with the routes ProcessController.Register mounts —
+// TestRouteSpecParity fails the build otherwise.
+func processOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/system/processes", id: "getSystemProcesses", tag: "system",
+			summary: "Snapshot AO-owned processes: control plane, tmux server, session trees, orphans",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProcessInventoryResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/system/processes/kill", id: "killSystemProcesses", tag: "system",
+			summary: "Kill orphaned process trees (re-validated against a fresh snapshot; only orphans are signalled)",
+			reqBody: controllers.ProcessKillRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProcessKillResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 			},
 		},
