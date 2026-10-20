@@ -42,7 +42,7 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 				LookPath: func(string) (string, error) {
 					return "", errors.New("not on PATH")
 				},
-				RunInteractiveCommand: func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, _ io.Reader, _, _ io.Writer) error {
 					gotName = name
 					gotArgs = append([]string(nil), args...)
 					return nil
