@@ -264,7 +264,10 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
+			// A report's prompt keeps its name only while it is sent unchanged.
+			const request = useUiStore.getState().newTaskRequest;
+			const displayName = request?.initialPrompt && request.displayName && text.trim() === request.initialPrompt.trim() ? request.displayName : undefined;
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments, displayName });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
