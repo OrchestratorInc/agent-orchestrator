@@ -1,29 +1,41 @@
 import type { Messages } from "@lingui/core";
-import { messages as enMessages } from "../../locales/en/messages";
+import { messages as cs } from "../../locales/cs/messages";
+import { messages as de } from "../../locales/de/messages";
+import { messages as en } from "../../locales/en/messages";
+import { messages as es } from "../../locales/es/messages";
+import { messages as fr } from "../../locales/fr/messages";
+import { messages as id } from "../../locales/id/messages";
+import { messages as it } from "../../locales/it/messages";
+import { messages as ja } from "../../locales/ja/messages";
+import { messages as ko } from "../../locales/ko/messages";
+import { messages as nl } from "../../locales/nl/messages";
+import { messages as pl } from "../../locales/pl/messages";
+import { messages as ptBR } from "../../locales/pt-BR/messages";
+import { messages as ru } from "../../locales/ru/messages";
+import { messages as tr } from "../../locales/tr/messages";
+import { messages as vi } from "../../locales/vi/messages";
+import { messages as zhCN } from "../../locales/zh-CN/messages";
+import { messages as zhTW } from "../../locales/zh-TW/messages";
 import type { SupportedLocale } from "./locales";
 
-// Bundlers only follow import() calls they can resolve statically, so the map
-// is spelled out.
-const CATALOGS: Record<SupportedLocale, () => Promise<{ messages: Messages }>> = {
-  en: async () => ({ messages: enMessages }),
-  ja: () => import("../../locales/ja/messages"),
-  "zh-CN": () => import("../../locales/zh-CN/messages"),
-  "zh-TW": () => import("../../locales/zh-TW/messages"),
-  ko: () => import("../../locales/ko/messages"),
-  fr: () => import("../../locales/fr/messages"),
-  es: () => import("../../locales/es/messages"),
-  de: () => import("../../locales/de/messages"),
-  "pt-BR": () => import("../../locales/pt-BR/messages"),
-  it: () => import("../../locales/it/messages"),
-  ru: () => import("../../locales/ru/messages"),
-  tr: () => import("../../locales/tr/messages"),
-  pl: () => import("../../locales/pl/messages"),
-  nl: () => import("../../locales/nl/messages"),
-  id: () => import("../../locales/id/messages"),
-  cs: () => import("../../locales/cs/messages"),
-  vi: () => import("../../locales/vi/messages"),
+// The interface catalogs are a few dozen strings each, so every locale ships
+// with the page and switching languages never waits on a request.
+export const CATALOGS: Record<SupportedLocale, Messages> = {
+  en,
+  ja,
+  "zh-CN": zhCN,
+  "zh-TW": zhTW,
+  ko,
+  fr,
+  es,
+  de,
+  "pt-BR": ptBR,
+  it,
+  ru,
+  tr,
+  pl,
+  nl,
+  id,
+  cs,
+  vi,
 };
-
-export async function getLocaleMessages(locale: SupportedLocale): Promise<Messages> {
-  return (await CATALOGS[locale]()).messages;
-}

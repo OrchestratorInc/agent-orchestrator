@@ -13,25 +13,15 @@ import {
   SearchDialogOverlay,
   type SharedProps,
 } from "fumadocs-ui/components/dialog/search";
-import { useI18n } from "fumadocs-ui/contexts/i18n";
-import { useMemo } from "react";
-import { DEFAULT_LOCALE, isSupportedLocale, localizePath } from "@/i18n/locales";
 
 const client = oramaStaticClient({ from: "/api/search" });
 
 /**
- * Searches the one English index every locale shares, then points each
- * result at the reader's locale so search does not drop them into English.
+ * Searches the English index whatever the interface language is. The default
+ * dialog would look for a per-language index, and the articles are English.
  */
-export function LocalizedSearchDialog(props: SharedProps) {
-  const { locale: current } = useI18n();
-  const locale = current && isSupportedLocale(current) ? current : DEFAULT_LOCALE;
+export function DocsSearchDialog(props: SharedProps) {
   const { search, setSearch, query } = useDocsSearch({ client });
-
-  const items = useMemo(() => {
-    if (query.data === "empty" || !query.data) return null;
-    return query.data.map((item) => ({ ...item, url: localizePath(locale, item.url) }));
-  }, [locale, query.data]);
 
   return (
     <SearchDialog search={search} onSearchChange={setSearch} isLoading={query.isLoading} {...props}>
@@ -42,7 +32,7 @@ export function LocalizedSearchDialog(props: SharedProps) {
           <SearchDialogInput />
           <SearchDialogClose />
         </SearchDialogHeader>
-        <SearchDialogList items={items} />
+        <SearchDialogList items={query.data === "empty" ? null : query.data} />
       </SearchDialogContent>
     </SearchDialog>
   );

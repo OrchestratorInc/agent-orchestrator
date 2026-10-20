@@ -1,14 +1,13 @@
 import type { I18n } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
-import { localizePath, type SupportedLocale } from "@/i18n/locales";
 import { COMPANY } from "./constants";
 
-export function baseOptions(i18n: I18n, locale: SupportedLocale): BaseLayoutProps {
+export function baseOptions(i18n: I18n): BaseLayoutProps {
   const name = COMPANY.NAME;
   return {
     nav: {
-      url: localizePath(locale, "/"),
+      url: "/",
       title: (
         <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <img

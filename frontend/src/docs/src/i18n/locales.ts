@@ -22,10 +22,8 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: SupportedLocale = "en";
 
-/** Locales served under a path prefix. English keeps the bare URLs. */
-export const PREFIXED_LOCALES = SUPPORTED_LOCALES.filter(
-  (locale): locale is Exclude<SupportedLocale, "en"> => locale !== DEFAULT_LOCALE,
-);
+/** Records an explicit choice from the language switcher. */
+export const LOCALE_COOKIE = "ao_locale";
 
 // Each name is in its own language, so a reader who cannot read the current
 // page can still find their language. Never translate these.
@@ -53,21 +51,14 @@ export function isSupportedLocale(value: string): value is SupportedLocale {
   return (SUPPORTED_LOCALES as readonly string[]).includes(value);
 }
 
-/** Splits a pathname into its locale and the path without the prefix. */
-export function splitLocalePath(pathname: string): {
-  locale: SupportedLocale;
-  path: string;
-} {
-  const [, first = "", ...rest] = pathname.split("/");
-  if (isSupportedLocale(first) && first !== DEFAULT_LOCALE) {
-    return { locale: first, path: `/${rest.join("/")}` };
+/** The locale saved by the language switcher, or English when none is saved. */
+export function readLocaleCookie(cookie: string): SupportedLocale {
+  for (const part of cookie.split(";")) {
+    const [name, value = ""] = part.trim().split("=");
+    if (name === LOCALE_COOKIE) {
+      const locale = decodeURIComponent(value);
+      return isSupportedLocale(locale) ? locale : DEFAULT_LOCALE;
+    }
   }
-  return { locale: DEFAULT_LOCALE, path: pathname || "/" };
-}
-
-/** Same-site path for a locale: bare for English, prefixed otherwise. */
-export function localizePath(locale: SupportedLocale, path: string): string {
-  const normalized = path.startsWith("/") ? path : `/${path}`;
-  if (locale === DEFAULT_LOCALE) return normalized;
-  return normalized === "/" ? `/${locale}/` : `/${locale}${normalized}`;
+  return DEFAULT_LOCALE;
 }
