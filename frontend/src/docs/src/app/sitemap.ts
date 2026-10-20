@@ -1,19 +1,22 @@
 import type { MetadataRoute } from "next";
 import { source } from "@/lib/source";
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "@/i18n/locales";
+import { translatedLocales } from "@/lib/translated";
+import { DEFAULT_LOCALE } from "@/i18n/locales";
 import { localeUrl, localizedAlternates } from "@/i18n/routing";
 
 export const dynamic = "force-static";
 
-/** Every page in every locale, each listing its other language versions. */
+/**
+ * Each page once per locale that has its body translated, with hreflang
+ * alternates. Pages whose body is English only are listed at their English URL.
+ */
 export default function sitemap(): MetadataRoute.Sitemap {
-  return SUPPORTED_LOCALES.flatMap((locale) =>
-    source.getPages(locale).map((page) => {
-      const path = `/${page.slugs.join("/")}`;
-      return {
-        url: localeUrl(locale, path),
-        alternates: { languages: localizedAlternates(DEFAULT_LOCALE, path).languages },
-      };
-    }),
-  );
+  return source.getPages(DEFAULT_LOCALE).flatMap((page) => {
+    const path = `/${page.slugs.join("/")}`;
+    const locales = translatedLocales(page.slugs);
+    return locales.map((locale) => {
+      const { languages } = localizedAlternates(locale, path, locales);
+      return languages ? { url: localeUrl(locale, path), alternates: { languages } } : { url: localeUrl(locale, path) };
+    });
+  });
 }

@@ -6,6 +6,7 @@ import { createRelativeLink } from "fumadocs-ui/mdx";
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/layouts/docs/page";
 import { Card, getMDXComponents, PluginCard } from "@/components/mdx";
 import { source } from "@/lib/source";
+import { hasTranslatedBody, translatedLocales } from "@/lib/translated";
 import { visibleProductName } from "@/lib/branding";
 import { DEFAULT_LOCALE, localizePath, SUPPORTED_LOCALES, type SupportedLocale } from "@/i18n/locales";
 import { joinSlug, localizedAlternates, splitSlug } from "@/i18n/routing";
@@ -17,12 +18,6 @@ async function resolvePage(props: PageProps<"/[[...slug]]">) {
   const page = source.getPage(slug, locale);
   if (!page) notFound();
   return { locale, slug, page };
-}
-
-/** True when the locale has its own copy of the article, not the English fallback. */
-function hasTranslatedBody(locale: SupportedLocale, slug: string[]): boolean {
-  if (locale === DEFAULT_LOCALE) return true;
-  return source.getPage(slug, locale)?.data !== source.getPage(slug, DEFAULT_LOCALE)?.data;
 }
 
 /** Keeps same-site links in the reader's locale. Assets and other hosts pass through. */
@@ -85,6 +80,6 @@ export async function generateMetadata(props: PageProps<"/[[...slug]]">): Promis
   return {
     title: i18n._(msg`${title} | Agent Orchestrator Docs`),
     description: page.data.description,
-    alternates: localizedAlternates(locale, `/${slug.join("/")}`),
+    alternates: localizedAlternates(locale, `/${slug.join("/")}`, translatedLocales(slug)),
   };
 }

@@ -3,7 +3,6 @@ import {
   DEFAULT_LOCALE,
   isSupportedLocale,
   localizePath,
-  SUPPORTED_LOCALES,
   type SupportedLocale,
 } from "./locales";
 
@@ -30,12 +29,22 @@ export function localeUrl(locale: SupportedLocale, path: string): string {
   return `${COMPANY.DOCS_URL}${localizePath(locale, withSlash)}`;
 }
 
-/** Canonical and hreflang links. Each locale version names every other one. */
-export function localizedAlternates(locale: SupportedLocale, path: string) {
+/**
+ * Canonical and hreflang links. `translatedLocales` are the locales whose copy
+ * of the page has its body in that language. A page whose body exists only in
+ * English keeps the English canonical and names no alternates.
+ */
+export function localizedAlternates(
+  locale: SupportedLocale,
+  path: string,
+  translatedLocales: readonly SupportedLocale[],
+) {
+  if (!translatedLocales.includes(locale)) return { canonical: localeUrl(DEFAULT_LOCALE, path) };
+  if (translatedLocales.length < 2) return { canonical: localeUrl(locale, path) };
   const languages: Record<string, string> = {
     "x-default": localeUrl(DEFAULT_LOCALE, path),
   };
-  for (const option of SUPPORTED_LOCALES) {
+  for (const option of translatedLocales) {
     languages[option] = localeUrl(option, path);
   }
   return { canonical: localeUrl(locale, path), languages };
