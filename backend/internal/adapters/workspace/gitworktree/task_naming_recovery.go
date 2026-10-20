@@ -45,6 +45,96 @@ func checkoutGitDir(path string) (string, error) {
 	return physicalAbs(gitDir)
 }
 
+// repairTaskWorkspaceLink updates only the admin backlink for this AO-owned
+// checkout. `git worktree repair <path>` also scans every registered worktree.
+func (w *Workspace) repairTaskWorkspaceLink(ctx context.Context, repo ports.WorkspaceRepoInfo) error {
+	gitDir, err := checkoutGitDir(repo.Path)
+	if err != nil {
+		return fmt.Errorf("gitworktree: task checkout %q Git directory: %w", repo.Path, err)
+	}
+	commonOut, err := w.run(ctx, w.binary, "-C", repo.RepoPath, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("gitworktree: resolve common Git directory for %q: %w", repo.RepoPath, err)
+	}
+	commonDir := strings.TrimSpace(string(commonOut))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo.RepoPath, commonDir)
+	}
+	commonDir, err = physicalAbs(commonDir)
+	if err != nil {
+		return fmt.Errorf("gitworktree: resolve common Git directory for %q: %w", repo.RepoPath, err)
+	}
+	worktreesDir, err := physicalAbs(filepath.Join(commonDir, "worktrees"))
+	if err != nil {
+		return fmt.Errorf("gitworktree: resolve worktree metadata directory for %q: %w", repo.RepoPath, err)
+	}
+	if filepath.Dir(gitDir) != worktreesDir {
+		return fmt.Errorf("gitworktree: task checkout %q is not registered under repository %q", repo.Path, repo.RepoPath)
+	}
+	gitdirFile := filepath.Join(gitDir, "gitdir")
+	fileInfo, err := os.Lstat(gitdirFile)
+	if err != nil {
+		return fmt.Errorf("gitworktree: inspect task checkout backlink %q: %w", gitdirFile, err)
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return fmt.Errorf("gitworktree: task checkout backlink %q is not a regular file", gitdirFile)
+	}
+	oldLink, err := os.ReadFile(gitdirFile)
+	if err != nil {
+		return fmt.Errorf("gitworktree: read task checkout backlink %q: %w", gitdirFile, err)
+	}
+	link := filepath.Join(repo.Path, ".git")
+	link, err = physicalAbs(link)
+	if err != nil {
+		return fmt.Errorf("gitworktree: resolve task checkout backlink %q: %w", link, err)
+	}
+	if len(oldLink) > 0 && !filepath.IsAbs(strings.TrimRight(string(oldLink), "\r\n")) {
+		link, err = filepath.Rel(gitDir, link)
+		if err != nil {
+			return fmt.Errorf("gitworktree: make task checkout backlink relative: %w", err)
+		}
+	}
+	if strings.TrimRight(string(oldLink), "\r\n") == link {
+		return nil
+	}
+	if err := replaceWorktreeGitdir(gitdirFile, []byte(link+"\n"), fileInfo.Mode().Perm()); err != nil {
+		return fmt.Errorf("gitworktree: update task checkout backlink %q: %w", gitdirFile, err)
+	}
+	return nil
+}
+
+func replaceWorktreeGitdir(path string, contents []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".ao-worktree-gitdir-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(contents); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
+}
+
 func writeTaskNamingMove(ctx context.Context, path string, move taskNamingMove) error {
 	body, err := json.Marshal(move)
 	if err != nil {

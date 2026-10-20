@@ -237,9 +237,9 @@ func TestNameTaskWorkspaceRepairCanResume(t *testing.T) {
 	actualRun := ws.run
 	injected := false
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
-		if !injected && strings.Contains(strings.Join(args, " "), "worktree repair") {
+		if !injected && strings.Contains(strings.Join(args, " "), "rev-parse --git-common-dir") {
 			injected = true
-			return nil, errors.New("repair interrupted")
+			return nil, errors.New("resolve common Git directory interrupted")
 		}
 		return actualRun(ctx, binary, args...)
 	}
@@ -263,5 +263,59 @@ func TestNameTaskWorkspaceRepairCanResume(t *testing.T) {
 		if got := gitOutput(t, git, wt.Path, "branch", "--show-current"); got != "ao/fix-login/root" {
 			t.Fatalf("branch=%q", got)
 		}
+	}
+}
+
+func TestNameTaskWorkspaceDoesNotRepairForeignWorktrees(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	foreign := filepath.Join(tmp, "Codex", "foreign")
+	gitOutput(t, git, repo, "worktree", "add", "-b", "codex/foreign", foreign, "main")
+	foreignGitFile := filepath.Join(foreign, ".git")
+	brokenGitFile := []byte("gitdir: " + filepath.Join(tmp, "unavailable", "admin") + "\n")
+	if err := os.WriteFile(foreignGitFile, brokenGitFile, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(foreignGitFile, 0o644) }()
+	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1",
+		RootRepoPath: repo, BaseBranch: "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualRun := ws.run
+	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "worktree repair") {
+			t.Fatal("task naming invoked Git's repo-wide worktree repair")
+		}
+		return actualRun(ctx, binary, args...)
+	}
+	info, err = ws.NameTaskWorkspace(context.Background(), info, "ao/fix-login/root", "fix-login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wt := range info.Worktrees {
+		gitDir, err := checkoutGitDir(wt.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		backlink, err := os.ReadFile(filepath.Join(gitDir, "gitdir"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.TrimSpace(string(backlink)), filepath.Join(wt.Path, ".git"); got != want {
+			t.Fatalf("%s backlink = %q, want %q", wt.Path, got, want)
+		}
+	}
+	if got, err := os.ReadFile(foreignGitFile); err != nil || string(got) != string(brokenGitFile) {
+		t.Fatalf("foreign Codex .git file changed: %q, %v", got, err)
 	}
 }

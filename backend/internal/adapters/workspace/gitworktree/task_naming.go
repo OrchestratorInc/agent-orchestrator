@@ -208,7 +208,7 @@ func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.Workspac
 	}
 	var repairErr error
 	for i, repo := range repos {
-		if _, err := w.run(ctx, w.binary, "-C", repo.RepoPath, "worktree", "repair", repo.Path); err != nil {
+		if err := w.repairTaskWorkspaceLink(ctx, repo); err != nil {
 			repairErr = errors.Join(repairErr, err)
 			continue
 		}
