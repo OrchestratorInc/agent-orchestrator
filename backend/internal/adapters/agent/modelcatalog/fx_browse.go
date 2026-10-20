@@ -31,6 +31,8 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	result.FetchedAt = time.Now().UTC()
 	result.Providers = []string{"gateway", "codex", "grok"}
 	var settings struct {
+		Provider  string            `json:"provider"`
+		Models    map[string]string `json:"models"`
 		Providers map[string]struct {
 			ModelMetadata map[string]struct {
 				ContextWindow int64 `json:"context_window"`
@@ -71,10 +73,21 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	var status struct {
 		ConnectedProviders []string `json:"connected_providers"`
 	}
+	// A built-in connection is set up when FX reports it connected, it is the
+	// saved provider, or it has a saved model. Gateway is FX's default. Listing
+	// fails for connections the user never set up (Grok without a selected
+	// model, for example); that is not worth a warning.
+	setUp := map[string]bool{"gateway": true, settings.Provider: true}
+	for provider, model := range settings.Models {
+		if strings.TrimSpace(model) != "" {
+			setUp[provider] = true
+		}
+	}
 	if statusErr == nil && json.Unmarshal(output, &status) == nil {
 		connected := map[string]bool{}
 		for _, provider := range status.ConnectedProviders {
 			connected[provider] = true
+			setUp[provider] = true
 		}
 		for _, provider := range result.Providers {
 			if connected[provider] {
@@ -126,7 +139,7 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	var unavailable []string
 	for index, provider := range result.Providers[:3] {
 		result.Models = append(result.Models, results[index].models...)
-		if results[index].failed {
+		if results[index].failed && setUp[provider] {
 			unavailable = append(unavailable, provider)
 		}
 	}

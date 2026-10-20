@@ -18,7 +18,7 @@ func TestFXCatalogKeepsDuplicateModelsSelectableByConnection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".fx"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".fx", "settings.json"), []byte(`{"providers":{"local":{"protocol":"openai-chat-completions","auth":{"type":"none"},"model_metadata":{"local-model":{"context_window":32768}}},"bad/name":{}}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".fx", "settings.json"), []byte(`{"models":{"grok":"grok-4"},"providers":{"local":{"protocol":"openai-chat-completions","auth":{"type":"none"},"model_metadata":{"local-model":{"context_window":32768}}},"bad/name":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := map[string]string{"HOME": home, "FX_PROVIDER": "codex"}
@@ -60,6 +60,35 @@ func TestFXCatalogKeepsDuplicateModelsSelectableByConnection(t *testing.T) {
 	}
 	if strings.Contains(got.Warning, "secret") || !strings.Contains(got.Warning, "grok") {
 		t.Fatalf("unsafe or missing failure explanation: %s", got.Warning)
+	}
+}
+
+func TestFXCatalogDoesNotWarnForConnectionsNeverSetUp(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".fx"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".fx", "settings.json"), []byte(`{"provider":"gateway","models":{"codex":"gpt-5.6-terra","gateway":"openai/gpt-5.2"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(_ context.Context, _ string, args []string, _ string, childEnv map[string]string) ([]byte, error) {
+		if strings.Join(args, " ") == "status --json" {
+			return []byte(`{"kind":"status","auth":"fx login"}`), nil
+		}
+		switch childEnv["FX_PROVIDER"] {
+		case "gateway":
+			return []byte(`{"ids":["openai/gpt-5.2"]}`), nil
+		case "codex":
+			return nil, errors.New("exit status 1")
+		}
+		return []byte("fx: no Grok model is selected"), errors.New("exit status 1")
+	}
+	got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": home}}, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata["unavailableProviders"] != "codex" || !strings.Contains(got.Warning, "codex") || strings.Contains(got.Warning, "grok") {
+		t.Fatalf("warning = %q, metadata = %v", got.Warning, got.Metadata)
 	}
 }
 
