@@ -121,3 +121,11 @@ describe("DaemonFailureBanner", () => {
 		expect(await screen.findByText("Daemon did not stop")).toBeInTheDocument();
 	});
 });
+
+it("launches the terminal fallback directly while the daemon is down", async () => {
+	const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "No terminal was found." });
+	render(<DaemonFailureBanner status={{ state: "error", code: "not_ready" }} />);
+	fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+	expect(launch).toHaveBeenCalledWith();
+	expect(await screen.findByText("No terminal was found.")).toBeInTheDocument();
+});
