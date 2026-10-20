@@ -140,6 +140,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		...window.ao,
 		app: {
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
@@ -828,18 +829,18 @@ describe("shell workspace startup", () => {
 });
 
 describe("shell route loader", () => {
-	const loader = Route.options.loader as (args: { context: { queryClient: Pick<QueryClient, "fetchQuery"> } }) => Promise<unknown>;
+	const loader = Route.options.loader as (args: { context: { queryClient: Pick<QueryClient, "fetchQuery"> }; location: { pathname: string } }) => Promise<unknown>;
 
 	it("treats a workspace fetch cancelled by a newer refetch as warmed, not a shell error", async () => {
 		const fetchQuery = vi.fn(() => Promise.reject(new CancelledError()));
-		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient } })).resolves.toBeUndefined();
+		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient }, location: { pathname: "/" } })).resolves.toBeUndefined();
 		expect(fetchQuery).toHaveBeenCalledTimes(1);
 	});
 
 	it("still fails the shell on a real workspace fetch error", async () => {
 		const failure = new Error("daemon down");
 		const fetchQuery = vi.fn(() => Promise.reject(failure));
-		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient } })).rejects.toBe(failure);
+		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient }, location: { pathname: "/" } })).rejects.toBe(failure);
 	});
 });
 

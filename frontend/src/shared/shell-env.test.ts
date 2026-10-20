@@ -78,6 +78,19 @@ describe("buildDaemonEnv", () => {
 		expect(env.ANTHROPIC_API_KEY).toBe("sk-ant");
 	});
 
+	it("preserves explicit empty credentials and isolated support paths over login-shell values", () => {
+		const env = buildDaemonEnv(
+			{ GH_TOKEN: "", AO_GITHUB_TOKEN: "", GH_CONFIG_DIR: "/isolated/empty-gh", AO_RUN_FILE: "/isolated/running.json" },
+			{ GH_TOKEN: "shell-token", AO_GITHUB_TOKEN: "shell-token", GH_CONFIG_DIR: "/native/gh", AO_RUN_FILE: "/native/running.json" },
+			{ AO_DATA_DIR: "/isolated/data" },
+		);
+		expect(env.GH_TOKEN).toBe("");
+		expect(env.AO_GITHUB_TOKEN).toBe("");
+		expect(env.GH_CONFIG_DIR).toBe("/isolated/empty-gh");
+		expect(env.AO_RUN_FILE).toBe("/isolated/running.json");
+		expect(env.AO_DATA_DIR).toBe("/isolated/data");
+	});
+
 	it("takes PATH from the shell env (with floor) over a minimal process PATH", () => {
 		const env = buildDaemonEnv(minimalProcessEnv, { PATH: "/opt/homebrew/bin:/usr/bin" }, {});
 		expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/opt/homebrew/sbin:/usr/local/bin:/bin:/usr/sbin:/sbin");

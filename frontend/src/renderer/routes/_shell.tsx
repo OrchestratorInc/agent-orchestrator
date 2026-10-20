@@ -12,6 +12,8 @@ import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
+import { TriageWorkspaceView } from "../components/triage/TriageWorkspaceView";
+import { TriageWorkspaceBoundary } from "../components/triage/TriageWorkspaceBoundary";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
@@ -101,8 +103,9 @@ export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
 	// children); pairs with the router's defaultPreload: "intent" so a hovered
 	// nav target is warm before the click.
-	loader: async ({ context }) => {
-		await refreshDaemonStatus().catch(() => undefined);
+	loader: async ({ context, location }) => {
+		const status = await refreshDaemonStatus().catch(() => undefined);
+		if (location.pathname === "/triage" && status?.state !== "ready") return;
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
 		// Fresh on navigation, but deduped: a hover preload followed by its click,
 		// or a quick run of navigations, shares one /projects + /sessions fetch
@@ -113,6 +116,7 @@ export const Route = createFileRoute("/_shell")({
 		return context.queryClient
 			.fetchQuery({ ...workspaceQueryOptions, staleTime: SHELL_LOADER_STALE_MS })
 			.catch((error: unknown) => {
+				if (location.pathname === "/triage") return undefined;
 				if (isCancelledError(error)) return undefined;
 				throw error;
 			});
@@ -121,11 +125,15 @@ export const Route = createFileRoute("/_shell")({
 });
 
 function ShellLayoutWithSettings() {
-	return (
+	const triage = useMatch({ from: "/_shell/triage", shouldThrow: false });
+	// Support uses only private IPC. Keep the same chat reachable when normal
+	// workspace queries cannot load, without mounting the daemon-bound shell.
+	const shell = (
 		<SettingsProvider>
 			<ShellLayout />
 		</SettingsProvider>
 	);
+	return triage ? <TriageWorkspaceBoundary runId={triage.search.run}>{shell}</TriageWorkspaceBoundary> : shell;
 }
 
 /**
@@ -283,6 +291,7 @@ const ShellCenter = memo(function ShellCenter({
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
 function ShellLayout() {
+	const triage = useMatch({ from: "/_shell/triage", shouldThrow: false });
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
 	useSessionSwitchSnap();
@@ -1320,7 +1329,7 @@ function ShellLayout() {
 	// Rendering the sidebar with an empty query while the home outlet shows its
 	// loader creates a visible two-stage launch and can make the home page flash
 	// before the project list arrives.
-	if (isStartupLoading) return <DaemonStartupLoader />;
+	if (isStartupLoading) return triage ? <TriageWorkspaceView runId={triage.search.run} recovery /> : <DaemonStartupLoader />;
 
 	return (
 		<ShellProvider

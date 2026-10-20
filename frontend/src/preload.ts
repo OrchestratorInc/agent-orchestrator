@@ -25,6 +25,7 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { TRIAGE_CHANNELS, type TriageBridge, type TriageRun, type TriageTerminalOutput } from "./shared/triage";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -185,6 +186,30 @@ function isRendererQueuePurgeRequest(value: unknown): value is RendererTelemetry
 }
 
 const api = {
+	triage: {
+		catalog: () => ipcRenderer.invoke(TRIAGE_CHANNELS.catalog),
+		configure: (choices) => ipcRenderer.invoke(TRIAGE_CHANNELS.configure, choices),
+		list: () => ipcRenderer.invoke(TRIAGE_CHANNELS.list),
+		get: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.get, runId),
+		prepare: (origin) => ipcRenderer.invoke(TRIAGE_CHANNELS.prepare, origin),
+		start: (request) => ipcRenderer.invoke(TRIAGE_CHANNELS.start, request),
+		reply: (runId, text, input) => ipcRenderer.invoke(TRIAGE_CHANNELS.reply, runId, text, input),
+		cancel: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.cancel, runId),
+		terminalInput: (runId, text) => ipcRenderer.invoke(TRIAGE_CHANNELS.terminalInput, runId, text),
+		terminalResize: (runId, rows, cols) => ipcRenderer.invoke(TRIAGE_CHANNELS.terminalResize, runId, rows, cols),
+		subscribe: (listener) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, run: TriageRun) => listener(run);
+			ipcRenderer.on(TRIAGE_CHANNELS.run, wrapped);
+			return () => { ipcRenderer.off(TRIAGE_CHANNELS.run, wrapped); };
+		},
+		subscribeTerminal: (runId, listener) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, output: TriageTerminalOutput) => {
+				if (output.runId === runId) listener(output.data, output.sequence);
+			};
+			ipcRenderer.on(TRIAGE_CHANNELS.terminal, wrapped);
+			return () => { ipcRenderer.off(TRIAGE_CHANNELS.terminal, wrapped); };
+		},
+	} satisfies TriageBridge,
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,

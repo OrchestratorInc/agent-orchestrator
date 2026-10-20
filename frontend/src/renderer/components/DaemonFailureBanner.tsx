@@ -5,6 +5,7 @@ import type { DaemonStatus } from "../../shared/daemon-status";
 import { isSlowDaemonStartupStatus } from "../../shared/daemon-startup-status";
 import { daemonFailureHint, daemonFailureMessage, daemonFailureTitle } from "../lib/daemon-failure";
 import { aoBridge } from "../lib/bridge";
+import { TriageReportButton } from "./triage/TriageReportButton";
 
 export function DaemonFailureBanner({ status }: { status: DaemonStatus }) {
 	if ((!status.code && !isSlowDaemonStartupStatus(status)) || status.state === "ready") return null;
@@ -96,6 +97,7 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 						</button>
 					) : null}
 					{restartError ? <p className="mt-2 text-error">{restartError}</p> : null}
+					<TriageReportButton className="mt-3" origin={{ surface: "daemon-error", daemonState: status.state, daemonCode: status.code, daemonOutput: status.details }} />
 					{details ? (
 						<div className="mt-2 flex items-center gap-3">
 							<button

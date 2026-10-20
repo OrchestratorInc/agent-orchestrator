@@ -70,6 +70,7 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 	"ao agent-process":           {},
 	"ao agent-process supervise": {},
 	"ao chat-host":               {},
+	"ao support-host":            {},
 	"ao completion":              {},
 	"ao daemon":                  {},
 	"ao help":                    {},

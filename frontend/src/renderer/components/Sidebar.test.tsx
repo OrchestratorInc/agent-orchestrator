@@ -31,6 +31,7 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { useTriageStore } from "../stores/triage-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
@@ -315,6 +316,7 @@ function renderSidebar({
 	onRemoveProject = vi.fn().mockResolvedValue(undefined) as RemoveProjectHandler,
 	seedAgents = true,
 	workspaces = [workspace],
+	workspaceError,
 	remoteHosts = [],
 	remoteWorkspaces = [],
 	onCreateRemoteProject = vi.fn().mockResolvedValue(undefined),
@@ -331,6 +333,7 @@ function renderSidebar({
 	onRemoveProject?: RemoveProjectHandler;
 	seedAgents?: boolean;
 	workspaces?: WorkspaceSummary[];
+	workspaceError?: string;
 	remoteHosts?: RemoteHost[];
 	remoteWorkspaces?: WorkspaceSummary[];
 	onCreateRemoteProject?: (hostId: string, input: CreateProjectInput) => Promise<void>;
@@ -367,6 +370,7 @@ function renderSidebar({
 						onInitializeProject={onInitializeProject}
 						onRemoveProject={onRemoveProject}
 						workspaces={workspaces}
+						workspaceError={workspaceError}
 						remoteHosts={remoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
 						onCreateRemoteProject={onCreateRemoteProject}
@@ -486,6 +490,7 @@ function fireDrag(
 }
 
 beforeEach(() => {
+	useTriageStore.setState({ runs: [] });
 	window.localStorage.clear();
 	dragEnds.clear();
 	dragOvers.clear();
@@ -1043,6 +1048,13 @@ describe("Sidebar", () => {
 		expect(section).toHaveClass("mb-2", "min-h-0");
 		expect(screen.queryByRole("button", { name: /show (more|fewer) agents/i })).not.toBeInTheDocument();
 		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("baby"));
+	});
+
+	it.each([undefined, "Projects could not be loaded"])("keeps a saved support report reachable without standalone agents, workspace error: %s", (workspaceError) => {
+		useTriageStore.setState({ runs: [{ id: "saved-support", version: 1, state: "report_saved", activity: "Saved", createdAt: "2026-10-19T00:00:00Z", updatedAt: "2026-10-19T00:00:00Z", request: { harness: "claude-code", observation: "", origin: {}, publishAuthorized: false }, messages: [], transport: "chat" }] });
+		renderSidebar({ workspaces: [], workspaceError });
+		expect(screen.getByTestId("triage-agent-rows")).toContainElement(screen.getByRole("link", { name: /AO support/ }));
+		expect(screen.getByRole("link", { name: /AO support/ })).toHaveAttribute("href", "#/triage?run=saved-support");
 	});
 
 	it("optically centers the Project and Scratchpad header add icons", () => {

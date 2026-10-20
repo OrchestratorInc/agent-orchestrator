@@ -12,6 +12,7 @@ import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
+import { TriageRuntime } from "./components/triage/TriageRuntime";
 import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
@@ -115,6 +116,7 @@ async function renderApp(): Promise<void> {
 				<QueryClientProvider client={queryClient}>
 					<CloudNotificationRuntime />
 					<RouterProvider router={router} />
+					<TriageRuntime />
 					<CloudOnboardingGate />
 				</QueryClientProvider>
 			</TelemetryBoundary>

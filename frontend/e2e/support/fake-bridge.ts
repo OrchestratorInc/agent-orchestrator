@@ -52,6 +52,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	await page.addInitScript(
 		({ version, daemonState, daemonPort, updateStatus, updateSettings }) => {
 			const unsubscribe = () => () => undefined;
+			const unavailableTriage = async () => { throw new Error("Problem reporting cannot run in this renderer fixture."); };
 			const updateListeners = new Set<(status: UpdateStatus) => void>();
 			let currentUpdateSettings = updateSettings;
 			let currentUpdateStatus = updateStatus;
@@ -74,6 +75,20 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				triage: {
+					catalog: async () => [],
+					configure: async () => undefined,
+					list: async () => [],
+					get: unavailableTriage,
+					prepare: unavailableTriage,
+					start: unavailableTriage,
+					reply: unavailableTriage,
+					cancel: unavailableTriage,
+					terminalInput: unavailableTriage,
+					terminalResize: unavailableTriage,
+					subscribeTerminal: unsubscribe,
+					subscribe: unsubscribe,
+				},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
@@ -940,6 +955,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			(window as unknown as { __aoFakeAgent: unknown }).__aoFakeAgent = controller;
 
 			const unsubscribe = () => () => undefined;
+			const unavailableTriage = async () => { throw new Error("Problem reporting cannot run in this renderer fixture."); };
 			const status: DaemonStatus = { state: "ready", port: daemonPort };
 			const navState = (viewId: string, url = "", error?: string) => ({
 				viewId,
@@ -951,6 +967,20 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				triage: {
+					catalog: async () => [],
+					configure: async () => undefined,
+					list: async () => [],
+					get: unavailableTriage,
+					prepare: unavailableTriage,
+					start: unavailableTriage,
+					reply: unavailableTriage,
+					cancel: unavailableTriage,
+					terminalInput: unavailableTriage,
+					terminalResize: unavailableTriage,
+					subscribeTerminal: unsubscribe,
+					subscribe: unsubscribe,
+				},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,

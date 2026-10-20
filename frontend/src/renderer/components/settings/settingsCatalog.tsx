@@ -13,6 +13,7 @@ import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
+import { TriageReportButton } from "../triage/TriageReportButton";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
 
@@ -143,6 +144,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (t, titleHidden) => (
 			<SettingsSection titleHidden={titleHidden} title={t("settings.diagnostics")}>
 				<MemoryDiagnostics />
+				<TriageReportButton origin={{ surface: "diagnostics" }} className="mt-4" />
 			</SettingsSection>
 		),
 	},

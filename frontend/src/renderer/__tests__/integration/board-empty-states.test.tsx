@@ -60,6 +60,7 @@ vi.mock("../../components/TerminalPane", () => ({
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
+		...window.ao,
 		app: {
 			chooseDirectory: chooseDirectoryMock,
 			openExternal: vi.fn(),

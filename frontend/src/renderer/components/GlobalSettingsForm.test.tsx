@@ -9,6 +9,7 @@ import { useSoundNotificationsStore } from "../stores/sound-notifications-store"
 import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
+import { useTriageStore } from "../stores/triage-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
@@ -39,6 +40,8 @@ const {
 	updOnStatus,
 	getVersion,
 	getDaemonStatus,
+	triageCatalog,
+	triageStart,
 	navigateMock,
 	writeText,
 	openExternal,
@@ -66,6 +69,8 @@ const {
 	updOnStatus: vi.fn(),
 	getVersion: vi.fn(),
 	getDaemonStatus: vi.fn(),
+	triageCatalog: vi.fn(),
+	triageStart: vi.fn(),
 	navigateMock: vi.fn(),
 	writeText: vi.fn(),
 	openExternal: vi.fn(),
@@ -100,9 +105,10 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		triage: { ...window.ao!.triage, catalog: triageCatalog, start: triageStart },
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
-		daemon: { getStatus: getDaemonStatus },
+		daemon: { ...window.ao!.daemon, getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
 		cliLink: {
 			setEnabled: vi.fn(async () => undefined),
@@ -151,6 +157,9 @@ function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: strin
 }
 
 beforeEach(async () => {
+	useTriageStore.setState(useTriageStore.getInitialState(), true);
+	triageCatalog.mockReset().mockResolvedValue([{ harness: "claude-code", label: "Claude Code", available: true, models: [{ id: "", label: "Configured default", default: true }], updatedAt: "2026-10-19T00:00:00Z" }]);
+	triageStart.mockReset();
 	harnessSettingsSectionMock.mockReset();
 	for (const m of [
 		getUpdate,
@@ -280,9 +289,8 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
-		expect(screen.getByText("Report a problem")).toBeInTheDocument();
-		// Report form is inline — no dialog, fields directly present.
-		expect(screen.getByLabelText("Title")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Report a problem" })).toBeInTheDocument();
+		expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
 	});
 
 	it("persists developer mode and reveals feature builds", async () => {
@@ -486,9 +494,10 @@ describe("GlobalSettingsForm", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("renders the report form inline without a dialog", async () => {
+	it("shows the reporting launcher without mandatory report fields", async () => {
 		renderForm();
-		expect(await screen.findByLabelText("Title")).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Report a problem" })).toBeInTheDocument();
+		expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
 		expect(screen.queryByRole("dialog", { name: "Report a problem" })).not.toBeInTheDocument();
 	});
 
@@ -769,114 +778,30 @@ describe("GlobalSettingsForm", () => {
 		expect(guidance).toBeInTheDocument();
 	});
 
-	it("opens feedback from settings and copies redacted report drafts", async () => {
+	it("opens the agent launcher from Help without starting an investigation", async () => {
 		const user = userEvent.setup();
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-		getVersion.mockResolvedValue("9.9.9-test");
-		getDaemonStatus.mockResolvedValue({
-			state: "ready",
-			message: "Listening at http://127.0.0.1:31001?token=secret",
-		});
-		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Create project fails in /Users/alice/private-repo");
-		await user.type(
-			screen.getByLabelText("What happened?"),
-			"Open http://127.0.0.1:5173/projects/demo?access_token=local-secret and click Create. Show a clear prerequisite error.",
-		);
-		expect(screen.queryByRole("combobox", { name: "Report type" })).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Include safe diagnostics")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Expected behavior")).not.toBeInTheDocument();
-		expect(screen.getByRole("group", { name: "Report destination" })).toBeInTheDocument();
-		expect(screen.queryByRole("radiogroup", { name: "Report destination" })).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Report preview")).not.toBeInTheDocument();
-
-		expect(screen.getByRole("button", { name: /copy & create github issue/i })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /copy & open discord/i })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
-		expect(screen.getByLabelText("What happened?")).toHaveClass("resize-none");
-		await user.click(screen.getByRole("button", { name: /copy & create github issue/i }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		const copied = writeText.mock.calls[0][0] as string;
-		expect(copied).toContain("Create project fails");
-		expect(copied).toContain("AO version: 9.9.9-test");
-		expect(copied).toContain("Daemon: ready");
-		expect(copied).toContain("[redacted-local-path]");
-		expect(copied).toContain("[redacted-local-url]");
-		expect(copied).not.toContain("/Users/alice");
-		expect(copied).not.toContain("local-secret");
-		expect(copied).not.toContain("## Type");
-		expect(copied).not.toContain("Generated locally by AO");
-		expect(openExternal).toHaveBeenCalledWith(
-			expect.stringContaining("https://github.com/Untrivial-ai/agent-orchestrator/issues/new"),
-		);
-		expect(open).not.toHaveBeenCalled();
-		expect(screen.getByLabelText("Title")).toHaveValue("");
-		expect(screen.getByLabelText("What happened?")).toHaveValue("");
+		renderForm("help");
+		const button = await screen.findByRole("button", { name: "Report a problem" });
+		expect(triageCatalog).not.toHaveBeenCalled();
+		await user.click(button);
+		await screen.findByRole("dialog", { name: "Report a problem" });
+		await waitFor(() => expect(screen.getByRole("button", { name: "Support agent" })).toHaveTextContent("Claude Code"));
+		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+		expect(triageStart).not.toHaveBeenCalled();
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("dialog", { name: "Report a problem" })).not.toBeInTheDocument();
 	});
 
-	it("opens Discord support and lets Windows users choose an email provider", async () => {
+	it("shows the scrubbed helper failure in Help without launching an agent", async () => {
 		const user = userEvent.setup();
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-		getVersion.mockRejectedValue(new Error("version unavailable"));
-		getDaemonStatus.mockRejectedValue(new Error("daemon unavailable"));
-		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-
-		expect(screen.getByRole("button", { name: /copy & open discord/i })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: /copy & open discord/i }));
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(writeText.mock.calls[0][0]).toContain("**AO feedback**");
-		expect(screen.getByText("Discord draft copied.")).toBeInTheDocument();
-		expect(screen.getByLabelText("Title")).toHaveValue("");
-		expect(screen.getByLabelText("What happened?")).toHaveValue("");
-
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeDisabled();
-		await user.type(screen.getByLabelText("Title"), "Need help with setup");
-		expect(screen.queryByText("Discord draft copied.")).not.toBeInTheDocument();
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
-		await user.click(await screen.findByRole("menuitem", { name: "Gmail" }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
-		expect(writeText.mock.calls[0][0]).toContain("Daemon: unknown");
-		expect(writeText.mock.calls[1][0]).toContain("To: prasad@untrivial.ai");
-		expect(writeText.mock.calls[1][0]).toContain("AO feedback");
-		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://mail.google.com/mail/"));
-		expect(open).not.toHaveBeenCalled();
-	});
-
-	it("keeps the direct system email handoff outside Windows", async () => {
-		const user = userEvent.setup();
-		isWindowsPlatform.mockReturnValue(false);
-		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("mailto:prasad@untrivial.ai"));
-		expect(screen.queryByRole("menuitem", { name: "Gmail" })).not.toBeInTheDocument();
-	});
-
-	it("keeps the report form to title and details while tailoring placeholder guidance", async () => {
-		renderForm();
-
-		expect(await screen.findByLabelText("Title")).toHaveAttribute("placeholder", "Brief Title");
-		expect(screen.getByLabelText("What happened?")).toHaveAttribute(
-			"placeholder",
-			"Share what happened, what you expected, and how to reproduce it.",
-		);
-		expect(screen.queryByLabelText("Expected behavior")).not.toBeInTheDocument();
-		expect(screen.queryByRole("combobox", { name: "Report type" })).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Include safe diagnostics")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Report preview")).not.toBeInTheDocument();
+		triageCatalog.mockRejectedValue(new Error("Support helper missing in /Users/alice/private-repo"));
+		renderForm("help");
+		await user.click(await screen.findByRole("button", { name: "Report a problem" }));
+		const error = await screen.findByRole("alert");
+		expect(error).toHaveTextContent("Support helper missing");
+		expect(error.textContent).not.toContain("/Users/alice");
+		expect(triageStart).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
 	});
 
 	it("surfaces a Return action for a persisted feature pin", async () => {

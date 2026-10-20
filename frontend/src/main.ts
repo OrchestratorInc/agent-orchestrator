@@ -79,6 +79,8 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { registerTriageIpc, resolveTriageBinary, TriageService } from "./main/triage-service";
+import { TRIAGE_CHANNELS } from "./shared/triage";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
 	refreshSlowDaemonStartupDetails,
@@ -350,6 +352,42 @@ app.once("will-quit", () => awakeDownloads.dispose());
 
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
+const triageService = new TriageService({
+	dataDir: desktopDataDir,
+	resolveBinary: () => resolveTriageBinary({
+		isPackaged: app.isPackaged,
+		resourcesPath: process.resourcesPath,
+		appPath: app.getAppPath(),
+		homeDir: os.homedir(),
+		platform: process.platform,
+	}),
+	context: () => ({
+		appVersion: app.getVersion(), buildMode: app.isPackaged ? "packaged" : "development",
+		daemonStatus, daemonOutput,
+	}),
+	env: () => {
+		const paths = {
+			AO_DATA_DIR: desktopDataDir,
+			AO_RUN_FILE: runFilePath() ?? "",
+			AO_ACP_RUNTIME_DIR: process.env.AO_ACP_RUNTIME_DIR ?? (app.isPackaged
+				? path.join(process.resourcesPath, "acp-runtime")
+				: path.join(app.getAppPath(), "resources", "acp-runtime")),
+		};
+		return process.platform === "win32"
+			? { ...cachedShellEnv, ...process.env, ...paths }
+			: buildDaemonEnv(process.env, cachedShellEnv, paths, configuredLoginShell);
+	},
+});
+triageService.subscribe((run) => {
+	for (const contents of trustedShellWebContents.values()) {
+		if (!contents.isDestroyed()) contents.send(TRIAGE_CHANNELS.run, run);
+	}
+});
+triageService.subscribeTerminal((output) => {
+	for (const contents of trustedShellWebContents.values()) {
+		if (!contents.isDestroyed()) contents.send(TRIAGE_CHANNELS.terminal, output);
+	}
+});
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
@@ -2450,6 +2488,12 @@ registerCliLinkIpc({
 });
 
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
+registerTriageIpc({
+	ipcMain,
+	service: triageService,
+	isTrustedSender: (event) => trustedShellWebContents.get(event.sender.id) === event.sender
+		&& !event.sender.isDestroyed() && event.senderFrame === event.sender.mainFrame,
+});
 ipcMain.handle("daemon:start", () => startDaemon());
 ipcMain.handle("daemon:stop", () => stopDaemon());
 ipcMain.handle("daemon:restart", async () => {
@@ -3562,6 +3606,7 @@ app.on("before-quit", (event) => {
 				sideLaunchState = undefined;
 			};
 			const cleanup = Promise.all([
+				triageService.shutdown(),
 				disposeAllBrowserViewHosts(),
 				remoteRegistry.closeAll(),
 				cloudAgentProxy.close(),
@@ -3600,6 +3645,7 @@ app.on("before-quit", (event) => {
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
+	triageService.closeOnExit();
 	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
 		killDaemon(daemonProcess);
 	}

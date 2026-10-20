@@ -30,7 +30,7 @@ func executeWithDeps(deps Deps, args []string) error {
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
-	if err != nil && ExitCode(err) == 2 {
+	if err != nil && ExitCode(err) == 2 && !isSupportHostInvocation(args) {
 		(&commandContext{deps: deps}).emitCLIUsageError(context.Background(), args, err)
 	}
 	return err
@@ -60,9 +60,10 @@ func ExitCode(err error) int {
 // Deps holds the small set of side effects the CLI needs. Tests replace these
 // functions without reaching into process-global state.
 type Deps struct {
-	In  io.Reader
-	Out io.Writer
-	Err io.Writer
+	In          io.Reader
+	Out         io.Writer
+	Err         io.Writer
+	SupportHost func(context.Context, io.Reader, io.Writer, string) error
 
 	HTTPClient            *http.Client
 	Executable            func() (string, error)
@@ -89,6 +90,7 @@ func DefaultDeps() Deps {
 		In:                    os.Stdin,
 		Out:                   os.Stdout,
 		Err:                   os.Stderr,
+		SupportHost:           runSupportHost,
 		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
 		Executable:            os.Executable,
 		StartProcess:          startProcess,
@@ -125,6 +127,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.Err == nil {
 		d.Err = def.Err
+	}
+	if d.SupportHost == nil {
+		d.SupportHost = def.SupportHost
 	}
 	if d.HTTPClient == nil {
 		d.HTTPClient = def.HTTPClient
@@ -214,6 +219,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())
+	root.AddCommand(newSupportHostCommand(ctx))
 	root.AddCommand(newUnrealProviderCommand())
 	root.AddCommand(newLaunchCommand(ctx))
 	root.AddCommand(newPtyHostCommand())
@@ -248,7 +254,7 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao support-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true

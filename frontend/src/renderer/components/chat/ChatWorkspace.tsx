@@ -140,6 +140,7 @@ import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { TriageReportButton } from "../triage/TriageReportButton";
 import {
 	activeTurn,
 	activityPlan,
@@ -332,6 +333,10 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 }
 
 export interface ChatWorkspaceProps {
+	/** A standalone conversation can ask without a daemon-owned turn. */
+	inputRequest?: ConversationActivity;
+	/** Pending interaction for a native recovery conversation without a daemon turn. */
+	pendingInteraction?: ConversationActivity;
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
@@ -621,6 +626,8 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 }
 
 function ChatWorkspaceContent({
+	inputRequest,
+	pendingInteraction,
 	onAddToSideChat,
 	annotationNavigationRequest,
 	snapshot,
@@ -1333,12 +1340,12 @@ function ChatWorkspaceContent({
 	);
 	const editHumanMessage = onEditMessage;
 	const pendingApproval = useMemo(
-		() => latestPendingInteraction(snapshot.items, "approval", turn),
-		[snapshot.items, turn],
+		() => pendingInteraction?.activityKind === "approval" ? pendingInteraction : latestPendingInteraction(snapshot.items, "approval", turn),
+		[pendingInteraction, snapshot.items, turn],
 	);
 	const pendingUserInput = useMemo(
-		() => latestPendingInteraction(snapshot.items, "user_input", turn),
-		[snapshot.items, turn],
+		() => inputRequest ?? (pendingInteraction?.activityKind === "user_input" ? pendingInteraction : latestPendingInteraction(snapshot.items, "user_input", turn)),
+		[inputRequest, pendingInteraction, snapshot.items, turn],
 	);
 	const stableSettings = useStableValue(snapshot.settings);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);
@@ -1705,6 +1712,8 @@ function ChatWorkspaceContent({
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
+					{session?.provisionState === "failed" || snapshot.controller.state === "stopped" && snapshot.controller.error || snapshot.threadState?.status === "system_error" ?
+						<TriageReportButton className="border-b border-border px-4 py-3" origin={{ surface: "session-error", sessionId: snapshot.sessionId, hostId: activeRemoteHostId, ...(session ? { session: { ...session } } : {}) }} /> : null}
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}

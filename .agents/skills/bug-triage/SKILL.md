@@ -75,6 +75,7 @@ For local-daemon evidence, use the affected binary's `--version` and `status --j
 status reads existing state without starting the daemon. For a known affected session,
 use `session get <id> --json` and keep only fields relevant to the symptom. If the
 daemon is unavailable, record its status or error and mark session evidence unavailable.
+`session get` may reconcile persisted artifact and output metadata while reading.
 
 Record app and CLI versions separately from daemon identity. Health probes provide no
 daemon release version; `dev` alone or missing build metadata does not identify the
