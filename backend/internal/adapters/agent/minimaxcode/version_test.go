@@ -84,3 +84,33 @@ func TestSupportsVersionAcceptsQualifiedAndNewerReleases(t *testing.T) {
 		}
 	}
 }
+
+// A held profile lock makes `mcode provider list` outlive the probe timeout,
+// so a signed-in account must not depend on the probe at all.
+func TestAuthStatusTrustsOAuthStateWithoutProbe(t *testing.T) {
+	versionProbeFixture(t)
+	runVersionProbe = func(context.Context, string) ([]byte, error) { return []byte("0.6.12"), nil }
+	previousAuth := runAuthProbe
+	t.Cleanup(func() { runAuthProbe = previousAuth })
+	probes := 0
+	runAuthProbe = func(context.Context, string) ([]byte, error) {
+		probes++
+		return nil, errors.New("agent_name_conflict_migration_failed:lock")
+	}
+	profile := t.TempDir()
+	t.Setenv("MINIMAX_DATA_DIR", profile)
+	plugin := New()
+	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "unknown" || probes != 1 {
+		t.Fatalf("signed out with failing probe = (%q, %v), probes=%d; want unknown after one probe", got, err, probes)
+	}
+	state := filepath.Join(profile, "auth", "prod", "en", "mcode-public", "auth-state.json")
+	if err := os.MkdirAll(filepath.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, []byte(`{"status":"authenticated"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := plugin.AuthStatus(context.Background()); err != nil || got != "configured" || probes != 1 {
+		t.Fatalf("signed in = (%q, %v), probes=%d; want configured without probing", got, err, probes)
+	}
+}

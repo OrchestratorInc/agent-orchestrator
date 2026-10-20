@@ -12,8 +12,23 @@ import (
 )
 
 var authProbeTimeout = 20 * time.Second
+
+// probeStopGrace lets a timed-out mcode run its exit handlers. The CLI holds
+// a proper-lockfile lock on the whole profile (<profile>.lock) while it
+// migrates; a SIGKILL orphans that lock and every mcode command, the user's
+// own included, then waits out its 30-minute staleness window.
+const probeStopGrace = 3 * time.Second
+
 var runAuthProbe = func(ctx context.Context, binary string) ([]byte, error) {
-	return aoprocess.CommandContext(ctx, binary, "provider", "list", "--json").Output()
+	cmd := aoprocess.CommandContext(ctx, binary, "provider", "list", "--json")
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = probeStopGrace
+	return cmd.Output()
 }
 
 // AuthStatus reports configured credentials only. A saved connectivity status
@@ -23,6 +38,15 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	dataDir, err := sourceProfile(nil)
+	if err != nil {
+		dataDir = ""
+	}
+	// A signed-in account is decided from its state file alone, so a busy or
+	// locked CLI cannot hide it behind a probe timeout.
+	if oauthAuthStatus(dataDir) == ports.AgentAuthStatusConfigured {
+		return ports.AgentAuthStatusConfigured, nil
+	}
 	probe, cancel := context.WithTimeout(ctx, authProbeTimeout)
 	defer cancel()
 	out, err := runAuthProbe(probe, binary)
@@ -31,10 +55,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	if err != nil || probe.Err() != nil {
 		return ports.AgentAuthStatusUnknown, nil
-	}
-	dataDir, err := sourceProfile(nil)
-	if err != nil {
-		dataDir = ""
 	}
 	return providerAuthStatus(out, dataDir), nil
 }

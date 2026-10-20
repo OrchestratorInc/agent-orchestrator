@@ -59,6 +59,8 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // a few times before the panel reports it did not take.
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
+// Harnesses whose auth probe reports stored credentials as "configured", never "authorized".
+const LOCALLY_CONFIRMED_AUTH_AGENTS = new Set(["mimo-code", "minimax-code"]);
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
 type AgentAuthProbeResult = Awaited<ReturnType<typeof probeAgentAuth>>;
@@ -599,10 +601,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
 		setAuthWorkflow(authWorkflowRef.current);
-		// MiMo can confirm a stored provider key locally without validating it upstream.
+		// MiMo and MiniMax confirm stored credentials locally without validating them upstream.
 		const completed = (candidate: AgentAuthProbeResult | undefined) => workflow.action === "logout"
 			? candidate?.agent?.authStatus === "unauthorized"
-			: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
+			: candidate?.agent?.authStatus === "authorized" || (LOCALLY_CONFIRMED_AUTH_AGENTS.has(workflow.agentId) && candidate?.agent?.authStatus === "configured");
 		let result = await checkAuth(workflow.agentId, { fresh: true });
 		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !completed(result); attempt++) {
 			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));

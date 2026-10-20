@@ -37,7 +37,7 @@ describe("AgentAvatar", () => {
 	});
 
 	it("gives every harness a theme-safe brand mark", () => {
-		const providers = ["prime-agent", "omp", "codewhale", "deepseek-harness", "mimo-code", "openhands", "amp"];
+		const providers = ["prime-agent", "omp", "codewhale", "deepseek-harness", "mimo-code", "minimax-code", "openhands", "amp"];
 		render(
 			<>
 				{providers.map((provider) => (
