@@ -101,12 +101,17 @@ func validate(cfg ports.LaunchConfig) error {
 	if len(cfg.AllowedTools)+len(cfg.DisallowedTools) > 0 {
 		return fmt.Errorf("hermes: AO tool allow/deny restrictions are unsupported")
 	}
-	switch cfg.Permissions {
-	case "", ports.PermissionModeDefault, ports.PermissionModeBypassPermissions:
-		return nil
-	default:
-		return fmt.Errorf("hermes: permission mode %q unsupported; use native default or explicit bypass", cfg.Permissions)
+	return nil
+}
+
+// permissionArgs maps AO approval modes onto native Hermes approvals. Hermes has
+// no accept-edits or auto tier, so those keep native prompts rather than
+// approving more than requested; only explicit bypass skips them.
+func permissionArgs(mode ports.PermissionMode) []string {
+	if ports.NormalizePermissionMode(mode) == ports.PermissionModeBypassPermissions {
+		return []string{"--yolo"}
 	}
+	return nil
 }
 
 // GetLaunchCommand implements the scoped native adapter contract.
@@ -123,9 +128,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	if cfg.Permissions == ports.PermissionModeBypassPermissions {
-		cmd = append(cmd, "--yolo")
-	}
+	cmd = append(cmd, permissionArgs(cfg.Permissions)...)
 	if cfg.Prompt != "" {
 		dir := sessionDir(cfg.DataDir, cfg.SessionID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {

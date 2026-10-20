@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,10 +62,32 @@ func TestRestoreRefusesUnobservedIdentity(t *testing.T) {
 		}
 	}
 }
-func TestLaunchRejectsUnsupportedPermissionsAndRestrictions(t *testing.T) {
-	for _, cfg := range []ports.LaunchConfig{{Permissions: ports.PermissionModeAcceptEdits}, {Permissions: ports.PermissionModeAuto}, {AllowedTools: []string{"read"}}} {
-		if _, err := New().GetLaunchCommand(context.Background(), cfg); err == nil {
-			t.Fatal("unsupported control accepted")
+func TestLaunchRejectsToolRestrictions(t *testing.T) {
+	for _, cfg := range []ports.LaunchConfig{{AllowedTools: []string{"read"}}, {DisallowedTools: []string{"bash"}}} {
+		if err := validate(cfg); err == nil {
+			t.Fatal("unsupported tool restriction accepted")
+		}
+	}
+}
+
+// AO spawns default to auto, so every approval mode must launch. Modes without a
+// native tier keep native prompts; only explicit bypass adds --yolo.
+func TestPermissionModesMapToNativeApprovals(t *testing.T) {
+	for _, tt := range []struct {
+		mode ports.PermissionMode
+		want []string
+	}{
+		{"", nil},
+		{ports.PermissionModeDefault, nil},
+		{ports.PermissionModeAuto, nil},
+		{ports.PermissionModeAcceptEdits, nil},
+		{ports.PermissionModeBypassPermissions, []string{"--yolo"}},
+	} {
+		if err := validate(ports.LaunchConfig{Permissions: tt.mode}); err != nil {
+			t.Fatalf("%q rejected: %v", tt.mode, err)
+		}
+		if got := permissionArgs(tt.mode); !slices.Equal(got, tt.want) {
+			t.Fatalf("%q args = %v, want %v", tt.mode, got, tt.want)
 		}
 	}
 }
