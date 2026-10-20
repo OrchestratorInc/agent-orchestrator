@@ -5,6 +5,7 @@ export const AGENT_OPTIONS = [
 	"codex",
 	"aider",
 	"opencode",
+	"opencode-v2",
 	"grok",
 	"droid",
 	"amp",
@@ -12,6 +13,7 @@ export const AGENT_OPTIONS = [
 	"crush",
 	"cursor",
 	"qwen",
+	"gemini",
 	"copilot",
 	"goose",
 	"auggie",
@@ -28,6 +30,14 @@ export const AGENT_OPTIONS = [
 	"prime-agent",
 	"autohand",
 	"omp",
+	"codewhale",
+	"fx",
+	"unreal-agent",
+	"mimo-code",
+	"deepseek-harness",
+	"openhands",
+	"command-code",
+	"memcode",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
@@ -43,6 +53,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	codex: "Codex",
 	aider: "Aider",
 	opencode: "OpenCode",
+	"opencode-v2": "OpenCode 2",
 	grok: "Grok",
 	droid: "Droid",
 	amp: "Amp",
@@ -50,6 +61,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	crush: "Crush",
 	cursor: "Cursor",
 	qwen: "Qwen",
+	gemini: "Gemini CLI",
 	copilot: "GitHub Copilot",
 	goose: "Goose",
 	auggie: "Auggie",
@@ -66,6 +78,14 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"prime-agent": "Prime Agent",
 	autohand: "Autohand",
 	omp: "OMP",
+	codewhale: "Codewhale",
+	fx: "fx",
+	"unreal-agent": "Unreal Agent",
+	"mimo-code": "MiMo Code",
+	"deepseek-harness": "DeepSeek",
+	openhands: "OpenHands",
+	"command-code": "Command Code",
+	memcode: "memcode",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

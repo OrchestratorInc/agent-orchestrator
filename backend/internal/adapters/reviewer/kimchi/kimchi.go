@@ -90,6 +90,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerKimchi
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
@@ -102,6 +110,7 @@ var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 // common mutation paths, but does not make the process read-only or isolated.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
+		Config:           inv.Config,
 		SessionID:        inv.ReviewerID,
 		WorkspacePath:    inv.WorkspacePath,
 		Prompt:           inv.Prompt,

@@ -57,6 +57,114 @@ func TestSessionCreateAllowsFakeHarness(t *testing.T) {
 	}
 }
 
+func TestSubagentFactsPersistWithActivityProjection(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Metadata.ClaudeActivityFacts = `{"launchId":"launch-1","parentState":"idle","children":{"child-1":{"running":true,"at":1}}}`
+	created.Metadata.CodexActivityFacts = `{"launchId":"launch-2","parentState":"idle","children":{"child-2":{"running":true,"at":2}}}`
+	if applied, err := s.UpdateSessionFromActivitySignal(ctx, created, created.Revision); err != nil || !applied {
+		t.Fatalf("project facts: applied=%v err=%v", applied, err)
+	}
+	got, found, err := s.GetSession(ctx, created.ID)
+	if err != nil || !found || got.Metadata.ClaudeActivityFacts != created.Metadata.ClaudeActivityFacts {
+		t.Fatalf("persisted facts=%q found=%v err=%v", got.Metadata.ClaudeActivityFacts, found, err)
+	}
+	if got.Metadata.CodexActivityFacts != created.Metadata.CodexActivityFacts {
+		t.Fatalf("Codex facts=%q, want %q", got.Metadata.CodexActivityFacts, created.Metadata.CodexActivityFacts)
+	}
+}
+
+func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "draft-1", "v1:payload"
+	var wg sync.WaitGroup
+	var ids [2]domain.SessionID
+	var fresh [2]bool
+	var errs [2]error
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			created, inserted, err := s.CreateClientRequestSession(ctx, rec)
+			ids[i], fresh[i], errs[i] = created.ID, inserted, err
+		}(i)
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil || ids[0] != ids[1] || fresh[0] == fresh[1] {
+		t.Fatalf("concurrent create: ids=%v fresh=%v errors=%v", ids, fresh, errs)
+	}
+	if err := s.CommitClientRequestSession(ctx, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	bound, found, err := s.GetSessionByClientRequestID(ctx, "draft-1")
+	if err != nil || !found || bound.ID != ids[0] || bound.ClientRequestHash != "v1:payload" || !bound.ClientRequestCommitted {
+		t.Fatalf("binding = %+v, found=%v, err=%v", bound, found, err)
+	}
+	prep := sampleRecord("mer")
+	prep.IsTaskPreparation = true
+	prep, err = s.CreateSession(ctx, prep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PromoteTaskPreparation(ctx, prep.ID, rec); err == nil {
+		t.Fatal("prepared promotion stole an existing request key")
+	}
+	still, found, err := s.GetSessionByClientRequestID(ctx, "draft-1")
+	if err != nil || !found || still.ID != ids[0] {
+		t.Fatalf("binding after rejected promotion = %+v, found=%v, err=%v", still, found, err)
+	}
+}
+
+func TestClientRequestIdentitySurvivesNormalSessionReads(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "retry-key", "v1:payload"
+	created, _, err := s.CreateClientRequestSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, committed := range []bool{false, true} {
+		if committed {
+			if err := s.CommitClientRequestSession(ctx, created.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, found, err := s.GetSession(ctx, created.ID)
+		if err != nil || !found {
+			t.Fatalf("get session: found=%v err=%v", found, err)
+		}
+		project, err := s.ListSessions(ctx, "mer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAllSessions(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(project) != 1 || len(all) != 1 {
+			t.Fatalf("session counts: project=%d all=%d", len(project), len(all))
+		}
+		for _, read := range []domain.SessionRecord{got, project[0], all[0]} {
+			if read.ID != created.ID || read.ClientRequestID != rec.ClientRequestID ||
+				read.ClientRequestHash != rec.ClientRequestHash || read.ClientRequestCommitted != committed {
+				t.Fatalf("request identity lost: got %+v, committed=%v", read, committed)
+			}
+		}
+	}
+}
+
 func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -68,6 +176,220 @@ func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	}
 }
 
+func TestSessionCreateAndReadFXHarness(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "fx-project")
+	rec := sampleRecord("fx-project")
+	rec.Harness = domain.HarnessFX
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create fx session: %v", err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok || got.Harness != domain.HarnessFX {
+		t.Fatalf("read fx session = %+v, %v, %v", got, ok, err)
+	}
+}
+
+func TestSessionRoundTripsOpenCodeHarnessVersions(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "opencode-project")
+
+	for index, harness := range []domain.AgentHarness{"opencode", "opencode-v2"} {
+		rec := sampleRecord("opencode-project")
+		rec.Harness = harness
+		created, err := s.CreateSession(ctx, rec)
+		if err != nil {
+			t.Fatalf("create %q session: %v", harness, err)
+		}
+		got, ok, err := s.GetSession(ctx, created.ID)
+		if err != nil || !ok {
+			t.Fatalf("read %q session: exists=%v err=%v", harness, ok, err)
+		}
+		if got.Harness != harness {
+			t.Fatalf("session %d harness = %q, want %q", index, got.Harness, harness)
+		}
+	}
+}
+
+func TestTaskPreparationPromotionPreservesWorkspace(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	prepared := sampleRecord("mer")
+	prepared.IsTaskPreparation = true
+	prepared.ProvisionState = domain.SessionProvisionProvisioning
+	prepared.Metadata.WorkspacePath = ""
+	created, err := s.CreateSession(ctx, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetSessionProvisionedWorkspace(ctx, created.ID, "ao/mer-1/root", "/prepared", "/repo", created.UpdatedAt); err != nil || !ok {
+		t.Fatalf("publish prepared workspace = %v, %v", ok, err)
+	}
+
+	visible := sampleRecord("mer")
+	visible.Harness = domain.HarnessCodex
+	visible.Metadata.Effort = "high"
+	if ok, err := s.PromoteTaskPreparation(ctx, created.ID, visible); err != nil || !ok {
+		t.Fatalf("promote preparation = %v, %v", ok, err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get promoted session = %v, %v", ok, err)
+	}
+	if got.IsTaskPreparation || got.Harness != domain.HarnessCodex || got.Metadata.Effort != "high" || got.Metadata.Branch != "ao/mer-1/root" || got.Metadata.WorkspacePath != "/prepared" {
+		t.Fatalf("promoted session = %+v", got)
+	}
+}
+
+func TestTaskPreparationBaseWriteCannotOverwritePromotedSession(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	prepared := sampleRecord("mer")
+	prepared.IsTaskPreparation = true
+	prepared.ProvisionState = domain.SessionProvisionProvisioning
+	prepared.Metadata.WorkspacePath = ""
+	created, err := s.CreateSession(ctx, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetTaskPreparationBase(ctx, created.ID, "base-sha", "refs/heads/main"); err != nil || !ok {
+		t.Fatalf("record hidden preparation base = %v, %v", ok, err)
+	}
+	visible := sampleRecord("mer")
+	visible.Harness = domain.HarnessCodex
+	visible.DisplayName = "Visible task"
+	visible.Metadata.Model = "codex-model"
+	if ok, err := s.PromoteTaskPreparation(ctx, created.ID, visible); err != nil || !ok {
+		t.Fatalf("promote preparation = %v, %v", ok, err)
+	}
+	if ok, err := s.SetTaskPreparationBase(ctx, created.ID, "late-sha", "refs/heads/old"); err != nil || ok {
+		t.Fatalf("late preparation base write = %v, %v, want fenced no-op", ok, err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("read promoted session = %v, %v", ok, err)
+	}
+	if got.Harness != visible.Harness || got.DisplayName != visible.DisplayName || got.Metadata.Model != visible.Metadata.Model || got.Metadata.DiffBaseSHA != "base-sha" || got.Metadata.DiffBaseRef != "refs/heads/main" {
+		t.Fatalf("late preparation write changed promoted session: %+v", got)
+	}
+}
+
+func TestProvisionedWorkspaceRejectsTerminatedSession(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ProvisionState = domain.SessionProvisionProvisioning
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.IsTerminated = true
+	if err := s.UpdateSession(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.SetSessionProvisionedWorkspace(ctx, created.ID, "ao/mer-1/root", "/late", "/repo", created.UpdatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated {
+		t.Fatal("terminated session accepted a late workspace publication")
+	}
+}
+
+func TestProvisionedWorkspaceRetainsLateFailedWorktree(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ProvisionState = domain.SessionProvisionFailed
+	rec.IsTerminated = true
+	rec.Metadata.WorkspacePath = ""
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.SetSessionProvisionedWorkspace(ctx, created.ID, "ao/mer-1/root", "/dirty-partial", "/repo", created.UpdatedAt)
+	if err != nil || !updated {
+		t.Fatalf("retain late failed worktree = (%v, %v)", updated, err)
+	}
+	stored, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok || stored.Metadata.WorkspacePath != "/dirty-partial" || !stored.IsTerminated {
+		t.Fatalf("failed session lost dirty worktree: %+v, exists=%v, err=%v", stored, ok, err)
+	}
+	updated, err = s.SetSessionProvisionedWorkspace(ctx, created.ID, "ao/other", "/other", "/repo", created.UpdatedAt)
+	if err != nil || updated {
+		t.Fatalf("late worktree replaced retained path = (%v, %v)", updated, err)
+	}
+}
+
+func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
+	for _, tc := range []struct {
+		state domain.SessionProvisionState
+		cause string
+	}{
+		{state: domain.SessionProvisionReady},
+		{state: domain.SessionProvisionFailed, cause: "agent start failed"},
+	} {
+		t.Run(string(tc.state), func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "mer")
+			rec := sampleRecord("mer")
+			rec.ProvisionState = domain.SessionProvisionProvisioning
+			created, err := s.CreateSession(ctx, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatalf("get session: %v, %v", ok, err)
+			}
+			if applied, err := s.SetSessionProvisionState(ctx, created.ID, tc.state, tc.cause, created.UpdatedAt.Add(time.Second)); err != nil || !applied {
+				t.Fatalf("publish provision state: %v, %v", applied, err)
+			}
+			published, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok || published.ProvisionState != tc.state || published.ProvisionError != tc.cause {
+				t.Fatalf("published provision state: session=%+v ok=%v err=%v", published, ok, err)
+			}
+			stale.DisplayName = "lifecycle update"
+			if err := s.UpdateSession(ctx, stale); err != nil {
+				t.Fatal(err)
+			}
+			got, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatalf("get updated session: %v, %v", ok, err)
+			}
+			if got.DisplayName != stale.DisplayName || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
+				t.Fatalf("stale lifecycle update overwrote provisioning facts: name=%q state=%q error=%q", got.DisplayName, got.ProvisionState, got.ProvisionError)
+			}
+		})
+	}
+}
+
+func TestDeleteTaskPreparationRemovesItsCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	prepared := sampleRecord("mer")
+	prepared.IsTaskPreparation = true
+	created, err := s.CreateSession(ctx, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := s.DeleteTaskPreparation(ctx, created.ID); err != nil || !deleted {
+		t.Fatalf("delete preparation = %v, %v", deleted, err)
+	}
+	if _, ok, err := s.GetSession(ctx, created.ID); err != nil || ok {
+		t.Fatalf("get deleted preparation = %v, %v", ok, err)
+	}
+}
+
 func TestSessionPersistsReviewerHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -76,8 +398,8 @@ func TestSessionPersistsReviewerHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.SetSessionReviewerHarness(ctx, rec.ID, domain.ReviewerCodex, time.Now().UTC()); err != nil || !ok {
-		t.Fatalf("set reviewer harness = %v, %v", ok, err)
+	if ok, err := s.SetSessionReviewerConfig(ctx, rec.ID, domain.ReviewerCodex, domain.AgentConfig{}, time.Now().UTC()); err != nil || !ok {
+		t.Fatalf("set reviewer config = %v, %v", ok, err)
 	}
 	got, ok, err := s.GetSession(ctx, rec.ID)
 	if err != nil || !ok {
@@ -85,6 +407,27 @@ func TestSessionPersistsReviewerHarness(t *testing.T) {
 	}
 	if got.ReviewerHarness != domain.ReviewerCodex {
 		t.Fatalf("reviewer harness = %q, want %q", got.ReviewerHarness, domain.ReviewerCodex)
+	}
+}
+
+func TestSessionPersistsResolvedEffort(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	created, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Metadata.Effort = "high"
+	if err := s.UpdateSession(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session = %v, %v", ok, err)
+	}
+	if got.Metadata.Effort != "high" {
+		t.Fatalf("effort = %q, want high", got.Metadata.Effort)
 	}
 }
 
@@ -128,10 +471,17 @@ func TestSessionPersistsDeterministicHandoffInputs(t *testing.T) {
 	seedProject(t, s, "handoff-inputs")
 	rec := sampleRecord("handoff-inputs")
 	rec.Metadata.LatestUserPrompt = "Please finish the duplicate-listener test."
+	rec.Metadata.LatestUserPromptAt = rec.CreatedAt.Add(time.Minute)
 	rec.Metadata.LatestAssistantUpdate = "The generation fence is implemented; the test is unfinished."
+	rec.Metadata.LatestAssistantUpdateAt = rec.CreatedAt.Add(2 * time.Minute)
+	rec.Metadata.NativeIdentityObservedAt = rec.CreatedAt.Add(3 * time.Minute)
 	rec.Metadata.NativeTranscriptPath = "/ao/transcripts/claude/session.jsonl"
 	rec.Metadata.AgentSessionID = "native-session-1"
 	rec.Metadata.AgentSessionIDLaunchID = "launch-1"
+	rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointComplete
+	rec.Metadata.ConversationCheckpointGeneration = "launch-1"
+	rec.Metadata.ConversationCheckpointNativeID = "native-session-1"
+	rec.Metadata.ConversationCheckpointUnsettled = true
 
 	created, err := s.CreateSession(ctx, rec)
 	if err != nil {
@@ -142,16 +492,30 @@ func TestSessionPersistsDeterministicHandoffInputs(t *testing.T) {
 		t.Fatalf("get session: ok=%v err=%v", ok, err)
 	}
 	if got.Metadata.LatestUserPrompt != rec.Metadata.LatestUserPrompt ||
+		!got.Metadata.LatestUserPromptAt.Equal(rec.Metadata.LatestUserPromptAt) ||
 		got.Metadata.LatestAssistantUpdate != rec.Metadata.LatestAssistantUpdate ||
+		!got.Metadata.LatestAssistantUpdateAt.Equal(rec.Metadata.LatestAssistantUpdateAt) ||
+		!got.Metadata.NativeIdentityObservedAt.Equal(rec.Metadata.NativeIdentityObservedAt) ||
 		got.Metadata.NativeTranscriptPath != rec.Metadata.NativeTranscriptPath ||
-		got.Metadata.AgentSessionIDLaunchID != rec.Metadata.AgentSessionIDLaunchID {
+		got.Metadata.AgentSessionIDLaunchID != rec.Metadata.AgentSessionIDLaunchID ||
+		got.Metadata.ConversationCheckpointState != rec.Metadata.ConversationCheckpointState ||
+		got.Metadata.ConversationCheckpointGeneration != rec.Metadata.ConversationCheckpointGeneration ||
+		got.Metadata.ConversationCheckpointNativeID != rec.Metadata.ConversationCheckpointNativeID ||
+		got.Metadata.ConversationCheckpointUnsettled != rec.Metadata.ConversationCheckpointUnsettled {
 		t.Fatalf("handoff inputs after create = %+v", got.Metadata)
 	}
 
 	got.Metadata.LatestUserPrompt = "Now run the focused tests."
+	got.Metadata.LatestUserPromptAt = got.Metadata.LatestUserPromptAt.Add(time.Minute)
 	got.Metadata.LatestAssistantUpdate = "The regression test has been added."
+	got.Metadata.LatestAssistantUpdateAt = got.Metadata.LatestAssistantUpdateAt.Add(time.Minute)
+	got.Metadata.NativeIdentityObservedAt = got.Metadata.NativeIdentityObservedAt.Add(time.Minute)
 	got.Metadata.NativeTranscriptPath = "/ao/transcripts/codex/session.jsonl"
 	got.Metadata.AgentSessionIDLaunchID = "launch-2"
+	got.Metadata.ConversationCheckpointState = domain.ConversationCheckpointPrompt
+	got.Metadata.ConversationCheckpointGeneration = "launch-2"
+	got.Metadata.ConversationCheckpointNativeID = "native-session-1"
+	got.Metadata.ConversationCheckpointUnsettled = false
 	got.UpdatedAt = got.UpdatedAt.Add(time.Second)
 	if err := s.UpdateSession(ctx, got); err != nil {
 		t.Fatalf("update session: %v", err)
@@ -161,15 +525,67 @@ func TestSessionPersistsDeterministicHandoffInputs(t *testing.T) {
 		t.Fatalf("get updated session: ok=%v err=%v", ok, err)
 	}
 	if updated.Metadata.LatestUserPrompt != got.Metadata.LatestUserPrompt ||
+		!updated.Metadata.LatestUserPromptAt.Equal(got.Metadata.LatestUserPromptAt) ||
 		updated.Metadata.LatestAssistantUpdate != got.Metadata.LatestAssistantUpdate ||
+		!updated.Metadata.LatestAssistantUpdateAt.Equal(got.Metadata.LatestAssistantUpdateAt) ||
+		!updated.Metadata.NativeIdentityObservedAt.Equal(got.Metadata.NativeIdentityObservedAt) ||
 		updated.Metadata.NativeTranscriptPath != got.Metadata.NativeTranscriptPath ||
-		updated.Metadata.AgentSessionIDLaunchID != got.Metadata.AgentSessionIDLaunchID {
+		updated.Metadata.AgentSessionIDLaunchID != got.Metadata.AgentSessionIDLaunchID ||
+		updated.Metadata.ConversationCheckpointState != got.Metadata.ConversationCheckpointState ||
+		updated.Metadata.ConversationCheckpointGeneration != got.Metadata.ConversationCheckpointGeneration ||
+		updated.Metadata.ConversationCheckpointNativeID != got.Metadata.ConversationCheckpointNativeID ||
+		updated.Metadata.ConversationCheckpointUnsettled != got.Metadata.ConversationCheckpointUnsettled {
 		t.Fatalf("handoff inputs after update = %+v", updated.Metadata)
 	}
 	listed, err := s.ListSessions(ctx, created.ProjectID)
 	if err != nil || len(listed) != 1 || listed[0].Metadata.LatestUserPrompt != got.Metadata.LatestUserPrompt ||
-		listed[0].Metadata.AgentSessionIDLaunchID != got.Metadata.AgentSessionIDLaunchID {
+		!listed[0].Metadata.LatestUserPromptAt.Equal(got.Metadata.LatestUserPromptAt) ||
+		listed[0].Metadata.AgentSessionIDLaunchID != got.Metadata.AgentSessionIDLaunchID ||
+		listed[0].Metadata.ConversationCheckpointState != got.Metadata.ConversationCheckpointState {
 		t.Fatalf("listed handoff inputs = %+v err=%v", listed, err)
+	}
+}
+
+func TestSessionPersistsArtifactMetadata(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "artifacts")
+
+	rec := sampleRecord("artifacts")
+	rec.Metadata.ArtifactDir = "/tmp/ao/artifacts/artifacts-1"
+	rec.OutputType = domain.SessionOutputArtifact
+
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if got.Metadata.ArtifactDir != rec.Metadata.ArtifactDir {
+		t.Fatalf("artifactDir = %q, want %q", got.Metadata.ArtifactDir, rec.Metadata.ArtifactDir)
+	}
+	if got.OutputType != domain.SessionOutputArtifact {
+		t.Fatalf("outputType = %q, want %q", got.OutputType, domain.SessionOutputArtifact)
+	}
+
+	got.UpdatedAt = got.UpdatedAt.Add(time.Second)
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatalf("update session: %v", err)
+	}
+	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/tmp/ao/artifacts/artifacts-1/final", domain.SessionOutputPR); err != nil || !applied {
+		t.Fatalf("update artifact output: applied=%v err=%v", applied, err)
+	}
+	updated, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get updated session: ok=%v err=%v", ok, err)
+	}
+	if updated.Metadata.ArtifactDir != "/tmp/ao/artifacts/artifacts-1/final" {
+		t.Fatalf("updated artifactDir = %q, want the narrow write's value", updated.Metadata.ArtifactDir)
+	}
+	if updated.OutputType != domain.SessionOutputPR {
+		t.Fatalf("updated outputType = %q, want %q", updated.OutputType, domain.SessionOutputPR)
 	}
 }
 
@@ -186,6 +602,10 @@ func TestRecordSessionLatestUserPromptIsNarrowAndMonotonic(t *testing.T) {
 	created.Harness = domain.HarnessCodex
 	created.Metadata.RuntimeLaunchID = "target-generation"
 	created.Metadata.LatestAssistantUpdate = "target already owns this row"
+	created.Metadata.ConversationCheckpointState = domain.ConversationCheckpointComplete
+	created.Metadata.ConversationCheckpointGeneration = "target-generation"
+	created.Metadata.ConversationCheckpointNativeID = "target-native"
+	created.Metadata.ConversationCheckpointUnsettled = true
 	created.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: ownerAt}
 	created.UpdatedAt = ownerAt
 	if err := s.UpdateSession(ctx, created); err != nil {
@@ -208,9 +628,13 @@ func TestRecordSessionLatestUserPromptIsNarrowAndMonotonic(t *testing.T) {
 		t.Fatalf("fresh prompt write = changed %v, err %v", changed, err)
 	}
 	current, _, _ = s.GetSession(ctx, created.ID)
-	if current.Metadata.LatestUserPrompt != "continue the target work" || current.Harness != domain.HarnessCodex ||
-		current.Metadata.RuntimeLaunchID != "target-generation" || current.Metadata.LatestAssistantUpdate != "target already owns this row" {
-		t.Fatalf("narrow prompt write changed unrelated facts: %+v", current)
+	if current.Metadata.LatestUserPrompt != "continue the target work" || !current.Metadata.LatestUserPromptAt.Equal(promptAt) || current.Harness != domain.HarnessCodex ||
+		current.Metadata.RuntimeLaunchID != "target-generation" || current.Metadata.LatestAssistantUpdate != "" ||
+		current.Metadata.ConversationCheckpointState != domain.ConversationCheckpointLegacy ||
+		current.Metadata.ConversationCheckpointGeneration != "" ||
+		current.Metadata.ConversationCheckpointNativeID != "" ||
+		!current.Metadata.ConversationCheckpointUnsettled {
+		t.Fatalf("pane prompt checkpoint or owner facts = %+v", current)
 	}
 
 	current.IsTerminated = true
@@ -265,6 +689,62 @@ func TestSessionPersistsBrowserCapabilityVerifier(t *testing.T) {
 	}
 	if updated.Metadata.BrowserCapabilityVerifier != "rotated-verifier" {
 		t.Fatalf("updated verifier = %q", updated.Metadata.BrowserCapabilityVerifier)
+	}
+}
+
+func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Mode = domain.SessionModeChat
+	rec.Metadata.ProviderConversationID = "thread-1"
+	rec.Metadata.ControllerGeneration = "generation-1"
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	expected := created.ControllerOwner()
+
+	concurrent := created
+	concurrent.DisplayName = "newer display name"
+	concurrent.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: created.UpdatedAt.Add(2 * time.Second)}
+	concurrent.UpdatedAt = created.UpdatedAt.Add(2 * time.Second)
+	if err := s.UpdateSession(ctx, concurrent); err != nil {
+		t.Fatalf("UpdateSession concurrent facts: %v", err)
+	}
+	applied, err := s.UpdateBrowserCapabilityVerifier(
+		ctx, created.ID, expected, "verifier-2",
+	)
+	if err != nil || !applied {
+		t.Fatalf("UpdateBrowserCapabilityVerifier: applied=%v err=%v", applied, err)
+	}
+	updated, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("GetSession: ok=%v err=%v", ok, err)
+	}
+	if updated.Metadata.BrowserCapabilityVerifier != "verifier-2" ||
+		updated.DisplayName != concurrent.DisplayName || updated.Activity != concurrent.Activity ||
+		!updated.UpdatedAt.Equal(concurrent.UpdatedAt) {
+		t.Fatalf("narrow verifier update changed unrelated facts: got=%+v", updated)
+	}
+
+	if err := s.ClaimChatControllerGeneration(
+		ctx, created.ID, "generation-2"); err != nil {
+		t.Fatalf("ClaimChatControllerGeneration: %v", err)
+	}
+	applied, err = s.UpdateBrowserCapabilityVerifier(
+		ctx, created.ID, expected, "stale-verifier",
+	)
+	if err != nil || applied {
+		t.Fatalf("stale owner verifier update: applied=%v err=%v", applied, err)
+	}
+	updated, _, err = s.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetSession after stale update: %v", err)
+	}
+	if updated.Metadata.BrowserCapabilityVerifier != "verifier-2" {
+		t.Fatalf("stale owner replaced verifier with %q", updated.Metadata.BrowserCapabilityVerifier)
 	}
 }
 
@@ -453,6 +933,118 @@ func TestSessionCreateAssignsPerProjectID(t *testing.T) {
 	}
 }
 
+func TestSessionCreateAssignsStandaloneIDsWithoutProject(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	first, err := s.CreateSession(ctx, sampleRecord(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateSession(ctx, sampleRecord(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != "standalone-1" || second.ID != "standalone-2" {
+		t.Fatalf("standalone ids = %q, %q", first.ID, second.ID)
+	}
+	if first.ProjectID != "" || !first.IsStandalone() {
+		t.Fatalf("standalone project = %q", first.ProjectID)
+	}
+	conversation, err := s.CreateConversation(
+		ctx,
+		"conversation-standalone-1",
+		domain.ConversationScopeSession,
+		"",
+		first.ID,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("create standalone conversation: %v", err)
+	}
+	if conversation.ProjectID != "" {
+		t.Fatalf("standalone conversation project = %q", conversation.ProjectID)
+	}
+	notification, inserted, err := s.CreateNotification(ctx, domain.NotificationRecord{
+		ID:        "notification-standalone-1",
+		SessionID: first.ID,
+		Type:      domain.NotificationNeedsInput,
+		Title:     "Input needed",
+		Status:    domain.NotificationUnread,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil || !inserted {
+		t.Fatalf("create standalone notification: inserted=%v err=%v", inserted, err)
+	}
+	if notification.ProjectID != "" {
+		t.Fatalf("standalone notification project = %q", notification.ProjectID)
+	}
+	events, err := s.EventsAfter(ctx, 0, 10)
+	if err != nil {
+		t.Fatalf("read standalone change log: %v", err)
+	}
+	if len(events) < 2 {
+		t.Fatalf("standalone change log has %d events, want session creates", len(events))
+	}
+	for _, event := range events {
+		if event.ProjectID != "" {
+			t.Fatalf("standalone change event project = %q", event.ProjectID)
+		}
+	}
+	rows, err := s.ListSessions(ctx, "")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("ListSessions(empty) = %d rows, err=%v", len(rows), err)
+	}
+}
+
+func TestSessionCreateAvoidsStandaloneProjectCollisionAfterProjectSession(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "standalone")
+
+	projectSession, err := s.CreateSession(ctx, sampleRecord("standalone"))
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+	standaloneSession, err := s.CreateSession(ctx, sampleRecord(""))
+	if err != nil {
+		t.Fatalf("create standalone session: %v", err)
+	}
+	if projectSession.ID != "standalone-1" {
+		t.Fatalf("project session id = %q, want standalone-1", projectSession.ID)
+	}
+	if standaloneSession.ID != "standalone-2" {
+		t.Fatalf("standalone session id = %q, want standalone-2", standaloneSession.ID)
+	}
+	if standaloneSession.ProjectID != "" || !standaloneSession.IsStandalone() {
+		t.Fatalf("standalone project = %q", standaloneSession.ProjectID)
+	}
+}
+
+func TestSessionCreateAvoidsStandaloneProjectCollisionAfterStandaloneSession(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "standalone")
+
+	standaloneSession, err := s.CreateSession(ctx, sampleRecord(""))
+	if err != nil {
+		t.Fatalf("create standalone session: %v", err)
+	}
+	projectSession, err := s.CreateSession(ctx, sampleRecord("standalone"))
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+	if standaloneSession.ID != "standalone-1" {
+		t.Fatalf("standalone session id = %q, want standalone-1", standaloneSession.ID)
+	}
+	if projectSession.ID != "standalone-2" {
+		t.Fatalf("project session id = %q, want standalone-2", projectSession.ID)
+	}
+	if projectSession.ProjectID != "standalone" || projectSession.IsStandalone() {
+		t.Fatalf("project session project = %q", projectSession.ProjectID)
+	}
+}
+
 // TestDeleteSessionOnlyRemovesSeedRows covers Bug 4's storage-layer guarantee:
 // DeleteSession removes a session row only when the row is still in seed state
 // (no workspace, no runtime handle, no agent session id, no prompt, not
@@ -549,6 +1141,24 @@ func TestSessionRenameUpdatesDisplayName(t *testing.T) {
 	got, _, _ := s.GetSession(ctx, r.ID)
 	if got.DisplayName != "Fix flaky tests" || !got.UpdatedAt.Equal(renamedAt) {
 		t.Fatalf("rename not persisted: %+v", got)
+	}
+
+	if changed, err := s.RenameSessionIfDisplayName(ctx, r.ID, "stale name", "Generated title", renamedAt.Add(time.Minute)); err != nil || changed {
+		t.Fatalf("conditional stale rename: changed=%v err=%v", changed, err)
+	}
+	if changed, err := s.RenameSessionIfDisplayName(ctx, r.ID, "Fix flaky tests", "Generated title", renamedAt.Add(time.Minute)); err != nil || !changed {
+		t.Fatalf("conditional rename: changed=%v err=%v", changed, err)
+	}
+	got, _, _ = s.GetSession(ctx, r.ID)
+	if got.DisplayName != "Generated title" {
+		t.Fatalf("conditional rename not persisted: %+v", got)
+	}
+	got.IsTerminated = true
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatalf("terminate session: %v", err)
+	}
+	if changed, err := s.RenameSessionIfDisplayName(ctx, r.ID, "Generated title", "Too late", renamedAt.Add(2*time.Minute)); err != nil || changed {
+		t.Fatalf("conditional terminated rename: changed=%v err=%v", changed, err)
 	}
 
 	ok, err = s.RenameSession(ctx, "mer-missing", "Missing", renamedAt)
@@ -792,7 +1402,134 @@ func TestPRCRUD(t *testing.T) {
 	}
 }
 
-func TestPRAutoInjectCISnapshotsSessionDefaultAtCreation(t *testing.T) {
+func TestMarkPRMergedPreservesObservedFactsAndEmitsCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{
+		URL: "https://github.com/acme/repo/pull/7", SessionID: r.ID, Number: 7,
+		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
+		Provider: "github", Host: "github.com", Repo: "acme/repo", ProviderID: "provider-pr-7",
+		SourceBranch: "feature", TargetBranch: "main", HeadSHA: "head-sha", Title: "keep this title",
+		MetadataHash: "metadata-v1", CIHash: "ci-v1", ReviewHash: "review-v1",
+		UpdatedAt: now, StateChangedAt: now, ObservedAt: now,
+	}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	base, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mergedAt := now.Add(time.Minute)
+	if err := s.MarkPRMerged(ctx, pr.URL, "merge-sha", mergedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" {
+		t.Fatalf("merge state = merged:%v draft:%v closed:%v sha:%q", got.Merged, got.Draft, got.Closed, got.MergeCommitSHA)
+	}
+	if !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("merge timestamps = state:%s updated:%s observed:%s, want %s", got.StateChangedAt, got.UpdatedAt, got.ObservedAt, mergedAt)
+	}
+	if got.Title != pr.Title || got.HeadSHA != pr.HeadSHA || got.CI != pr.CI || got.Review != pr.Review || got.Mergeability != pr.Mergeability ||
+		got.MetadataHash != pr.MetadataHash || got.CIHash != pr.CIHash || got.ReviewHash != pr.ReviewHash {
+		t.Fatalf("mark merged replaced observed facts: got=%+v want preserved=%+v", got, pr)
+	}
+
+	events, err := s.EventsAfter(ctx, base, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || string(events[0].Type) != "pr_updated" {
+		t.Fatalf("merge events = %+v, want one pr_updated", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["url"] != pr.URL || payload["state"] != "merged" {
+		t.Fatalf("merge event payload = %#v", payload)
+	}
+
+	// A provider poll may have fetched the old open state before the merge
+	// completed and reach SQLite afterward. That stale observation must not
+	// regress the authoritative merge result.
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err = s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr after stale observation: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" || !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("stale observation regressed merged state: %+v", got)
+	}
+}
+
+func TestGetPRByNumberPrefersActiveRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	closed := domain.PullRequest{
+		URL: "https://github.com/acme/closed/pull/7", SessionID: r.ID, Number: 7,
+		Closed: true, UpdatedAt: now.Add(time.Minute), StateChangedAt: now.Add(time.Minute),
+	}
+	active := domain.PullRequest{
+		URL: "https://github.com/acme/active/pull/7", SessionID: r.ID, Number: 7,
+		UpdatedAt: now, StateChangedAt: now,
+	}
+	if err := s.WritePR(ctx, closed, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WritePR(ctx, active, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetPRByNumber(ctx, 7)
+	if err != nil || !ok {
+		t.Fatalf("GetPRByNumber: ok=%v err=%v", ok, err)
+	}
+	if got.URL != active.URL {
+		t.Fatalf("selected %q, want active %q", got.URL, active.URL)
+	}
+}
+
+func TestWriteSCMObservationPersistsAuthorAvatarURL(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	pr := domain.PullRequest{
+		URL:             "https://github.com/o/r/pull/1",
+		SessionID:       r.ID,
+		Number:          1,
+		Author:          "octocat",
+		AuthorAvatarURL: "https://avatars.githubusercontent.com/u/583231?v=4",
+		UpdatedAt:       time.Now().UTC().Truncate(time.Second),
+	}
+
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !ok {
+		t.Fatalf("get pr: ok=%v err=%v", ok, err)
+	}
+	if got.Author != pr.Author || got.AuthorAvatarURL != pr.AuthorAvatarURL {
+		t.Fatalf("author = %q avatar = %q", got.Author, got.AuthorAvatarURL)
+	}
+}
+
+func TestPRAutoInjectCITracksSessionPolicyChanges(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
@@ -812,37 +1549,47 @@ func TestPRAutoInjectCISnapshotsSessionDefaultAtCreation(t *testing.T) {
 	changedAt := now.Add(time.Minute)
 	ok, err := s.SetSessionAutoInjectCI(ctx, owner.ID, false, changedAt)
 	if err != nil || !ok {
-		t.Fatalf("disable session CI default: ok=%v err=%v", ok, err)
+		t.Fatalf("disable session CI policy: ok=%v err=%v", ok, err)
 	}
 	session, found, err := s.GetSession(ctx, owner.ID)
 	if err != nil || !found || session.AutoInjectCI {
-		t.Fatalf("disabled session default = found:%v err:%v session:%+v", found, err, session)
+		t.Fatalf("disabled session policy = found:%v err:%v session:%+v", found, err, session)
 	}
 
 	events, err := s.EventsAfter(ctx, base, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || string(events[0].Type) != "session_updated" {
-		t.Fatalf("policy change events = %+v, want one session_updated", events)
+	if len(events) != 2 {
+		t.Fatalf("policy change events = %+v, want session and PR updates", events)
+	}
+	var sessionPayload []byte
+	for i := range events {
+		if string(events[i].Type) == "session_updated" {
+			sessionPayload = events[i].Payload
+			break
+		}
+	}
+	if sessionPayload == nil {
+		t.Fatalf("policy change events = %+v, want session_updated", events)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+	if err := json.Unmarshal(sessionPayload, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if enabled, ok := payload["autoInjectCI"].(bool); !ok || enabled {
 		t.Fatalf("autoInjectCI payload = %#v, want false", payload["autoInjectCI"])
 	}
 
-	// Re-observing the first PR after changing the session default must preserve
-	// the value captured when that PR was first inserted.
+	// Re-observing the first PR after changing the session policy must preserve
+	// the currently selected policy.
 	first.UpdatedAt = changedAt.Add(time.Minute)
 	if err := s.WritePR(ctx, first, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.GetPR(ctx, first.URL)
-	if !got.AutoInjectCI {
-		t.Fatal("session toggle rewrote the first PR's enabled snapshot")
+	if got.AutoInjectCI {
+		t.Fatal("session toggle did not rewrite the first PR's enabled policy")
 	}
 
 	second := domain.PullRequest{URL: "https://github.com/o/r/pull/2", SessionID: owner.ID, Number: 2, UpdatedAt: changedAt}
@@ -851,19 +1598,19 @@ func TestPRAutoInjectCISnapshotsSessionDefaultAtCreation(t *testing.T) {
 	}
 	got, _, _ = s.GetPR(ctx, second.URL)
 	if got.AutoInjectCI {
-		t.Fatal("PR created while disabled did not capture the disabled default")
+		t.Fatal("PR created while disabled did not inherit the disabled session policy")
 	}
 
 	if ok, err := s.SetSessionAutoInjectCI(ctx, owner.ID, true, changedAt.Add(time.Minute)); err != nil || !ok {
-		t.Fatalf("enable session CI default: ok=%v err=%v", ok, err)
+		t.Fatalf("enable session CI policy: ok=%v err=%v", ok, err)
 	}
 	second.UpdatedAt = changedAt.Add(2 * time.Minute)
 	if err := s.WritePR(ctx, second, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.GetPR(ctx, second.URL)
-	if got.AutoInjectCI {
-		t.Fatal("later session enable rewrote the second PR's disabled snapshot")
+	if !got.AutoInjectCI {
+		t.Fatal("later session enable did not rewrite the second PR's disabled policy")
 	}
 }
 
@@ -971,6 +1718,44 @@ func TestMarkPRCommentResolved(t *testing.T) {
 	}
 }
 
+func TestMarkPRReviewThreadResolved(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/1", SessionID: r.ID, Number: 1, UpdatedAt: now}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil,
+		[]domain.PullRequestReviewThread{
+			{ThreadID: "thread-1", UpdatedAt: now},
+			{ThreadID: "thread-2", UpdatedAt: now},
+		},
+		[]domain.PullRequestComment{
+			{ID: "comment-1", ThreadID: "thread-1", Body: "fix", CreatedAt: now},
+			{ID: "comment-2", ThreadID: "thread-2", Body: "keep", CreatedAt: now},
+		}, ports.ReviewWriteReplace); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MarkPRReviewThreadResolved(ctx, pr.URL, "thread-1"); err != nil {
+		t.Fatal(err)
+	}
+	threads, err := s.ListPRReviewThreads(ctx, pr.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments, err := s.ListPRComments(ctx, pr.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 2 || !threads[0].Resolved || threads[1].Resolved {
+		t.Fatalf("threads = %+v, want only thread-1 resolved", threads)
+	}
+	if len(comments) != 2 || !comments[0].Resolved || comments[1].Resolved {
+		t.Fatalf("comments = %+v, want only comment-1 resolved", comments)
+	}
+}
+
 func TestWriteSCMObservationPersistsMetadataChecksReviewsAndComments(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -993,7 +1778,7 @@ func TestWriteSCMObservationPersistsMetadataChecksReviewsAndComments(t *testing.
 	checks := []domain.PullRequestCheck{{Name: "build", CommitHash: "h1", Status: domain.PRCheckFailed, Conclusion: "failure", URL: "ci", Details: "99", LogTail: "boom", CreatedAt: now}}
 	reviews := []domain.PullRequestReview{{ID: "review-1", Author: "reviewer", State: domain.ReviewChangesRequest, URL: "https://github.com/o/r/pull/1#pullrequestreview-1", Body: "please fix the nil check", TargetSHA: "h1", SubmittedAt: now, AutoInjectReview: false}}
 	threads := []domain.PullRequestReviewThread{{ThreadID: "t1", Path: "main.go", Line: 7, SemanticHash: "th", UpdatedAt: now}}
-	comments := []domain.PullRequestComment{{ThreadID: "t1", ID: "c1", Author: "reviewer", File: "main.go", Line: 7, Body: "fix", URL: "comment", CreatedAt: now, AutoInjectReview: false}}
+	comments := []domain.PullRequestComment{{ThreadID: "t1", ReviewID: "4876751117", ID: "c1", Author: "reviewer", File: "main.go", Line: 7, Body: "fix", URL: "comment", CreatedAt: now, AutoInjectReview: false}}
 
 	if err := s.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, ports.ReviewWriteReplace); err != nil {
 		t.Fatal(err)
@@ -1018,7 +1803,7 @@ func TestWriteSCMObservationPersistsMetadataChecksReviewsAndComments(t *testing.
 		t.Fatalf("reviews not persisted: %+v", gotReviews)
 	}
 	gotComments, _ := s.ListPRComments(ctx, pr.URL)
-	if len(gotComments) != 1 || gotComments[0].ThreadID != "t1" || gotComments[0].URL != "comment" || gotComments[0].AutoInjectReview {
+	if len(gotComments) != 1 || gotComments[0].ThreadID != "t1" || gotComments[0].ReviewID != "4876751117" || gotComments[0].URL != "comment" || gotComments[0].AutoInjectReview {
 		t.Fatalf("comments not persisted: %+v", gotComments)
 	}
 }
@@ -1484,8 +2269,8 @@ func TestSessionWorktreesRoundTrip(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	rows := []domain.SessionWorktreeRecord{
-		{SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName, Branch: "ao/ws-1", BaseSHA: "root-base", BaseRef: "refs/remotes/origin/trunk", WorktreePath: "/managed/ws/ws-1", State: "active"},
-		{SessionID: rec.ID, RepoName: "api", Branch: "ao/ws-1", BaseSHA: "api-base", BaseRef: "refs/remotes/origin/dev", WorktreePath: "/managed/ws/ws-1/api", PreservedRef: "refs/ao/preserved/ws-1", State: "removed"},
+		{SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName, Branch: "ao/ws-1", BaseSHA: "root-base", BaseRef: "refs/remotes/origin/trunk", CreationSHA: "root-created", WorktreePath: "/managed/ws/ws-1", State: "active"},
+		{SessionID: rec.ID, RepoName: "api", Branch: "ao/ws-1", BaseSHA: "api-base", BaseRef: "refs/remotes/origin/dev", CreationSHA: "api-created", WorktreePath: "/managed/ws/ws-1/api", PreservedRef: "refs/ao/preserved/ws-1", State: "removed"},
 	}
 	for _, row := range rows {
 		if err := s.UpsertSessionWorktree(ctx, row); err != nil {
@@ -1556,5 +2341,205 @@ func TestUpsertSessionWorktreeEmptyStateDefaultsToActive(t *testing.T) {
 	}
 	if got.State != "active" {
 		t.Fatalf("State = %q, want %q", got.State, "active")
+	}
+}
+
+func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "permissions")
+	cfg := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits}}}
+	if err := s.UpsertProject(ctx, domain.ProjectRecord{ID: "permissions", Path: "/tmp/permissions", Config: cfg}); err != nil {
+		t.Fatal(err)
+	}
+	var rows []domain.SessionRecord
+	for _, tc := range []struct {
+		kind  domain.SessionKind
+		saved domain.PermissionMode
+		want  domain.PermissionMode
+	}{{domain.KindWorker, "", domain.PermissionModeAcceptEdits}, {domain.KindOrchestrator, "", domain.PermissionModeDefault}, {domain.KindWorker, domain.PermissionModeAuto, domain.PermissionModeAuto}} {
+		rec := sampleRecord("permissions")
+		rec.Kind = tc.kind
+		rec.Metadata.Permissions = tc.saved
+		row, err := s.CreateSession(ctx, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row.Mode = domain.NormalizeSessionMode(row.Mode)
+		row.ProvisionState = domain.SessionProvisionReady
+		row.Metadata.ConversationCheckpointState = domain.ConversationCheckpointEmpty
+		row.OutputType = domain.SessionOutputNone
+		row.Metadata.Permissions = tc.want
+		if tc.saved == "" {
+			row.Revision++ // Pinning permissions writes even without changing updated_at.
+		}
+		rows = append(rows, row)
+	}
+	if _, ok, err := s.SetProjectPermissions(ctx, "permissions", domain.PermissionModeBypassPermissions); err != nil || !ok {
+		t.Fatalf("remember: %v %v", ok, err)
+	}
+	for _, want := range rows {
+		got, ok, err := s.GetSession(ctx, want.ID)
+		if err != nil || !ok {
+			t.Fatalf("load: %v %v", ok, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("session mutated beyond permission pin: got %#v want %#v", got, want)
+		}
+	}
+	if _, ok, err := s.SetProjectPermissions(ctx, "permissions", domain.PermissionModeDefault); err != nil || !ok {
+		t.Fatalf("second remember: %v %v", ok, err)
+	}
+	for _, want := range rows {
+		got, _, err := s.GetSession(ctx, want.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Metadata.Permissions != want.Metadata.Permissions {
+			t.Fatalf("repinned existing session: %q", got.Metadata.Permissions)
+		}
+	}
+}
+
+func TestSessionRequestedOutputRoundTripsAndSurvivesUpdate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "outputs")
+	rec := sampleRecord("outputs")
+	rec.RequestedOutput = domain.RequestedOutputArtifact
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("load: %v %v", ok, err)
+	}
+	if got.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput = %q, want artifact", got.RequestedOutput)
+	}
+	// A generic update from a record without the field must not clear it.
+	got.RequestedOutput = ""
+	got.DisplayName = "renamed"
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _, err := s.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput after update = %q, want artifact", reloaded.RequestedOutput)
+	}
+	plain, err := s.CreateSession(ctx, sampleRecord("outputs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.RequestedOutput != "" {
+		t.Fatalf("default RequestedOutput = %q, want empty", plain.RequestedOutput)
+	}
+}
+
+func TestClaimChatControllerGenerationPreservesRecency(t *testing.T) {
+	st := newTestStore(t)
+	seedProject(t, st, "restart")
+	rec := sampleRecord("restart")
+	rec.Mode = domain.SessionModeChat
+	rec.Metadata.ControllerGeneration = "before"
+	before, err := st.CreateSession(context.Background(), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimChatControllerGeneration(context.Background(), before.ID, "after"); err != nil {
+		t.Fatal(err)
+	}
+	after, _, err := st.GetSession(context.Background(), before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Metadata.ControllerGeneration != "after" || !after.UpdatedAt.Equal(before.UpdatedAt) || after.Activity != before.Activity {
+		t.Fatalf("claim changed user-visible facts: before=%+v after=%+v", before, after)
+	}
+}
+
+// The chat surface refetches a session on session_updated, so publishing a
+// start's checklist must persist it and fire that event exactly when it changes.
+func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ProvisionSteps) != 0 {
+		t.Fatalf("new session steps = %+v, want none", r.ProvisionSteps)
+	}
+
+	base, _ := s.LatestSeq(ctx)
+	at := r.UpdatedAt.Add(time.Second)
+	steps := []domain.SessionProvisionStep{
+		{ID: domain.SessionProvisionStepWorktree, Status: domain.SessionProvisionStepDone, StartedAt: &at, EndedAt: &at},
+		{ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepRunning, StartedAt: &at},
+	}
+	if err := s.SetSessionProvisionSteps(ctx, r.ID, steps, at); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.GetSession(ctx, r.ID)
+	if err != nil || !found {
+		t.Fatalf("get session: found=%v err=%v", found, err)
+	}
+	if len(got.ProvisionSteps) != 2 ||
+		got.ProvisionSteps[0].ID != domain.SessionProvisionStepWorktree || got.ProvisionSteps[0].Status != domain.SessionProvisionStepDone ||
+		got.ProvisionSteps[0].EndedAt == nil || !got.ProvisionSteps[0].EndedAt.Equal(at) ||
+		got.ProvisionSteps[1].ID != domain.SessionProvisionStepAgent || got.ProvisionSteps[1].Status != domain.SessionProvisionStepRunning ||
+		got.ProvisionSteps[1].EndedAt != nil {
+		t.Fatalf("steps did not round-trip: %+v", got.ProvisionSteps)
+	}
+	evs, err := s.EventsAfter(ctx, base, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || string(evs[0].Type) != "session_updated" {
+		t.Fatalf("checklist events = %+v, want one session_updated", evs)
+	}
+
+	base, _ = s.LatestSeq(ctx)
+	if err := s.SetSessionProvisionSteps(ctx, r.ID, steps, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if evs, err := s.EventsAfter(ctx, base, 100); err != nil || len(evs) != 0 {
+		t.Fatalf("unchanged checklist events = %+v err=%v, want none", evs, err)
+	}
+}
+
+func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	created, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session: %v, %v", ok, err)
+	}
+	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/data/artifacts/x", domain.SessionOutputArtifact); err != nil || !applied {
+		t.Fatalf("narrow write: %v, %v", applied, err)
+	}
+	stale.DisplayName = "stale full-row write"
+	if err := s.UpdateSession(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session: %v, %v", ok, err)
+	}
+	if got.DisplayName != stale.DisplayName {
+		t.Fatalf("display name = %q, want the full-row write applied", got.DisplayName)
+	}
+	if got.OutputType != domain.SessionOutputArtifact || got.Metadata.ArtifactDir != "/data/artifacts/x" {
+		t.Fatalf("stale UpdateSession clobbered output columns: type=%q dir=%q", got.OutputType, got.Metadata.ArtifactDir)
 	}
 }

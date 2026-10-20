@@ -279,9 +279,8 @@ type indexedRef struct {
 
 // repoFullNameFromRef returns the display repository name from a ref's
 // SCMRepo, preferring the pre-filled Repo field and falling back to
-// Owner + "/" + Name when Repo is empty. This mirrors the observer's
-// repoFullName helper and ensures Fetched=false placeholders carry a
-// non-empty Repo so prKeyFromObs produces a non-empty key.
+// Owner + "/" + Name when Repo is empty. This ensures Fetched=false
+// placeholders retain the repository context of the ref they represent.
 func repoFullNameFromRef(repo ports.SCMRepo) string {
 	if repo.Repo != "" {
 		return repo.Repo

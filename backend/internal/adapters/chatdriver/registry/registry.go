@@ -10,16 +10,38 @@ package registry
 import (
 	"log/slog"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	commandcodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/agyacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commandcodeacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/copilotacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/deepseekharnessacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/droidacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimchiacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/ompacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodev2acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/piacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/qwenacp"
+	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -27,6 +49,9 @@ import (
 // Registry maps a harness to its Chat driver.
 type Registry struct {
 	drivers map[domain.AgentHarness]ports.ChatDriver
+	// plugins are the drivers' own agent plugins, each caching the executable
+	// it resolved.
+	plugins map[domain.AgentHarness]ports.AgentBinaryResolutionInvalidator
 }
 
 var _ ports.ChatDriverRegistry = (*Registry)(nil)
@@ -48,21 +73,65 @@ func New(drivers ...ports.ChatDriver) *Registry {
 //
 // Codex uses its native app-server protocol. Claude Code uses AO's reusable ACP
 // transport plus claude-agent-acp, pointed at the user's own Claude executable.
-// OpenCode and Droid expose ACP themselves, so AO launches the exact executable
+// Cursor, OpenCode, Droid, Kimi, Kimchi, Pi, OMP, Qwen, Command Code,
+// DeepSeek Harness, and GitHub Copilot expose ACP themselves, so AO launches the exact executable
 // resolved by each existing agent plugin. No path scrapes terminal output or
 // packages a second provider CLI.
+// Unreal Agent is compiled into AO and runs behind the same detached host seam.
 //
 // Every other harness stays TUI-only until the same is true of it. The driver
 // reuses the harness's existing agent plugin for binary resolution and auth, so
 // registration adds no second answer to "is this agent installed and logged in".
-func Build(log *slog.Logger) *Registry {
-	return New(
-		codexappserver.New(codex.New(), log),
-		claudeacp.New(claudecode.New(), log),
-		opencodeacp.New(opencode.New(), log),
-		droidacp.New(droid.New(), log),
-		kimchiacp.New(kimchi.New(), log),
-	)
+func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
+	r := New()
+	r.plugins = make(map[domain.AgentHarness]ports.AgentBinaryResolutionInvalidator)
+	add := func(driver ports.ChatDriver, plugin any) {
+		r.drivers[driver.Harness()] = driver
+		if invalidator, ok := plugin.(ports.AgentBinaryResolutionInvalidator); ok {
+			r.plugins[driver.Harness()] = invalidator
+		}
+	}
+	codexPlugin := codex.New()
+	add(codexappserver.New(codexPlugin, log), codexPlugin)
+	claudePlugin := claudecode.New()
+	add(claudeacp.New(claudePlugin, log, onClaudeAuthRejected), claudePlugin)
+	opencodePlugin := opencode.New()
+	add(opencodeacp.New(opencodePlugin, log), opencodePlugin)
+	opencodeV2Plugin := opencodev2.New()
+	add(opencodev2acp.New(opencodeV2Plugin, log), opencodeV2Plugin)
+	droidPlugin := droid.New()
+	add(droidacp.New(droidPlugin, log), droidPlugin)
+	kimiPlugin := kimi.New()
+	add(kimiacp.New(kimiPlugin, log), kimiPlugin)
+	kimchiPlugin := kimchi.New()
+	add(kimchiacp.New(kimchiPlugin, log), kimchiPlugin)
+	piPlugin := pi.New()
+	add(piacp.New(piPlugin, log), piPlugin)
+	cursorPlugin := cursor.New()
+	add(cursoracp.New(cursorPlugin, log), cursorPlugin)
+	ompPlugin := omp.New()
+	add(ompacp.New(ompPlugin, log), ompPlugin)
+	qwenPlugin := qwen.New()
+	add(qwenacp.New(qwenPlugin, log), qwenPlugin)
+	unrealPlugin := unrealagent.New()
+	add(unrealchat.New(unrealPlugin, log), unrealPlugin)
+	deepseekPlugin := deepseekharness.New()
+	add(deepseekharnessacp.New(deepseekPlugin, log), deepseekPlugin)
+	commandCodePlugin := commandcodeagent.New()
+	add(commandcodeacp.New(commandCodePlugin, log), commandCodePlugin)
+	copilotPlugin := copilot.New()
+	add(copilotacp.New(copilotPlugin, log), copilotPlugin)
+	agyPlugin := agy.New()
+	add(agyacp.New(agyPlugin, log), agyPlugin)
+	return r
+}
+
+// InvalidateBinaryResolution makes harness's driver resolve its executable
+// again, after an install changed which one sessions should run.
+func (r *Registry) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if plugin, ok := r.plugins[harness]; ok {
+		plugin.InvalidateBinaryResolution()
+	}
 }
 
 // Driver returns the driver for a harness.

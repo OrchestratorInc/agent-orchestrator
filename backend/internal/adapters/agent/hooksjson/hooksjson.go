@@ -74,8 +74,10 @@ func (h *HookEntry) UnmarshalJSON(data []byte) error {
 // preserved agent-specific fields back into the same object.
 func (h HookEntry) MarshalJSON() ([]byte, error) {
 	fields := cloneRawFields(h.Extra)
-	if err := setRawField(fields, "type", h.Type); err != nil {
-		return nil, err
+	if h.Type != "" {
+		if err := setRawField(fields, "type", h.Type); err != nil {
+			return nil, err
+		}
 	}
 	if err := setRawField(fields, "command", h.Command); err != nil {
 		return nil, err
@@ -155,6 +157,7 @@ func setRawField(fields map[string]json.RawMessage, key string, value any) error
 type HookSpec struct {
 	Event   string
 	Matcher *string
+	// An empty command reconciles legacy hooks for this event without adding one.
 	Command string
 }
 
@@ -162,12 +165,17 @@ type HookSpec struct {
 // hooks file. Construct one per adapter with its file path, command prefix,
 // per-hook timeout, and managed hook set.
 type Manager struct {
+	// Flat selects native event arrays of command entries without matcher groups.
+	Flat bool
 	// Label prefixes error messages, e.g. "claude-code" or "goose", so the
 	// wrapped error reads "<label>.GetAgentHooks: ...".
 	Label string
 	// CommandPrefix identifies AO-owned hook commands, e.g. "ao hooks goose ".
 	// Install skips commands already present and uninstall/detect match on it.
 	CommandPrefix string
+	// LegacyCommandPrefixes identifies AO-owned command prefixes from an older
+	// installer that should be removed while installing the current hooks.
+	LegacyCommandPrefixes []string
 	// Timeout is written into each installed hook entry.
 	Timeout int
 	// Path returns the hooks file path for a workspace.
@@ -197,14 +205,21 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 
 	for event, specs := range m.groupByEvent() {
 		var groups []MatcherGroup
-		if err := parseEvent(rawHooks, event, &groups); err != nil {
+		if err := m.parseEvent(rawHooks, event, &groups); err != nil {
 			return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 		}
+		groups = removeManagedPrefixes(groups, m.LegacyCommandPrefixes)
 		for _, spec := range specs {
+			if spec.Command == "" {
+				continue
+			}
 			entry := HookEntry{Type: "command", Command: spec.Command, Timeout: m.Timeout}
+			if m.Flat {
+				entry.Type = ""
+			}
 			groups = reconcileHook(groups, entry, spec.Matcher)
 		}
-		if err := marshalEvent(rawHooks, event, groups); err != nil {
+		if err := m.marshalEvent(rawHooks, event, groups); err != nil {
 			return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 		}
 	}
@@ -216,6 +231,33 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 		return fmt.Errorf("%s.GetAgentHooks: gitignore: %w", m.Label, err)
 	}
 	return nil
+}
+
+func removeManagedPrefixes(groups []MatcherGroup, prefixes []string) []MatcherGroup {
+	if len(prefixes) == 0 {
+		return groups
+	}
+	result := make([]MatcherGroup, 0, len(groups))
+	for _, group := range groups {
+		kept := make([]HookEntry, 0, len(group.Hooks))
+		for _, hook := range group.Hooks {
+			legacy := false
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(hook.Command, prefix) {
+					legacy = true
+					break
+				}
+			}
+			if !legacy {
+				kept = append(kept, hook)
+			}
+		}
+		if len(kept) > 0 {
+			group.Hooks = kept
+			result = append(result, group)
+		}
+	}
+	return result
 }
 
 // Uninstall removes AO's hooks from the workspace's hooks file, leaving
@@ -239,11 +281,11 @@ func (m Manager) Uninstall(ctx context.Context, workspacePath string) error {
 
 	for _, event := range m.managedEvents() {
 		var groups []MatcherGroup
-		if err := parseEvent(rawHooks, event, &groups); err != nil {
+		if err := m.parseEvent(rawHooks, event, &groups); err != nil {
 			return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
 		}
 		groups = removeManaged(groups, m.CommandPrefix)
-		if err := marshalEvent(rawHooks, event, groups); err != nil {
+		if err := m.marshalEvent(rawHooks, event, groups); err != nil {
 			return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
 		}
 	}
@@ -275,7 +317,7 @@ func (m Manager) AreInstalled(ctx context.Context, workspacePath string) (bool, 
 
 	for _, event := range m.managedEvents() {
 		var groups []MatcherGroup
-		if err := parseEvent(rawHooks, event, &groups); err != nil {
+		if err := m.parseEvent(rawHooks, event, &groups); err != nil {
 			return false, fmt.Errorf("%s.AreHooksInstalled: %w", m.Label, err)
 		}
 		for _, group := range groups {
@@ -337,6 +379,12 @@ func readHooksFile(hooksPath string) (topLevel, rawHooks map[string]json.RawMess
 			return nil, nil, fmt.Errorf("parse hooks in %s: %w", hooksPath, err)
 		}
 	}
+	if topLevel == nil {
+		topLevel = map[string]json.RawMessage{}
+	}
+	if rawHooks == nil {
+		rawHooks = map[string]json.RawMessage{}
+	}
 	return topLevel, rawHooks, nil
 }
 
@@ -367,9 +415,17 @@ func writeHooksFile(hooksPath string, topLevel, rawHooks map[string]json.RawMess
 	return nil
 }
 
-func parseEvent(rawHooks map[string]json.RawMessage, event string, target *[]MatcherGroup) error {
+func (m Manager) parseEvent(rawHooks map[string]json.RawMessage, event string, target *[]MatcherGroup) error {
 	data, ok := rawHooks[event]
 	if !ok {
+		return nil
+	}
+	if m.Flat {
+		var entries []HookEntry
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return fmt.Errorf("parse %s hooks: %w", event, err)
+		}
+		*target = []MatcherGroup{{Hooks: entries}}
 		return nil
 	}
 	if err := json.Unmarshal(data, target); err != nil {
@@ -378,12 +434,20 @@ func parseEvent(rawHooks map[string]json.RawMessage, event string, target *[]Mat
 	return nil
 }
 
-func marshalEvent(rawHooks map[string]json.RawMessage, event string, groups []MatcherGroup) error {
+func (m Manager) marshalEvent(rawHooks map[string]json.RawMessage, event string, groups []MatcherGroup) error {
 	if len(groups) == 0 {
 		delete(rawHooks, event)
 		return nil
 	}
-	data, err := json.Marshal(groups)
+	var value any = groups
+	if m.Flat {
+		var entries []HookEntry
+		for _, group := range groups {
+			entries = append(entries, group.Hooks...)
+		}
+		value = entries
+	}
+	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode %s hooks: %w", event, err)
 	}

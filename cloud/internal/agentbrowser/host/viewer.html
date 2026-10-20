@@ -1,0 +1,518 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Agent's browser</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; color: #ddd; font: 12px system-ui, sans-serif; overflow: hidden; }
+  #bar { height: 36px; display: flex; gap: 6px; align-items: center; padding: 0 8px; background: #2b2b2b; border-bottom: 1px solid #000; box-sizing: border-box; }
+  #bar button, #bar select { background: #3a3a3a; color: #ddd; border: 0; border-radius: 4px; padding: 4px 8px; }
+  #url { flex: 1; min-width: 120px; background: #1b1b1b; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; }
+  #tabs { max-width: 200px; }
+  #ctl { padding: 3px 9px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+  #ctl.agent { background: #1d4f91; } #ctl.none { background: #333; }
+  #stage { position: absolute; top: 36px; left: 0; right: 0; bottom: 22px; overflow: hidden; background: #fff; }
+  #c { display: block; outline: none; object-fit: contain; background: #222; }
+  #stats { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; background: #111; color: #8f8; font: 11px ui-monospace, monospace; padding: 4px 8px; box-sizing: border-box; white-space: nowrap; overflow: hidden; }
+  #overlay { position: absolute; top: 36px; left: 0; right: 0; bottom: 22px; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+  .card { background: #2b2b2b; padding: 16px; border-radius: 8px; min-width: 280px; display: flex; flex-direction: column; gap: 10px; }
+  .card .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .card button { background: #3a3a3a; color: #eee; border: 0; border-radius: 4px; padding: 5px 12px; }
+  #selmenu { position: absolute; display: none; background: #fff; color: #000; border: 1px solid #888; box-shadow: 0 4px 12px rgba(0,0,0,.4); max-height: 300px; overflow: auto; font: 13px system-ui; z-index: 5; }
+  #selmenu div { padding: 3px 8px; cursor: default; } #selmenu div:hover, #selmenu div.cur { background: #2563eb; color: #fff; }
+  .menu { position: absolute; display: none; background: #fff; color: #000; border: 1px solid #888; box-shadow: 0 4px 12px rgba(0,0,0,.4); font: 13px system-ui; z-index: 6; min-width: 180px; padding: 4px 0; }
+  .menu div { padding: 4px 12px; cursor: default; } .menu div:hover { background: #2563eb; color: #fff; }
+  #ime { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; pointer-events: none; }
+  .pick { position: absolute; z-index: 6; }
+  #tip { position: absolute; display: none; background: #fffbe6; color: #111; border: 1px solid #aaa; padding: 2px 6px; font: 12px system-ui; z-index: 6; pointer-events: none; }
+  #toast { position: absolute; right: 12px; bottom: 30px; display: none; background: #2b2b2b; color: #ddd; padding: 10px 14px; border-radius: 6px; font: 13px system-ui; z-index: 7; }
+  #toast a { color: #93c5fd; margin-left: 8px; }
+  #empty { position: absolute; inset: 40% 0 auto; text-align: center; color: #aaa; font: 14px system-ui; display: none; }
+  #find { position: absolute; top: 44px; right: 12px; display: none; gap: 6px; align-items: center; background: #2b2b2b; padding: 6px 8px; border-radius: 6px; z-index: 8; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+  #find input { background: #1b1b1b; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; width: 200px; }
+  #find button { background: #3a3a3a; color: #ddd; border: 0; border-radius: 4px; padding: 3px 7px; }
+  /* One tab of a host app (AO's Browser panel): the host's own toolbar drives it. */
+  .embed #bar, .embed #stats { display: none; }
+  .embed #stage, .embed #overlay { top: 0; bottom: 0; }
+  .embed #find { top: 8px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="back" title="Back">◀</button><button id="fwd" title="Forward">▶</button><button id="reload" title="Reload">⟳</button>
+  <input id="url" spellcheck="false">
+  <select id="tabs"></select><button id="closetab" title="Close tab">✕</button><button id="newtab" title="New tab">+</button>
+  <span id="ctl" class="none">Idle</span>
+  <select id="q" title="JPEG quality"><option>50</option><option>70</option><option>85</option></select>
+  <select id="dpr" title="Device pixel ratio"><option value="1">1x</option><option value="2">2x</option></select>
+</div>
+<div id="stage"><canvas id="c" tabindex="0"></canvas><div id="selmenu"></div><div id="ctxmenu" class="menu"></div><textarea id="ime" aria-hidden="true"></textarea><div id="tip"></div></div>
+<div id="toast"></div><div id="empty">No tabs open. Type an address above, or press +.</div>
+<div id="find"><input id="fi" placeholder="Find in page" spellcheck="false"><span id="fn"></span><button id="fp_" title="Previous">↑</button><button id="fnx" title="Next">↓</button><button id="fx" title="Close">✕</button></div>
+<div id="overlay"><div class="card" id="card"></div></div>
+<div id="stats">connecting…</div>
+<script>
+const qs = new URLSearchParams(location.search);
+const token = qs.get('token');
+const embed = qs.get('embed') === '1';
+document.body.classList.toggle('embed', embed);
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), canvas = $('c'), g = canvas.getContext('2d'), statsEl = $('stats');
+let ws, vw = 0, vh = 0;
+let pageW = 0, pageH = 0, sizer = false; // the page's size, and whether this view set it
+let dpr = Number(qs.get('dpr') || Math.min(2, Math.round(window.devicePixelRatio || 1)));
+let quality = Number(qs.get('q') || 70);
+$('dpr').value = String(dpr); $('q').value = String(quality);
+const now = () => performance.timeOrigin + performance.now();
+const S = { frames: 0, bytes: 0, drawn: [], ages: [], capAges: [], rtt: [], offset: 0, lat: { click: [], key: [], wheel: [] }, frameBytes: [] };
+const sentAt = new Map();
+let inputSeq = 0;
+
+function measure() {
+  const r = stage.getBoundingClientRect();
+  vw = Math.floor(r.width); vh = Math.floor(r.height);
+  sizeCanvas();
+}
+// The view that sizes the page shows each frame at its natural size: stretching
+// the last frame to a new panel size blurred it until a frame of the new size
+// came. Other views fit the page into their box (letterbox).
+function sizeCanvas() {
+  const [w, h] = sizer && pageW ? [pageW, pageH] : [vw, vh];
+  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+}
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function connect() {
+  measure();
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/cdp?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    send({ t: 'hello', w: vw, h: vh, dpr, quality, scrollQuality: Number(qs.get('sq') || 45), scrollScale: Number(qs.get('ss') || 0.5), maxInFlight: qs.get('inflight') === 'auto' ? 0 : qs.get('inflight') === 'bbr' ? -1 : Number(qs.get('inflight') || 4), embed, tab: qs.get('tab') || '', hidden: !shown() });
+    ping();
+  };
+  ws.onmessage = (e) => typeof e.data === 'string' ? onText(JSON.parse(e.data)) : onFrame(e.data);
+  ws.onclose = () => { statsEl.textContent = 'disconnected, retrying…'; setTimeout(connect, 1000); };
+}
+function ping() { send({ t: 'ping', c: now() }); }
+setInterval(ping, 2000);
+let resizeTimer;
+new ResizeObserver(() => {
+  const ow = vw, oh = vh; measure();
+  if (vw !== ow || vh !== oh) { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => send({ t: 'resize', w: vw, h: vh, dpr }), 150); }
+}).observe(stage);
+
+// Frames: [u32 header length][header JSON][JPEG]. Decode one at a time; the newest pending frame wins.
+let decoding = false, pending = null;
+function onFrame(buf) {
+  const hl = new DataView(buf).getUint32(0);
+  const hdr = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+  S.bytes += buf.byteLength; S.frameBytes.push(buf.byteLength);
+  pending = { hdr, img: new Uint8Array(buf, 4 + hl) };
+  if (!decoding) drawNext();
+}
+async function drawNext() {
+  const p = pending; if (!p) return;
+  pending = null; decoding = true;
+  try {
+    const bmp = await createImageBitmap(new Blob([p.img], { type: 'image/jpeg' }));
+    const [cw, ch] = p.hdr.crop || [bmp.width, bmp.height]; // fullscreen: only the page part of Chrome's window
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; sizeCanvas(); }
+    g.drawImage(bmp, 0, 0, cw, ch, 0, 0, cw, ch); bmp.close();
+  } catch (e) { console.warn(e); }
+  frameDrawn(p.hdr);
+  decoding = false;
+  if (pending) drawNext();
+}
+function frameDrawn(hdr) {
+  const t = now();
+  S.frames++; S.drawn.push(t);
+  S.ages.push(t - (hdr.ts - S.offset));
+  if (hdr.meta && hdr.meta.timestamp) S.capAges.push(t - (hdr.meta.timestamp * 1000 - S.offset));
+  for (const [seq, info] of sentAt) if (seq <= hdr.inputSeq) { S.lat[info.kind].push(t - info.at); sentAt.delete(seq); }
+  send({ t: 'ack', seq: hdr.seq });
+}
+
+const tabsSel = $('tabs'), urlIn = $('url'), ctl = $('ctl');
+function onText(m) {
+  switch (m.t) {
+    case 'pong': { const t1 = now(); S.rtt.push(t1 - m.c); S.offset = m.s - (m.c + t1) / 2; break; }
+    // Cut by characters, not UTF-16 units: a cut through an emoji drew a broken glyph.
+    case 'tabs': lastTabs = m.tabs; tabsSel.innerHTML = m.tabs.map(t => `<option value="${t.id}">${esc([...(t.title || t.url || 'tab')].slice(0, 40).join(''))}</option>`).join(''); tabsSel.value = activeTab; agentTitle(); break;
+    case 'active': activeTab = m.id; tabsSel.value = m.id; pin(m.id); $('empty').style.display = m.id ? 'none' : 'block'; if (!m.id) g.clearRect(0, 0, canvas.width, canvas.height); setLoading(false); agentTitle(); break;
+    case 'loading': setLoading(m.on); break;
+    case 'agentTab': notice('The agent opened a new tab', 'Show', () => send({ t: 'tab', id: m.id })); break;
+    case 'dialogClosed': if (card.dataset.kind === 'dialog') hideCard(); break;
+    // The view that set the size changes its canvas with the first frame of the new size.
+    case 'viewport': pageW = m.w; pageH = m.h; sizer = !!m.mine; if (!sizer) sizeCanvas(); break;
+    case 'url': if (document.activeElement !== urlIn) urlIn.value = m.url; page.url = m.url; hostReport(); break;
+    case 'control': ctl.className = m.owner; ctl.textContent = m.owner === 'agent' ? 'Agent is driving' : 'Idle'; page.driving = m.owner === 'agent'; hostReport(); break;
+    case 'history': page.back = m.back; page.fwd = m.fwd; hostReport(); break;
+    case 'opened': if (embed) { page.follow = m.follow ? m.id : ''; hostReport(); } break;
+    case 'closed': if (embed) { page.closed = { next: m.next || '' }; hostReport(); } break;
+    case 'dialog': showDialog(m); break;
+    case 'select': showSelect(framed(m)); break;
+    case 'filechooser': showUpload(m); break;
+    case 'clipboard': writeClipboard(m.text, m.html); break;
+    case 'ui': showUI(framed(m)); break;
+    case 'auth': showAuth(m); break;
+    case 'download': showDownload(m); break;
+    // The page's icon as rbhost loaded it: a data: URL, or "" (never a URL to fetch).
+    case 'favicon': page.favicon = typeof m.href === 'string' ? m.href : ''; hostReport(); break;
+    case 'found': $('fn').textContent = m.found || !m.text ? '' : 'No matches'; break;
+    case 'crashed': showCard('<b>The remote page crashed</b><div class="row"><button id="rl">Reload</button></div>', () => { $('rl').onclick = () => { send({ t: 'reload' }); hideCard(); }; }); break;
+  }
+}
+let activeTab = '', lastTabs = [];
+// The host app (AO's Browser panel) names this tab after the page: say whose it is.
+function agentTitle() { const t = lastTabs.find((x) => x.id === activeTab); document.title = t ? `Agent · ${t.title || t.url}` : "Agent's browser"; hostReport(); }
+// Shim reports come from any frame, iframes included: place them in the page
+// (dx, dy: where their frame sits) and answer in the frame that asked (ctx).
+function framed(m) { const d = m.data; if (typeof d.x === 'number') { d.x += m.dx || 0; d.y += m.dy || 0; } d.ctx = m.ctx; return d; }
+let loading = false;
+function setLoading(on) { loading = on; $('reload').textContent = on ? '✕' : '⟳'; $('reload').title = on ? 'Stop' : 'Reload'; page.loading = on; hostReport(); }
+// Embedded, the host app shows this tab as its own: it reads the agent's page
+// from these reports (its address bar, title, icon, Back/Forward, the agent's
+// other tabs) and drives the page through __rbHost.
+const page = { url: '', back: false, fwd: false, loading: false, driving: false, favicon: '', follow: '', closed: null };
+// Embedded, the host app says whether this is its tab in front (its other
+// tabs stay "visible" offscreen): only that view streams and brings its page
+// to the front, the one page Chrome paints.
+let hostShown = !embed;
+const shown = () => hostShown && document.visibilityState !== 'hidden';
+let reportQueued = false;
+// Embedded, this view shows one agent page for life: a reload or a reconnect
+// comes back to it, never to whatever page the agent is on then.
+function pin(id) {
+  if (!embed || !id || qs.get('tab') === id) return;
+  qs.set('tab', id);
+  history.replaceState(null, '', location.pathname + '?' + qs);
+}
+function hostReport() {
+  if (!embed || reportQueued) return;
+  reportQueued = true;
+  queueMicrotask(() => {
+    reportQueued = false;
+    const t = lastTabs.find((x) => x.id === activeTab);
+    console.debug('__ao_remote_tab__' + JSON.stringify({ tabId: activeTab || qs.get('tab') || '', url: page.url || (t && t.url) || '', title: (t && t.title) || '', favicon: page.favicon,
+      loading: page.loading, back: page.back, fwd: page.fwd, driving: page.driving, follow: page.follow, closed: page.closed, shown: hostShown,
+      tabs: lastTabs.map(({ id, title, url }) => ({ id, title, url })) }));
+  });
+}
+window.__rbHost = {
+  navigate: (url) => send({ t: 'nav', url }), back: () => send({ t: 'back' }), forward: () => send({ t: 'forward' }),
+  reload: () => send({ t: 'reload' }), stop: () => send({ t: 'stop' }),
+  show: (on) => { hostShown = on; send({ t: 'visible', on: shown() }); hostReport(); },
+  // Closes agent tab id, by default this view's own. The host may close this
+  // view right after: resolve once the close has left.
+  close: (id) => new Promise((resolve) => {
+    id ||= activeTab;
+    if (!id) return resolve();
+    send({ t: 'closetab', id });
+    const t0 = Date.now();
+    (function sent() { if (!ws || ws.bufferedAmount === 0 || Date.now() - t0 > 500) resolve(); else setTimeout(sent, 10); })();
+  }),
+};
+if (embed) document.addEventListener('visibilitychange', () => send({ t: 'visible', on: shown() }));
+
+// Input. Coordinates are CSS pixels: the remote viewport is sized to this canvas.
+const btn = ['left', 'middle', 'right'];
+const mods = (e) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+// Cmd+click is Ctrl+click on the Linux browser: new-tab links, adding to a multi-select.
+const clickMods = (e) => { let m = mods(e); if (/Mac/.test(navigator.platform) && e.metaKey) m = (m & ~4) | 2; return m; };
+// fit maps page CSS px onto the canvas: 1:1 in the view that set the size (its
+// canvas is the page), letterboxed in the others.
+const fit = () => { const r = canvas.getBoundingClientRect(), [pw, ph] = sizer || !pageW ? [r.width, r.height] : [pageW, pageH], s = Math.min(r.width / pw, r.height / ph); return { r, s, ox: (r.width - pw * s) / 2, oy: (r.height - ph * s) / 2 }; };
+const pos = (e) => { const f = fit(); return { x: (e.clientX - f.r.left - f.ox) / f.s, y: (e.clientY - f.r.top - f.oy) / f.s }; };
+const at = (d) => { const f = fit(), o = { left: f.ox + d.x * f.s + 'px', top: f.oy + d.y * f.s + 'px' }; if (d.w) o.width = d.w * f.s + 'px'; if (d.h) o.height = d.h * f.s + 'px'; return o; };
+function input(o, kind) { o.seq = ++inputSeq; if (kind) sentAt.set(o.seq, { kind, at: now() }); send(o); }
+canvas.addEventListener('mousedown', (e) => { if (!btn[e.button]) return e.preventDefault(); canvas.focus(); hideSelect(); input({ t: 'mouse', type: 'mousePressed', ...pos(e), button: btn[e.button], buttons: e.buttons, clickCount: e.detail || 1, mods: clickMods(e) }, 'click'); e.preventDefault(); });
+// The thumb buttons (3, 4) go Back and Forward on release, as in Chrome: never a click on the page.
+canvas.addEventListener('mouseup', (e) => {
+  if (btn[e.button]) return input({ t: 'mouse', type: 'mouseReleased', ...pos(e), button: btn[e.button], buttons: e.buttons, clickCount: e.detail || 1, mods: clickMods(e) });
+  e.preventDefault();
+  if (e.button === 3 || e.button === 4) send({ t: e.button === 3 ? 'back' : 'forward' });
+});
+let move = null;
+function queueMove(p, b) {
+  if (!move) requestAnimationFrame(() => { input({ t: 'mouse', type: 'mouseMoved', ...move.p, button: move.b & 1 ? 'left' : 'none', buttons: move.b, mods: 0 }); move = null; });
+  move = { p, b };
+}
+canvas.addEventListener('mousemove', (e) => queueMove(pos(e), e.buttons));
+// Leaving the view ends the page's hover: menus that open on :hover close.
+canvas.addEventListener('mouseleave', (e) => { if (!e.buttons) queueMove({ x: -1, y: -1 }, 0); });
+const isMac = /Mac/.test(navigator.platform);
+// macOS already turned Shift+wheel into a sideways scroll; Linux would turn it again.
+canvas.addEventListener('wheel', (e) => { input({ t: 'mouse', type: 'mouseWheel', ...pos(e), dx: e.deltaX, dy: e.deltaY, mods: isMac ? mods(e) & ~8 : mods(e) }, 'wheel'); e.preventDefault(); }, { passive: false });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+function keyMods(e) { let m = mods(e); if (isMac && e.metaKey && e.key.length === 1) m = (m & ~4) | 2; return m; } // Cmd+key -> Ctrl+key on the Linux browser
+// Mac text-editing keys, as the Linux browser binds them: Option+arrow is
+// Ctrl+arrow (Alt+Left would go Back), Cmd+arrow is Home/End, Cmd+Backspace
+// deletes to the line start. Each step is [key, keyCode, mods].
+function macEdit(e) {
+  if (!isMac || e.ctrlKey || e.altKey === e.metaKey) return null;
+  const s = e.shiftKey ? 8 : 0, k = e.key;
+  if (e.altKey) return ['ArrowLeft', 'ArrowRight', 'Backspace', 'Delete'].includes(k) ? [[k, e.keyCode, 2 | s]] : null;
+  return { ArrowLeft: [['Home', 36, s]], ArrowRight: [['End', 35, s]], ArrowUp: [['Home', 36, 2 | s]], ArrowDown: [['End', 35, 2 | s]],
+    Backspace: [['Home', 36, 8], ['Backspace', 8, 0]], Delete: [['End', 35, 8], ['Delete', 46, 0]] }[k] || null;
+}
+const translated = new Set(); // keys sent as their Linux form; their keyup is already sent
+function onKeyDown(e) {
+  if (e.isComposing || e.keyCode === 229) return;
+  const edit = macEdit(e);
+  if (edit) {
+    for (const [key, keyCode, mods] of edit) {
+      input({ t: 'key', type: 'rawKeyDown', key, code: key, keyCode, mods, repeat: e.repeat }, 'key');
+      input({ t: 'key', type: 'keyUp', key, code: key, keyCode, mods });
+    }
+    translated.add(e.code); e.preventDefault(); return;
+  }
+  const m = keyMods(e), accel = (m & 2) !== 0, k = e.key;
+  if (isMac && e.metaKey && (k === '[' || k === ']')) { send({ t: k === '[' ? 'back' : 'forward' }); e.preventDefault(); return; }
+  if (accel && k.toLowerCase() === 'f') return; // find: the document's listener opens it
+  if (accel && k.toLowerCase() === 'v') return; // the paste event below carries the local clipboard
+  let type = 'rawKeyDown', text = '';
+  if (k === 'Enter') { type = 'keyDown'; text = '\r'; }
+  else if (k.length === 1 && !accel) { type = 'keyDown'; text = k; }
+  input({ t: 'key', type, key: k, code: e.code, keyCode: e.keyCode, text, mods: m, repeat: e.repeat }, 'key');
+  e.preventDefault();
+}
+function onKeyUp(e) {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (!translated.delete(e.code)) input({ t: 'key', type: 'keyUp', key: e.key, code: e.code, keyCode: e.keyCode, mods: keyMods(e) });
+  e.preventDefault();
+}
+// Keys go through a hidden text field: IME composition (Chinese, Japanese,
+// Korean...) only happens in an editable element, never on a canvas.
+const ime = $('ime');
+for (const el of [canvas, ime]) { el.addEventListener('keydown', onKeyDown); el.addEventListener('keyup', onKeyUp); }
+ime.addEventListener('compositionupdate', (e) => send({ t: 'ime', text: e.data, start: e.data.length, end: e.data.length }));
+ime.addEventListener('compositionend', (e) => { if (e.data) input({ t: 'text', text: e.data }, 'key'); ime.value = ''; });
+// Text inserted without a keypress (an emoji panel, dictation) arrives as input only.
+ime.addEventListener('input', (e) => { if (e.isComposing || e.inputType === 'insertCompositionText') return; if (e.data) input({ t: 'text', text: e.data }, 'key'); ime.value = ''; });
+canvas.addEventListener('mousedown', (e) => { const r = canvas.getBoundingClientRect(); Object.assign(ime.style, { left: e.clientX - r.left + 'px', top: e.clientY - r.top + 'px' }); setTimeout(() => ime.focus({ preventScroll: true }), 0); });
+// Paste hands the whole desktop clipboard over (text, HTML, an image); the host
+// puts it on the remote clipboard and presses Ctrl+V, so the page sees a real paste.
+const b64 = (buf) => { const a = new Uint8Array(buf); let s = ''; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode(...a.subarray(i, i + 0x8000)); return btoa(s); };
+async function asPNG(f) {
+  if (f.type === 'image/png') return f;
+  const bmp = await createImageBitmap(f), c = new OffscreenCanvas(bmp.width, bmp.height);
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  return c.convertToBlob({ type: 'image/png' });
+}
+document.addEventListener('paste', async (e) => {
+  // Only a paste into the page goes to it: one into the viewer's own fields
+  // (sign-in, prompt, find, address) stays there, a password included.
+  if (e.target !== canvas && e.target !== ime) return;
+  e.preventDefault();
+  const cd = e.clipboardData, text = cd.getData('text/plain'), html = cd.getData('text/html'), images = [...cd.files].filter((f) => f.type.startsWith('image/'));
+  const files = [];
+  for (const f of images.slice(0, 1)) files.push({ name: 'image.png', type: 'image/png', data: b64(await (await asPNG(f)).arrayBuffer()) });
+  if (text || html || files.length) input({ t: 'paste', text, html, files }, 'key');
+});
+// Files dragged in from Finder are dropped on the page where they land.
+canvas.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+canvas.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const p = pos(e), list = [...e.dataTransfer.files];
+  if (!list.length) return;
+  try { input({ t: 'drop', ...p, ...(await sendFiles(list)) }, 'click'); } catch (err) { hint(`Drop failed: ${err.message}`); }
+});
+// Files reach the host over HTTP, streamed, so any size works (inline on the
+// socket, 50 MB overran its read limit and dropped the connection).
+async function sendFiles(list) {
+  const dir = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join(''), names = [];
+  hint(`Uploading ${list.length === 1 ? list[0].name : list.length + ' files'}…`);
+  for (const f of list) {
+    const name = f.webkitRelativePath || f.name;
+    const r = await fetch(`/upload?token=${encodeURIComponent(token)}&dir=${dir}&name=${encodeURIComponent(name)}`, { method: 'POST', body: f });
+    if (!r.ok) throw new Error(`${name}: ${(await r.text()).trim()}`);
+    names.push(name);
+  }
+  toast.style.display = 'none';
+  return { dir, names };
+}
+function writeClipboard(text, html) {
+  const w = html && window.ClipboardItem
+    ? navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })])
+    : navigator.clipboard.writeText(text);
+  w.catch(() => navigator.clipboard.writeText(text).catch(() => {}));
+}
+
+// Toolbar
+urlIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { send({ t: 'nav', url: urlIn.value.trim() }); canvas.focus(); } });
+$('back').onclick = () => send({ t: 'back' });
+$('fwd').onclick = () => send({ t: 'forward' });
+$('reload').onclick = () => send({ t: loading ? 'stop' : 'reload' });
+$('newtab').onclick = () => send({ t: 'newtab' });
+$('closetab').onclick = () => { if (activeTab) send({ t: 'closetab', id: activeTab }); };
+// Find in page: headless Chromium draws no find bar, so the viewer brings one.
+const findBox = $('find'), fi = $('fi');
+let lastFind = '';
+function openFind() { findBox.style.display = 'flex'; fi.focus(); fi.select(); }
+// Cmd/Ctrl+F opens it from anywhere in the viewer (the host app leaves the key
+// to it), except in the viewer's own fields: sign-in, prompt, find, address.
+document.addEventListener('keydown', (e) => {
+  if ((keyMods(e) & 2) && e.key.toLowerCase() === 'f' && !(e.target instanceof HTMLInputElement)) { openFind(); e.preventDefault(); }
+});
+function findNext(back) { const t = fi.value; send({ t: 'find', text: t, back, fresh: t !== lastFind }); lastFind = t; }
+function closeFind() { findBox.style.display = 'none'; send({ t: 'find', text: '' }); lastFind = ''; $('fn').textContent = ''; ime.focus(); }
+fi.addEventListener('input', () => findNext(false));
+fi.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); findNext(e.shiftKey); } else if (e.key === 'Escape') { e.preventDefault(); closeFind(); } });
+$('fnx').onclick = () => findNext(false); $('fp_').onclick = () => findNext(true); $('fx').onclick = closeFind;
+tabsSel.onchange = () => { activeTab = tabsSel.value; send({ t: 'tab', id: activeTab }); };
+$('q').onchange = () => { quality = Number($('q').value); send({ t: 'quality', quality }); };
+$('dpr').onchange = () => { dpr = Number($('dpr').value); send({ t: 'resize', w: vw, h: vh, dpr }); };
+
+// Native UI that headless Chromium never paints: dialogs, <select> popups, file pickers.
+const overlay = $('overlay'), card = $('card');
+function showCard(html, wire) {
+  card.innerHTML = html; card.dataset.kind = showCard.kind || ''; showCard.kind = ''; overlay.style.display = 'flex'; wire();
+  // Like a dialog, the card takes focus: its first field, else its primary button.
+  (card.querySelector('input:not([type=file])') || [...card.querySelectorAll('button')].pop())?.focus();
+}
+// Cards behave like dialogs: Enter takes the primary (last) button, Escape the first.
+card.addEventListener('keydown', (e) => {
+  const buttons = card.querySelectorAll('button');
+  if (!buttons.length) return;
+  if (e.key === 'Enter') { e.preventDefault(); buttons[buttons.length - 1].click(); }
+  else if (e.key === 'Escape') { e.preventDefault(); buttons[0].click(); }
+});
+function hideCard() { overlay.style.display = 'none'; card.dataset.kind = ''; canvas.focus(); }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function showDialog(m) {
+  // Name the page that asks, as Chrome does: the viewer's own host would let any page pose as it.
+  let who = 'This page';
+  try { who = new URL(m.url).host || who; } catch {}
+  showCard.kind = 'dialog';
+  // A page's beforeunload message is ignored by browsers: Chrome asks this.
+  const leave = m.type === 'beforeunload';
+  showCard((leave ? '<b>Leave site?</b><div>Changes you made may not be saved.</div>' : `<b>${esc(who)} says</b><div>${esc(m.message)}</div>`) +
+    (m.type === 'prompt' ? `<input id="pt" value="${esc(m.defaultPrompt || '')}">` : '') +
+    `<div class="row">${m.type === 'alert' ? '' : '<button id="dc">Cancel</button>'}<button id="dok">${leave ? 'Leave' : 'OK'}</button></div>`, () => {
+    $('dok').onclick = () => { send({ t: 'dialog', accept: true, promptText: $('pt') ? $('pt').value : '' }); hideCard(); };
+    if ($('dc')) $('dc').onclick = () => { send({ t: 'dialog', accept: false }); hideCard(); };
+  });
+}
+// The picker takes what the page's input takes: several files, a folder, the accepted types.
+function showUpload(m) {
+  const many = m.mode === 'selectMultiple', folder = !!m.folder;
+  showCard(`<b>The remote page asks for ${folder ? 'a folder' : many ? 'files' : 'a file'}</b><input type="file" id="fp"${many ? ' multiple' : ''}${folder ? ' webkitdirectory' : ''} accept="${esc(m.accept || '')}"><div class="row"><button id="fc">Cancel</button></div>`, () => {
+    $('fc').onclick = hideCard;
+    $('fp').onchange = async () => {
+      const list = [...$('fp').files]; if (!list.length) return;
+      hideCard();
+      try { send({ t: 'upload', folder, ...(await sendFiles(list)) }); } catch (err) { hint(`Upload failed: ${err.message}`); }
+    };
+  });
+}
+// Date and color pickers: the desktop's own native picker over the remote field.
+let picker = null;
+function closePicker() { if (picker) { picker.remove(); picker = null; } }
+function showUI(d) {
+  if (d.kind === 'picker') {
+    closePicker();
+    picker = Object.assign(document.createElement('input'), { type: d.type, value: d.value, min: d.min, max: d.max, step: d.step || 'any', className: 'pick' });
+    Object.assign(picker.style, at(d));
+    stage.appendChild(picker);
+    const done = () => { if (picker) send({ t: 'pickerResp', id: d.id, value: picker.value, ctx: d.ctx }); closePicker(); ime.focus(); };
+    picker.addEventListener('change', done);
+    picker.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePicker(); ime.focus(); } });
+    picker.focus();
+    try { picker.showPicker(); } catch {} // needs the click's user activation; else the field stays for a click
+    return;
+  }
+  if (d.kind === 'contextmenu') return showContextMenu(d);
+  if (d.kind === 'clipboard') return writeClipboard(d.text, d.html);
+  if (d.kind === 'notification') return hint(`🔔 ${d.origin.replace(/^https?:\/\//, '')}: ${d.title}${d.body ? ' — ' + d.body : ''}`);
+  if (d.kind === 'fullscreen') return d.on && hint('Press Esc to exit full screen');
+  if (d.kind === 'webauthn') return hint('This page asked for a passkey or security key. The remote browser cannot use the ones on this computer.');
+  // A custom url() cursor names a keyword to fall back on, last.
+  if (d.kind === 'cursor') { const kw = String(d.cursor).split(',').pop().trim(); canvas.style.cursor = /^[a-z-]+$/.test(kw) ? kw : 'default'; return; }
+  if (d.kind === 'datalist') return showDatalist(d);
+  if (d.kind === 'tooltip') {
+    const tip = $('tip');
+    if (!d.text && Date.now() < (tip.holdUntil || 0)) return; // a validation message stays a moment
+    tip.textContent = d.text; tip.holdUntil = d.hold ? Date.now() + d.hold : 0;
+    Object.assign(tip.style, { ...at({ x: d.x, y: d.y }), display: d.text ? 'block' : 'none' });
+    if (d.hold) setTimeout(() => { if (Date.now() >= tip.holdUntil) tip.style.display = 'none'; }, d.hold);
+    return;
+  }
+  if (d.kind === 'permission') {
+    const what = { notifications: 'show notifications', geolocation: 'know your location' }[d.name] || d.name;
+    showCard(`<b>${esc(d.origin)} (remote page) wants to ${esc(what)}</b><div class="row"><button id="pb">Block</button><button id="pa">Allow</button></div>`, () => {
+      const answer = (granted) => {
+        hideCard();
+        const r = { t: 'permResp', id: d.id, name: d.name, origin: d.origin, ctx: d.ctx };
+        if (!granted || d.name !== 'geolocation' || !navigator.geolocation) return send({ ...r, granted });
+        navigator.geolocation.getCurrentPosition(
+          (p) => send({ ...r, granted, lat: p.coords.latitude, lon: p.coords.longitude }),
+          () => send({ ...r, granted: false }), { timeout: 5000 });
+      };
+      $('pa').onclick = () => answer(true); $('pb').onclick = () => answer(false);
+    });
+  }
+}
+const ctxmenu = $('ctxmenu');
+function showContextMenu(d) {
+  const items = [];
+  if (d.link) items.push(['Open link in new tab', () => send({ t: 'menu', action: 'openLink', url: d.link })], ['Copy link address', () => navigator.clipboard.writeText(d.link).catch(() => {})]);
+  if (d.image) items.push(['Open image in new tab', () => send({ t: 'menu', action: 'openLink', url: d.image })], ['Copy image address', () => navigator.clipboard.writeText(d.image).catch(() => {})]);
+  if (d.selection) items.push(['Copy', () => send({ t: 'menu', action: 'copy', ctx: d.ctx })]);
+  if (d.editable) items.push(['Cut', () => send({ t: 'menu', action: 'cut', ctx: d.ctx })], ['Paste', () => navigator.clipboard.readText().then((t) => t && input({ t: 'paste', text: t, html: '', files: [] }, 'key')).catch(() => hint('Press ⌘V to paste: this window cannot read the clipboard from a menu'))]);
+  items.push(['Select all', () => send({ t: 'menu', action: 'selectAll', ctx: d.ctx })], ['Reload', () => send({ t: 'reload' })]);
+  ctxmenu.innerHTML = items.map(([label], i) => `<div data-i="${i}">${esc(label)}</div>`).join('');
+  Object.assign(ctxmenu.style, { ...at({ x: d.x, y: d.y }), display: 'block' });
+  ctxmenu.onclick = (e) => { const i = e.target.dataset.i; ctxmenu.style.display = 'none'; if (i != null) items[Number(i)][1](); ime.focus(); };
+}
+document.addEventListener('mousedown', (e) => { if (!ctxmenu.contains(e.target)) ctxmenu.style.display = 'none'; }, true);
+function showAuth(m) {
+  showCard(`<b>${esc(m.origin)} (remote page) asks you to sign in</b>${m.failed ? '<div>Wrong username or password.</div>' : ''}${m.realm ? `<div>${esc(m.realm)}</div>` : ''}<input id="au" placeholder="Username"><input id="ap" type="password" placeholder="Password"><div class="row"><button id="ac">Cancel</button><button id="ao">Sign in</button></div>`, () => {
+    $('ao').onclick = () => { send({ t: 'authResp', origin: m.origin, username: $('au').value, password: $('ap').value }); hideCard(); };
+    $('ac').onclick = () => { send({ t: 'authResp', origin: m.origin, cancel: true }); hideCard(); }; // shows the server's 401 page
+    $('au').focus();
+  });
+}
+const toast = $('toast');
+function notice(text, label, act) {
+  toast.textContent = text + ' ';
+  const a = document.createElement('a'); a.href = '#'; a.textContent = label;
+  a.onclick = (e) => { e.preventDefault(); toast.style.display = 'none'; act(); };
+  toast.appendChild(a); toast.style.display = 'block';
+  clearTimeout(hint.t); hint.t = setTimeout(() => (toast.style.display = 'none'), 8000);
+}
+function hint(text) { toast.textContent = text; toast.style.display = 'block'; clearTimeout(hint.t); hint.t = setTimeout(() => (toast.style.display = 'none'), 4000); }
+// Recent downloads stack, each with its own Save: a page that downloads two
+// files at once used to leave only the last one's.
+const downloads = [];
+function showDownload(m) {
+  downloads.unshift(m); downloads.length = Math.min(downloads.length, 5);
+  toast.innerHTML = downloads.map((d, i) => `<div>Downloaded ${esc(d.name)} (${Math.round(d.size / 1024)} KB) on the remote browser<a${i ? '' : ' id="dlsave"'} href="/download/${encodeURIComponent(d.guid)}?token=${encodeURIComponent(token)}" download="${esc(d.name)}">Save</a></div>`).join('');
+  toast.style.display = 'block';
+  clearTimeout(showDownload.t); showDownload.t = setTimeout(() => { toast.style.display = 'none'; downloads.length = 0; }, 15000);
+}
+const selmenu = $('selmenu');
+function showSelect(d) {
+  selmenu.innerHTML = d.options.map((o, i) => `<div data-i="${i}" class="${i === d.selected ? 'cur' : ''}">${esc(o.label)}</div>`).join('');
+  const { width: minWidth, ...xy } = at(d); Object.assign(selmenu.style, { ...xy, minWidth, display: 'block' });
+  selmenu.onclick = (e) => { const i = e.target.dataset.i; if (i != null) send({ t: 'selectResp', id: d.id, index: Number(i), ctx: d.ctx }); hideSelect(); canvas.focus(); };
+}
+function hideSelect() { selmenu.style.display = 'none'; }
+function showDatalist(d) {
+  if (!d.options || !d.options.length) return hideSelect();
+  selmenu.innerHTML = d.options.map((o, i) => `<div data-i="${i}">${esc(o)}</div>`).join('');
+  const { width: minWidth, ...xy } = at(d); Object.assign(selmenu.style, { ...xy, minWidth, display: 'block' });
+  selmenu.onclick = (e) => { const i = e.target.dataset.i; if (i != null) send({ t: 'pickerResp', id: d.id, value: d.options[Number(i)], ctx: d.ctx }); hideSelect(); ime.focus(); };
+}
+
+// Stats for the standalone viewer's toolbar.
+const pct = (a, p) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))]); };
+let lastBytes = 0;
+setInterval(() => {
+  const t = now(); S.drawn = S.drawn.filter((x) => t - x < 1000);
+  const kbps = Math.round((S.bytes - lastBytes) * 8 / 1000 / 0.5); lastBytes = S.bytes;
+  statsEl.textContent = `fps ${S.drawn.length} · ${kbps} kbit/s · rtt ${pct(S.rtt.slice(-10), .5)} ms · frame age ${pct(S.ages.slice(-60), .5)} ms · click→frame p50 ${pct(S.lat.click, .5)} · key→frame p50 ${pct(S.lat.key, .5)} · wheel→frame p50 ${pct(S.lat.wheel, .5)} · ${canvas.width}×${canvas.height}`;
+}, 500);
+connect();
+canvas.focus();
+</script>
+</body>
+</html>

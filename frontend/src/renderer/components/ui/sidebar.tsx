@@ -1,5 +1,7 @@
 "use client";
 
+import { useSidebarChromeGeometry } from "../../hooks/useSidebarChromeGeometry";
+
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { PanelLeftIcon } from "lucide-react";
@@ -15,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
@@ -130,22 +132,20 @@ function SidebarProvider({
 
 	return (
 		<SidebarContext.Provider value={contextValue}>
-			<TooltipProvider delayDuration={0}>
-				<div
-					data-slot="sidebar-wrapper"
-					style={
-						{
-							"--sidebar-width": SIDEBAR_WIDTH,
-							"--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
-							...style,
-						} as React.CSSProperties
-					}
-					className={cn("group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar", className)}
-					{...props}
-				>
-					{children}
-				</div>
-			</TooltipProvider>
+			<div
+				data-slot="sidebar-wrapper"
+				style={
+					{
+						"--sidebar-width": SIDEBAR_WIDTH,
+						"--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
+						...style,
+					} as React.CSSProperties
+				}
+				className={cn("group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar", className)}
+				{...props}
+			>
+				{children}
+			</div>
 		</SidebarContext.Provider>
 	);
 }
@@ -154,19 +154,22 @@ function Sidebar({
 	side = "left",
 	variant = "sidebar",
 	collapsible = "offcanvas",
-	overlay = false,
 	className,
 	children,
+	resizeScopeRef,
 	...props
 }: React.ComponentProps<"div"> & {
 	side?: "left" | "right";
 	variant?: "sidebar" | "floating" | "inset";
 	collapsible?: "offcanvas" | "icon" | "none";
-	overlay?: boolean;
+	resizeScopeRef?: React.RefObject<HTMLDivElement | null>;
 }) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	const { isMobile, state, openMobile, setOpenMobile, isReady } = useSidebar();
+	const gapRef = React.useRef<HTMLDivElement>(null);
+	const containerRef = React.useRef<HTMLDivElement>(null);
+	useSidebarChromeGeometry(!isMobile && side === "left" && collapsible !== "none", gapRef, containerRef);
 
 	if (collapsible === "none") {
 		return (
@@ -214,33 +217,37 @@ function Sidebar({
 	// Target width for the gap placeholder. Animating the actual width lets the
 	// flex sibling <main> follow in real time instead of snapping separately.
 	const gapTargetWidth =
-		overlay || isOffcanvasCollapsed
+		isOffcanvasCollapsed
 			? 0
 			: isIconCollapsed
 				? variant === "floating" || variant === "inset"
 					? "calc(var(--sidebar-width-icon) + 1rem)"
 					: "var(--sidebar-width-icon)"
-				: "var(--sidebar-width)";
+				: "var(--ao-sidebar-w, var(--sidebar-width))";
 
 	// Several React HTML event types conflict with Motion's overloaded versions.
 	// Cast once so callers can keep passing through plain div props.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const motionSafeProps = props as any;
+	const childList = React.Children.toArray(children);
+	const rail = childList.filter((child) => React.isValidElement(child) && child.type === SidebarRail);
+	const rest = childList.filter((child) => !rail.includes(child));
 
 	return (
 		<div
 			className="group peer hidden text-sidebar-foreground md:block"
 			data-state={state}
 			data-collapsible={state === "collapsed" ? collapsible : ""}
-			data-overlay={overlay ? "true" : "false"}
 			data-variant={variant}
 			data-side={side}
 			data-slot="sidebar"
+			ref={resizeScopeRef}
 		>
 			{/* Layout gap follows the sidebar width so <main> expands and contracts
 			    smoothly with the shell instead of snapping on a separate CSS timer. */}
 			<motion.div
 				data-slot="sidebar-gap"
+				ref={gapRef}
 				initial={false}
 				animate={{ width: gapTargetWidth }}
 				transition={activeTransition}
@@ -250,11 +257,15 @@ function Sidebar({
 			    uses the same curve as the section animations. */}
 			<motion.div
 				data-slot="sidebar-container"
+				ref={containerRef}
 				initial={false}
 				animate={{ x: containerX }}
 				transition={activeTransition}
 				className={cn(
-					"fixed inset-y-0 z-chrome hidden h-svh w-(--sidebar-width) md:flex",
+					// Prefer top/bottom over inset-y so callers can clear titlebar chrome
+					// with `top-(--sidebar-chrome-offset)` without fighting inset-y-0.
+					// DO NOT restore `inset-y-0` + `h-svh` — under-topbar offset then clips wrong.
+					"fixed top-0 bottom-0 z-chrome hidden w-(--ao-sidebar-w,var(--sidebar-width)) md:flex",
 					side === "left" ? "left-0" : "right-0",
 					// Adjust the padding for floating and inset variants.
 					variant === "floating" || variant === "inset"
@@ -269,7 +280,13 @@ function Sidebar({
 					data-slot="sidebar-inner"
 					className="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
 				>
-					{children}
+					{/* The expand rail stays live while the rest is off-screen: a collapsed
+					    sidebar's controls must not be tabbable or readable, but its edge
+					    strip is how the pointer reopens it. */}
+					{rail}
+					<div aria-hidden={isOffcanvasCollapsed ? true : undefined} className="contents" inert={isOffcanvasCollapsed}>
+						{rest}
+					</div>
 				</div>
 			</motion.div>
 		</div>

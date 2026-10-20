@@ -21,7 +21,10 @@ var _ ports.Attacher = (*Runtime)(nil)
 // pty-host. rows/cols size the host's PTY from birth when known (a MsgResize is
 // sent right after connect). ctx cancellation closes the Stream.
 func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, cols uint16) (ports.Stream, error) {
-	sess := r.resolve(handle.ID)
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return nil, fmt.Errorf("conpty: resolve session %q for attach: %w", handle.ID, err)
+	}
 	if sess == nil {
 		return nil, fmt.Errorf("conpty: session %q not found", handle.ID)
 	}
@@ -30,8 +33,8 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 		return nil, fmt.Errorf("conpty: dial host for %q: %w", handle.ID, err)
 	}
 
-	pr, pw := io.Pipe()
-	s := &loopbackStream{conn: conn, pr: pr, pw: pw}
+	pipe := newBytePipe()
+	s := &loopbackStream{conn: conn, pr: pipe, pw: pipe}
 
 	// Pump host frames: MsgTerminalData payloads go into the pipe that Read
 	// drains. The first such frame is the scrollback snapshot, so the replay
@@ -51,16 +54,25 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 			return nil, err
 		}
 	}
+	// A detached host deliberately survives its child for scrollback. Ask for
+	// the child status on every attach so a pane opened after process exit gets
+	// the same definitive exit signal as a pane that observed the live event.
+	statusFrame, _ := EncodeMessage(MsgStatusReq, nil)
+	if _, err := conn.Write(statusFrame); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
 // loopbackStream is a ports.Stream backed by a single loopback connection to the
-// pty-host. The pump goroutine reframes host output into an io.Pipe so Read
-// presents a plain byte stream; Write/Resize encode client frames onto the conn.
+// pty-host. The pump goroutine reframes host output into a bytePipe so Read
+// presents a plain byte stream (all buffered output per Read); Write/Resize
+// encode client frames onto the conn.
 type loopbackStream struct {
 	conn io.ReadWriteCloser
-	pr   *io.PipeReader
-	pw   *io.PipeWriter
+	pr   *bytePipe
+	pw   *bytePipe
 
 	closeOnce sync.Once
 }
@@ -68,17 +80,29 @@ type loopbackStream struct {
 // pump reads framed host messages and writes MsgTerminalData payloads into the
 // pipe. It closes the pipe when the connection ends so Read returns EOF.
 func (s *loopbackStream) pump() {
+	processExited := false
 	parser := NewMessageParser(func(msgType byte, payload []byte) {
-		if msgType == MsgTerminalData {
-			// Write blocks until Read drains, preserving back-pressure and order.
+		switch msgType {
+		case MsgTerminalData:
+			// Write blocks once the pipe is full, preserving back-pressure and order.
 			_, _ = s.pw.Write(payload)
+		case MsgStatusRes:
+			var status StatusPayload
+			if json.Unmarshal(payload, &status) == nil && !status.Alive {
+				processExited = true
+			}
 		}
 	})
-	buf := make([]byte, 4096)
+	buf := make([]byte, 32*1024)
 	for {
 		n, err := s.conn.Read(buf)
 		if n > 0 {
 			parser.Feed(buf[:n])
+			if processExited {
+				_ = s.conn.Close()
+				_ = s.pw.CloseWithError(ports.ErrRuntimeProcessExited)
+				return
+			}
 		}
 		if err != nil {
 			_ = s.pw.CloseWithError(err)

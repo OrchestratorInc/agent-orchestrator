@@ -82,7 +82,7 @@ func TestBrowserCoreInteractionActionsReachRuntime(t *testing.T) {
 	runtime := &fakeBrowserRuntime{}
 	srv := browserServer(t, runtime)
 	actions := []string{
-		"type", "press", "hover", "highlight", "unhighlight",
+		"act", "type", "press", "hover", "highlight", "unhighlight",
 		"tabs", "tab-new", "tab-select", "tab-close",
 		"scroll", "select", "check", "uncheck", "get",
 		"network-start", "network-status", "network-list", "network-stop", "network-clear",
@@ -125,6 +125,21 @@ func TestBrowserCommandValidationAndErrors(t *testing.T) {
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"click"}`)
 	if status != http.StatusConflict || !containsAll(body, `"code":"STALE_REFERENCE"`) {
 		t.Fatalf("stale = %d body=%s", status, body)
+	}
+	runtime.err = browserruntime.CommandError{Code: "BROWSER_TARGET_MISMATCH", Message: "Browser automation could not target AO tab t2"}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"click"}`)
+	if status != http.StatusConflict || !containsAll(body, `"code":"BROWSER_TARGET_MISMATCH"`, `"message":"Browser automation could not target AO tab t2"`) {
+		t.Fatalf("target mismatch = %d body=%s", status, body)
+	}
+	runtime.err = browserruntime.CommandError{Code: "AGENT_BROWSER_TIMEOUT", Message: "agent-browser command timed out"}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"screenshot"}`)
+	if status != http.StatusGatewayTimeout || !containsAll(body, `"code":"AGENT_BROWSER_TIMEOUT"`) {
+		t.Fatalf("native timeout = %d body=%s", status, body)
+	}
+	runtime.err = context.DeadlineExceeded
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"screenshot"}`)
+	if status != http.StatusGatewayTimeout || !containsAll(body, `"code":"BROWSER_COMMAND_TIMEOUT"`) {
+		t.Fatalf("request deadline = %d body=%s", status, body)
 	}
 }
 

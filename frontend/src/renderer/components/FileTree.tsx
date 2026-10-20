@@ -1,0 +1,625 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
+import { preparePresortedFileTreeInput, type GitStatus, type GitStatusEntry } from "@pierre/trees";
+import { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react";
+import {
+	buildWorkspaceFileTree,
+	sessionWorkspaceTreeQueryOptions,
+	type TreeNode,
+	type WorkspaceTreeEntry,
+} from "../hooks/useSessionWorkspaceTree";
+import { sessionUiKey } from "../lib/hosts";
+import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+
+const ROW_HEIGHT = 28;
+
+// Pierre Trees paints inside a shadow root, so it is themed through its
+// override variables. Everything maps to AO's semantic tokens: neutral hover
+// and selection fills, passive chrome, the standard focus ring and radius.
+// Rows pad 6px on both sides (no scrollbar gutter, no row margin) so the icon
+// column and the trailing status letter sit the same distance from the edges.
+function treeStyle(flushTop: boolean): React.CSSProperties {
+	return {
+		"--trees-bg-override": "transparent",
+		"--trees-fg-override": "var(--foreground)",
+		"--trees-fg-muted-override": "var(--color-text-passive)",
+		"--trees-bg-muted-override": "var(--interactive-hover)",
+		"--trees-selected-bg-override": "var(--interactive-active)",
+		"--trees-selected-fg-override": "var(--foreground)",
+		"--trees-selected-focused-border-color-override": "transparent",
+		"--trees-accent-override": "var(--ring)",
+		"--trees-focus-ring-color-override": "var(--ring)",
+		"--trees-border-radius-override": "var(--radius-md)",
+		"--trees-padding-inline-override": "0px",
+		"--trees-item-padding-x-override": "6px",
+		"--trees-item-margin-x-override": "0px",
+		"--trees-item-row-gap-override": "6px",
+		"--trees-scrollbar-gutter-override": "0px",
+		"--trees-icon-width-override": "14px",
+		"--trees-font-family-override": "inherit",
+		"--trees-font-size-override": "var(--font-size-base)",
+		paddingTop: flushTop ? 0 : 4,
+	} as React.CSSProperties;
+}
+
+// Folders use Lucide's Folder / FolderOpen (the icon set project rows use)
+// instead of the tree's chevron: one symbol carries both shapes and the row's
+// expanded state picks which is visible through inherited custom properties.
+const FOLDER_SPRITE = `<svg data-icon-sprite aria-hidden="true" width="0" height="0">
+  <symbol id="ao-folder" viewBox="0 0 24 24">
+    <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path style="display:var(--ao-folder-closed,inline)" d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+      <path style="display:var(--ao-folder-open,none)" d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
+    </g>
+  </symbol>
+</svg>`;
+
+// Per-technology file glyphs keep their own colors, like the file icons in the
+// Changes review; only the folder glyph is neutral.
+const TREE_ICONS = {
+	set: "complete",
+	colored: true,
+	spriteSheet: FOLDER_SPRITE,
+	remap: { "file-tree-icon-chevron": { name: "ao-folder", width: 14, height: 14, viewBox: "0 0 24 24" } },
+} as const;
+
+// Folders never read as "active" (only the open file does). The row focus ring
+// is hidden while the last input was a pointer (the hook below sets
+// data-pointer-focus on the tree host) and returns on the first key press.
+const TREE_UNSAFE_CSS = `
+  [data-item-type="folder"] > [data-item-section="icon"] > [data-icon-name="file-tree-icon-chevron"] {
+    transform: none !important;
+    color: var(--trees-fg-muted);
+  }
+  [data-item-type="folder"][aria-expanded="true"] > [data-item-section="icon"] {
+    --ao-folder-closed: none;
+    --ao-folder-open: inline;
+  }
+  button[data-item-type="folder"][data-item-selected]:not(:hover) {
+    background-color: transparent;
+  }
+  :host([data-pointer-focus]) button[data-type="item"][data-item-focused="true"]:before {
+    outline: none;
+  }
+`;
+
+const EXPAND_SECONDS = 0.14;
+const EXPAND_EASE = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
+const EXPAND_SLIDE_PX = 12;
+const EXPAND_WATCH_MS = 600;
+
+type TreeModel = ReturnType<typeof useFileTree>["model"];
+
+/**
+ * Clicking a folder toggles it, but only the open file may read as active:
+ * drop any folder from the selection and put the open file back.
+ */
+function restoreFileSelection(model: TreeModel, selectedPath: string | null, syncing: { current: boolean }) {
+	syncing.current = true;
+	for (const path of model.getSelectedPaths()) {
+		if (path.endsWith("/")) model.getItem(path)?.deselect();
+	}
+	if (selectedPath) model.getItem(selectedPath)?.select();
+	syncing.current = false;
+}
+
+/**
+ * Settles the list the way a project's session list settles in the sidebar
+ * (0.14s, same ease, children sliding down 12px as they fade in) when one
+ * folder opens or closes. Pierre windows its rows and reuses DOM nodes, so this
+ * runs imperatively on its shadow root: the new child rows slide and fade in,
+ * and every row below the folder glides by the height that was added or
+ * removed, which reads as the list growing and shrinking.
+ *
+ * A folder toggle is spotted from the user's click or key press on a folder
+ * row, not by diffing the tree on every model event. Lazy folders report their
+ * children a fetch later, so the change in visible rows is what triggers the
+ * settle. The hook also tracks the last input device so the row focus ring
+ * only shows for keyboard focus.
+ */
+function useTreeExpandAnimation(model: TreeModel) {
+	const hostRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		const wrapper = hostRef.current;
+		if (!wrapper) return;
+		const treeHost = () => wrapper.querySelector("file-tree-container");
+		let pending: { path: string; at: number } | null = null;
+		let frame = 0;
+		const timing: KeyframeAnimationOptions = { duration: EXPAND_SECONDS * 1000, easing: EXPAND_EASE };
+		const folderRowOf = (event: Event) =>
+			event.composedPath().find(
+				(node): node is HTMLElement => node instanceof HTMLElement && node.dataset.itemType === "folder" && node.dataset.itemPath != null,
+			);
+		const markFolderToggle = (event: Event) => {
+			const row = folderRowOf(event);
+			if (row?.dataset.itemPath) pending = { path: row.dataset.itemPath, at: performance.now() };
+		};
+		const onPointerDown = (event: PointerEvent) => {
+			treeHost()?.setAttribute("data-pointer-focus", "");
+			markFolderToggle(event);
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			treeHost()?.removeAttribute("data-pointer-focus");
+			if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) markFolderToggle(event);
+		};
+		// `animate` is missing in non-browser DOMs (jsdom), where a late frame would throw.
+		const animate = (dir: string, delta: number) => {
+			if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+			const root = treeHost()?.shadowRoot;
+			if (!root) return;
+			// Sticky ancestor rows repeat a folder's path; only the list rows move.
+			const rows = [...root.querySelectorAll<HTMLElement>('button[data-type="item"][data-item-path]:not([data-file-tree-sticky-row])')];
+			const dirIndex = rows.findIndex((row) => row.dataset.itemPath === dir);
+			if (dirIndex < 0) return;
+			const added = Math.max(delta, 0);
+			rows.slice(dirIndex + 1).forEach((row, offset) => {
+				if (offset < added) {
+					row.animate?.(
+						[{ opacity: 0, transform: `translateY(-${EXPAND_SLIDE_PX}px)` }, { opacity: 1, transform: "none" }],
+						timing,
+					);
+					return;
+				}
+				// Rows below the folder travel the height gained or lost.
+				row.animate?.([{ transform: `translateY(${-delta * ROW_HEIGHT}px)` }, { transform: "none" }], timing);
+			});
+		};
+		let lastCount = model.getVisibleCount();
+		const unsubscribe = model.subscribe(() => {
+			const count = model.getVisibleCount();
+			if (pending && performance.now() - pending.at > EXPAND_WATCH_MS) pending = null;
+			if (pending && count !== lastCount) {
+				const { path } = pending;
+				const delta = count - lastCount;
+				pending = null;
+				cancelAnimationFrame(frame);
+				frame = requestAnimationFrame(() => animate(path, delta));
+			}
+			lastCount = count;
+		});
+		wrapper.addEventListener("pointerdown", onPointerDown, true);
+		wrapper.addEventListener("keydown", onKeyDown, true);
+		return () => {
+			unsubscribe();
+			cancelAnimationFrame(frame);
+			wrapper.removeEventListener("pointerdown", onPointerDown, true);
+			wrapper.removeEventListener("keydown", onKeyDown, true);
+		};
+	}, [model]);
+	return hostRef;
+}
+
+function entryToNode(entry: WorkspaceTreeEntry): TreeNode {
+	if (entry.type === "dir") {
+		return { name: entry.name, path: entry.path, type: "dir", hasChanges: entry.hasChanges, children: [] };
+	}
+	return { name: entry.name, path: entry.path, type: "file", status: entry.status, binary: entry.binary };
+}
+
+// Observe directory queries rather than copying them into local state, so
+// workspace invalidation updates expanded folders without closing them.
+function treeFromDirectories(entries: WorkspaceTreeEntry[], directories: Map<string, WorkspaceTreeEntry[]>): TreeNode[] {
+	return entries.map((entry) => {
+		const node = entryToNode(entry);
+		return node.type === "dir"
+			? { ...node, children: treeFromDirectories(directories.get(node.path) ?? [], directories) }
+			: node;
+	});
+}
+
+export function FileTree({
+	filterText,
+	sessionId,
+	hostId,
+	changedOnly,
+	changedOnlyData,
+	selectedPath,
+	onSelectPath,
+	onPrefetchPath,
+	flushTop = false,
+}: {
+	/** Start the first row at the top edge (the Files split view's divider). */
+	flushTop?: boolean;
+	filterText: string;
+	sessionId: string;
+	hostId?: string;
+	changedOnly: boolean;
+	changedOnlyData: TreeNode[];
+	selectedPath: string | null;
+	onSelectPath: (node: TreeNode) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
+}) {
+	if (changedOnly) {
+		return (
+			<ChangedFileTree
+				data={changedOnlyData}
+				filterText={filterText}
+				flushTop={flushTop}
+				onSelectPath={onSelectPath}
+				onPrefetchPath={onPrefetchPath}
+				selectedPath={selectedPath}
+				sessionId={sessionId}
+			/>
+		);
+	}
+
+	return (
+		<WorkspaceFileTree
+			filterText={filterText}
+			flushTop={flushTop}
+			hostId={hostId}
+			onSelectPath={onSelectPath}
+			onPrefetchPath={onPrefetchPath}
+			selectedPath={selectedPath}
+			sessionId={sessionId}
+		/>
+	);
+}
+
+function WorkspaceFileTree({
+	filterText,
+	hostId,
+	sessionId,
+	selectedPath,
+	onSelectPath,
+	onPrefetchPath,
+	flushTop,
+}: {
+	filterText: string;
+	hostId?: string;
+	sessionId: string;
+	selectedPath: string | null;
+	onSelectPath: (node: TreeNode) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
+	flushTop: boolean;
+}) {
+	const { t } = useTranslation();
+	const uiKey = sessionUiKey(sessionId, hostId);
+	const [directories, setDirectories] = useState({ key: uiKey, requested: [] as string[], open: new Set<string>() });
+	const normalizedFilter = filterText.trim();
+	const [search, setSearch] = useState({ key: uiKey, value: normalizedFilter });
+	useEffect(() => {
+		const timer = setTimeout(() => setSearch({ key: uiKey, value: normalizedFilter }), 125);
+		return () => clearTimeout(timer);
+	}, [normalizedFilter, uiKey]);
+	const searchFilter = normalizedFilter === "" ? "" : search.key === uiKey ? search.value : normalizedFilter;
+
+	const rootQuery = useQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, "", "Unable to load workspace tree", hostId), enabled: normalizedFilter.length === 0 });
+	const searchQuery = useQuery({
+		...sessionWorkspaceSearchQueryOptions(sessionId, searchFilter, t("files.error.searchWorkspace"), hostId),
+		enabled: searchFilter.length > 0,
+	});
+
+	const requested = directories.key === uiKey ? directories.requested : [];
+	const directoryQueries = useQueries({
+		queries: requested.map((dir) => ({
+			...sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId),
+			enabled: normalizedFilter.length === 0 && directories.open.has(dir),
+		})),
+	});
+	const directoryEntries = new Map<string, WorkspaceTreeEntry[]>();
+	requested.forEach((dir, index) => {
+		const entries = directoryQueries[index]?.data?.entries;
+		if (entries) directoryEntries.set(dir, entries);
+	});
+	const lazyData = treeFromDirectories(rootQuery.data?.entries ?? [], directoryEntries);
+
+	const loadChildren = useCallback((dir: string, open: boolean) => {
+		setDirectories((previous) => {
+			const current = previous.key === uiKey ? previous : { key: uiKey, requested: [], open: new Set<string>() };
+			if (current.open.has(dir) === open && current.requested.includes(dir)) return previous;
+			const nextOpen = new Set(current.open);
+			if (open) nextOpen.add(dir); else nextOpen.delete(dir);
+			return { key: uiKey, open: nextOpen, requested: current.requested.includes(dir) ? current.requested : [...current.requested, dir] };
+		});
+	}, [uiKey]);
+
+	const searchData = buildWorkspaceFileTree(searchQuery.data?.results ?? []);
+	const data = normalizedFilter ? searchData : lazyData;
+	const isPending = normalizedFilter ? searchQuery.isPending : rootQuery.isPending;
+	const activeError = normalizedFilter ? searchQuery.error : rootQuery.error;
+	const isEmpty = data.length === 0 && !isPending && !activeError;
+
+	return (
+		<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-1.5">
+			{isPending ? (
+				<p className="p-3 text-xs text-muted-foreground">{t("files.loading")}</p>
+			) : null}
+			{activeError ? (
+				<p className="p-3 text-xs text-error">{activeError.message || t("files.error.loadWorkspaceTree")}</p>
+			) : null}
+			{isEmpty ? <p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p> : null}
+			{!isPending && !activeError && !isEmpty ? (
+				<PierreTreeSurface
+					data={data}
+					expandAll={normalizedFilter.length > 0}
+					flushTop={flushTop}
+					id={`workspace-files-${sessionId}`}
+					onDirectoryExpanded={normalizedFilter ? undefined : loadChildren}
+					onPrefetchPath={onPrefetchPath}
+					onSelectPath={onSelectPath}
+					selectedPath={selectedPath}
+				/>
+			) : null}
+		</div>
+	);
+}
+
+function flattenChangedFiles(nodes: TreeNode[], files: TreeNode[] = []): TreeNode[] {
+	for (const node of nodes) {
+		if (node.type === "file") files.push(node);
+		else flattenChangedFiles(node.children ?? [], files);
+	}
+	return files;
+}
+
+function toPierreGitStatus(status: TreeNode["status"]): GitStatus | null {
+	switch (status) {
+		case "added":
+		case "deleted":
+		case "modified":
+		case "renamed":
+			return status;
+		default:
+			return null;
+	}
+}
+
+function flattenTreeNodes(nodes: TreeNode[], entries: TreeNode[] = []): TreeNode[] {
+	for (const node of nodes) {
+		entries.push(node);
+		if (node.type === "dir") flattenTreeNodes(node.children ?? [], entries);
+	}
+	return entries;
+}
+
+function pierrePath(entry: TreeNode): string {
+	return entry.type === "dir" ? `${entry.path}/` : entry.path;
+}
+
+function useTreePrefetch(entries: Map<string, TreeNode>, onPrefetchPath?: (node: TreeNode) => void) {
+	const lastPath = useRef<string | null>(null);
+	return (event: React.SyntheticEvent) => {
+		const row = event.nativeEvent.composedPath().find((target) => target instanceof HTMLElement && target.hasAttribute("data-item-path")) as HTMLElement | undefined;
+		const path = row?.getAttribute("data-item-path")?.replace(/\/$/, "");
+		if (!path || path === lastPath.current) return;
+		lastPath.current = path;
+		const entry = entries.get(path);
+		if (entry) onPrefetchPath?.(entry);
+	};
+}
+
+function PierreTreeSurface({
+	data,
+	expandAll,
+	flushTop,
+	id,
+	onDirectoryExpanded,
+	onPrefetchPath,
+	onSelectPath,
+	selectedPath,
+}: {
+	data: TreeNode[];
+	expandAll: boolean;
+	flushTop: boolean;
+	id: string;
+	onDirectoryExpanded?: (path: string, open: boolean) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
+	onSelectPath: (node: TreeNode) => void;
+	selectedPath: string | null;
+}) {
+	const { t } = useTranslation();
+	const entries = useMemo(() => flattenTreeNodes(data), [data]);
+	const entriesByPath = useMemo(() => new Map(entries.map((entry) => [entry.path, entry])), [entries]);
+	const prefetch = useTreePrefetch(entriesByPath, onPrefetchPath);
+	const entriesByPathRef = useRef(entriesByPath);
+	entriesByPathRef.current = entriesByPath;
+	const onSelectPathRef = useRef(onSelectPath);
+	onSelectPathRef.current = onSelectPath;
+	const onDirectoryExpandedRef = useRef(onDirectoryExpanded);
+	onDirectoryExpandedRef.current = onDirectoryExpanded;
+	const paths = useMemo(() => entries.map(pierrePath), [entries]);
+	const preparedInput = useMemo(() => preparePresortedFileTreeInput(paths), [paths]);
+	const gitStatus = useMemo(
+		() => entries.flatMap<GitStatusEntry>((entry) => {
+			if (entry.type !== "file") return [];
+			const status = toPierreGitStatus(entry.status);
+			return status ? [{ path: entry.path, status }] : [];
+		}),
+		[entries],
+	);
+	const syncingSelection = useRef(false);
+	const modelRef = useRef<TreeModel | null>(null);
+	const selectedPathRef = useRef(selectedPath);
+	selectedPathRef.current = selectedPath;
+	const { model } = useFileTree({
+		preparedInput,
+		flattenEmptyDirectories: false,
+		icons: TREE_ICONS,
+		unsafeCSS: TREE_UNSAFE_CSS,
+		initialExpansion: expandAll ? "open" : "closed",
+		initialSelectedPaths: selectedPath && entriesByPath.get(selectedPath)?.type === "file" ? [selectedPath] : [],
+		itemHeight: ROW_HEIGHT,
+		overscan: 8,
+		gitStatus,
+		onSelectionChange: (selectedPaths) => {
+			if (syncingSelection.current) return;
+			const path = selectedPaths.at(-1);
+			if (path?.endsWith("/")) {
+				queueMicrotask(() => modelRef.current && restoreFileSelection(modelRef.current, selectedPathRef.current, syncingSelection));
+				return;
+			}
+			const entry = path ? entriesByPathRef.current.get(path) : undefined;
+			if (entry?.type === "file") onSelectPathRef.current(entry);
+		},
+	});
+	modelRef.current = model;
+	const hostRef = useTreeExpandAnimation(model);
+
+	useLayoutEffect(() => {
+		const expandedPaths = expandAll
+			? entries.filter((entry) => entry.type === "dir").map(pierrePath)
+			: model.getVisibleRows(0, model.getVisibleCount())
+				.filter((row) => row.kind === "directory" && row.isExpanded)
+				.map((row) => row.path);
+		model.resetPaths({ preparedInput, initialExpandedPaths: expandedPaths });
+		model.setGitStatus(gitStatus);
+	}, [entries, expandAll, gitStatus, model, preparedInput]);
+
+	useEffect(() => {
+		const loadExpandedDirectories = () => {
+			const load = onDirectoryExpandedRef.current;
+			if (!load) return;
+			for (const entry of entriesByPathRef.current.values()) {
+				const item = model.getItem(pierrePath(entry));
+				if (entry.type === "dir" && item && "isExpanded" in item) {
+					load(entry.path, item.isExpanded());
+				}
+			}
+		};
+		loadExpandedDirectories();
+		return model.subscribe(loadExpandedDirectories);
+	}, [model]);
+
+	useLayoutEffect(() => {
+		if (!selectedPath || entriesByPath.get(selectedPath)?.type !== "file") return;
+		if (model.getSelectedPaths().length === 1 && model.getSelectedPaths()[0] === selectedPath) return;
+		syncingSelection.current = true;
+		model.getItem(selectedPath)?.select();
+		syncingSelection.current = false;
+	}, [entriesByPath, model, selectedPath]);
+	useLayoutEffect(() => markFileViewerPerformance("tree-painted"), [model, preparedInput]);
+
+	return (
+		<div className="flex min-h-0 flex-1 flex-col" ref={hostRef}>
+			<PierreFileTree
+				onPointerMove={prefetch}
+				onFocusCapture={prefetch}
+				aria-label={t("files.explorer.tree")}
+				className="min-h-0 flex-1"
+				data-testid="workspace-file-tree"
+				id={id}
+				model={model}
+				style={treeStyle(flushTop)}
+			/>
+		</div>
+	);
+}
+
+/**
+ * The changed-files view is a warm, path-first model. Pierre Trees owns the
+ * canonical path index and virtualized rows; manifest refreshes update that
+ * stable model instead of rebuilding a React node for every visible file.
+ */
+function ChangedFileTree({
+	onPrefetchPath,
+	data,
+	filterText,
+	flushTop,
+	onSelectPath,
+	selectedPath,
+	sessionId,
+}: {
+	onPrefetchPath?: (node: TreeNode) => void;
+	data: TreeNode[];
+	filterText: string;
+	flushTop: boolean;
+	onSelectPath: (node: TreeNode) => void;
+	selectedPath: string | null;
+	sessionId: string;
+}) {
+	const { t } = useTranslation();
+	const onSelectPathRef = useRef(onSelectPath);
+	onSelectPathRef.current = onSelectPath;
+
+	const files = useMemo(() => {
+		const normalizedFilter = filterText.trim().toLocaleLowerCase();
+		const allFiles = flattenChangedFiles(data);
+		return normalizedFilter
+			? allFiles.filter((file) => file.path.toLocaleLowerCase().includes(normalizedFilter))
+			: allFiles;
+	}, [data, filterText]);
+	const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files]);
+	const prefetch = useTreePrefetch(filesByPath, onPrefetchPath);
+	const filesByPathRef = useRef(filesByPath);
+	filesByPathRef.current = filesByPath;
+	const paths = useMemo(() => files.map((file) => file.path), [files]);
+	const preparedInput = useMemo(() => preparePresortedFileTreeInput(paths), [paths]);
+	const gitStatus = useMemo(
+		() => files.flatMap<GitStatusEntry>((file) => {
+			const status = toPierreGitStatus(file.status);
+			return status ? [{ path: file.path, status }] : [];
+		}),
+		[files],
+	);
+	const syncingSelection = useRef(false);
+	const modelRef = useRef<TreeModel | null>(null);
+	const selectedPathRef = useRef(selectedPath);
+	selectedPathRef.current = selectedPath;
+	const { model } = useFileTree({
+		preparedInput,
+		flattenEmptyDirectories: false,
+		icons: TREE_ICONS,
+		unsafeCSS: TREE_UNSAFE_CSS,
+		initialExpansion: "closed",
+		initialSelectedPaths: selectedPath && filesByPath.has(selectedPath) ? [selectedPath] : [],
+		itemHeight: ROW_HEIGHT,
+		overscan: 8,
+		gitStatus,
+		onSelectionChange: (selectedPaths) => {
+			if (syncingSelection.current) return;
+			const path = selectedPaths.at(-1);
+			if (path?.endsWith("/")) {
+				queueMicrotask(() => modelRef.current && restoreFileSelection(modelRef.current, selectedPathRef.current, syncingSelection));
+				return;
+			}
+			const file = path ? filesByPathRef.current.get(path) : undefined;
+			if (file) onSelectPathRef.current(file);
+		},
+	});
+	modelRef.current = model;
+	const hostRef = useTreeExpandAnimation(model);
+
+	useLayoutEffect(() => {
+		const expandedPaths = model
+			.getVisibleRows(0, model.getVisibleCount())
+			.filter((row) => row.kind === "directory" && row.isExpanded)
+			.map((row) => row.path);
+		model.resetPaths({ preparedInput, initialExpandedPaths: expandedPaths });
+		model.setGitStatus(gitStatus);
+	}, [gitStatus, model, preparedInput]);
+
+	useLayoutEffect(() => {
+		if (!selectedPath || !filesByPath.has(selectedPath)) return;
+		if (model.getSelectedPaths().length === 1 && model.getSelectedPaths()[0] === selectedPath) return;
+		syncingSelection.current = true;
+		model.getItem(selectedPath)?.select();
+		syncingSelection.current = false;
+	}, [filesByPath, model, selectedPath]);
+	useLayoutEffect(() => markFileViewerPerformance("tree-painted"), [model, preparedInput]);
+
+	if (files.length === 0) {
+		return (
+			<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-1.5">
+				<p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-1.5" ref={hostRef}>
+			<PierreFileTree
+			onPointerMove={prefetch}
+			onFocusCapture={prefetch}
+				aria-label={t("files.explorer.tree")}
+				className="min-h-0 flex-1"
+				data-testid="changed-file-tree"
+				id={`changed-files-${sessionId}`}
+				model={model}
+				style={treeStyle(flushTop)}
+			/>
+		</div>
+	);
+}

@@ -1,8 +1,20 @@
-import { render, screen } from "@testing-library/react";
+import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
-import { ActivityRow, SteerMessage } from "./ChatTimelineItems";
-import type { ConversationActivity } from "../../types/conversation";
+import type { ReactElement } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { ActivityRow, OriginMessage, SteerMessage } from "./ChatTimelineItems";
+import { ChatLinkProvider } from "./ChatMarkdown";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
+import { aoBridge } from "../../lib/bridge";
+import { TooltipProvider } from "../ui/tooltip";
+
+function render(ui: ReactElement) {
+	return rtlRender(
+		<TooltipProvider>
+			<ChatLinkProvider onSessionLinkOpen={vi.fn()}>{ui}</ChatLinkProvider>
+		</TooltipProvider>,
+	);
+}
 
 // One test file per new provider signal the daemon started serving. What each covers
 // is the claim the row makes, not its markup: an MCP call must not read as a command
@@ -91,10 +103,9 @@ describe("MCP tool call", () => {
 
 	it("names the server and the tool, not a shell command", () => {
 		render(<ActivityRow activity={call} />);
-		expect(screen.getByText("github")).toBeInTheDocument();
 		expect(screen.getByText("search_issues")).toBeInTheDocument();
 		// The distinction the kind exists to draw: nothing ran in the worktree.
-		expect(screen.getByText("MCP tool")).toBeInTheDocument();
+		expect(screen.getByText("MCP · github")).toBeInTheDocument();
 	});
 
 	it("shows the arguments and the answer when opened", async () => {
@@ -279,6 +290,7 @@ describe("steer message", () => {
 	it("shows the user's own words and says they landed mid-turn", () => {
 		render(
 			<SteerMessage
+				sessionId="ao-1"
 				activity={activity({
 					activityKind: "system",
 					summary: "Skip the integration tests",
@@ -288,6 +300,89 @@ describe("steer message", () => {
 		);
 		expect(screen.getByText("Skip the integration tests")).toBeInTheDocument();
 		expect(screen.getByText(/Steered into the running turn/i)).toBeInTheDocument();
+	});
+
+	it("renders a CLI steer as an attributed automation block with a session link", () => {
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "[from worker-1] focus on the API",
+					detail: {
+						event: "steer",
+						text: "[from worker-1] focus on the API",
+						origin: "human",
+						senderSessionId: "worker-1",
+						senderProjectId: "project-1",
+						senderDisplayName: "Backend worker",
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("Backend worker")).toBeInTheDocument();
+		expect(screen.getByText("focus on the API")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "Backend worker" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-1/worker-1",
+		);
+	});
+
+	it("renders an idle automation message with the same sender header and link", () => {
+		const message: ConversationMessage = {
+			kind: "message",
+			id: "message-1",
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "automation",
+			text: "[from worker-1] use the simpler approach",
+			streaming: false,
+			senderSessionId: "worker-1",
+			senderProjectId: "project-1",
+			senderDisplayName: "Backend worker",
+			createdAt: new Date().toISOString(),
+		};
+		render(<OriginMessage message={message} />);
+
+		expect(screen.getByRole("link", { name: "Backend worker" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-1/worker-1",
+		);
+		expect(screen.getByText("use the simpler approach")).toBeInTheDocument();
+		expect(screen.queryByText("[from worker-1] use the simpler approach")).not.toBeInTheDocument();
+	});
+
+	it("keeps long attributed steers consistent with automation reports", async () => {
+		const user = userEvent.setup();
+		const body = `${"A long steering report. ".repeat(30)}See ao://sessions/project-2/worker-2`;
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: `[from worker-2] ${body}`,
+					detail: {
+						event: "steer",
+						text: `[from worker-2] ${body}`,
+						origin: "human",
+						senderSessionId: "worker-2",
+						senderProjectId: "project-1",
+						senderDisplayName: "A very long backend worker display name that should truncate",
+					},
+				})}
+			/>,
+		);
+
+		const label = screen.getByText(/A very long backend worker/);
+		expect(label.closest(".cursor-chat-origin-message")).toContainElement(label);
+		expect(screen.getByRole("button", { name: "Show full report" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Show full report" }));
+		expect(screen.getByRole("button", { name: "Hide report" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "ao://sessions/project-2/worker-2" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-2/worker-2",
+		);
 	});
 });
 
@@ -320,29 +415,106 @@ describe("provider error", () => {
 		);
 		expect(screen.getByText("Reconnecting... [1/5]")).toBeInTheDocument();
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
+		expect(
+			screen.getByRole("link", {
+				name: "https://platform.openai.com/settings/organization/billing",
+			}),
+		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 		// The raw envelope must not paint as the row label — that is what overflowed the column.
 		expect(screen.queryByText(/codexErrorInfo/i)).not.toBeInTheDocument();
 		expect(screen.queryByText(/provider error:/i)).not.toBeInTheDocument();
 	});
 
-	it("reads already-normalized summary and detail without a JSON dump", () => {
+	it("reads normalized opaque text without a JSON dump", () => {
 		render(
 			<ActivityRow
 				activity={activity({
 					activityKind: "error",
 					status: "failed",
-					summary: "Reconnecting... [1/5]",
+					summary: "Reconnecting... [1/5]\n\nYou have no credits remaining. Add credits at https://platform.openai.com/settings/organization/billing",
 					detail: {
-						message: "Reconnecting... [1/5]",
-						error:
-							"stream disconnected before completion: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing",
+						error: "Reconnecting... [1/5]\n\nYou have no credits remaining. Add credits at https://platform.openai.com/settings/organization/billing",
 					},
 				})}
 			/>,
 		);
-		expect(screen.getByText("Reconnecting... [1/5]")).toBeInTheDocument();
+		expect(screen.getByText(/Reconnecting\.\.\. \[1\/5\]/)).toBeInTheDocument();
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
+		expect(
+			screen.getByRole("link", {
+				name: "https://platform.openai.com/settings/organization/billing",
+			}),
+		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 		expect(screen.queryByText(/codexErrorInfo/i)).not.toBeInTheDocument();
+	});
+
+	it("renders an arbitrary provider web URL literally and opens it externally", async () => {
+		const user = userEvent.setup();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "error",
+					status: "failed",
+					summary: "Custom provider request failed",
+					detail: {
+						message: "Custom provider request failed",
+						error: "Review the provider account at http://billing.example.test/renew.",
+					},
+				})}
+			/>,
+		);
+
+		const link = screen.getByRole("link", { name: "http://billing.example.test/renew" });
+		expect(link).toHaveAttribute("href", "http://billing.example.test/renew");
+		await user.click(link);
+		expect(openExternal).toHaveBeenCalledWith("http://billing.example.test/renew");
+		openExternal.mockRestore();
+	});
+
+	it("renders a separate provider action URL literally", () => {
+		render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "error",
+					status: "failed",
+					summary: "Request failed",
+					detail: {
+						message: "Request failed",
+						error: "You have no credits remaining.",
+						actionUrl: "https://platform.openai.com/settings/organization/billing",
+					},
+				})}
+			/>,
+		);
+
+		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
+		expect(
+			screen.getByRole("link", {
+				name: "https://platform.openai.com/settings/organization/billing",
+			}),
+		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
+	});
+
+	it("leaves non-web provider destinations as inert text", () => {
+		render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "error",
+					status: "failed",
+					summary: "Request failed",
+					detail: {
+						message: "Request failed",
+						error: "Run javascript:alert('owned') to continue.",
+						actionUrl: "file:///tmp/provider-help.html",
+					},
+				})}
+			/>,
+		);
+
+		expect(screen.getByText(/javascript:alert/)).toBeInTheDocument();
+		expect(screen.getByText("file:///tmp/provider-help.html")).toBeInTheDocument();
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
 	});
 
 	it("keeps plain-language errors readable without a JSON dump", () => {
@@ -445,23 +617,49 @@ describe("file changes", () => {
 
 	it("shows a status per file, which no client could read before", async () => {
 		render(<ActivityRow activity={edit} />);
-		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
-		expect(screen.getByLabelText("modified")).toBeInTheDocument();
-		expect(screen.getByLabelText("deleted")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
+		expect(screen.getByText("modified")).toBeInTheDocument();
+		expect(screen.getByText("deleted")).toBeInTheDocument();
 	});
 
 	it("opens a file's own patch", async () => {
 		render(<ActivityRow activity={edit} />);
-		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
+		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		await userEvent.click(screen.getByRole("button", { name: /src\/a\.ts/ }));
 		expect(screen.getByText(/@@ -1 \+1,2 @@/)).toBeInTheDocument();
+	});
+
+	it("opens a single-file edit straight onto its patch without listing the file again", async () => {
+		render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "file_change",
+					summary: "Edited 1 file",
+					detail: {
+						files: [
+							{
+								path: "src/FAQ.tsx",
+								status: "modified",
+								additions: 1,
+								deletions: 1,
+								patch: "@@ -1 +1 @@\n-old\n+new\n",
+							},
+						],
+					},
+				})}
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
+		expect(screen.getByText(/@@ -1 \+1 @@/)).toBeInTheDocument();
+		// Header already shows the basename; do not repeat "Edited FAQ.tsx" in the body.
+		expect(screen.getAllByText("FAQ.tsx")).toHaveLength(1);
 	});
 
 	// A file with no patch is not a button: a control that does nothing when pressed
 	// is worse than plain text.
 	it("does not offer to open a file that carries no patch", async () => {
 		render(<ActivityRow activity={edit} />);
-		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
+		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		expect(screen.queryByRole("button", { name: /src\/gone\.ts/ })).not.toBeInTheDocument();
 	});
 
@@ -486,10 +684,7 @@ describe("file changes", () => {
 				})}
 			/>,
 		);
-		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
-		// The row's own header names the single file too, so the file's disclosure is
-		// the last of the two.
-		await userEvent.click(screen.getAllByRole("button", { name: /src\/big\.ts/ }).at(-1)!);
+		await userEvent.click(screen.getByRole("button", { name: /Created/ }));
 		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
 	});
 
@@ -510,8 +705,16 @@ describe("file changes", () => {
 				})}
 			/>,
 		);
-		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
-		expect(screen.getByText("src/legacy.ts")).toBeInTheDocument();
-		expect(screen.getByLabelText("modified")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
+		expect(screen.getByText("legacy.ts")).toBeInTheDocument();
+		expect(screen.getByText("modified")).toBeInTheDocument();
+	});
+
+	it("shows the full path when hovering an edited basename", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={edit} />);
+		await user.click(screen.getByRole("button", { name: /Edited 2 files/ }));
+		await user.hover(screen.getByText("a.ts"));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/a.ts");
 	});
 });

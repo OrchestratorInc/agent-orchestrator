@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -35,7 +36,7 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"copilot", "--allow-all", "--interactive", "-fix this"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all", "--interactive", "-fix this"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -56,7 +57,7 @@ func TestGetLaunchCommandUsesSessionCustomAgentForSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"copilot", "--allow-all", "--agent=ao-mer-1", "--interactive", "-fix this"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all", "--agent=ao-mer-1", "--interactive", "-fix this"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -235,7 +236,7 @@ func TestGetLaunchCommandAppendsModelFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot", "--model", "claude-sonnet-4.5"}
+	want := []string{"copilot", "--no-auto-update", "--model", "claude-sonnet-4.5"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -276,7 +277,7 @@ func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v (model override must not be forwarded on restore)", cmd, want)
 	}
@@ -422,6 +423,22 @@ func TestAuthStatusAuthorizedFromEnv(t *testing.T) {
 	}
 }
 
+func TestCopilotClassicPATIsNotAnAuthorizationSignal(t *testing.T) {
+	clearCopilotAuthEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GH_TOKEN", "ghp_classic_token")
+
+	status, ok, err := copilotLocalAuthStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
+	}
+}
+
 func TestCopilotConfigAuthStatusAuthorizedWithPlainTextToken(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"authToken":"token"}`), 0o600); err != nil {
@@ -437,7 +454,7 @@ func TestCopilotConfigAuthStatusAuthorizedWithPlainTextToken(t *testing.T) {
 	}
 }
 
-func TestCopilotConfigAuthStatusUnauthorizedWithEmptyConfig(t *testing.T) {
+func TestCopilotConfigAuthStatusUnknownWithEmptyConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(" \n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -447,27 +464,23 @@ func TestCopilotConfigAuthStatusUnauthorizedWithEmptyConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusUnauthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusUnauthorized)
+	if ok || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
 	}
 }
 
-func TestCopilotSessionStateAuthStatusAuthorizedWithModelEvent(t *testing.T) {
-	dir := t.TempDir()
-	sessionDir := filepath.Join(dir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(`{"type":"tool.execution_complete","data":{"model":"claude-sonnet-4.5"}}`), 0o600); err != nil {
+func TestCopilotConfigAuthStatusDoesNotTreatAuthModeAsCredential(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"authMode":"github"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	status, ok, err := copilotSessionStateAuthStatus(context.Background(), dir)
+	status, ok, err := copilotConfigAuthStatus(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if ok || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -493,7 +506,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--allow-all-tools", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all-tools", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -519,7 +532,7 @@ func TestGetRestoreCommandSelectsSessionCustomAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--agent=ao-mer-1", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--agent=ao-mer-1", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -721,7 +734,7 @@ func TestInstallAgentProfileInstallsSessionCopilotAgent(t *testing.T) {
 		t.Fatalf("agent profile must start with YAML frontmatter for Copilot discovery:\n%s", agentText)
 	}
 	for _, want := range []string{
-		copilotAgentSentinel,
+		hookutil.CopilotAgentProfileSentinel,
 		"name: ao-sess-1",
 		"target: github-copilot",
 		"orchestrator must spawn workers",
@@ -1038,4 +1051,23 @@ func countCopilotHookCommand(entries []copilotHookEntry, command string) int {
 		}
 	}
 	return count
+}
+
+func TestManagedCopilotLaunchAndResumeDisableVendorAutoUpdate(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	launch, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "original-native-id"},
+	}})
+	if err != nil || !ok {
+		t.Fatalf("native resume unavailable: ok=%v error=%v", ok, err)
+	}
+	for name, argv := range map[string][]string{"launch": launch, "resume": resume} {
+		if !contains(argv, "--no-auto-update") {
+			t.Errorf("%s can replace its release outside AO: %q", name, argv)
+		}
+	}
 }

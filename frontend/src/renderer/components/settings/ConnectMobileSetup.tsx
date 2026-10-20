@@ -9,7 +9,7 @@ export type SetupMode = "lan" | "tailscale";
 // Maps a `securePairing.reason` from the daemon to the copy explaining it. An
 // unknown reason (e.g. a newer daemon build) returns undefined and renders
 // nothing rather than a raw translation key.
-function reasonMessage(reason: string, t: TFunction): string | undefined {
+export function reasonMessage(reason: string, t: TFunction): string | undefined {
 	switch (reason) {
 		case "no_cli":
 		case "no_magicdns":
@@ -28,7 +28,7 @@ function reasonMessage(reason: string, t: TFunction): string | undefined {
 }
 
 interface ConnectMobileSetupProps {
-	/** The selected connection method. Owned by the modal, which encodes the
+	/** The selected connection method. Owned by the Mobile settings page, which encodes the
 	 *  matching address into the pairing QR. */
 	mode: SetupMode;
 	onModeChange: (mode: SetupMode) => void;
@@ -44,13 +44,13 @@ interface ConnectMobileSetupProps {
 	 * seconds (up to three chained `tailscale` subprocess calls).
 	 */
 	busy?: boolean;
-	/** Secure-pairing (Tailscale TLS) state, owned by the modal. */
+	/** Secure-pairing (Tailscale TLS) state, owned by the Mobile settings page. */
 	secure: { enabled: boolean; reason: string };
 	onSecureChange: (on: boolean) => void;
 }
 
 // ConnectMobileSetup tells the user what to do with the pairing QR above it and
-// which address that QR carries. The mode is owned by ConnectMobileModal so the
+// which address that QR carries. The mode is owned by the Mobile settings page so the
 // QR can re-encode: LAN mode encodes the private IPv4 from AutopickLANIP, and
 // Tailscale mode encodes the 100.64.0.0/10 address from AutopickTailscaleIP
 // (backend/internal/mobilebridge/netiface.go), or the MagicDNS host over 443
@@ -59,7 +59,7 @@ export function ConnectMobileSetup({ mode, onModeChange, enabled, busy = false, 
 	const { t } = useTranslation();
 	const reasonText = reasonMessage(secure.reason, t);
 
-	// Margin-free on purpose: the modal owns the spacing around this block.
+	// Margin-free on purpose: the parent settings page owns the spacing around this block.
 	return (
 		<div className="flex w-full flex-col items-center">
 			<RadioGroup.Root
@@ -86,7 +86,7 @@ export function ConnectMobileSetup({ mode, onModeChange, enabled, busy = false, 
 				</div>
 			) : (
 				<div className="mt-3 w-full px-(--size-settings-mobile-details-pad-x)">
-					<div className="relative flex items-start justify-between gap-3 rounded-(--radius-settings-dialog-lg) border border-[var(--color-border-settings-input)] bg-[var(--color-bg-settings-input)] px-3.5 py-2.5">
+					<div className="relative flex items-start justify-between gap-3 rounded-(--radius-settings-dialog-lg) bg-[var(--color-bg-settings-input)] px-3.5 py-2.5">
 						<div className="flex min-w-0 flex-col gap-1 pr-2">
 							<span className="text-subtitle leading-(--leading-settings-mobile-title) text-settings-label">
 								{t("mobile.securePairing")}

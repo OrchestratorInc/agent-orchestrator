@@ -56,6 +56,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCopilot
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
@@ -75,6 +83,7 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 // adapter maps auto to --allow-all-tools, which would defeat this policy.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
+		Config:           inv.Config,
 		DataDir:          inv.DataDir,
 		SessionID:        inv.ReviewerID,
 		WorkspacePath:    inv.WorkspacePath,

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -16,7 +18,7 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	binary, err := p.ResolveBinary(ctx)
+	_, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
@@ -25,42 +27,97 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	} else if ok {
 		return status, nil
 	}
-	return authprobe.CLIStatus(ctx, binary, nil)
+	return ports.AgentAuthStatusUnknown, nil
 }
 
 var kimiAPIKeyEnvVars = []string{
 	"KIMI_API_KEY",
+	"OPENAI_API_KEY",
+	// Legacy Kimi Code distributions also accepted these names.
 	"KIMI_CODE_API_KEY",
 	"MOONSHOT_API_KEY",
 }
 
+// kimiLocalAuthStatus checks Kimi's own config and stored logins first; a key
+// in the environment is the fallback when they hold no usable credential.
 func kimiLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	for _, name := range kimiAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
+	status, found, err := kimiStoredAuthStatus(ctx)
+	if err == nil && found && status.HasCredential() {
+		return status, true, nil
 	}
-	home, ok := kimiCodeHome()
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, kimiAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	return status, found, err
+}
+
+func kimiStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+	homes, ok := kimiAuthHomes()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	configStatus, configOK, err := kimiConfigAuthStatus(filepath.Join(home, "config.toml"))
-	if err != nil || configStatus == ports.AgentAuthStatusAuthorized {
-		return configStatus, configOK, err
-	}
-	credentialsStatus, credentialsOK, err := kimiCredentialsAuthStatus(filepath.Join(home, "credentials", "kimi-code.json"))
-	if err != nil || credentialsOK {
-		return credentialsStatus, credentialsOK, err
-	}
-	if configOK {
-		return configStatus, configOK, nil
+	for _, home := range homes {
+		for _, configName := range []string{"config.toml", "config.json"} {
+			status, evidence, found, err := kimiConfigAuth(filepath.Join(home, configName))
+			if err != nil || found {
+				if status == ports.AgentAuthStatusAuthorized {
+					ports.RecordAuthEvidence(ctx, evidence)
+				}
+				return status, found, err
+			}
+		}
+		// Legacy Kimi Code stored its hosted OAuth token at this fixed path.
+		legacyPath := filepath.Join(home, "credentials", "kimi-code.json")
+		status, found, err := kimiCredentialsAuthStatus(legacyPath)
+		if err != nil || found {
+			if status == ports.AgentAuthStatusAuthorized {
+				ports.RecordAuthEvidence(ctx, authprobe.FileSource(legacyPath).WithMethod(domain.AgentAccountMethodAccount))
+			}
+			return status, found, err
+		}
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
+func kimiAuthHomes() ([]string, bool) {
+	userHome, err := os.UserHomeDir()
+	if err != nil && strings.TrimSpace(os.Getenv("KIMI_SHARE_DIR")) == "" &&
+		strings.TrimSpace(os.Getenv(kimiCodeHomeEnv)) == "" {
+		return nil, false
+	}
+
+	candidates := []string{
+		strings.TrimSpace(os.Getenv("KIMI_SHARE_DIR")),
+		strings.TrimSpace(os.Getenv(kimiCodeHomeEnv)),
+	}
+	if candidates[0] == "" && userHome != "" {
+		candidates[0] = filepath.Join(userHome, ".kimi")
+	}
+	if candidates[1] == "" && userHome != "" {
+		candidates[1] = filepath.Join(userHome, ".kimi-code")
+	}
+
+	homes := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		clean := filepath.Clean(candidate)
+		if _, exists := seen[clean]; exists {
+			continue
+		}
+		seen[clean] = struct{}{}
+		homes = append(homes, clean)
+	}
+	return homes, len(homes) > 0
+}
+
+// kimiCodeHome retains the legacy KIMI_CODE_HOME lookup used by runtime hook
+// isolation. Auth detection additionally checks the current KIMI_SHARE_DIR.
 func kimiCodeHome() (string, bool) {
 	if home := strings.TrimSpace(os.Getenv(kimiCodeHomeEnv)); home != "" {
 		return home, true
@@ -72,34 +129,129 @@ func kimiCodeHome() (string, bool) {
 	return filepath.Join(home, ".kimi-code"), true
 }
 
-var kimiAPIKeyLineRE = regexp.MustCompile(`(?m)^\s*api_key\s*=\s*("([^"]*)"|'([^']*)'|([^\s#]+))`)
+type kimiOAuthRef struct {
+	Storage string `json:"storage" toml:"storage"`
+	Key     string `json:"key" toml:"key"`
+}
 
-func kimiConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
+type kimiCredentialSource struct {
+	APIKey string            `json:"api_key" toml:"api_key"`
+	Env    map[string]string `json:"env" toml:"env"`
+	OAuth  *kimiOAuthRef     `json:"oauth" toml:"oauth"`
+}
+
+type kimiAuthConfig struct {
+	Providers map[string]kimiCredentialSource `json:"providers" toml:"providers"`
+}
+
+func kimiConfigOAuthCredentialPaths(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return nil, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return nil, nil
 	}
-	matches := kimiAPIKeyLineRE.FindAllStringSubmatch(string(data), -1)
-	if len(matches) == 0 {
-		return ports.AgentAuthStatusUnknown, false, nil
+	var config kimiAuthConfig
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		err = json.Unmarshal(data, &config)
+	} else {
+		err = toml.Unmarshal(data, &config)
 	}
-	for _, match := range matches {
-		for _, group := range match[2:] {
-			if strings.TrimSpace(group) != "" {
-				return ports.AgentAuthStatusAuthorized, true, nil
-			}
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0, len(config.Providers))
+	seen := make(map[string]struct{}, len(config.Providers))
+	for _, provider := range config.Providers {
+		if provider.OAuth == nil {
+			continue
+		}
+		credentialPath := kimiOAuthCredentialPath(filepath.Dir(path), provider.OAuth.Key)
+		if credentialPath == "" {
+			continue
+		}
+		clean := filepath.Clean(credentialPath)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		paths = append(paths, clean)
+	}
+	return paths, nil
+}
+
+func kimiConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
+	status, _, found, err := kimiConfigAuth(path)
+	return status, found, err
+}
+
+// kimiConfigAuth also names the file that holds the deciding credential.
+func kimiConfigAuth(path string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
+	}
+	var config kimiAuthConfig
+	var decodeErr error
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		decodeErr = json.Unmarshal(data, &config)
+	} else {
+		decodeErr = toml.Unmarshal(data, &config)
+	}
+	if decodeErr != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, decodeErr
+	}
+	for _, provider := range config.Providers {
+		if strings.TrimSpace(provider.APIKey) != "" || kimiProviderEnvHasCredential(provider.Env) {
+			return ports.AgentAuthStatusAuthorized, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey), true, nil
+		}
+		if provider.OAuth == nil || strings.TrimSpace(provider.OAuth.Key) == "" {
+			continue
+		}
+		credentialPath := kimiOAuthCredentialPath(filepath.Dir(path), provider.OAuth.Key)
+		status, found, err := kimiCredentialsAuthStatus(credentialPath)
+		if err != nil || found {
+			return status, authprobe.FileSource(credentialPath).WithMethod(domain.AgentAccountMethodAccount), found, err
 		}
 	}
-	return ports.AgentAuthStatusUnauthorized, true, nil
+	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
+}
+
+func kimiProviderEnvHasCredential(env map[string]string) bool {
+	for name, value := range env {
+		normalized := strings.ToUpper(strings.TrimSpace(name))
+		if strings.TrimSpace(value) != "" &&
+			(strings.HasSuffix(normalized, "_API_KEY") || strings.HasSuffix(normalized, "_TOKEN")) {
+			return true
+		}
+	}
+	return false
+}
+
+func kimiOAuthCredentialPath(home, key string) string {
+	name := strings.TrimPrefix(strings.TrimSpace(key), "oauth/")
+	name = filepath.Base(filepath.FromSlash(name))
+	if name == "" || name == "." {
+		return ""
+	}
+	return filepath.Join(home, "credentials", name+".json")
 }
 
 func kimiCredentialsAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return ports.AgentAuthStatusUnknown, false, nil
+	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return ports.AgentAuthStatusUnknown, false, nil
@@ -122,5 +274,5 @@ func kimiCredentialsAuthStatus(path string) (ports.AgentAuthStatus, bool, error)
 		strings.TrimSpace(credentials.RefreshToken) != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	return ports.AgentAuthStatusUnauthorized, true, nil
+	return ports.AgentAuthStatusUnknown, false, nil
 }

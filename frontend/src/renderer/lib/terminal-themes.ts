@@ -16,14 +16,20 @@ export function buildTerminalThemes(): { dark: ITheme; light: ITheme } {
 		: cssVar("--color-bg-terminal-opaque") || cssVar("--color-bg-terminal");
 	const terminalForeground = namedThemeActive ? cssVar("--foreground") : cssVar("--color-text-terminal");
 	const terminalCursor = namedThemeActive ? cssVar("--primary") : cssVar("--color-working");
+	// Collapse ANSI black into the plate. Agent TUIs (Cursor's prompt bar) fill
+	// rows with "black"; leaving the slot as a true dark color paints a black
+	// stripe on the light canvas. Same approach as packages/mobile/lib/theme.ts.
+	const ansiBlack = terminalBg;
 	const dark: ITheme = {
 		background: terminalBg,
+		// AO owns the scrollbar gutter; xterm 6 otherwise paints a white ruler edge.
+		overviewRulerBorder: "transparent",
 		foreground: terminalForeground,
 		cursor: terminalCursor,
 		cursorAccent: terminalBg,
 		selectionBackground: cssVar("--color-term-selection-dark"),
 		selectionInactiveBackground: cssVar("--color-term-selection-inactive"),
-		black: cssVar("--color-term-black"),
+		black: ansiBlack,
 		red: cssVar("--color-term-red"),
 		green: cssVar("--color-term-green"),
 		yellow: cssVar("--color-term-yellow"),
@@ -43,6 +49,8 @@ export function buildTerminalThemes(): { dark: ITheme; light: ITheme } {
 
 	const light: ITheme = {
 		background: terminalBg,
+		// AO owns the scrollbar gutter; xterm 6 otherwise paints a white ruler edge.
+		overviewRulerBorder: "transparent",
 		foreground: terminalForeground,
 		// xterm block cursor fills with `cursor` and paints cell text in
 		// `cursorAccent`. --color-working is fine on dark plates but reads as a
@@ -52,7 +60,7 @@ export function buildTerminalThemes(): { dark: ITheme; light: ITheme } {
 		cursorAccent: terminalBg,
 		selectionBackground: cssVar("--color-term-selection-light"),
 		selectionInactiveBackground: cssVar("--color-term-selection-inactive-light"),
-		black: cssVar("--color-term-black"),
+		black: ansiBlack,
 		red: cssVar("--color-term-red"),
 		green: cssVar("--color-term-green"),
 		yellow: cssVar("--color-term-yellow"),

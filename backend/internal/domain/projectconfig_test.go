@@ -17,6 +17,12 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"session prefix with slash", ProjectConfig{SessionPrefix: "ao/project"}, true},
 		{"session prefix with backslash", ProjectConfig{SessionPrefix: `ao\project`}, true},
 		{"session prefix traversal component", ProjectConfig{SessionPrefix: ".."}, true},
+		{"valid env", ProjectConfig{Env: map[string]string{"API_KEY": "a=b\nsecond line"}}, false},
+		{"AO-owned env name", ProjectConfig{Env: map[string]string{"AO_SESSION_ID": "spoof"}}, true},
+		{"case-folded AO-owned env name", ProjectConfig{Env: map[string]string{"ao_worktree_path": "spoof"}}, true},
+		{"invalid env name", ProjectConfig{Env: map[string]string{"BAD KEY": "secret"}}, true},
+		{"invalid env value", ProjectConfig{Env: map[string]string{"KEY": "bad\x00value"}}, true},
+		{"case-folded duplicate env", ProjectConfig{Env: map[string]string{"KEY": "first", "key": "second"}}, true},
 		{"good role override", ProjectConfig{Worker: RoleOverride{Harness: HarnessCodex}}, false},
 		{"unknown role harness", ProjectConfig{Orchestrator: RoleOverride{Harness: "nope"}}, true},
 		{"bad role agent config", ProjectConfig{Worker: RoleOverride{AgentConfig: AgentConfig{Permissions: "nope"}}}, true},
@@ -39,11 +45,10 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"good opencode reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerOpenCode}}}, false},
 		{"good kiro reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerKiro}}}, false},
 		{"good pi reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerPi}}}, false},
-		{"good experimental qwen reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerQwen}}}, false},
 		{"good experimental agy reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerAgy}}}, false},
-		{"good experimental continue reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerContinue}}}, false},
-		{"good experimental goose reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerGoose}}}, false},
-		{"good experimental vibe reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerVibe}}}, false},
+		{"unsupported continue reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: "continue"}}}, true},
+		{"unsupported goose reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: "goose"}}}, true},
+		{"unsupported vibe reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: "vibe"}}}, true},
 		{"good experimental Devin reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerDevin}}}, false},
 		{"good experimental Droid reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerDroid}}}, false},
 		{"good experimental Kimi reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerKimi}}}, false},
@@ -120,13 +125,42 @@ func TestProjectConfigWithDefaults(t *testing.T) {
 	}
 
 	got = (ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Assignee: "alice"}}).WithDefaults()
-	if got.TrackerIntake.Provider != TrackerProviderGitHub {
-		t.Fatalf("TrackerIntake.Provider = %q, want %q", got.TrackerIntake.Provider, TrackerProviderGitHub)
+	if got.TrackerIntake.Provider != "" {
+		t.Fatalf("TrackerIntake.Provider = %q, want empty (inferred at use time)", got.TrackerIntake.Provider)
 	}
 
 	got = (ProjectConfig{}).WithDefaults()
 	if got.TrackerIntake.Provider != "" {
 		t.Fatalf("disabled TrackerIntake.Provider = %q, want empty", got.TrackerIntake.Provider)
+	}
+}
+
+func TestInferTrackerProvider(t *testing.T) {
+	tests := []struct {
+		name    string
+		repoURL string
+		want    TrackerProvider
+	}{
+		{"empty", "", TrackerProviderGitHub},
+		{"https github", "https://github.com/acme/demo.git", TrackerProviderGitHub},
+		{"ssh github", "git@github.com:acme/demo.git", TrackerProviderGitHub},
+		{"ghe host", "https://ghe.corp.ghe.io/acme/demo.git", TrackerProviderGitHub},
+		{"github with port", "https://github.com:443/org/repo.git", TrackerProviderGitHub},
+		{"ssh github with port", "ssh://git@github.com:2222/org/repo.git", TrackerProviderGitHub},
+		{"https gitlab.com", "https://gitlab.com/group/repo.git", TrackerProviderGitLab},
+		{"ssh gitlab.com", "git@gitlab.com:group/repo.git", TrackerProviderGitLab},
+		{"self-managed gitlab", "https://gitlab.internal/group/repo.git", TrackerProviderGitLab},
+		{"ssh self-managed", "git@gitlab.internal:group/repo.git", TrackerProviderGitLab},
+		{"self-managed with port", "https://gitlab.local:8443/group/repo.git", TrackerProviderGitLab},
+		{"non-gitlab custom host", "https://dev.company.com/group/repo.git", TrackerProviderGitLab},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := InferTrackerProvider(tt.repoURL)
+			if got != tt.want {
+				t.Errorf("InferTrackerProvider(%q) = %q, want %q", tt.repoURL, got, tt.want)
+			}
+		})
 	}
 }
 

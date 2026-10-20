@@ -9,6 +9,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -53,6 +55,15 @@ type sessionDTO struct {
 	CreatedAt    time.Time       `json:"createdAt"`
 	UpdatedAt    time.Time       `json:"updatedAt"`
 	Status       string          `json:"status"`
+	Branch       string          `json:"branch,omitempty"`
+	BranchState  *branchStateDTO `json:"branchState,omitempty"`
+	PRs          []sessionPRDTO  `json:"prs"`
+}
+
+type branchStateDTO struct {
+	Commits      int    `json:"commits"`
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	Unpushed     int    `json:"unpushed"`
 }
 
 type sessionActivity struct {
@@ -64,18 +75,52 @@ type sessionListResponse struct {
 	Sessions []sessionDTO `json:"sessions"`
 }
 
+// sessionPRSummaryResponse mirrors the daemon's curated PR read model. The
+// list endpoint already carries aggregate PR facts, while this response adds
+// the unresolved-thread count needed by the human-readable session table.
+type sessionPRSummaryResponse struct {
+	PRs []sessionPRSummaryDTO `json:"prs"`
+}
+
+type sessionPRSummaryDTO struct {
+	Number int `json:"number"`
+	CI     struct {
+		State string `json:"state"`
+	} `json:"ci"`
+	Review struct {
+		// A pointer keeps a pre-change daemon's successful-but-fieldless
+		// response unknown rather than decoding absence as a known zero.
+		Decision              string `json:"decision"`
+		UnresolvedThreadCount *int   `json:"unresolvedThreadCount"`
+	} `json:"review"`
+}
+
 type sessionResponse struct {
 	Session sessionDTO `json:"session"`
 }
 
 type killSessionResponse struct {
-	SessionID string `json:"sessionId"`
-	Freed     bool   `json:"freed"`
+	SessionID      string `json:"sessionId"`
+	Freed          bool   `json:"freed"`
+	CleanupPending bool   `json:"cleanupPending"`
 }
 
 type restoreSessionResponse struct {
 	SessionID string     `json:"sessionId"`
 	Session   sessionDTO `json:"session"`
+}
+
+type exitAgentResponse struct {
+	OK        bool       `json:"ok"`
+	SessionID string     `json:"sessionId"`
+	Session   sessionDTO `json:"session"`
+}
+
+type resumeAgentResponse struct {
+	OK         bool       `json:"ok"`
+	SessionID  string     `json:"sessionId"`
+	ResumeMode string     `json:"resumeMode"`
+	Session    sessionDTO `json:"session"`
 }
 
 type renameSessionResponse struct {
@@ -89,8 +134,9 @@ type cleanupSkippedSession struct {
 }
 
 type cleanupSessionsResponse struct {
-	Cleaned []string                `json:"cleaned"`
-	Skipped []cleanupSkippedSession `json:"skipped"`
+	Cleaned     []string                `json:"cleaned"`
+	AlreadyGone []string                `json:"alreadyGone"`
+	Skipped     []cleanupSkippedSession `json:"skipped"`
 }
 
 type claimPRRequest struct {
@@ -118,16 +164,27 @@ type claimPRResponse struct {
 }
 
 type sessionListEntry struct {
-	ID             string     `json:"id"`
-	ProjectID      string     `json:"projectId"`
-	Role           string     `json:"role"`
-	Status         string     `json:"status,omitempty"`
-	IssueID        string     `json:"issueId,omitempty"`
-	Harness        string     `json:"harness,omitempty"`
-	IsTerminated   bool       `json:"isTerminated"`
-	LastActivityAt *time.Time `json:"lastActivityAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	ID             string          `json:"id"`
+	ProjectID      string          `json:"projectId"`
+	Role           string          `json:"role"`
+	DisplayName    string          `json:"displayName,omitempty"`
+	Status         string          `json:"status,omitempty"`
+	Activity       string          `json:"activity,omitempty"`
+	IssueID        string          `json:"issueId,omitempty"`
+	Harness        string          `json:"harness,omitempty"`
+	Branch         string          `json:"branch,omitempty"`
+	PRs            []sessionListPR `json:"prs"`
+	IsTerminated   bool            `json:"isTerminated"`
+	LastActivityAt *time.Time      `json:"lastActivityAt,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+}
+
+type sessionListPR struct {
+	Number  int    `json:"number"`
+	CI      string `json:"ci,omitempty"`
+	Review  string `json:"review,omitempty"`
+	Threads *int   `json:"threads"`
 }
 
 type sessionListOutput struct {
@@ -144,9 +201,12 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 		Short: "Manage agent sessions",
 	}
 	cmd.AddCommand(newSessionListCommand(ctx))
+	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
+	cmd.AddCommand(newSessionExitAgentCommand(ctx))
+	cmd.AddCommand(newSessionResumeAgentCommand(ctx))
 	cmd.AddCommand(newSessionRenameCommand(ctx))
 	cmd.AddCommand(newSessionCleanupCommand(ctx))
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
@@ -216,7 +276,7 @@ func newSessionRestoreCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "restore <id>",
-		Short: "Relaunch a terminated session",
+		Short: "Restore a terminated session or resume an exited agent",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -227,6 +287,44 @@ func newSessionRestoreCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	return cmd
+}
+
+func newSessionExitAgentCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "exit-agent <id>",
+		Short: "Exit an agent without terminating its AO session",
+		Args:  oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.exitSessionAgent(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output as JSON")
+	return cmd
+}
+
+func newSessionResumeAgentCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "resume-agent <id>",
+		Short: "Resume an exited agent in its existing AO session",
+		Args:  oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.resumeSessionAgent(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output as JSON")
 	return cmd
 }
 
@@ -270,7 +368,8 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim-pr [<session-id>] <pr-ref>",
 		Short: "Attach an existing PR to a session",
-		Long:  "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.",
+		Long: "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
+			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.",
 		Example: `  # From inside an AO worker session
   ao session claim-pr 88
 
@@ -374,21 +473,19 @@ func (c *commandContext) fetchProjectDetails(ctx context.Context, id string) (pr
 func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
 	out := cmd.OutOrStdout()
 	if len(res.PRs) == 0 {
-		_, err := fmt.Fprintf(out, "session %s claimed PR\n", res.SessionID)
-		return err
+		if _, err := fmt.Fprintf(out, "session %s claimed PR\n", res.SessionID); err != nil {
+			return err
+		}
+	} else {
+		pr := res.PRs[0]
+		if _, err := fmt.Fprintf(out, "session %s claimed PR #%d\n", res.SessionID, pr.Number); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(out, "  pr:       %s\n", pr.URL); err != nil {
+			return err
+		}
 	}
-	pr := res.PRs[0]
-	if _, err := fmt.Fprintf(out, "session %s claimed PR #%d\n", res.SessionID, pr.Number); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "  pr:       %s\n", pr.URL); err != nil {
-		return err
-	}
-	checkout := "already on PR branch"
-	if res.BranchChanged {
-		checkout = "switched to PR branch"
-	}
-	if _, err := fmt.Fprintf(out, "  checkout: %s\n", checkout); err != nil {
+	if err := writeClaimPRCheckout(out, res.BranchChanged); err != nil {
 		return err
 	}
 	for _, owner := range res.TakenOverFrom {
@@ -429,13 +526,58 @@ func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, o
 		hiddenTerminatedCount = terminatedCount
 		hiddenOrchestratorCount += terminatedOrchestratorCount
 	}
+	prSummaries, err := c.listSessionPRSummaries(ctx, sessions)
+	if err != nil {
+		return err
+	}
 	if opts.json {
-		out := sessionListOutput{Data: sessionListEntries(sessions)}
+		out := sessionListOutput{Data: sessionListEntries(sessions, prSummaries)}
 		out.Meta.HiddenTerminatedCount = hiddenTerminatedCount
 		out.Meta.HiddenOrchestratorCount = hiddenOrchestratorCount
 		return writeJSON(cmd.OutOrStdout(), out)
 	}
-	return writeSessionList(cmd, sessions, hiddenTerminatedCount, hiddenOrchestratorCount)
+	return writeSessionList(cmd, sessions, prSummaries, hiddenTerminatedCount, hiddenOrchestratorCount, c.deps.Now())
+}
+
+// listSessionPRSummaries fetches rich PR facts concurrently from the daemon.
+// Individual summary failures are intentionally non-fatal: the list response
+// still contains the persisted PR/CI/review facts and remains useful while an
+// SCM observation is incomplete or unavailable.
+func (c *commandContext) listSessionPRSummaries(ctx context.Context, sessions []sessionDTO) (map[string][]sessionPRSummaryDTO, error) {
+	out := make(map[string][]sessionPRSummaryDTO)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	// Keep the loopback daemon responsive when a project has many sessions while
+	// still resolving independent session summaries in parallel.
+	sem := make(chan struct{}, 8)
+	for _, sess := range sessions {
+		if len(sess.PRs) == 0 {
+			continue
+		}
+		id := sess.ID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			var res sessionPRSummaryResponse
+			if err := c.getJSON(ctx, "sessions/"+url.PathEscape(id)+"/pr", &res); err != nil {
+				return
+			}
+			mu.Lock()
+			out[id] = res.PRs
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *commandContext) countHiddenTerminated(ctx context.Context, project string, includeOrchestrators bool) (int, int, error) {
@@ -480,6 +622,10 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", struct{}{}, &res); err != nil {
 		return err
 	}
+	if res.CleanupPending {
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed (workspace cleanup pending)\n", res.SessionID)
+		return err
+	}
 	if res.Freed {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed\n", res.SessionID)
 		return err
@@ -491,10 +637,12 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 }
 
 func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
-	if opts.project != "" {
-		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
-			return err
-		}
+	sess, err := c.fetchScopedSession(ctx, id, opts.project)
+	if err != nil {
+		return err
+	}
+	if !sess.IsTerminated && sess.Activity.State == "exited" {
+		return c.resumeSessionAgent(ctx, cmd, id, sessionOptions{})
 	}
 	var res restoreSessionResponse
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/restore", struct{}{}, &res); err != nil {
@@ -508,6 +656,46 @@ func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command,
 		if _, err := fmt.Fprintf(out, "  project: %s\n", res.Session.ProjectID); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *commandContext) exitSessionAgent(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	var res exitAgentResponse
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/exit-agent", struct{}{}, &res); err != nil {
+		return err
+	}
+	if opts.json {
+		return writeJSON(cmd.OutOrStdout(), res)
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "agent exited for session %s\n", res.SessionID)
+	return err
+}
+
+func (c *commandContext) resumeSessionAgent(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	var res resumeAgentResponse
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/resume-agent", struct{}{}, &res); err != nil {
+		return err
+	}
+	if opts.json {
+		return writeJSON(cmd.OutOrStdout(), res)
+	}
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "agent resumed for session %s\n", res.SessionID); err != nil {
+		return err
+	}
+	if res.ResumeMode != "" {
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "  mode: %s\n", res.ResumeMode)
+		return err
 	}
 	return nil
 }
@@ -589,6 +777,15 @@ func (c *commandContext) cleanupSessions(ctx context.Context, cmd *cobra.Command
 			return err
 		}
 	}
+	for _, id := range res.AlreadyGone {
+		label := id
+		if mapped := labelByID[id]; mapped != "" {
+			label = mapped
+		}
+		if _, err := fmt.Fprintf(out, "  Already gone: %s (workspace was missing; nothing reclaimed)\n", label); err != nil {
+			return err
+		}
+	}
 	for _, skip := range res.Skipped {
 		label := skip.SessionID
 		if mapped := labelByID[skip.SessionID]; mapped != "" {
@@ -599,6 +796,9 @@ func (c *commandContext) cleanupSessions(ctx context.Context, cmd *cobra.Command
 		}
 	}
 	summary := fmt.Sprintf("\nCleanup complete. %d session%s cleaned", len(cleaned), pluralS(len(cleaned)))
+	if len(res.AlreadyGone) > 0 {
+		summary += fmt.Sprintf(", %d already gone", len(res.AlreadyGone))
+	}
 	if len(res.Skipped) > 0 {
 		summary += fmt.Sprintf(", %d skipped", len(res.Skipped))
 	}
@@ -647,7 +847,7 @@ func filterAndSortSessions(sessions []sessionDTO, includeOrchestrators bool) []s
 	return out
 }
 
-func sessionListEntries(sessions []sessionDTO) []sessionListEntry {
+func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRSummaryDTO) []sessionListEntry {
 	entries := make([]sessionListEntry, 0, len(sessions))
 	for _, sess := range sessions {
 		var last *time.Time
@@ -659,9 +859,13 @@ func sessionListEntries(sessions []sessionDTO) []sessionListEntry {
 			ID:             sess.ID,
 			ProjectID:      sess.ProjectID,
 			Role:           sessionRole(sess),
+			DisplayName:    sess.DisplayName,
 			Status:         sess.Status,
+			Activity:       sess.Activity.State,
 			IssueID:        sess.IssueID,
 			Harness:        sess.Harness,
+			Branch:         sess.Branch,
+			PRs:            listPRsForSession(sess, summaries[sess.ID]),
 			IsTerminated:   sess.IsTerminated,
 			LastActivityAt: last,
 			CreatedAt:      sess.CreatedAt,
@@ -669,6 +873,27 @@ func sessionListEntries(sessions []sessionDTO) []sessionListEntry {
 		})
 	}
 	return entries
+}
+
+func listPRsForSession(sess sessionDTO, summaries []sessionPRSummaryDTO) []sessionListPR {
+	if len(summaries) > 0 {
+		out := make([]sessionListPR, 0, len(summaries))
+		for _, pr := range summaries {
+			// Threads stays nil (rendered as "-") when the daemon did not
+			// publish a count: an older daemon or an only-partially observed
+			// thread snapshot must read as unknown, not zero.
+			out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI.State, Review: pr.Review.Decision, Threads: pr.Review.UnresolvedThreadCount})
+		}
+		return out
+	}
+
+	// Preserve useful list facts when the more detailed endpoint failed or its
+	// snapshot has already been replaced.
+	out := make([]sessionListPR, 0, len(sess.PRs))
+	for _, pr := range sess.PRs {
+		out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI, Review: pr.Review})
+	}
+	return out
 }
 
 func cleanupLabels(sessions []sessionDTO, scopedProject string) []string {
@@ -694,38 +919,37 @@ func cleanupLabel(sess sessionDTO, scopedProject string) string {
 	return sess.ID
 }
 
-func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, hiddenTerminatedCount, hiddenOrchestratorCount int) error {
+func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[string][]sessionPRSummaryDTO, hiddenTerminatedCount, hiddenOrchestratorCount int, now time.Time) error {
 	out := cmd.OutOrStdout()
 	if len(sessions) == 0 {
 		if _, err := fmt.Fprintln(out, "(no active sessions)"); err != nil {
 			return err
 		}
 	} else {
+		table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		currentProject := ""
 		for _, sess := range sessions {
 			if sess.ProjectID != currentProject {
 				if currentProject != "" {
-					if _, err := fmt.Fprintln(out); err != nil {
+					if _, err := fmt.Fprintln(table); err != nil {
 						return err
 					}
 				}
 				currentProject = sess.ProjectID
-				if _, err := fmt.Fprintf(out, "%s:\n", currentProject); err != nil {
+				if _, err := fmt.Fprintf(table, "%s:\n", currentProject); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(table, "  SESSION\tROLE\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tAGE"); err != nil {
 					return err
 				}
 			}
-			if _, err := fmt.Fprintf(out, "  %s", sess.ID); err != nil {
+			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
-			parts := sessionLineParts(sess)
-			if len(parts) > 0 {
-				if _, err := fmt.Fprintf(out, "  %s", strings.Join(parts, "  ")); err != nil {
-					return err
-				}
-			}
-			if _, err := fmt.Fprintln(out); err != nil {
-				return err
-			}
+		}
+		if err := table.Flush(); err != nil {
+			return err
 		}
 	}
 	if hiddenTerminatedCount > 0 {
@@ -740,21 +964,45 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, hiddenTerminate
 	return nil
 }
 
-func sessionLineParts(sess sessionDTO) []string {
-	parts := []string{}
-	if !sess.Activity.LastActivityAt.IsZero() {
-		parts = append(parts, "("+formatSessionAge(time.Since(sess.Activity.LastActivityAt))+")")
+func sessionPRColumns(sess sessionDTO, summaries []sessionPRSummaryDTO) (prNumbers, ci, review, threads string) {
+	prs := listPRsForSession(sess, summaries)
+	if len(prs) == 0 {
+		return "-", "-", "-", "0"
 	}
-	if sess.Status != "" {
-		parts = append(parts, "["+sess.Status+"]")
+	prValues := make([]string, 0, len(prs))
+	ciValues := make([]string, 0, len(prs))
+	reviewValues := make([]string, 0, len(prs))
+	threadCount := 0
+	threadsKnown := true
+	for _, pr := range prs {
+		prValues = append(prValues, fmt.Sprintf("#%d", pr.Number))
+		ciValues = append(ciValues, emptyDash(pr.CI))
+		reviewValues = append(reviewValues, emptyDash(pr.Review))
+		if pr.Threads == nil {
+			threadsKnown = false
+			continue
+		}
+		threadCount += *pr.Threads
 	}
-	if sess.Kind != "" {
-		parts = append(parts, sess.Kind)
+	threads = "-"
+	if threadsKnown {
+		threads = fmt.Sprintf("%d", threadCount)
 	}
-	if sess.IssueID != "" {
-		parts = append(parts, sess.IssueID)
+	return strings.Join(prValues, ","), strings.Join(ciValues, ","), strings.Join(reviewValues, ","), threads
+}
+
+func emptyDash(value string) string {
+	if value == "" {
+		return "-"
 	}
-	return parts
+	return value
+}
+
+func sessionAge(now, at time.Time) string {
+	if at.IsZero() {
+		return "-"
+	}
+	return formatSessionAge(now.Sub(at)) + " ago"
 }
 
 func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
@@ -768,6 +1016,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"activity", sess.Activity.State},
 		{"harness", sess.Harness},
 		{"issue", sess.IssueID},
+		{"branch", formatBranchState(sess)},
 		{"terminated", fmt.Sprintf("%t", sess.IsTerminated)},
 	}
 	for _, field := range fields {
@@ -789,6 +1038,30 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		}
 	}
 	return nil
+}
+
+// formatBranchState renders the daemon's observed branch facts, for example
+// "feat/x (3 commits, 1 not pushed to origin/feat/x)".
+func formatBranchState(sess sessionDTO) string {
+	state := sess.BranchState
+	if sess.Branch == "" || state == nil {
+		return sess.Branch
+	}
+	commits := fmt.Sprintf("%d commit", state.Commits)
+	if state.Commits != 1 {
+		commits += "s"
+	}
+	switch {
+	case state.RemoteBranch == "":
+		if state.Commits == 0 {
+			return fmt.Sprintf("%s (%s)", sess.Branch, commits)
+		}
+		return fmt.Sprintf("%s (%s, not pushed)", sess.Branch, commits)
+	case state.Unpushed > 0:
+		return fmt.Sprintf("%s (%s, %d not pushed to %s)", sess.Branch, commits, state.Unpushed, state.RemoteBranch)
+	default:
+		return fmt.Sprintf("%s (%s, pushed to %s)", sess.Branch, commits, state.RemoteBranch)
+	}
 }
 
 func sessionRole(sess sessionDTO) string {

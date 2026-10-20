@@ -23,6 +23,7 @@ func IsRoutineInternalCLICommand(commandPath string) bool {
 var routineInternalCLICommands = []string{
 	"ao status",
 	"ao session ls",
+	"ao session top",
 	"ao session get",
 	"ao session agent-switch ls",
 	"ao session handoff",
@@ -31,6 +32,9 @@ var routineInternalCLICommands = []string{
 	"ao orchestrator ls",
 	"ao hooks",
 	"ao pty-host",
+	"ao unreal-provider",
+	"ao codex-login",
+	"ao claude-login",
 }
 
 // CLIActorType infers the actor for legacy loopback CLI telemetry requests that
@@ -56,7 +60,7 @@ func CLIActorType(actorType, commandPath string) string {
 	case "ao session agent-switch", "ao session agent-switch ls", "ao session switch-agent":
 		return "user"
 	}
-	if normalized == "ao hooks" {
+	if normalized == "ao hooks" || normalized == "ao report" {
 		return "agent"
 	}
 	return "system"
@@ -65,17 +69,27 @@ func CLIActorType(actorType, commandPath string) string {
 var legacyActorlessSystemCLICommands = map[string]struct{}{
 	"ao agent-process":           {},
 	"ao agent-process supervise": {},
+	"ao chat-host":               {},
 	"ao completion":              {},
 	"ao daemon":                  {},
 	"ao help":                    {},
 	"ao pty-host":                {},
 	"ao start":                   {},
+	"ao unreal-provider":         {},
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao agent":                  {},
 	"ao agent ls":               {},
+	"ao automation":             {},
+	"ao automation create":      {},
+	"ao automation delete":      {},
+	"ao automation get":         {},
+	"ao automation list":        {},
+	"ao automation runs":        {},
+	"ao automation update":      {},
 	"ao browser":                {},
+	"ao browser act":            {},
 	"ao browser check":          {},
 	"ao browser click":          {},
 	"ao browser console":        {},
@@ -118,6 +132,9 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao browser uncheck":        {},
 	"ao browser unhighlight":    {},
 	"ao browser wait":           {},
+	"ao cue":                    {},
+	"ao cue create":             {},
+	"ao cue list":               {},
 	"ao dev":                    {},
 	"ao dev import-projects":    {},
 	"ao doctor":                 {},
@@ -137,6 +154,11 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao project add":            {},
 	"ao project rm":             {},
 	"ao project set-config":     {},
+	"ao remote-host":            {},
+	"ao remote-host status":     {},
+	"ao remote-host enable":     {},
+	"ao remote-host disable":    {},
+	"ao render":                 {},
 	"ao review":                 {},
 	"ao review cancel":          {},
 	"ao review ls":              {},
@@ -146,8 +168,10 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session":                {},
 	"ao session claim-pr":       {},
 	"ao session cleanup":        {},
+	"ao session exit-agent":     {},
 	"ao session kill":           {},
 	"ao session rename":         {},
+	"ao session resume-agent":   {},
 	"ao session restore":        {},
 	"ao spawn":                  {},
 	"ao stop":                   {},

@@ -8,6 +8,46 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// codexComposerChromeLabels names provider-owned text that Codex paints into
+// the current composer row. After a Chat to Terminal UI switch the placeholder
+// can arrive without dim styling, so its visible characters would otherwise
+// read as an unsent draft. It is not human input and must not fail an
+// interface switch.
+var codexComposerChromeLabels = []string{"Ask Codex to do anything"}
+
+// codexPromptMarkers start Codex's prompt-shaped rows. Through v0.161 the
+// current composer, submitted prompts, and picker selections all use "›";
+// from v0.162 the current composer is "»" and the others keep "›".
+var codexPromptMarkers = []string{"»", "›"}
+
+// codexPromptMarker returns the marker that starts a plain row, if any.
+func codexPromptMarker(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	for _, marker := range codexPromptMarkers {
+		if strings.HasPrefix(line, marker) {
+			return marker, true
+		}
+	}
+	return "", false
+}
+
+func codexPromptLine(line string) bool {
+	_, ok := codexPromptMarker(line)
+	return ok
+}
+
+// codexLastPromptMarker is the marker of the last prompt-shaped row, the only
+// one that can be the current composer.
+func codexLastPromptMarker(output string) string {
+	lines := terminalui.PlainTerminalLines(output)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if marker, ok := codexPromptMarker(lines[i]); ok {
+			return marker
+		}
+	}
+	return "›"
+}
+
 // DetectTerminalActivity reports idle only when Codex's composer and footer are visible.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	observation := p.InspectTerminalSurface(output)
@@ -21,8 +61,9 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 // A visible prompt can contain a draft, and Codex can render that prompt while
 // an active turn remains interruptible.
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
+	frame := codexComposerFrame(output)
 	observation := ports.TerminalSurfaceObservation{
-		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), "›")),
+		Composer: codexComposerState(terminalui.LastPromptComposerState(frame, codexLastPromptMarker(frame), codexComposerChromeLabels...)),
 	}
 	lines := terminalLines(output)
 	if len(lines) < 2 {
@@ -38,12 +79,12 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 		return observation
 	}
 	prompt, _ := codexPromptFooter(lines, start)
-	if prompt < 0 && terminalui.LastPromptHasBoldMarker(output, "›") {
+	if prompt < 0 && terminalui.LastPromptHasBoldMarker(output, codexLastPromptMarker(output)) {
 		// Codex hides its footer in constrained viewports but retains a bold,
 		// non-dim current-prompt marker. Plain or dim transcript prompts do not
 		// satisfy this fallback, so missing structural evidence still fails closed.
 		for i := len(lines) - 1; i >= start; i-- {
-			if strings.HasPrefix(strings.TrimSpace(lines[i]), "›") {
+			if codexPromptLine(lines[i]) {
 				prompt = i
 				break
 			}
@@ -70,7 +111,7 @@ func codexInitialComposer(lines []string, currentPrompt int) bool {
 		if strings.Contains(line, "OpenAI Codex (v") {
 			header = true
 		}
-		if strings.HasPrefix(line, "›") {
+		if codexPromptLine(line) {
 			prompts++
 			if i != currentPrompt {
 				return false
@@ -84,12 +125,13 @@ func codexConfirmationFrame(lines []string, start int) bool {
 	selection := -1
 	for i := len(lines) - 1; i >= start; i-- {
 		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "›") {
+		marker, ok := codexPromptMarker(line)
+		if !ok {
 			continue
 		}
 		// An ordinary composer below a completed picker makes the picker
 		// transcript. Only the current, last prompt-shaped row can be selected.
-		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, "›"))) {
+		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, marker))) {
 			return false
 		}
 		selection = i
@@ -135,7 +177,7 @@ func codexPromptFooter(lines []string, start int) (int, int) {
 			continue
 		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
-			if strings.HasPrefix(strings.TrimSpace(lines[prompt]), "›") {
+			if codexPromptLine(lines[prompt]) {
 				return prompt, footer
 			}
 		}
@@ -169,9 +211,13 @@ func codexComposerFrame(output string) string {
 		if !strings.Contains(plainFooter, " · ") {
 			continue
 		}
+		// Codex can stack several " · " footer rows; the frame ends above all of them.
+		for footer > start && strings.Contains(terminalui.PlainTerminalText(raw[footer-1]), " · ") {
+			footer--
+		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
-			if strings.HasPrefix(plainPrompt, "›") {
+			if codexPromptLine(plainPrompt) {
 				return strings.Join(raw[prompt:footer], "\n")
 			}
 		}

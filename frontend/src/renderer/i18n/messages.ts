@@ -1,24 +1,16 @@
 import en from "./en.json";
-import zhCN from "./zh-CN.json";
-import ja from "./ja.json";
-import ko from "./ko.json";
-import es from "./es.json";
-import fr from "./fr.json";
-import de from "./de.json";
-import ptBR from "./pt-BR.json";
-import type { AppLocale } from "./locales";
+
+// Only English is bundled into the startup graph; it is the fallback and the
+// source of the key types. Other locales load on demand (instance.ts
+// loadLocaleCatalog). Tests and tools that need every catalog import
+// all-messages.ts, which must stay out of runtime code.
 
 /** English is the source-of-truth catalog; keys are typed from it. */
 export const enMessages = en;
-export const zhCNMessages = zhCN;
-export const jaMessages = ja;
-export const koMessages = ko;
-export const esMessages = es;
-export const frMessages = fr;
-export const deMessages = de;
-export const ptBRMessages = ptBR;
 
-export type MessageKey = keyof typeof enMessages;
+export type MessageKey = {
+	[K in keyof typeof enMessages]: typeof enMessages[K] extends string ? K : never;
+}[keyof typeof enMessages];
 
 type PluralCategory = "zero" | "one" | "two" | "few" | "many" | "other";
 export type PluralMessageKey = MessageKey extends infer Key extends string
@@ -28,18 +20,3 @@ export type PluralMessageKey = MessageKey extends infer Key extends string
 	: never;
 
 export type MessageCatalog = Record<MessageKey, string>;
-
-const catalogs: Record<AppLocale, Readonly<Record<string, string>>> = {
-	en: enMessages,
-	"zh-CN": zhCNMessages,
-	ja: jaMessages,
-	ko: koMessages,
-	es: esMessages,
-	fr: frMessages,
-	de: deMessages,
-	"pt-BR": ptBRMessages,
-};
-
-export function catalogFor(locale: AppLocale): Readonly<Record<string, string>> {
-	return catalogs[locale] ?? catalogs.en;
-}

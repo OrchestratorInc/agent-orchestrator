@@ -1,90 +1,154 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ThemePreference, ThemeStyle } from "../../lib/theme";
+import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
+import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
-import { Switch } from "../ui/switch";
+import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { useTerminalShellStore } from "../../stores/terminal-shell-store";
+import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
-import { SettingsLinkRow, SettingsRow } from "./SettingsRow";
+import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
+import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
+import type { TerminalShellKind } from "../../../shared/ui-locale";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 
 /**
- * The default interface for new sessions.
- *
- * Daemon-owned, so `ao spawn` and mobile resolve the same value. Two things this
- * control must be honest about: it only affects sessions created afterwards —
- * a session's interface is fixed when it is born — and chat is limited to the
- * agents that have a structured driver today.
+ * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
+ * resolve the same value. Only affects sessions created afterwards — a
+ * session's interface is fixed when it is born.
  */
 function SessionInterfaceRow() {
 	const { t } = useTranslation();
 	const { settings, isLoading, error } = useSettings();
 	const { update, saving, error: saveError } = useUpdateSessionInterface();
 	const interfaceOptions = [
-		{
-			value: "tui",
-			label: t("settings.sessionInterface.terminal"),
-		},
-		{
-			value: "chat",
-			label: t("settings.sessionInterface.chat"),
-		},
+		{ value: "tui", label: t("settings.sessionInterface.terminal") },
+		{ value: "chat", label: t("settings.sessionInterface.chat") },
 	] satisfies SettingsOption<SessionMode>[];
 
 	const chatAvailable = (settings?.chatHarnesses.length ?? 0) > 0;
-	const help = !chatAvailable
-		? t("settings.sessionInterface.unavailable")
-		: t("settings.sessionInterface.available", { harnesses: settings?.chatHarnesses.join(", ") });
+	// Silent when everything works; speak up only when the control is limited
+	// (no chat-capable agent installed) or a save failed.
+	const note = saveError ?? error ?? (!chatAvailable ? t("settings.sessionInterface.unavailable") : null);
 
-	const note = saveError ?? error ?? help;
+	const failed = Boolean(saveError || error);
 
 	return (
+		<SettingsRow
+			label={t("settings.sessionInterface.label")}
+			description={note ? <span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>{note}</span> : undefined}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.sessionInterface.label")}
+				value={settings?.defaultSessionMode ?? "tui"}
+				options={interfaceOptions}
+				onChange={(mode) => update(mode)}
+				disabled={isLoading || saving || !chatAvailable}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * After a harness update, idle open sessions restart on the new release
+ * instead of running the old one until they happen to restart. Daemon-owned:
+ * the daemon does the moving.
+ */
+function VersionRefreshRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateVersionRefresh();
+	return (
 		<div className="flex w-full flex-col">
-			<SettingsRow className="rounded-none" label={t("settings.sessionInterface.label")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.sessionInterface.label")}
-					value={settings?.defaultSessionMode ?? "tui"}
-					options={interfaceOptions}
-					onChange={(mode) => update(mode)}
-					disabled={isLoading || saving || !chatAvailable}
+			<SettingsRow className="rounded-none" label={t("settings.versionRefresh.label")} description={t("settings.versionRefresh.description")}>
+				<Switch
+					aria-label={t("settings.versionRefresh.label")}
+					checked={settings?.versionRefresh ?? false}
+					disabled={isLoading || saving || !settings}
+					onCheckedChange={update}
 				/>
 			</SettingsRow>
-			{/* Stated rather than implied: this changes what NEW sessions get. An
-			    existing session's interface is fixed when it is created, so nothing
-			    here can move a session that already exists. */}
-			<p
-				className={cn(
-					"px-3 pt-0 pb-4 text-xs leading-relaxed",
-					saveError || error ? "text-destructive" : "text-muted-foreground",
-				)}
-			>
-				{note}
-			</p>
+			{error ? (
+				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
+					{error}
+				</p>
+			) : null}
 		</div>
 	);
 }
 
-const COLOR_THEME_OPTIONS = [
-	{ value: "orchestrate", label: "Orchestrate" },
-	{ value: "github", label: "GitHub" },
-	{ value: "catppuccin", label: "Catppuccin" },
-	{ value: "dracula", label: "Dracula" },
-	{ value: "tokyo-night", label: "Tokyo Night" },
-	{ value: "rose-pine", label: "Rosé Pine" },
-	{ value: "nord", label: "Nord" },
-	{ value: "gruvbox", label: "Gruvbox" },
-	{ value: "solarized", label: "Solarized" },
-] satisfies SettingsOption<ThemeStyle>[];
+function TerminalShellRows() {
+	const { t } = useTranslation();
+	const preference = useTerminalShellStore((state) => state.preference);
+	const load = useTerminalShellStore((state) => state.load);
+	const setPreference = useTerminalShellStore((state) => state.setPreference);
+	const saving = useTerminalShellStore((state) => state.saving);
+	const saveError = useTerminalShellStore((state) => state.saveError);
+	const [customPath, setCustomPath] = useState(preference.path ?? "");
+
+	useEffect(() => {
+		void load();
+	}, [load]);
+
+	useEffect(() => {
+		setCustomPath(preference.path ?? "");
+	}, [preference.path]);
+
+	const shellOptions = [
+		{ value: "auto", label: t("settings.terminalShell.auto") },
+		{ value: "git-bash", label: t("settings.terminalShell.gitBash") },
+		{ value: "pwsh", label: t("settings.terminalShell.pwsh") },
+		{ value: "powershell", label: t("settings.terminalShell.windowsPowerShell") },
+		{ value: "cmd", label: t("settings.terminalShell.cmd") },
+		{ value: "custom", label: t("settings.terminalShell.custom") },
+	] satisfies SettingsOption<TerminalShellKind>[];
+
+	return (
+		<>
+			<SettingsRow
+				label={t("settings.terminalShell.label")}
+				description={saveError ? <span role="alert" className="text-error">{t("settings.terminalShell.saveFailed")}</span> : undefined}
+			>
+				<SettingsOptionMenu
+					aria-label={t("settings.terminalShell.label")}
+					value={preference.kind}
+					options={shellOptions}
+					disabled={saving}
+					onChange={(kind) => {
+						void setPreference(kind === "custom" ? { kind, path: customPath } : { kind });
+					}}
+				/>
+			</SettingsRow>
+			{preference.kind === "custom" ? (
+				<SettingsInputRow
+					id="terminal-shell-custom-path"
+					label={t("settings.terminalShell.customPath")}
+					value={customPath}
+					onChange={setCustomPath}
+					onCommit={(path) => void setPreference({ kind: "custom", path })}
+					onCancel={() => setCustomPath(preference.path ?? "")}
+					placeholder={t("settings.terminalShell.customPathPlaceholder")}
+				/>
+			) : null}
+		</>
+	);
+}
+
+const COLOR_THEME_OPTIONS = THEMES.map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
 
 export function GeneralSettingsSection({
-	onConnectMobile,
 	titleHidden,
 }: {
-	onConnectMobile: () => void;
 	titleHidden?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -92,6 +156,7 @@ export function GeneralSettingsSection({
 	const setThemePreference = useUiStore((state) => state.setThemePreference);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const setThemeStyle = useUiStore((state) => state.setThemeStyle);
+	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const locale = useLocaleStore((state) => state.locale);
 	const setLocale = useLocaleStore((state) => state.setLocale);
 	const localeSaving = useLocaleStore((state) => state.saving);
@@ -102,14 +167,22 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
+	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+
+	// Trigger and menu rows share one layout: name, then the palette on the right.
+	const renderColorTheme = (option: SettingsOption<ThemeStyle> | undefined, compact = false) =>
+		option ? (
+			<>
+				<span className="min-w-0 flex-1 truncate">{option.label}</span>
+				<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} compact={compact} />
+			</>
+		) : null;
 
 	const themeOptions = [
 		{ value: "light", label: t("settings.theme.light") },
 		{ value: "dark", label: t("settings.theme.dark") },
-		{
-			value: "system",
-			label: t("settings.theme.system"),
-		},
+		{ value: "system", label: t("settings.theme.system") },
 	] satisfies SettingsOption<ThemePreference>[];
 
 	const languageOptions = [
@@ -124,63 +197,227 @@ export function GeneralSettingsSection({
 	] satisfies SettingsOption<AppLocale>[];
 
 	return (
-		<SettingsSection title={t("settings.general")} titleHidden={titleHidden} grouped>
-			<SettingsRow label={t("settings.colorTheme")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.colorTheme")}
-					value={themeStyle}
-					options={COLOR_THEME_OPTIONS}
-					onChange={setThemeStyle}
-				/>
-			</SettingsRow>
-			<SettingsRow label={t("settings.theme")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.theme")}
-					value={themePreference}
-					options={themeOptions}
-					onChange={setThemePreference}
-				/>
-			</SettingsRow>
-			<SettingsRow label={t("settings.language")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.language")}
-					disabled={localeSaving}
-					value={locale}
-					options={languageOptions}
-					onChange={(next) => {
-						void setLocale(next);
+		<>
+			{/* Appearance */}
+			<SettingsSection title={t("settings.appearance")} titleHidden={titleHidden} grouped>
+				<SettingsRow label={t("settings.theme")}>
+					<div className="flex items-center gap-1.5">
+						<SettingsOptionMenu
+							aria-label={t("settings.colorTheme")}
+							value={themeStyle}
+							options={COLOR_THEME_OPTIONS}
+							onChange={setThemeStyle}
+							onHighlight={(previewed) => previewDocumentThemeStyle(previewed, useUiStore.getState().themeStyle)}
+							menuClassName="min-w-60"
+							renderTrigger={(selected) => renderColorTheme(selected, true)}
+							renderMenuItem={(option) => renderColorTheme(option)}
+						/>
+						<SettingsOptionMenu
+							aria-label={t("settings.theme")}
+							value={themePreference}
+							options={themeOptions}
+							onChange={setThemePreference}
+						/>
+					</div>
+				</SettingsRow>
+				{isMacPlatform() && <WindowTranslucencyRow />}
+				<SettingsRow
+					label={t("settings.language")}
+					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
+				>
+					<SettingsOptionMenu
+						aria-label={t("settings.language")}
+						disabled={localeSaving}
+						value={locale}
+						options={languageOptions}
+						onChange={(next) => {
+							void setLocale(next);
+						}}
+					/>
+				</SettingsRow>
+			</SettingsSection>
+
+			{/* Sessions */}
+			<SettingsSection title={t("settings.sessions")} grouped>
+				<SessionInterfaceRow />
+				<VersionRefreshRow />
+				{isWindowsPlatform() ? <TerminalShellRows /> : null}
+				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
+					<Switch
+						aria-label={t("settings.terminalCopyOnSelect")}
+						checked={terminalCopyOnSelect}
+						onCheckedChange={setTerminalCopyOnSelect}
+					/>
+				</SettingsRow>
+				<SettingsRow
+					label={t("settings.soundNotifications")}
+					description={soundNotificationsSaveError ? <span role="alert" className="text-error">{t("settings.soundNotifications.saveFailed")}</span> : undefined}
+				>
+					<Switch
+						aria-label={t("settings.soundNotifications")}
+						checked={soundNotificationsEnabled}
+						disabled={soundNotificationsSaving}
+						onCheckedChange={(next) => {
+							void setSoundNotificationsEnabled(next);
+						}}
+					/>
+				</SettingsRow>
+			</SettingsSection>
+
+			<DefaultCloudSandboxSection />
+
+			<SettingsSection title={t("settings.privacy")} grouped>
+				<TelemetryEventsRow />
+			</SettingsSection>
+
+			{/* Advanced */}
+			<SettingsSection title={t("settings.advanced")} grouped>
+				<SettingsRow label={t("settings.developerMode")}>
+					<Switch
+						aria-label={t("settings.developerMode")}
+						checked={developerMode}
+						onCheckedChange={setDeveloperMode}
+					/>
+				</SettingsRow>
+				{developerMode && <CloudOfferingRow />}
+				{developerMode && <DiagnosticsRow />}
+				<CliLinkSettings enabled={developerMode} />
+				{developerMode && <SideChatsRow />}
+			</SettingsSection>
+		</>
+	);
+}
+
+function TelemetryEventsRow() {
+	const { t } = useTranslation();
+	const view = useTelemetryPolicyStore((state) => state.view);
+	const saving = useTelemetryPolicyStore((state) => state.saving);
+	const saveError = useTelemetryPolicyStore((state) => state.saveError);
+	const setEnabled = useTelemetryPolicyStore((state) => state.setEnabled);
+	const checked = view?.eventsEnabled ?? false;
+	const blockedEnable = !checked && (view?.environmentVeto || !view?.durabilitySupported);
+	const status = saveError ? "failed"
+		: !view ? null
+		: !view.durabilitySupported ? "unsupported"
+		: view.state === "cleanup_failed" ? "failed"
+		: view.state === "cleanup_pending" ? "pending"
+		: view.reason === "environment_veto" ? "veto"
+		: view.reason === "release_blocked" ? "releaseBlocked"
+		: null;
+	return (
+		<SettingsRow
+			label={t("settings.telemetryEvents.label")}
+			description={
+				<span className={cn(status === "failed" && "text-error")} role={status === "failed" ? "alert" : undefined}>
+					{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
+				</span>
+			}
+		>
+			<Switch aria-label={t("settings.telemetryEvents.label")} checked={checked} disabled={saving || !view || blockedEnable} onCheckedChange={(enabled) => { void setEnabled(enabled); }} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for memory and CPU monitoring: the card chips,
+ * the board's memory light and window, and the Diagnostics settings page.
+ * Off by default so Developer mode alone does not poll process trees.
+ */
+function DiagnosticsRow() {
+	const { t } = useTranslation();
+	const diagnostics = useUiStore((state) => state.diagnostics);
+	const setDiagnostics = useUiStore((state) => state.setDiagnostics);
+	return (
+		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
+			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
+ * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ */
+function SideChatsRow() {
+	const { t } = useTranslation();
+	const sideChats = useUiStore((state) => state.sideChats);
+	const setSideChats = useUiStore((state) => state.setSideChats);
+	return (
+		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
+			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * macOS Appearance toggle for window translucency: native
+ * vibrancy blurs the desktop behind a translucent shell. Renderer state.
+ */
+function WindowTranslucencyRow() {
+	const { t } = useTranslation();
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	return (
+		<SettingsRow label={t("settings.windowTranslucency")} description={t("settings.windowTranslucencyHint")}>
+			<Switch
+				aria-label={t("settings.windowTranslucency")}
+				checked={windowTranslucency}
+				onCheckedChange={setWindowTranslucency}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for the cloud offering. Persisted daemon-side (a
+ * preference, not renderer state) so every surface resolves the same gate; the
+ * daemon combines it with its baked control-plane URL into cloudEnabled, which
+ * is what reveals sign-in, cloud projects, and sandbox sessions.
+ */
+function CloudOfferingRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateCloudOffering();
+	// Enabling requires an explicit confirmation (the offering is an unstable
+	// preview); disabling never does.
+	const [confirmOpen, setConfirmOpen] = useState(false);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow
+				label={t("settings.cloud")}
+				description={
+					<>
+						{t("settings.cloudToggleHint")}
+						{error ? <span role="alert" className="block text-error">{error}</span> : null}
+					</>
+				}
+			>
+				<Switch
+					aria-label={t("settings.cloud")}
+					checked={settings?.cloudOffering ?? false}
+					disabled={isLoading || saving}
+					onCheckedChange={(enabled) => {
+						if (enabled) {
+							setConfirmOpen(true);
+							return;
+						}
+						update(false);
 					}}
 				/>
 			</SettingsRow>
-			{localeSaveError ? (
-				<p role="alert" className="px-3 text-caption leading-4 text-error">
-					{t("settings.language.saveFailed")}
-				</p>
-			) : null}
-			<SessionInterfaceRow />
-			<SettingsRow label={t("settings.soundNotifications")}>
-				<Switch
-					aria-label={t("settings.soundNotifications")}
-					checked={soundNotificationsEnabled}
-					disabled={soundNotificationsSaving}
-					onCheckedChange={(next) => {
-						void setSoundNotificationsEnabled(next);
-					}}
-				/>
-			</SettingsRow>
-			{soundNotificationsSaveError ? (
-				<p role="alert" className="px-3 text-caption leading-4 text-error">
-					{t("settings.soundNotifications.saveFailed")}
-				</p>
-			) : null}
-			<SettingsRow label={t("settings.developerMode")}>
-				<Switch
-					aria-label={t("settings.developerMode")}
-					checked={developerMode}
-					onCheckedChange={setDeveloperMode}
-				/>
-			</SettingsRow>
-			<SettingsLinkRow label={t("settings.connectMobile")} onClick={onConnectMobile} />
-		</SettingsSection>
+			<ConfirmDialog
+				open={confirmOpen}
+				title={t("settings.cloudConfirm.title")}
+				description={t("settings.cloudConfirm.description")}
+				confirmLabel={t("settings.cloudConfirm.confirm")}
+				destructive
+				busy={saving}
+				onConfirm={() => {
+					update(true);
+					setConfirmOpen(false);
+				}}
+				onOpenChange={setConfirmOpen}
+			/>
+		</div>
 	);
 }

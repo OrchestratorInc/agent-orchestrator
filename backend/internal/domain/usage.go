@@ -15,6 +15,7 @@ const (
 	UsageSourceClaudeMain     UsageSourceKind = "claude_main"
 	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
 	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
+	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
 )
 
 // UsageBindingState tracks the root native-session binding lifecycle.
@@ -72,6 +73,7 @@ type UsageBindingRecord struct {
 	Harness        AgentHarness
 	NativeRootID   string
 	InitialModelID string
+	ProviderHint   string
 	State          UsageBindingState
 	LastErrorCode  string
 	UpdatedAt      time.Time
@@ -105,55 +107,267 @@ type UsageSourceContext struct {
 	SessionID      SessionID
 	NativeRootID   string
 	InitialModelID string
+	ProviderHint   string
 	BindingState   UsageBindingState
 }
 
-// UsageTokenMetrics is the normalized token vector stored on every usage event
-// and returned in aggregate summaries.
+// UsageProviderID identifies the provider vocabulary normalized into a usage
+// event. Provider-specific counters remain separate from the canonical totals.
+type UsageProviderID string
+
+// Usage provider identifiers.
+const (
+	UsageProviderOpenAI    UsageProviderID = "openai"
+	UsageProviderAnthropic UsageProviderID = "anthropic"
+)
+
+// UsageMeasurementKind describes the trust source for a complete usage event.
+// It replaces per-metric provenance: the nullable counters already say which
+// metrics are known, so the only remaining question is where they came from.
+type UsageMeasurementKind string
+
+// Usage measurement kinds.
+const (
+	// UsageMeasurementNativeReported means the counters came from a native
+	// provider or CLI usage record. Exact arithmetic over native counters —
+	// subtracting Codex cumulative totals, summing Claude cache buckets — does
+	// not make an event estimated.
+	UsageMeasurementNativeReported UsageMeasurementKind = "native_reported"
+	// UsageMeasurementAOEstimated means AO approximated counters without native ones.
+	UsageMeasurementAOEstimated UsageMeasurementKind = "ao_estimated"
+	// UsageMeasurementMixed means native counters and AO estimates were combined.
+	UsageMeasurementMixed UsageMeasurementKind = "mixed"
+	// UsageMeasurementUnknown means the origin cannot be established.
+	UsageMeasurementUnknown UsageMeasurementKind = "unknown"
+)
+
+// UsageBillingProviderSource records how an event's billing provider was
+// reached, which decides whether it can ever be revised.
+type UsageBillingProviderSource string
+
+const (
+	// UsageBillingProviderObserved means the provider was named by the
+	// transcript or by the trusted route hint. It is immutable, as is the cost
+	// derived from it.
+	UsageBillingProviderObserved UsageBillingProviderSource = "observed"
+	// UsageBillingProviderInferred means nothing named the provider and it was
+	// resolved from the model that answered. One later observation may replace
+	// it, along with its cost.
+	UsageBillingProviderInferred UsageBillingProviderSource = "inferred"
+)
+
+// ObservedBillingProviderSource pairs a provider the transcript or the
+// binding's route hint named outright with the source that makes the
+// attribution immutable. An empty provider carries no source: both columns are
+// written together or not at all.
+func ObservedBillingProviderSource(billingProviderID string) UsageBillingProviderSource {
+	if billingProviderID == "" {
+		return ""
+	}
+	return UsageBillingProviderObserved
+}
+
+// UsageTokenMetrics is the provider-neutral token vector stored on every usage
+// event. Nil means unknown; a non-nil zero is a known zero. Cache writes are
+// part of uncached input here; their provider-specific split stays in the
+// bounded provider usage object.
 type UsageTokenMetrics struct {
-	InputTokens         int64
-	UncachedInputTokens int64
-	CacheReadTokens     int64
-	CacheWriteTokens    int64
-	OutputTokens        int64
-	ReasoningTokens     *int64
+	InputTokens         *int64
+	CachedInputTokens   *int64
+	UncachedInputTokens *int64
+	OutputTokens        *int64
+}
+
+// UsageEventCosts is the durable nano-USD estimate stored on one event. Every
+// field is nil until the event has been priced; a non-nil total is immutable.
+// InputCostNanos covers every non-cache-read input charge, cache writes
+// included, so reasoning and cache-write subsets are never charged twice.
+type UsageEventCosts struct {
+	InputCostNanos       *int64
+	CachedInputCostNanos *int64
+	OutputCostNanos      *int64
+	EstimatedCostNanos   *int64
+	PricingVersion       string
 }
 
 // ModelUsageEvent is one append-only normalized usage fact.
+//
+// ProviderID identifies the provider vocabulary into which token counters were
+// normalized. BillingProviderID identifies the exact catalog provider used for
+// pricing and is empty until attribution proves it; the two differ whenever an
+// Anthropic-vocabulary transcript is served by another provider such as z.ai.
+//
+// ProviderUsageJSON is the bounded usage object the CLI emitted, stored
+// verbatim so optional and future provider fields survive. It is empty when the
+// event predates the capture or the object exceeded its size bound.
 type ModelUsageEvent struct {
-	ModelID        string
-	Tokens         UsageTokenMetrics
-	SourceEventKey string
+	ProviderID            UsageProviderID
+	BillingProviderID     string
+	BillingProviderSource UsageBillingProviderSource
+	ModelID               string
+	MeasurementKind       UsageMeasurementKind
+	Tokens                UsageTokenMetrics
+	ProviderUsageJSON     string
+	Costs                 UsageEventCosts
+	CreatedAt             time.Time
+	SourceEventKey        string
+}
+
+// UsageCostCandidate is one still-total-null event selected for an exact
+// provider catalog attempt. Source facts remain immutable and are carried back
+// to storage as compare-and-swap guards.
+type UsageCostCandidate struct {
+	ID                int64
+	BindingID         int64
+	ProviderID        UsageProviderID
+	BillingProviderID string
+	ModelID           string
+	MeasurementKind   UsageMeasurementKind
+	Tokens            UsageTokenMetrics
+	ProviderUsageJSON string
+	PricingVersion    string
+	SourceEventKey    string
+}
+
+// UsageCostUpdate carries one candidate's immutable compare-and-swap facts and
+// the result of attempting it against a newer provider catalog version.
+type UsageCostUpdate struct {
+	Candidate UsageCostCandidate
+	Costs     UsageEventCosts
+}
+
+// LegacyUsageEvent is one open-attribution event selected for transcript
+// attribution repair: never attributed, or attributed only by inference and so
+// still replaceable by an observation. Its source and generic facts are
+// immutable CAS guards.
+type LegacyUsageEvent struct {
+	ID                    int64
+	BindingID             int64
+	UsageSourceID         int64
+	ProviderID            UsageProviderID
+	BillingProviderID     string
+	BillingProviderSource UsageBillingProviderSource
+	ModelID               string
+	MeasurementKind       UsageMeasurementKind
+	Tokens                UsageTokenMetrics
+	ProviderUsageJSON     string
+	PricingVersion        string
+	SourceEventKey        string
+}
+
+// LegacyUsageRepair carries transcript-derived attribution and the estimate
+// made from the same fenced pricing snapshot.
+type LegacyUsageRepair struct {
+	Candidate               LegacyUsageEvent
+	ExpectedFileIdentity    string
+	ExpectedByteOffset      int64
+	ExpectedParserStateJSON string
+	ExpectedSourceUpdatedAt time.Time
+	BillingProviderID       string
+	BillingProviderSource   UsageBillingProviderSource
+	ProviderUsageJSON       string
+	Costs                   UsageEventCosts
+}
+
+// EstimatedCostCoverage describes how much of a usage scope has a durable
+// estimate. Token collection integrity is reported separately.
+type EstimatedCostCoverage string
+
+const (
+	// EstimatedCostCoverageComplete means every event in the scope has a stored total.
+	EstimatedCostCoverageComplete EstimatedCostCoverage = "complete"
+	// EstimatedCostCoveragePartial means the scope has a positive known lower bound.
+	EstimatedCostCoveragePartial EstimatedCostCoverage = "partial"
+)
+
+// EstimatedCostProviderAttribution describes whether the billing providers
+// behind an estimate were observed from routing evidence or inferred from the
+// model catalog.
+type EstimatedCostProviderAttribution string
+
+const (
+	// EstimatedCostProviderAttributionObserved means every contributing price
+	// used a billing provider named by routing evidence.
+	EstimatedCostProviderAttributionObserved EstimatedCostProviderAttribution = "observed"
+	// EstimatedCostProviderAttributionInferred means every contributing price
+	// used a billing provider inferred from model ownership.
+	EstimatedCostProviderAttributionInferred EstimatedCostProviderAttribution = "inferred"
+	// EstimatedCostProviderAttributionMixed means the estimate combines prices
+	// from observed and inferred billing providers.
+	EstimatedCostProviderAttributionMixed EstimatedCostProviderAttribution = "mixed"
+)
+
+// EstimatedCost is the user-facing nano-USD estimate for one usage scope.
+// Components remain nullable when only part of that component is known.
+type EstimatedCost struct {
+	TotalNanos          int64
+	InputNanos          *int64
+	CachedInputNanos    *int64
+	OutputNanos         *int64
+	Coverage            EstimatedCostCoverage
+	ProviderAttribution EstimatedCostProviderAttribution
+}
+
+// UsageCostAggregate contains the independent SQL sums and coverage counts
+// needed to derive a scope estimate without double-counting priced events.
+type UsageCostAggregate struct {
+	EventCount             int64
+	PricedEventCount       int64
+	PricedTotalNanos       int64
+	ObservedCostEventCount int64
+	InferredCostEventCount int64
+
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
 }
 
 // UsageModelAggregate is the raw model-level aggregate read from storage before
 // the service applies user-facing coverage rules.
 type UsageModelAggregate struct {
-	Harness             AgentHarness
-	ModelID             string
-	Tokens              UsageTokenMetrics
-	ReasoningEventCount int64
+	Harness AgentHarness
+	ModelID string
+	Tokens  UsageTokenMetrics
+	Cost    UsageCostAggregate
 }
 
-// CompactSessionUsage is the token-only dashboard read model.
+// CompactSessionUsageAggregate is one batched storage row before checked token
+// and cost derivation.
+type CompactSessionUsageAggregate struct {
+	SessionID       SessionID
+	ProcessedTokens *int64
+	Incomplete      bool
+	Cost            UsageCostAggregate
+}
+
+// CompactSessionUsage is the dashboard usage read model.
 type CompactSessionUsage struct {
-	SessionID   SessionID
-	TotalTokens int64
-	Incomplete  bool
+	SessionID       SessionID
+	ProcessedTokens *int64
+	Incomplete      bool
+	EstimatedCost   *EstimatedCost
 }
 
 // UsageMetricTotals is the aggregate metric block used by session, harness,
 // and model summaries.
 type UsageMetricTotals struct {
 	InputTokens         *int64
+	CachedInputTokens   *int64
 	UncachedInputTokens *int64
-	CacheReadTokens     *int64
-	CacheWriteTokens    *int64
 	OutputTokens        *int64
-	ReasoningTokens     *int64
+	ProcessedTokens     *int64
+	EstimatedCost       *EstimatedCost
 }
 
-// ModelUsageSummary is a per-exact-model aggregate.
+// ModelUsageSummary is a per-model aggregate. The billing provider stays a
+// pricing input: every event was costed against its own provider's rates before
+// it reached this sum, so the total is exact without splitting the model apart.
 type ModelUsageSummary struct {
 	ModelID string
 	Totals  UsageMetricTotals
@@ -185,4 +399,97 @@ type SourceCursorState struct {
 	NextRetryAt     *time.Time
 	LastErrorCode   string
 	UpdatedAt       time.Time
+}
+
+// SessionMemoryProcess is one process inside a session's runtime tree.
+type SessionMemoryProcess struct {
+	PID        int
+	PPID       int
+	RSSBytes   uint64
+	CPUPercent float64
+	Command    string
+}
+
+// SessionMemory is the resident memory of one live session's process tree,
+// sampled on request. It is transient by design: memory is a live reading,
+// not a durable session fact, so it is never persisted.
+type SessionMemory struct {
+	SessionID    SessionID
+	RSSBytes     uint64
+	ProcessCount int
+	// CPUPercent is the tree's share of one core since the previous sample;
+	// zero on the first sample, when there is nothing to compare against.
+	CPUPercent float64
+	SampledAt  time.Time
+	Processes  []SessionMemoryProcess
+}
+
+// SystemMemory is the host's headroom at sample time: RAM, swap, swapping
+// rate and CPU load. It is what the pressure light reads; AO's own share is
+// deliberately not part of it. Zero TotalBytes means the reading is
+// unsupported on this platform.
+type SystemMemory struct {
+	TotalBytes     uint64
+	AvailableBytes uint64
+	SwapTotalBytes uint64
+	SwapUsedBytes  uint64
+	// SwapBytesPerSec is how fast pages moved to or from swap since the
+	// previous sample. Sustained non-zero is the frozen-cursor signal.
+	SwapBytesPerSec float64
+	CPUCount        int
+	// Load1 is the one-minute load average; divided by CPUCount, above one
+	// means work is queueing. -1 on a platform with no such concept
+	// (Windows); never otherwise negative.
+	Load1 float64
+	// CPUPercent is the share of all cores the whole host used since the
+	// previous sample, 0..100; zero on the first sample.
+	CPUPercent float64
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against, so CPUPercent's zero means "unknown", not "idle".
+	CPUMeasured bool
+	// PressureRaw is the kernel's memory-pressure figure (PSI some avg10, or
+	// 100 minus available percent where PSI is missing); PressureSource
+	// names which. Clients turn it into fine / tight-soon / tight.
+	PressureRaw    float64
+	PressureSource string
+}
+
+// AppMemory is the resident memory of everything AO runs: the daemon, the
+// desktop shell when the daemon is app-owned, and every live session tree.
+// Own is the daemon and shell alone, so the panel can pin AO's own cost as a
+// row with no action of its own.
+type AppMemory struct {
+	RSSBytes     uint64
+	ProcessCount int
+	CPUPercent   float64
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against, so CPUPercent's zero means "unknown", not "idle".
+	CPUMeasured bool
+	Own         SessionMemory
+	// Reviewers is memory held by live reviewer panes that outlive (or never
+	// had) a session row of their own — ownership lives on the review record
+	// instead. Kept separate from Own and from ListMemory's per-session rows
+	// so a "why is AO using memory" report can name a reviewer specifically,
+	// even one whose worker has already terminated.
+	Reviewers []ReviewerMemory
+}
+
+// ReviewerMemory is one live reviewer pane's process-tree reading, attributed
+// back to the review that owns it.
+type ReviewerMemory struct {
+	ReviewID  string
+	SessionID SessionID
+	Harness   ReviewerHarness
+	Memory    SessionMemory
+}
+
+// SessionStep is one tool call the agent made, as reported by its hooks: which
+// tool and when. Transient like SessionMemory; never persisted.
+type SessionStep struct {
+	ToolUseID string
+	Tool      string
+	StartedAt time.Time
+	// EndedAt is zero while the tool is still running.
+	EndedAt time.Time
+	Failed  bool
 }

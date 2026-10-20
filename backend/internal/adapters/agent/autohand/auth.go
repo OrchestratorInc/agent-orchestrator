@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -17,7 +19,38 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	return autohandConfigAuthStatus(autohandConfigPath())
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	// Autohand's own config decides first; a key in the environment is the
+	// fallback. A config read error only surfaces when no key is set either.
+	configPath := autohandConfigPath()
+	status, configErr := autohandConfigAuthStatus(configPath)
+	if configErr == nil && status != ports.AgentAuthStatusUnknown {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
+		}
+		return status, nil
+	}
+	for _, name := range []string{
+		"AUTOHAND_API_KEY", "AUTOHAND_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+		"GOOGLE_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY",
+	} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			method := domain.AgentAccountMethodAPIKey
+			if strings.HasSuffix(name, "_TOKEN") {
+				method = domain.AgentAccountMethodToken
+			}
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
+			return ports.AgentAuthStatusAuthorized, nil
+		}
+	}
+	if configErr != nil {
+		return ports.AgentAuthStatusUnknown, configErr
+	}
+	// The documented CLI flow prompts for browser sign-in on first use; it does
+	// not expose a stable non-interactive `auth status` command.
+	return ports.AgentAuthStatusUnknown, nil
 }
 
 func autohandConfigAuthStatus(configPath string) (ports.AgentAuthStatus, error) {
@@ -42,7 +75,7 @@ func autohandConfigAuthStatus(configPath string) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	if authKnown {
-		return ports.AgentAuthStatusUnauthorized, nil
+		return ports.AgentAuthStatusUnknown, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }
@@ -53,11 +86,16 @@ func autohandCloudAuthReady(config map[string]json.RawMessage) (ready, known boo
 		return false, false
 	}
 	var auth struct {
-		Token string `json:"token"`
+		Token        string `json:"token"`
+		APIKeyHelper string `json:"apiKeyHelper"`
 	}
 	if err := json.Unmarshal(authRaw, &auth); err != nil {
 		return false, false
 	}
+	// apiKeyHelper is a documented command which Autohand invokes to obtain an
+	// API key. Its presence alone does not prove the command still exists or
+	// yields a usable key, and AO must not execute arbitrary user commands for
+	// an advisory probe.
 	return usableSecret(auth.Token), true
 }
 

@@ -124,6 +124,9 @@ func startDaemon(t *testing.T, dataDir string) *daemon {
 		"AO_DATA_DIR="+dataDir,
 		"AO_RUN_FILE="+filepath.Join(dataDir, "running.json"),
 		"AO_PORT="+strconv.Itoa(port),
+		// Never inherit a desktop-stamped export setting from the shell that
+		// runs the tests; a test daemon must not report to PostHog.
+		"AO_TELEMETRY_REMOTE=off",
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -360,6 +363,11 @@ func seedProject(t *testing.T, d *daemon, name string) string {
 	}
 	run("git", "add", "-A")
 	run("git", "commit", "-m", "init")
+	// Strict default-branch resolution deliberately refuses a local-only HEAD.
+	// Give the fixture a primary remote with a cached HEAD like a real project.
+	run("git", "remote", "add", "origin", dir)
+	run("git", "fetch", "origin", "main")
+	run("git", "remote", "set-head", "origin", "main")
 
 	var out struct {
 		Project struct{ ID string } `json:"project"`

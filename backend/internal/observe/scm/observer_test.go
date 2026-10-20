@@ -155,12 +155,12 @@ type fakeIdentityResolver struct {
 	calls    int
 }
 
-func (r *fakeIdentityResolver) AuthenticatedIdentity(context.Context) (ports.SCMIdentity, error) {
+func (r *fakeIdentityResolver) AuthenticatedIdentityForProvider(context.Context, string, string) (ports.SCMIdentity, error) {
 	r.calls++
 	return r.identity, r.err
 }
 
-func (p *fakeProvider) AuthenticatedIdentity(context.Context) (ports.SCMIdentity, error) {
+func (p *fakeProvider) AuthenticatedIdentityForProvider(context.Context, string, string) (ports.SCMIdentity, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.identityCalls++
@@ -209,6 +209,10 @@ func (p *fakeProvider) ListPRsByRepo(_ context.Context, repo ports.SCMRepo, _ ti
 func (p *fakeProvider) CommitChecksGuard(_ context.Context, repo ports.SCMRepo, sha, _ string) (ports.SCMGuardResult, error) {
 	return p.checkGuards[commitKey(repo, sha)], nil
 }
+
+// FetchPullRequests honors the positional-alignment contract: out[i] answers
+// refs[i], with a zero-value Fetched=false placeholder for refs the fake has
+// no observation for.
 func (p *fakeProvider) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -216,25 +220,25 @@ func (p *fakeProvider) FetchPullRequests(_ context.Context, refs []ports.SCMPRRe
 	if p.fetchErr != nil {
 		return nil, p.fetchErr
 	}
-	out := make([]ports.SCMObservation, 0, len(refs))
-	for _, ref := range refs {
+	out := make([]ports.SCMObservation, len(refs))
+	for i, ref := range refs {
 		key := prKey(ref.Repo, ref.Number)
 		// Per-observation error mimics the multi dispatcher's per-provider
 		// Error metadata: a Fetched=false placeholder carrying the failure
 		// so the observer can route it to cooldown / refresh-incomplete.
 		if err, ok := p.fetchObsErrors[key]; ok {
-			out = append(out, ports.SCMObservation{
+			out[i] = ports.SCMObservation{
 				Fetched:  false,
 				Provider: ref.Repo.Provider,
 				Host:     ref.Repo.Host,
 				Repo:     ref.Repo.Repo,
 				PR:       ports.SCMPRObservation{Number: ref.Number, URL: ref.URL},
 				Error:    err,
-			})
+			}
 			continue
 		}
 		if obs, ok := p.observations[key]; ok {
-			out = append(out, obs)
+			out[i] = obs
 		}
 	}
 	return out, nil
@@ -269,8 +273,18 @@ func (l *fakeLifecycle) ApplySCMObservation(_ context.Context, _ domain.SessionI
 }
 
 func newTestObserver(store *fakeStore, provider *fakeProvider, lc Lifecycle, now time.Time) *Observer {
-	cfg := Config{Clock: func() time.Time { return now }, Tick: time.Hour, Logger: quietSlog(), CacheMax: 128, IdentityResolver: provider}
-	return New(provider, store, lc, cfg)
+	if provider.identity.Login == "" && provider.identityErr == nil {
+		provider.identity = ports.SCMIdentity{Login: "alice", Human: true}
+	}
+	for repo, prs := range provider.openPRs {
+		for i := range prs {
+			if prs[i].Author == "" {
+				prs[i].Author = "alice"
+			}
+		}
+		provider.openPRs[repo] = prs
+	}
+	return New(provider, store, lc, Config{Clock: func() time.Time { return now }, Tick: time.Hour, Logger: quietSlog(), CacheMax: 128, ScopedIdentityResolver: provider})
 }
 
 func TestDispatchOrderIsDeterministic(t *testing.T) {
@@ -443,7 +457,7 @@ func TestStartAsyncPerformsImmediatePollAndStopsOnCancel(t *testing.T) {
 	}
 }
 
-func TestPoll_DisablesOnceWhenCredentialsUnavailable(t *testing.T) {
+func TestPoll_SkipsProviderWhenCredentialsUnavailable(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		credentialGate: true,
@@ -458,12 +472,107 @@ func TestPoll_DisablesOnceWhenCredentialsUnavailable(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if provider.credentialChecks != 1 {
-		t.Fatalf("credential checks = %d, want one lazy check", provider.credentialChecks)
+	if provider.credentialChecks != 2 {
+		t.Fatalf("credential checks = %d, want one per poll while unavailable", provider.credentialChecks)
 	}
 	if provider.repoGuardCalls != 0 || provider.listCalls != 0 || len(provider.fetchBatches) != 0 {
 		t.Fatalf("provider API calls should be skipped without credentials: guards=%d lists=%d batches=%d",
 			provider.repoGuardCalls, provider.listCalls, len(provider.fetchBatches))
+	}
+}
+
+type countingBranchStates struct{ calls int }
+
+func (c *countingBranchStates) ReconcileBranchStates(context.Context) error {
+	c.calls++
+	return nil
+}
+
+func TestPoll_ReconcilesBranchStatesWithoutCredentials(t *testing.T) {
+	provider := &fakeProvider{credentialGate: true, credentialOK: false, observations: map[string]ports.SCMObservation{}}
+	obs := newTestObserver(testStoreWithSession(), provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	branchStates := &countingBranchStates{}
+	obs.branchStates = branchStates
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if branchStates.calls != 1 {
+		t.Fatalf("branch state reconciles = %d, want one per tick even without credentials", branchStates.calls)
+	}
+}
+
+func TestPoll_LogsStartAndCompletionTiming(t *testing.T) {
+	store := &fakeStore{
+		sessions: nil,
+		projects: map[string]domain.ProjectRecord{},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	var logs bytes.Buffer
+	obs := New(&fakeProvider{}, store, &fakeLifecycle{}, Config{
+		Tick:   time.Hour,
+		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logged := logs.String()
+	for _, field := range []string{"scm observer: poll started", "scm observer: poll completed", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in poll timing log:\n%s", field, logged)
+		}
+	}
+}
+
+func TestLogProviderRequest_WarnsForRequestLongerThanPollCadence(t *testing.T) {
+	var logs bytes.Buffer
+	obs := &Observer{
+		tick:   30 * time.Second,
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	obs.logProviderRequest("repo_pr_list_guard", "acme/widgets", time.Now().Add(-31*time.Second), nil)
+
+	logged := logs.String()
+	for _, field := range []string{"slow provider request completed", "stage=repo_pr_list_guard", "repository=acme/widgets", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in provider timing log:\n%s", field, logged)
+		}
+	}
+}
+
+func TestPoll_ResumesAfterCredentialsBecomeAvailable(t *testing.T) {
+	store := testStoreWithSession()
+	provider := &fakeProvider{
+		credentialGate: true,
+		repoGuards:     map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v1"}},
+		observations:   map[string]ports.SCMObservation{},
+	}
+	var logs bytes.Buffer
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	obs.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	for i := 0; i < 2; i++ {
+		if err := obs.Poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provider.repoGuardCalls != 0 {
+		t.Fatalf("provider API called before authentication: guards=%d", provider.repoGuardCalls)
+	}
+
+	provider.mu.Lock()
+	provider.credentialOK = true
+	provider.mu.Unlock()
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if obs.disabled || provider.credentialChecks != 3 || provider.repoGuardCalls != 1 {
+		t.Fatalf("observer did not resume after authentication: disabled=%v credential checks=%d guards=%d",
+			obs.disabled, provider.credentialChecks, provider.repoGuardCalls)
+	}
+	if got := strings.Count(logs.String(), "scm observer disabled: provider credentials unavailable"); got != 1 {
+		t.Fatalf("unavailable credentials warning count = %d, want one: %s", got, logs.String())
 	}
 }
 
@@ -644,6 +753,9 @@ func TestPoll_RepoETag200DiscoversPRAndRefreshesSamePoll(t *testing.T) {
 	if store.writes[0].pr.ProviderID != "PR_stable_1" {
 		t.Fatalf("discovery ProviderID = %q, want PR_stable_1", store.writes[0].pr.ProviderID)
 	}
+	if got := store.writes[0].pr.Author; got != "alice" {
+		t.Fatalf("discovered author = %q, want alice", got)
+	}
 }
 
 func TestPoll_DiscoversOnlyPRsFromAuthenticatedHuman(t *testing.T) {
@@ -652,17 +764,18 @@ func TestPoll_DiscoversOnlyPRsFromAuthenticatedHuman(t *testing.T) {
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
 		openPRs: map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {
 			{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
-			{URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: "ALICE"},
+			{URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: " ALICE "},
+			{URL: "https://github.com/o/r/pull/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", Author: ""},
 		}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 2): testObs(2)},
 	}
-	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: "alice", Human: true}}
+	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: " alice ", Human: true}}
 	obs := New(provider, store, &fakeLifecycle{}, Config{
-		Clock:            func() time.Time { return time.Unix(1, 0).UTC() },
-		Tick:             time.Hour,
-		Logger:           quietSlog(),
-		CacheMax:         128,
-		IdentityResolver: identity,
+		Clock:                  func() time.Time { return time.Unix(1, 0).UTC() },
+		Tick:                   time.Hour,
+		Logger:                 quietSlog(),
+		CacheMax:               128,
+		ScopedIdentityResolver: identity,
 	})
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -674,18 +787,21 @@ func TestPoll_DiscoversOnlyPRsFromAuthenticatedHuman(t *testing.T) {
 		t.Fatalf("fetched PRs = %#v, want only authenticated author's PR #2", provider.fetchBatches)
 	}
 	for _, write := range store.writes {
-		if write.pr.Number == 1 {
+		if write.pr.Number != 2 {
 			t.Fatal("foreign author's PR was persisted")
 		}
 	}
 }
 
-func TestPoll_PreservesBranchDiscoveryWithoutHumanIdentity(t *testing.T) {
+func TestPoll_DisablesAutomaticDiscoveryWithoutHumanIdentity(t *testing.T) {
 	tests := []struct {
 		name        string
 		identity    ports.SCMIdentity
 		identityErr error
+		noResolver  bool
 	}{
+		{name: "missing resolver", noResolver: true},
+		{name: "empty login", identity: ports.SCMIdentity{Login: "  ", Human: true}},
 		{name: "lookup error", identityErr: errors.New("identity unavailable")},
 		{name: "bot account", identity: ports.SCMIdentity{Login: "ao-bot", Human: false}},
 	}
@@ -699,12 +815,16 @@ func TestPoll_PreservesBranchDiscoveryWithoutHumanIdentity(t *testing.T) {
 				identity:     tt.identity,
 				identityErr:  tt.identityErr,
 			}
-			obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+			var resolver ports.ScopedIdentityResolver = provider
+			if tt.noResolver {
+				resolver = nil
+			}
+			obs := New(provider, store, &fakeLifecycle{}, Config{Logger: quietSlog(), ScopedIdentityResolver: resolver})
 			if err := obs.Poll(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if len(provider.fetchBatches) != 1 || provider.fetchBatches[0][0].Number != 1 {
-				t.Fatalf("branch fallback did not discover PR: %#v", provider.fetchBatches)
+			if len(provider.fetchBatches) != 0 || len(store.writes) != 0 {
+				t.Fatalf("automatic discovery must fail closed: batches=%#v writes=%#v", provider.fetchBatches, store.writes)
 			}
 		})
 	}
@@ -845,7 +965,7 @@ func TestPoll_DiscoversWorkspaceChildRepoPR(t *testing.T) {
 
 func TestPoll_DiscoversWorkspaceChildRepoUpstreamPR(t *testing.T) {
 	oldRemoteURLs := gitRemoteURLsFunc
-	gitRemoteURLsFunc = func(path string) []string {
+	gitRemoteURLsFunc = func(_ context.Context, path string) []string {
 		if strings.HasSuffix(filepath.ToSlash(path), "/api") {
 			return []string{"https://github.com/o/api.git", "https://github.com/upstream/api.git"}
 		}
@@ -921,6 +1041,22 @@ func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	}
 	if len(store.writes) != 0 {
 		t.Fatalf("fork PR must not be persisted, got %d writes", len(store.writes))
+	}
+}
+
+func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
+	store := testStoreWithSession()
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/neworg/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "NewOrg/r", BaseRepo: "NewOrg/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+	}
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
+		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
 	}
 }
 
@@ -1225,7 +1361,7 @@ func TestPoll_ReviewHashDrivesPersistenceAndLifecycle(t *testing.T) {
 	review := ports.SCMReviewObservation{
 		Decision: string(domain.ReviewChangesRequest),
 		Reviews:  []ports.SCMReviewSummaryObservation{{ID: "review-1", Author: "ann", State: string(domain.ReviewChangesRequest), URL: "https://github.com/o/r/pull/1#pullrequestreview-1", SubmittedAt: time.Unix(199, 0).UTC()}},
-		Threads:  []ports.SCMReviewThreadObservation{{ID: "t1", Path: "f.go", Line: 2, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "ann", Body: "fix this"}}}},
+		Threads:  []ports.SCMReviewThreadObservation{{ID: "t1", Path: "f.go", Line: 2, IsBot: true, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "ann", IsBot: false, Body: "fix this"}}}},
 	}
 	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}}, observations: map[string]ports.SCMObservation{}, reviews: map[string]ports.SCMReviewObservation{prKey(testRepo, 1): review}}
 	lc := &fakeLifecycle{}
@@ -1239,6 +1375,9 @@ func TestPoll_ReviewHashDrivesPersistenceAndLifecycle(t *testing.T) {
 	}
 	if len(store.writes[0].reviews) != 1 || store.writes[0].reviews[0].URL != "https://github.com/o/r/pull/1#pullrequestreview-1" {
 		t.Fatalf("review summaries not persisted: %#v", store.writes[0].reviews)
+	}
+	if len(store.writes[0].comments) != 1 || store.writes[0].comments[0].IsBot {
+		t.Fatalf("comment author identity was not preserved through persistence: %#v", store.writes[0].comments)
 	}
 	if len(store.writes) != 2 {
 		t.Fatalf("review change with lifecycle should write held-back facts then acknowledgement, got %d writes", len(store.writes))
@@ -2871,6 +3010,7 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 	glAuthErr := errors.New("gitlab 401 unauthorized")
 
 	provider := &hostAwareProvider{fakeProvider: &fakeProvider{
+		identity: ports.SCMIdentity{Login: "alice", Human: true},
 		repoGuards: map[string]ports.SCMGuardResult{
 			prKey(testRepo, 0): {ETag: "repo2"},
 			prKey(glRepo, 0):   {ETag: "repo2"},
@@ -2888,11 +3028,11 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 
 	now := time.Unix(2000, 0).UTC()
 	obs := New(provider, store, &fakeLifecycle{}, Config{
-		Clock:            func() time.Time { return now },
-		Tick:             time.Hour,
-		Logger:           quietSlog(),
-		CacheMax:         128,
-		IdentityResolver: provider.fakeProvider,
+		Clock:                  func() time.Time { return now },
+		Tick:                   time.Hour,
+		Logger:                 quietSlog(),
+		CacheMax:               128,
+		ScopedIdentityResolver: provider.fakeProvider,
 	})
 	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
 	obs.Cache.RepoPRListETag[prKey(glRepo, 0)] = "repo1"
@@ -3004,5 +3144,418 @@ func TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds(t *testing.T) {
 	// The sync cursor must NOT advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; got != cursorBefore {
 		t.Fatalf("sync cursor advanced when listing failed: got %v, want %v (unchanged)", got, cursorBefore)
+	}
+}
+
+// After a repository rename or org transfer, the provider serves fetches for
+// the old owner/name through a redirect: the tracked subject still carries the
+// stale repo recorded on the stored PR row, while the fetched observation
+// canonicalizes to the new owner/name. These tests pin that such observations
+// are dispatched under the tracked subject's key (and persisted with the
+// canonical repo so the identities converge) instead of being dropped, which
+// left CI/mergeability permanently "unknown" while review stayed fresh.
+
+func renamedRepoFixture() (*fakeStore, *fakeProvider, ports.SCMRepo) {
+	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
+	store := &fakeStore{
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/old/r.git"}},
+		prs: map[domain.SessionID][]domain.PullRequest{"p-1": {{
+			URL: "https://github.com/new/r/pull/1", SessionID: "p-1", Number: 1,
+			Provider: "github", Host: "github.com", Repo: "old/r", SourceBranch: "feat",
+		}}},
+		checks: map[string][]domain.PullRequestCheck{},
+	}
+	canonical := ports.SCMObservation{
+		Fetched: true, Provider: "github", Host: "github.com", Repo: "new/r",
+		PR:           ports.SCMPRObservation{URL: "https://github.com/new/r/pull/1", Number: 1, State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
+		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: "sha1"},
+		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)},
+		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked), Blockers: []string{"review_required"}},
+	}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(oldRepo, 0): {ETag: "v1"}},
+		openPRs:      map[string][]ports.SCMPRObservation{},
+		observations: map[string]ports.SCMObservation{prKey(oldRepo, 1): canonical},
+	}
+	return store, provider, oldRepo
+}
+
+func TestPoll_RenamedRepoObservationPersistsUnderTrackedRef(t *testing.T) {
+	store, provider, _ := renamedRepoFixture()
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.fetchBatches) != 1 {
+		t.Fatalf("fetch batches = %d, want 1", len(provider.fetchBatches))
+	}
+	if len(store.writes) == 0 {
+		t.Fatal("renamed-repo observation was dropped: no writes")
+	}
+	final := store.writes[len(store.writes)-1].pr
+	if final.Repo != "new/r" || final.Title != "PR" || final.CI != domain.CIPassing || final.Mergeability != domain.MergeBlocked {
+		t.Fatalf("persisted PR = repo %q title %q ci %q mergeability %q; want canonical new/r metadata", final.Repo, final.Title, final.CI, final.Mergeability)
+	}
+	if len(lc.observed) != 1 {
+		t.Fatalf("lifecycle notifications = %d, want 1", len(lc.observed))
+	}
+}
+
+func TestPoll_RenamedRepoReconciliationPersistsUnderTrackedRef(t *testing.T) {
+	store, provider, oldRepo := renamedRepoFixture()
+	// A fully-observed local row keeps the PR out of the normal refresh
+	// candidate set; the empty incremental listing then routes it through
+	// terminal reconciliation, which must survive the rename the same way.
+	local := &store.prs["p-1"][0]
+	local.MetadataHash = "stale-meta"
+	local.CIHash = "stale-ci"
+	local.ReviewHash = "stale-review"
+	local.Review = domain.ReviewRequired
+	local.ReviewObservedAt = time.Unix(60, 0).UTC()
+	local.HeadSHA = "sha0"
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	obs.Cache.LastSyncCursor[prKey(oldRepo, 0)] = time.Unix(50, 0).UTC()
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) == 0 {
+		t.Fatal("renamed-repo reconciliation observation was dropped: no writes")
+	}
+	final := store.writes[len(store.writes)-1].pr
+	if final.Repo != "new/r" || final.CI != domain.CIPassing {
+		t.Fatalf("persisted PR = repo %q ci %q; want canonical new/r with passing CI", final.Repo, final.CI)
+	}
+}
+
+func TestKeyForTrackedPR(t *testing.T) {
+	repo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "o", Name: "r", Repo: "o/r"}
+	withID := domain.PullRequest{Provider: "GitHub", Host: "GitHub.com", ProviderID: "PR_x", Number: 7}
+	if got, want := keyForTrackedPR(withID, repo), "github:github.com@PR_x"; got != want {
+		t.Fatalf("identity key = %q, want %q", got, want)
+	}
+	withoutID := domain.PullRequest{Number: 7}
+	if got, want := keyForTrackedPR(withoutID, repo), prKey(repo, 7); got != want {
+		t.Fatalf("legacy key = %q, want %q", got, want)
+	}
+}
+
+// The discovery clobber (issue #4089, mechanism 2): a second scan name for the
+// same repository (stale upstream remote after a transfer) lists the same PRs.
+// A tracked PR recognized by its provider identity must NOT be re-discovered —
+// the baseline write would overwrite the row's CI/mergeability facts and wipe
+// its semantic hashes, flapping the PR panel back to "Checking merge
+// readiness" on every listing change.
+func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
+	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
+	newRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "new", Name: "r", Repo: "new/r"}
+	restoreRemotes := gitRemoteURLsFunc
+	gitRemoteURLsFunc = func(context.Context, string) []string {
+		return []string{"https://github.com/new/r.git", "https://github.com/old/r.git"}
+	}
+	defer func() { gitRemoteURLsFunc = restoreRemotes }()
+
+	listing := []ports.SCMPRObservation{{
+		ProviderID: "PR_stable_1", URL: "https://github.com/new/r/pull/1", Number: 1,
+		SourceBranch: "feat", HeadRepo: "new/r", TargetBranch: "main", HeadSHA: "sha1",
+	}}
+	for _, tt := range []struct {
+		name       string
+		providerID string
+	}{
+		{name: "provider identity already stored", providerID: "PR_stable_1"},
+		{name: "legacy row associated by listing identity"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tracked := domain.PullRequest{
+				URL: "https://github.com/new/r/pull/1", SessionID: "p-1", Number: 1,
+				Provider: "github", Host: "github.com", Repo: "old/r", ProviderID: tt.providerID,
+				SourceBranch: "feat", HeadSHA: "sha1", CI: domain.CIPassing, Mergeability: domain.MergeBlocked,
+				MetadataHash: "m", CIHash: "c", ReviewHash: "r", Review: domain.ReviewRequired,
+				ObservedAt: time.Unix(50, 0).UTC(), CIObservedAt: time.Unix(50, 0).UTC(), ReviewObservedAt: time.Unix(50, 0).UTC(),
+			}
+			store := &fakeStore{
+				sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+				projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: "/proj", RepoOriginURL: "https://github.com/new/r.git"}},
+				prs:      map[domain.SessionID][]domain.PullRequest{"p-1": {tracked}},
+				checks:   map[string][]domain.PullRequestCheck{},
+			}
+			provider := &fakeProvider{
+				repoGuards: map[string]ports.SCMGuardResult{
+					prKey(newRepo, 0): {ETag: "vN"},
+					prKey(oldRepo, 0): {ETag: "vO"},
+				},
+				// Both scan names list the same PR: the canonical listing and the
+				// stale-remote listing served through GitHub's rename redirect.
+				openPRs: map[string][]ports.SCMPRObservation{
+					prKey(newRepo, 0): listing,
+					prKey(oldRepo, 0): listing,
+				},
+				observations: map[string]ports.SCMObservation{},
+			}
+			obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range store.writes {
+				if w.pr.Number == 1 && w.pr.CI == domain.CIUnknown {
+					t.Fatalf("tracked PR was re-baselined by a second scan name: %+v", w.pr)
+				}
+			}
+		})
+	}
+}
+
+// Identity-first dispatch: when the tracked row carries a provider id, a
+// canonical observation for a renamed repo is delivered by identity — no URL
+// fallback involved — and the persisted row heals to the canonical repo.
+func TestPoll_IdentityKeyedDispatchSurvivesRename(t *testing.T) {
+	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
+	store := &fakeStore{
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/old/r.git"}},
+		prs: map[domain.SessionID][]domain.PullRequest{"p-1": {{
+			// URL intentionally differs from the canonical URL so the legacy
+			// URL fallback cannot be what delivers this observation.
+			URL: "https://github.com/old/r/pull/1", SessionID: "p-1", Number: 1,
+			Provider: "github", Host: "github.com", Repo: "old/r", ProviderID: "PR_stable_1",
+			SourceBranch: "feat",
+		}}},
+		checks: map[string][]domain.PullRequestCheck{},
+	}
+	canonical := ports.SCMObservation{
+		Fetched: true, Provider: "github", Host: "github.com", Repo: "new/r",
+		PR:           ports.SCMPRObservation{URL: "https://github.com/new/r/pull/1", Number: 1, ProviderID: "PR_stable_1", State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
+		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: "sha1"},
+		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)},
+		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked), Blockers: []string{"review_required"}},
+	}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(oldRepo, 0): {ETag: "v1"}},
+		openPRs:      map[string][]ports.SCMPRObservation{},
+		observations: map[string]ports.SCMObservation{prKey(oldRepo, 1): canonical},
+	}
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) == 0 {
+		t.Fatal("identity-keyed observation was dropped")
+	}
+	final := store.writes[len(store.writes)-1].pr
+	if final.Repo != "new/r" || final.CI != domain.CIPassing || final.ProviderID != "PR_stable_1" {
+		t.Fatalf("persisted PR = repo %q ci %q providerID %q; want canonical new/r, passing, PR_stable_1", final.Repo, final.CI, final.ProviderID)
+	}
+	if len(lc.observed) != 1 {
+		t.Fatalf("lifecycle notifications = %d, want 1", len(lc.observed))
+	}
+}
+
+// A permanently unresolvable tracked PR (provider returns an ErrSCMNotFound
+// placeholder every tick) must stay quiet at Warn level — Debug only — while
+// still pinning the repo ETag/cursor and never entering a rate-limit
+// cooldown. Guards the ~2.9k-warnings/day regression flagged in review.
+func TestPoll_NotFoundObservationLogsDebugAndPinsRepo(t *testing.T) {
+	store := testStoreWithSession()
+	store.prs["p-1"] = []domain.PullRequest{knownPR(1)}
+	provider := &fakeProvider{
+		repoGuards:     map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
+		openPRs:        map[string][]ports.SCMPRObservation{},
+		observations:   map[string]ports.SCMObservation{},
+		fetchObsErrors: map[string]error{prKey(testRepo, 1): fmt.Errorf("%w: pull request o/r#1 not in batch response", ports.ErrSCMNotFound)},
+		identity:       ports.SCMIdentity{Login: "alice", Human: true},
+	}
+	var logs bytes.Buffer
+	obs := New(provider, store, &fakeLifecycle{}, Config{
+		Clock:                  func() time.Time { return time.Unix(1, 0).UTC() },
+		Tick:                   time.Hour,
+		Logger:                 slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		CacheMax:               128,
+		ScopedIdentityResolver: provider,
+	})
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "v1"
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "provider fetch failed") || strings.Contains(logs.String(), "rate-limited") {
+		t.Fatalf("not-found placeholder logged at warn: %s", logs.String())
+	}
+	if obs.inRateLimitCooldown(time.Unix(1, 0).UTC(), "github") {
+		t.Fatal("not-found placeholder must not trigger a rate-limit cooldown")
+	}
+	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "v1" {
+		t.Fatalf("repo ETag advanced past a not-found ref: %q, want pinned v1", got)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("not-found placeholder was persisted: %#v", store.writes)
+	}
+}
+
+func TestPoll_FailedFirstReviewFetchDoesNotManufactureCompleteness(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	// The PR has never had a successful review fetch. A metadata change in the
+	// same poll must not turn that into a complete-looking review observation:
+	// the summary gate treats (zero timestamp, non-partial) as unknown, and a
+	// manufactured timestamp would publish a known-looking zero count.
+	local.ReviewObservedAt = time.Time{}
+	store.prs["p-1"] = []domain.PullRequest{local}
+	obsValue := testObs(1)
+	obsValue.PR.Title = "PR (updated)"
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): obsValue},
+		reviewErr:    errors.New("review window unavailable"),
+	}
+	obs := newTestObserver(store, provider, nil, time.Unix(300, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) == 0 {
+		t.Fatal("metadata change should still be persisted")
+	}
+	written := store.writes[0].pr
+	if written.Title != "PR (updated)" {
+		t.Fatalf("metadata change not persisted: %+v", written)
+	}
+	if !written.ReviewObservedAt.IsZero() {
+		t.Fatalf("failed first review fetch manufactured a review observation at %v; only a successful fetch may establish one", written.ReviewObservedAt)
+	}
+	if written.ReviewPartial {
+		t.Fatalf("never-fetched review storage must stay non-partial (the zero timestamp carries the unknown): %+v", written)
+	}
+}
+
+func TestPoll_CompletenessUpgradePersistsWithUnchangedReviewContent(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	// Simulate a row upgraded by the conservative review_partial default: the
+	// stored flag says partial even though the review hash was computed from a
+	// full observation. A later full fetch with identical content must still
+	// persist the completeness repair — the content-hash match must not skip it.
+	local.ReviewPartial = true
+	store.prs["p-1"] = []domain.PullRequest{local}
+	obsValue := testObs(1)
+	review := ports.SCMReviewObservation{Decision: string(domain.ReviewNone)}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): obsValue},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): review},
+	}
+	obs := newTestObserver(store, provider, nil, time.Unix(300, 0).UTC())
+	// Force a review retry without touching any content: the retry cache slot
+	// is what a failed-fetch recovery or a post-upgrade poll would hit.
+	obs.cacheSetBool(obs.Cache.ReviewRefreshFailed, &obs.Cache.reviewFailedOrder, prKey(testRepo, 1), true)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("completeness repair was skipped on unchanged content: writes=%d", len(store.writes))
+	}
+	written := store.writes[0].pr
+	if written.ReviewPartial {
+		t.Fatalf("full fetch did not clear the partial flag: %+v", written)
+	}
+	if written.ReviewObservedAt.IsZero() {
+		t.Fatalf("successful review fetch left no review observation: %+v", written)
+	}
+	if store.writes[0].reviewMode != ports.ReviewWriteReplace {
+		t.Fatalf("review mode = %v, want replace", store.writes[0].reviewMode)
+	}
+}
+
+// TestMergeabilityFromProviderFacts_UnstableOutranksBlockers pins issue #2401: an
+// UNSTABLE PR is mergeable-with-a-failing-optional-check, so it must NOT be
+// downgraded to blocked by the ci/review/draft blockers. doc.go rule (3) beats
+// rules (5) and (6), matching the mergeabilityFromGraphQL sibling.
+func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
+	cases := []struct {
+		name         string
+		mergeable    string
+		state        string
+		ci           string
+		review       string
+		draft        bool
+		want         domain.Mergeability
+		wantBlockers []string
+		wantBehind   bool
+	}{
+		{
+			// The repro from the issue: optional codecov fails, rollup is
+			// FAILURE (-> ci failing), review approved, GitHub still merges.
+			name:      "unstable with failing ci stays unstable",
+			mergeable: "MERGEABLE", state: "UNSTABLE",
+			ci:     string(domain.CIFailing),
+			review: string(domain.ReviewApproved),
+			want:   domain.MergeUnstable,
+		},
+		{
+			name:      "unstable with changes requested stays unstable",
+			mergeable: "MERGEABLE", state: "UNSTABLE",
+			ci:     string(domain.CIPassing),
+			review: string(domain.ReviewChangesRequest),
+			want:   domain.MergeUnstable,
+		},
+		{
+			name:      "unstable behind base keeps the behind_base signal",
+			mergeable: "MERGEABLE", state: "BEHIND_BASE",
+			ci:         string(domain.CIFailing),
+			want:       domain.MergeBlocked,
+			wantBehind: true, wantBlockers: []string{"behind_base", "ci_failing"},
+		},
+		// Regressions guarded: the non-UNSTABLE paths must be untouched.
+		{
+			name:      "conflicting still wins",
+			mergeable: "CONFLICTING", state: "DIRTY",
+			want: domain.MergeConflicting, wantBlockers: []string{"conflicts"},
+		},
+		{
+			name:      "blocked by provider still collects every blocker",
+			mergeable: "MERGEABLE", state: "BLOCKED",
+			ci: string(domain.CIFailing), review: string(domain.ReviewChangesRequest), draft: true,
+			want:         domain.MergeBlocked,
+			wantBlockers: []string{"blocked_by_provider", "draft", "ci_failing", "changes_requested"},
+		},
+		{
+			name:      "clean + failing ci still blocks",
+			mergeable: "MERGEABLE", state: "CLEAN",
+			ci:   string(domain.CIFailing),
+			want: domain.MergeBlocked, wantBlockers: []string{"ci_failing"},
+		},
+		{
+			name:      "clean + approved is mergeable",
+			mergeable: "MERGEABLE", state: "CLEAN",
+			ci: string(domain.CIPassing), review: string(domain.ReviewApproved),
+			want: domain.MergeMergeable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mergeabilityFromProviderFacts(tc.mergeable, tc.state, tc.ci, tc.review, tc.draft)
+			if got.State != string(tc.want) {
+				t.Fatalf("State = %q, want %q", got.State, tc.want)
+			}
+			if got.Mergeable != (tc.want == domain.MergeMergeable) {
+				t.Fatalf("Mergeable = %v for state %q", got.Mergeable, got.State)
+			}
+			if got.Conflict != (tc.want == domain.MergeConflicting) {
+				t.Fatalf("Conflict = %v for state %q", got.Conflict, got.State)
+			}
+			if got.BehindBase != tc.wantBehind {
+				t.Fatalf("BehindBase = %v, want %v", got.BehindBase, tc.wantBehind)
+			}
+			if tc.wantBlockers == nil {
+				if len(got.Blockers) != 0 {
+					t.Fatalf("Blockers = %v, want none", got.Blockers)
+				}
+				return
+			}
+			if strings.Join(got.Blockers, ",") != strings.Join(tc.wantBlockers, ",") {
+				t.Fatalf("Blockers = %v, want %v", got.Blockers, tc.wantBlockers)
+			}
+		})
 	}
 }

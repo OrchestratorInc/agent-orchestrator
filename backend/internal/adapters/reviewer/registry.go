@@ -14,13 +14,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/cline"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/continueagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/devin"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/droid"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/goose"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/grok"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/kilocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/kimchi"
@@ -28,9 +26,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/opencode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/pi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/qwen"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -53,13 +50,11 @@ func Constructors() []Adapter {
 		claudecode.New(),
 		cline.New(),
 		codex.New(),
-		continueagent.New(),
 		copilot.New(),
 		cursor.New(),
 		devin.New(),
 		droid.New(),
 		crush.New(),
-		goose.New(),
 		grok.New(),
 		kimchi.New(),
 		kilocode.New(),
@@ -67,9 +62,8 @@ func Constructors() []Adapter {
 		kimi.New(),
 		muse.New(),
 		opencode.New(),
+		opencodev2.New(),
 		pi.New(),
-		qwen.New(),
-		vibe.New(),
 	}
 }
 
@@ -107,4 +101,12 @@ func NewResolver() (*Resolver, error) {
 func (r *Resolver) Reviewer(harness domain.ReviewerHarness) (ports.Reviewer, bool) {
 	rv, ok := r.reviewers[harness]
 	return rv, ok
+}
+
+// InvalidateBinaryResolution makes harness's reviewer resolve its executable
+// again, after an install changed which one should run.
+func (r *Resolver) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if invalidator, ok := r.reviewers[domain.ReviewerHarness(harness)].(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
 }

@@ -23,6 +23,13 @@ export type ShellContextValue = {
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	}) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;
+	openRemoteProjectSettings: (hostId: string, projectId: string) => void;
+	/** Navigate to a project's board, e.g. a cloud project just created. */
+	openProject?: (projectId: string) => void;
+	validateImport?: (input: {
+		path: string;
+		importKind: "project" | "workspace";
+	}) => Promise<components["schemas"]["ImportValidationResult"]>;
 };
 
 const ShellContext = createContext<ShellContextValue | null>(null);

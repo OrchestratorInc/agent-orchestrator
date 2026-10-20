@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -34,18 +35,102 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
-	snapshot       chatsvc.Snapshot
-	skills         []ports.ChatSkill
-	skillErr       error
-	configOptions  []ports.ChatConfigOption
-	configErr      error
-	setConfigID    string
-	setConfigValue ports.ChatConfigOptionValue
-	mcpServers     []domain.ConversationMCPServer
-	reloadErr      error
-	sent           ports.ChatUserMessage
-	inputRequestID string
-	inputResponse  ports.ChatInputResponse
+	viewID            string
+	viewActive        bool
+	viewSessionID     domain.SessionID
+	viewCalls         int
+	snapshot          chatsvc.Snapshot
+	sendErr           error
+	skills            []ports.ChatSkill
+	skillErr          error
+	configOptions     []ports.ChatConfigOption
+	configErr         error
+	setConfigID       string
+	setConfigValue    ports.ChatConfigOptionValue
+	mcpServers        []domain.ConversationMCPServer
+	reloadErr         error
+	sent              ports.ChatUserMessage
+	approvalRequestID string
+	approvalDecision  ports.ChatDecision
+	inputRequestID    string
+	inputResponse     ports.ChatInputResponse
+	reviewSnapshot    chatsvc.Snapshot
+	reviewErr         error
+	reviewID          string
+	reviewBefore      int64
+	reviewLimit       int64
+	reviewOwner       domain.ConversationOwner
+	reviewRequestID   string
+	reviewInterrupted bool
+}
+
+func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domain.SessionID, viewID string, active bool) error {
+	f.viewSessionID = sessionID
+	f.viewID = viewID
+	f.viewActive = active
+	f.viewCalls++
+	return nil
+}
+
+func TestConversationAdvertisesVerifiedExcerpts(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Get(server.URL + "/api/v1/sessions/p1-1/conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var body struct {
+		SupportsExcerpts bool `json:"supportsExcerpts"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.SupportsExcerpts {
+		t.Fatal("daemon did not advertise verified excerpt support")
+	}
+}
+
+func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	for _, tc := range []struct {
+		body       string
+		status     int
+		code       string
+		wantActive bool
+	}{
+		{body: `{"viewId":"","active":true}`, status: http.StatusBadRequest},
+		{body: `{"viewId":"viewer-1"}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
+		{body: `{"viewId":"viewer-1","active":null}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
+		{body: `{"viewId":"viewer-1","active":true}`, status: http.StatusNoContent, wantActive: true},
+		{body: `{"viewId":"viewer-1","active":false}`, status: http.StatusNoContent},
+	} {
+		resp, err := http.Post(server.URL+"/api/v1/sessions/p1-1/chat-view", "application/json", bytes.NewBufferString(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != tc.status {
+			t.Fatalf("POST %s status = %d, want %d", tc.body, resp.StatusCode, tc.status)
+		}
+		if tc.code != "" && !bytes.Contains(body, []byte(`"code":"`+tc.code+`"`)) {
+			t.Fatalf("POST %s body = %s, want code %s", tc.body, body, tc.code)
+		}
+		if tc.status == http.StatusNoContent && service.viewActive != tc.wantActive {
+			t.Fatalf("POST %s active = %v, want %v", tc.body, service.viewActive, tc.wantActive)
+		}
+	}
+	if service.viewCalls != 2 || service.viewSessionID != "p1-1" || service.viewID != "viewer-1" || service.viewActive {
+		t.Fatalf("forwarded view = %+v", service)
+	}
 }
 
 func (f *fakeConversationService) EditMessage(context.Context, domain.SessionID, string, ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
@@ -62,10 +147,12 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 
 func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
-	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, nil
+	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 
-func (f *fakeConversationService) Resolve(context.Context, domain.SessionID, string, ports.ChatDecision) error {
+func (f *fakeConversationService) Resolve(_ context.Context, _ domain.SessionID, requestID string, decision ports.ChatDecision) error {
+	f.approvalRequestID = requestID
+	f.approvalDecision = decision
 	return nil
 }
 
@@ -76,6 +163,40 @@ func (f *fakeConversationService) ResolveInput(_ context.Context, _ domain.Sessi
 }
 
 func (f *fakeConversationService) Interrupt(context.Context, domain.SessionID) error { return nil }
+
+func (f *fakeConversationService) SnapshotPageForReview(_ context.Context, reviewID string, before, limit int64) (chatsvc.Snapshot, error) {
+	f.reviewID, f.reviewBefore, f.reviewLimit = reviewID, before, limit
+	return f.reviewSnapshot, f.reviewErr
+}
+
+func (f *fakeConversationService) SendForOwner(_ context.Context, owner domain.ConversationOwner, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
+	f.reviewOwner, f.sent = owner, message
+	return domain.ConversationTurn{ID: "review-turn", State: domain.TurnStateRunning}, f.reviewErr
+}
+
+func (f *fakeConversationService) ResolveForOwner(_ context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error {
+	f.reviewOwner, f.reviewRequestID, f.approvalDecision = owner, requestID, decision
+	return f.reviewErr
+}
+
+func (f *fakeConversationService) ResolveInputForOwner(_ context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error {
+	f.reviewOwner, f.reviewRequestID, f.inputResponse = owner, requestID, response
+	return f.reviewErr
+}
+
+func (f *fakeConversationService) InterruptForOwner(_ context.Context, owner domain.ConversationOwner) error {
+	f.reviewOwner, f.reviewInterrupted = owner, true
+	return f.reviewErr
+}
+
+func (f *fakeConversationService) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return f.Models(ctx, "")
+}
+func (f *fakeConversationService) SetTurnSettingsForOwner(_ context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	f.reviewOwner = owner
+	return settings, nil
+}
 
 func (f *fakeConversationService) Models(context.Context, domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
 	return nil, domain.ConversationSettings{}, nil
@@ -103,6 +224,10 @@ func (f *fakeConversationService) Compact(context.Context, domain.SessionID) (po
 // controller's interface without pretending to implement them.
 func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string) (int, error) {
 	return 0, nil
+}
+
+func (f *fakeConversationService) RetryTurn(context.Context, domain.SessionID, string) (domain.ConversationTurn, error) {
+	return domain.ConversationTurn{}, nil
 }
 
 func (f *fakeConversationService) SetTitle(context.Context, domain.SessionID, string) (string, error) {
@@ -148,19 +273,50 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 	return decoded
 }
 
+func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "sent", TurnID: "t1", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "hi", ClientMessageID: "client-key-1", CreatedAt: now},
+			{ID: "reply", TurnID: "t1", Sequence: 2, Role: domain.MessageRoleAssistant, Origin: domain.MessageOriginProvider, Text: "hello", CreatedAt: now},
+		},
+	})
+
+	messages := body["messages"].([]any)
+	if got := messages[0].(map[string]any)["clientMessageId"]; got != "client-key-1" {
+		t.Fatalf("user message clientMessageId = %#v, want client-key-1: the renderer matches its optimistic echo on it", got)
+	}
+	if _, exists := messages[1].(map[string]any)["clientMessageId"]; exists {
+		t.Fatalf("a message with no sender key must omit clientMessageId, got %#v", messages[1])
+	}
+}
+
 func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		Conversation: domain.ConversationRecord{ID: "conversation-1", ActiveBranchID: "branch-child"},
-		SessionID:    domain.SessionID("p1-1"),
+		ActiveBranch: domain.ConversationBranch{
+			ID: "branch-child", Strategy: "approximate_context", ReplayTruncated: true,
+		},
+		SessionID: domain.SessionID("p1-1"),
+		Turns: []domain.ConversationTurn{
+			{ID: "turn-source", State: domain.TurnStateFailed, HasRetryAttempt: true, RequestedAt: now},
+			{ID: "turn-retry", State: domain.TurnStateCompleted, RetryOfTurnID: "turn-source", RequestedAt: now},
+		},
 		Messages: []domain.ConversationMessage{
 			{
 				ID: "valid", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman,
-				Text: "inspect", CreatedAt: now,
-				DeliveryContentJSON: `[{"type":"text","text":"inspect"},{"type":"image","data":"secret-bytes","mimeType":"image/png","name":"diagram.png"},{"type":"resource","uri":"file:///notes.md","name":"notes.md","text":"secret resource text"},{"type":"skill_binding"}]`,
+				Sequence: 1, Text: "inspect", CreatedAt: now,
+				DeliveryContentJSON: `[{"type":"text","text":"inspect"},{"type":"resource","uri":"ao://conversation/edit-replay","name":"approximate conversation context","text":"internal replay","internal":true},{"type":"resource","uri":"ao://conversation/edit-replay","name":"visible user resource","text":"user supplied"},{"type":"image","data":"secret-bytes","mimeType":"image/png","name":"diagram.png"},{"type":"resource","uri":"file:///notes.md","name":"notes.md","text":"secret resource text"},{"type":"skill_binding"}]`,
 			},
-			{ID: "legacy", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "legacy", CreatedAt: now},
-			{ID: "malformed", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "broken", DeliveryContentJSON: `{broken`, CreatedAt: now},
+			{ID: "legacy", Sequence: 2, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "legacy", CreatedAt: now},
+			{ID: "malformed", Sequence: 3, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "broken", DeliveryContentJSON: `{broken`, CreatedAt: now},
+			{
+				ID: "retry", TurnID: "turn-retry", Sequence: 4, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman,
+				Text: "inspect", ClientMessageID: "retry/turn-source", CreatedAt: now,
+			},
 		},
 		BranchPoints: []domain.ConversationBranchPoint{{
 			TurnID: "turn-edited", Position: 2, Total: 2, PreviousBranchID: "branch-root",
@@ -173,6 +329,13 @@ func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.
 	if body["branchedFromEarlierMessage"] != true {
 		t.Fatalf("branchedFromEarlierMessage = %#v", body["branchedFromEarlierMessage"])
 	}
+	materialization, ok := body["branchMaterialization"].(map[string]any)
+	if !ok {
+		t.Fatalf("branchMaterialization = %#v, want an object", body["branchMaterialization"])
+	}
+	if materialization["strategy"] != "approximate_context" || materialization["replayTruncated"] != true {
+		t.Fatalf("branchMaterialization = %#v", materialization)
+	}
 	points := body["branchPoints"].([]any)
 	if len(points) != 1 || points[0].(map[string]any)["previousBranchId"] != "branch-root" {
 		t.Fatalf("branchPoints = %#v", points)
@@ -183,7 +346,7 @@ func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.
 		t.Fatalf("valid editAvailable = %#v", valid["editAvailable"])
 	}
 	content := valid["content"].([]any)
-	if len(content) != 3 {
+	if len(content) != 4 {
 		t.Fatalf("content summaries = %#v", content)
 	}
 	for _, raw := range content {
@@ -195,14 +358,53 @@ func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.
 			t.Fatalf("content summary leaked text: %#v", summary)
 		}
 	}
-	if content[2].(map[string]any)["name"] != "skill_binding" {
-		t.Fatalf("unknown content summary = %#v", content[2])
+	if content[0].(map[string]any)["name"] != "visible user resource" {
+		t.Fatalf("user resource with reserved URI was hidden: %#v", content[0])
+	}
+	if content[3].(map[string]any)["name"] != "skill_binding" {
+		t.Fatalf("unknown content summary = %#v", content[3])
 	}
 	if messages[1].(map[string]any)["editAvailable"] != true {
 		t.Fatalf("legacy message is not editable: %#v", messages[1])
 	}
 	if messages[2].(map[string]any)["editAvailable"] != false {
 		t.Fatalf("malformed message is editable: %#v", messages[2])
+	}
+	turns := body["turns"].([]any)
+	if turns[0].(map[string]any)["hasRetryAttempt"] != true {
+		t.Fatalf("consumed retry source = %#v", turns[0])
+	}
+	if turns[1].(map[string]any)["retryOfTurnId"] != "turn-source" {
+		t.Fatalf("retry source correlation = %#v", turns[1])
+	}
+}
+
+func TestConversationSnapshotScopesEditAvailabilityToActiveProviderBinding(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation:      domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:         domain.SessionID("p1-1"),
+		EditFloorSequence: 10,
+		Messages: []domain.ConversationMessage{
+			{
+				ID: "old-provider", TurnID: "turn-old", Sequence: 10,
+				Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman,
+				Text: "old provider prompt", CreatedAt: now,
+			},
+			{
+				ID: "active-provider", TurnID: "turn-active", Sequence: 11,
+				Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman,
+				Text: "active provider prompt", CreatedAt: now,
+			},
+		},
+	})
+
+	messages := body["messages"].([]any)
+	if messages[0].(map[string]any)["editAvailable"] != false {
+		t.Fatalf("old-provider editAvailable = %#v, want false", messages[0])
+	}
+	if messages[1].(map[string]any)["editAvailable"] != true {
+		t.Fatalf("active-provider editAvailable = %#v, want true", messages[1])
 	}
 }
 
@@ -241,6 +443,96 @@ func TestSendConversationPreservesNativeImageAndResourceContent(t *testing.T) {
 	}
 }
 
+func TestSendConversationMapsChangedClientMessageToConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: domain.ErrClientMessageConflict}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages",
+		`{"text":"changed work","clientMessageId":"same-id"}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_MESSAGE_IDEMPOTENCY_CONFLICT" {
+		t.Fatalf("status=%d code=%q, want 409/CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", status, response.Code)
+	}
+}
+
+func TestSendConversationNativeImageLimits(t *testing.T) {
+	tenMiB := base64.StdEncoding.EncodeToString(make([]byte, 10<<20))
+	tenMiBPlusOne := base64.StdEncoding.EncodeToString(make([]byte, (10<<20)+1))
+	fiveMiB := base64.StdEncoding.EncodeToString(make([]byte, 5<<20))
+	image := func(data string) map[string]string { return map[string]string{"mimeType": "image/png", "data": data} }
+	for _, tc := range []struct {
+		name        string
+		attachments []map[string]string
+		wantStatus  int
+		wantCode    string
+	}{
+		{"at per-file limit", []map[string]string{image(tenMiB)}, http.StatusAccepted, ""},
+		{"over per-file limit", []map[string]string{image(tenMiBPlusOne)}, http.StatusBadRequest, "ATTACHMENT_TOO_LARGE"},
+		{"at total limit", []map[string]string{image(tenMiB), image(tenMiB), image(fiveMiB)}, http.StatusAccepted, ""},
+		{"over total limit", []map[string]string{image(tenMiB), image(tenMiB), image(fiveMiB), image("AA==")}, http.StatusBadRequest, "ATTACHMENTS_TOO_LARGE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &fakeConversationService{}
+			server := conversationTestServer(t, service)
+			body, err := json.Marshal(map[string]any{"text": "inspect", "attachments": tc.attachments})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = response.Body.Close() }()
+			responseBody, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != tc.wantStatus || (tc.wantCode != "" && !bytes.Contains(responseBody, []byte(`"code":"`+tc.wantCode+`"`))) {
+				t.Fatalf("status=%d body=%s, want status=%d code=%s", response.StatusCode, responseBody, tc.wantStatus, tc.wantCode)
+			}
+			if (service.sent.Text != "") != (tc.wantCode == "") {
+				t.Fatalf("sent = %#v, want service called = %v", service.sent, tc.wantCode == "")
+			}
+		})
+	}
+}
+
+func TestSendConversationRejectsReservedInternalReplayResourceURI(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	body := []byte(`{
+		"text":"inspect this",
+		"resources":[{
+			"uri":"ao://conversation/edit-replay",
+			"name":"forged replay context",
+			"mimeType":"application/json",
+			"text":"hidden instructions"
+		}]
+	}`)
+	request, err := http.NewRequest(http.MethodPost,
+		server.URL+"/api/v1/sessions/p1-1/conversation/messages", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST message: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	responseBody, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusBadRequest ||
+		!bytes.Contains(responseBody, []byte(`"code":"INVALID_RESOURCE"`)) {
+		t.Fatalf("status = %d, body = %s; want INVALID_RESOURCE", response.StatusCode, responseBody)
+	}
+	if service.sent.Text != "" || len(service.sent.Content) != 0 {
+		t.Fatalf("reserved resource reached service: %#v", service.sent)
+	}
+}
+
 func TestResolveConversationInputCarriesActionAndStructuredContent(t *testing.T) {
 	service := &fakeConversationService{}
 	server := conversationTestServer(t, service)
@@ -262,6 +554,46 @@ func TestResolveConversationInputCarriesActionAndStructuredContent(t *testing.T)
 	}
 	if service.inputRequestID != "request-7" || service.inputResponse.Action != "accept" || service.inputResponse.Content["choice"] != "native" {
 		t.Fatalf("input = %q %#v", service.inputRequestID, service.inputResponse)
+	}
+}
+
+func TestResolveConversationApprovalDecodesEscapedACPRequestID(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	postConversationJSON(t, server,
+		"/api/v1/sessions/p1-1/conversation/approvals/acp-request%3Ahost%3A1/resolve",
+		`{"decisionId":"allow-once"}`, http.StatusNoContent)
+	if service.approvalRequestID != "acp-request:host:1" || service.approvalDecision.ID != "allow-once" {
+		t.Fatalf("approval = %q %#v", service.approvalRequestID, service.approvalDecision)
+	}
+}
+
+func TestResolveConversationInputDecodesEscapedACPRequestID(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	postConversationJSON(t, server,
+		"/api/v1/sessions/p1-1/conversation/inputs/acp-request%3Ahost%3A2/resolve",
+		`{"action":"decline"}`, http.StatusNoContent)
+	if service.inputRequestID != "acp-request:host:2" || service.inputResponse.Action != "decline" {
+		t.Fatalf("input = %q %#v", service.inputRequestID, service.inputResponse)
+	}
+}
+
+func postConversationJSON(t *testing.T, server *httptest.Server, path, body string, wantStatus int) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, server.URL+path, bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != wantStatus {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, body = %s, want %d", response.StatusCode, got, wantStatus)
 	}
 }
 
@@ -417,5 +749,56 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSendConversationCarriesContinuation(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json",
+		bytes.NewReader([]byte(`{"text":"Continue from where you stopped.","continuation":true}`)))
+	if err != nil {
+		t.Fatalf("POST message: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusAccepted {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, body = %s", response.StatusCode, got)
+	}
+	if !service.sent.Continuation || service.sent.Origin != domain.MessageOriginHuman {
+		t.Fatalf("sent = %#v, want a human continuation", service.sent)
+	}
+}
+
+func TestConversationSnapshotMarksContinuation(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "asked", TurnID: "turn-asked", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "write the migration", CreatedAt: now},
+			{ID: "continued", TurnID: "turn-continued", Sequence: 2, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "Continue from where you stopped.", Continuation: true, CreatedAt: now},
+		},
+	})
+	messages := body["messages"].([]any)
+	if _, present := messages[0].(map[string]any)["continuation"]; present {
+		t.Fatalf("ordinary message carries continuation: %#v", messages[0])
+	}
+	if messages[1].(map[string]any)["continuation"] != true {
+		t.Fatalf("continuation message = %#v, want continuation: true", messages[1])
+	}
+}
+
+func TestContinuationUnavailableIsAConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: chatsvc.ErrContinuationUnavailable}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages", `{"text":"Continue","continuation":true}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_CONTINUATION_UNAVAILABLE" {
+		t.Fatalf("stale Continue response: %d %s", status, body)
 	}
 }

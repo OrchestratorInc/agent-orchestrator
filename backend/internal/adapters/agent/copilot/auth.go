@@ -2,21 +2,22 @@ package copilot
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	binary, err := p.ResolveBinary(ctx)
+	_, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
@@ -25,8 +26,12 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	} else if ok {
 		return status, nil
 	}
-	return authprobe.CLIStatus(ctx, binary, nil)
+	return ports.AgentAuthStatusUnknown, nil
 }
+
+// gitHubCLITokenEnvVars take precedence over the GitHub CLI's stored
+// credentials for github.com, in this order.
+var gitHubCLITokenEnvVars = []string{"GH_TOKEN", "GITHUB_TOKEN"}
 
 var copilotTokenEnvVars = []string{
 	"COPILOT_GITHUB_TOKEN",
@@ -34,16 +39,32 @@ var copilotTokenEnvVars = []string{
 	"GITHUB_TOKEN",
 }
 
+// copilotLocalAuthStatus follows Copilot CLI's own credential order: token
+// environment variables first (one silently overrides a stored login), then
+// Copilot's stored login, then the GitHub CLI. A BYOK provider is the fallback.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	for _, name := range copilotTokenEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
+		if copilotUsableToken(os.Getenv(name)) {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
+	status, ok, err := copilotStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
+	}
+	if copilotBYOKConfigured() {
+		// A bring-your-own provider; its API key, if any, is optional.
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("COPILOT_PROVIDER_BASE_URL"))
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	return status, ok, err
+}
 
+func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -51,20 +72,33 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 	if home == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	configStatus, configOK, err := copilotConfigAuthStatus(filepath.Join(home, ".copilot", "config.json"))
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
-	}
+	// Copilot credentials can come from several independent sources. A corrupt
+	// config file must not prevent the documented GitHub CLI token fallback.
+	configPath := filepath.Join(copilotHomeDir(home), "config.json")
+	configStatus, configOK, _ := copilotConfigAuthStatus(configPath)
 	if configOK {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
 		return configStatus, true, nil
-	}
-	if status, ok, err := copilotSessionStateAuthStatus(ctx, filepath.Join(home, ".copilot", "session-state")); err != nil || ok {
-		return status, ok, err
 	}
 	if status, ok, err := copilotGHAuthStatus(ctx); err != nil || ok {
 		return status, ok, err
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// copilotBYOKConfigured recognizes Copilot CLI's documented local BYOK setup.
+// An API key is optional because providers such as local Ollama do not require
+// one; the endpoint and model identify a usable provider configuration.
+func copilotBYOKConfigured() bool {
+	return strings.TrimSpace(os.Getenv("COPILOT_PROVIDER_BASE_URL")) != "" &&
+		strings.TrimSpace(os.Getenv("COPILOT_MODEL")) != ""
+}
+
+func copilotHomeDir(home string) string {
+	if path := strings.TrimSpace(os.Getenv("COPILOT_HOME")); path != "" {
+		return path
+	}
+	return filepath.Join(home, ".copilot")
 }
 
 func copilotConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
@@ -75,85 +109,118 @@ func copilotConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		return ports.AgentAuthStatusUnauthorized, true, nil
+	if strings.TrimSpace(string(data)) == "" {
+		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	if textContainsTokenAssignment(text) {
-		return ports.AgentAuthStatusAuthorized, true, nil
-	}
-	return ports.AgentAuthStatusUnknown, false, nil
-}
-
-func copilotSessionStateAuthStatus(ctx context.Context, dir string) (ports.AgentAuthStatus, bool, error) {
-	if err := ctx.Err(); err != nil {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	paths, err := filepath.Glob(filepath.Join(dir, "*", "events.jsonl"))
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
-	}
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
-		}
-		data, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
-		}
-		if copilotEventsShowModelUse(string(data)) {
+	for _, key := range []string{"authToken", "accessToken", "token"} {
+		var token string
+		if err := json.Unmarshal(config[key], &token); err == nil && copilotUsableToken(token) {
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
+	if copilotLoggedInUser(config) {
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
 	return ports.AgentAuthStatusUnknown, false, nil
-}
-
-func copilotEventsShowModelUse(text string) bool {
-	return strings.Contains(text, `"model":`) ||
-		strings.Contains(text, `"type":"tool.execution_complete"`) ||
-		strings.Contains(text, `"type":"message"`)
 }
 
 func copilotGHAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	out, err := aoprocess.CommandContext(probeCtx, "gh", "auth", "token").CombinedOutput()
+	out, err := authprobe.CmdRunner(probeCtx, "gh", "auth", "token")
 	if probeCtx.Err() != nil {
+		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+			return ports.AgentAuthStatusUnknown, false, nil
+		}
 		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
 	}
-	text := strings.TrimSpace(string(out))
-	if err == nil && text != "" {
+	if err == nil && copilotUsableToken(string(out)) {
+		// GH_TOKEN and GITHUB_TOKEN override the GitHub CLI's stored login, and
+		// `gh auth token` then prints that token; hosts.yml's user is not its owner.
+		for _, name := range gitHubCLITokenEnvVars {
+			if copilotUsableToken(os.Getenv(name)) {
+				ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
+				return ports.AgentAuthStatusAuthorized, true, nil
+			}
+		}
+		evidence := domain.CommandSource("gh", "auth", "token").WithMethod(domain.AgentAccountMethodAccount)
+		evidence.Name = gitHubCLIUser(ctx)
+		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	if strings.Contains(strings.ToLower(text), "no oauth token") || strings.Contains(strings.ToLower(text), "not logged") {
-		return ports.AgentAuthStatusUnknown, false, nil
-	}
+	// GitHub CLI state is only one Copilot credential source. A negative result
+	// cannot rule out Copilot's own stored OAuth or token credentials.
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-func textContainsTokenAssignment(text string) bool {
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "#") {
+// gitHubCLIUser returns the github.com login the GitHub CLI is signed in as,
+// read from its hosts.yml (GH_CONFIG_DIR, then XDG_CONFIG_HOME, then
+// ~/.config/gh). Tokens in the file are never read.
+func gitHubCLIUser(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	dir := strings.TrimSpace(os.Getenv("GH_CONFIG_DIR"))
+	if dir == "" {
+		if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+			dir = filepath.Join(xdg, "gh")
+		} else if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dir = filepath.Join(home, ".config", "gh")
+		}
+	}
+	if dir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "hosts.yml")) //nolint:gosec // GitHub CLI's own config
+	if err != nil {
+		return ""
+	}
+	inGitHub := false
+	childIndent := -1
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		lower := strings.ToLower(line)
-		if !strings.Contains(lower, "token") && !strings.Contains(lower, "auth") {
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if indent == 0 {
+			inGitHub = strings.TrimSuffix(trimmed, ":") == "github.com"
+			childIndent = -1
 			continue
 		}
-		for _, sep := range []string{":", "="} {
-			_, after, ok := strings.Cut(line, sep)
-			if !ok {
-				continue
-			}
-			value := strings.Trim(strings.TrimSpace(strings.TrimRight(after, ",")), `"'`)
-			if value != "" && !strings.EqualFold(value, "null") && !strings.EqualFold(value, "none") {
-				return true
-			}
+		if !inGitHub {
+			continue
+		}
+		// The active account is the host's own "user:" entry, at the indent of
+		// the host's first child; logins listed under "users:" sit deeper.
+		if childIndent < 0 {
+			childIndent = indent
+		}
+		if indent == childIndent && strings.HasPrefix(trimmed, "user:") {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "user:")), `"'`)
+		}
+	}
+	return ""
+}
+
+func copilotUsableToken(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && !strings.HasPrefix(value, "ghp_")
+}
+
+func copilotLoggedInUser(config map[string]json.RawMessage) bool {
+	var users map[string]json.RawMessage
+	if err := json.Unmarshal(config["loggedInUsers"], &users); err != nil {
+		return false
+	}
+	for _, user := range users {
+		if len(user) > 0 && string(user) != "null" && string(user) != `""` {
+			return true
 		}
 	}
 	return false

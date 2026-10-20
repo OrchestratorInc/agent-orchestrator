@@ -174,6 +174,24 @@ describe("sessionPRDisplaySummaries", () => {
 });
 
 describe("prStatusRows", () => {
+	it("shows unavailable checks without a loading indicator when cloud cannot read CI", () => {
+		const pr = summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [] }, mergeability: {
+			state: "mergeable", reasons: ["github_checks_unavailable"], prUrl: "https://github.com/acme/repo/pull/7",
+		} });
+		const card = prCardPresentation(pr);
+		expect(card.statusRows?.find((row) => row.key === "ci")).toMatchObject({ label: "Checks unavailable", breathe: false });
+		expect(card.readiness?.label).toBe("Status unavailable");
+		expect(card.readiness?.detail).toContain("Checks and Commit statuses read access");
+	});
+	it("shows lost GitHub App access instead of checking merge status", () => {
+		const pr = summary({ mergeability: {
+			state: "unknown", reasons: ["github_access_lost"], prUrl: "https://github.com/acme/repo/pull/7",
+		} });
+		const merge = prStatusRows(pr).find((row) => row.key === "merge");
+		expect(merge?.value).toBe("Status unavailable");
+		expect(prCardPresentation(pr).readiness?.detail).toBe("GitHub access to this repository is unavailable, so merge readiness cannot be checked.");
+	});
+
 	it("formats the three PR states without exposing raw unknown", () => {
 		const rows = prStatusRows(
 			summary({
@@ -203,6 +221,14 @@ describe("prDiffSummary", () => {
 });
 
 describe("prCardPresentation", () => {
+	it("renders when the provider returns null merge reasons", () => {
+		const malformed = summary({
+			mergeability: { state: "blocked", reasons: null, prUrl: "https://github.com/acme/repo/pull/7" } as unknown as SessionPRSummary["mergeability"],
+		});
+
+		expect(() => prCardPresentation(malformed)).not.toThrow();
+	});
+
 	const priorityCases: Array<[string, Partial<SessionPRSummary>, string]> = [
 		["conflict + passing + approval", { mergeability: { state: "conflicting", reasons: [], prUrl: "" } }, "Not mergeable yet"],
 		["clean + passing + approval", { mergeability: { state: "mergeable", reasons: [], prUrl: "" } }, "Mergeable"],
@@ -235,6 +261,49 @@ describe("prCardPresentation", () => {
 			tone: "review",
 		});
 		expect(presentation.supporting.map((status) => status.label)).toEqual(["Checks passing"]);
+	});
+
+	it("treats a PR that needs no review as mergeable", () => {
+		const presentation = prCardPresentation(
+			summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] } }),
+		);
+
+		expect(presentation.readiness).toMatchObject({
+			label: "Mergeable",
+			detail: "No merge conflict, checks are passing, and the review requirement is satisfied.",
+			tone: "success",
+		});
+		expect(presentation.statusRows?.find((status) => status.key === "review")?.detail).toBe("No review required");
+	});
+
+	it.each(["review_required", "changes_requested"] as const)("does not call a %s PR mergeable", (decision) => {
+		const presentation = prCardPresentation(
+			summary({ review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] } }),
+		);
+
+		expect(presentation.readiness?.label).toBe("Not mergeable yet");
+	});
+
+	it.each(["blocked", "unstable"] as const)("does not call a %s PR mergeable", (state) => {
+		const presentation = prCardPresentation(
+			summary({ mergeability: { state, reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } }),
+		);
+
+		expect(presentation.readiness).toMatchObject({
+			label: "Not mergeable yet",
+			detail: "GitHub currently reports this pull request can't be merged.",
+		});
+	});
+
+	it.each(["approved", "none"] as const)("does not call a %s PR with unresolved review comments mergeable", (decision) => {
+		const presentation = prCardPresentation(
+			summary({ review: { decision, hasUnresolvedHumanComments: true, unresolvedBy: [] } }),
+		);
+
+		expect(presentation.readiness).toMatchObject({
+			label: "Not mergeable yet",
+			detail: "Unresolved review comments must be resolved before this PR can merge.",
+		});
 	});
 
 	it("shows checking merge readiness while provider state is pending", () => {
@@ -330,6 +399,21 @@ describe("prCardPresentation", () => {
 			detail: "GitHub currently reports this pull request can't be merged.",
 			links: [],
 		});
+	});
+
+	it("names GitLab when a merge request is blocked", () => {
+		const url = "https://gitlab.com/acme/repo/-/merge_requests/7";
+		const presentation = prCardPresentation(
+			summary({
+				url,
+				htmlUrl: url,
+				provider: "gitlab",
+				mergeability: { state: "blocked", reasons: ["blocked_by_provider"], prUrl: url },
+			}),
+		);
+
+		expect(presentation.primary.detail).toBe("GitLab currently reports this pull request can't be merged.");
+		expect(presentation.readiness?.detail).toBe("GitLab currently reports this pull request can't be merged.");
 	});
 });
 
@@ -817,7 +901,7 @@ describe("prSummaryParts", () => {
 		});
 	});
 
-	it("links merge conflicts to GitHub's conflict resolution page", () => {
+	it("links merge conflicts to the PR page instead of the host's conflicts subpage", () => {
 		const parts = prSummaryParts(
 			summary({
 				url: "https://github.com/acme/repo/issues/7",
@@ -836,7 +920,7 @@ describe("prSummaryParts", () => {
 		});
 		expect(parts.find((part) => part.key === "merge")?.links[0]).toMatchObject({
 			label: "conflicts",
-			href: "https://github.com/acme/repo/pull/7/conflicts",
+			href: "https://github.com/acme/repo/pull/7",
 		});
 	});
 
@@ -868,5 +952,20 @@ describe("prSummaryParts", () => {
 			status: "None",
 			summary: "Draft PR · Not ready for review",
 		});
+	});
+});
+
+describe("pull request repositories", () => {
+	it("reads owner/name from GitHub and GitLab pull request URLs", async () => {
+		const { prRepositoryFromUrl } = await import("./pr-display");
+		expect(prRepositoryFromUrl("https://github.com/acme/11x/pull/12")).toBe("acme/11x");
+		expect(prRepositoryFromUrl("https://gitlab.com/acme/app/-/merge_requests/3")).toBe("acme/app");
+		expect(prRepositoryFromUrl("not a url")).toBeUndefined();
+	});
+
+	it("tells when a session's pull requests span repositories", async () => {
+		const { prsSpanRepositories } = await import("./pr-display");
+		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/a/pull/2" }])).toBe(false);
+		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/b/pull/1" }])).toBe(true);
 	});
 });

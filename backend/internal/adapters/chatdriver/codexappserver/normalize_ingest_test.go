@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -305,7 +306,7 @@ func TestNormalizeMcpToolCallFailureIsFailed(t *testing.T) {
 // by every snapshot poll. Over the cap the JSON is replaced by a marker rather than
 // cut, because half a JSON document is not JSON.
 func TestNormalizeMcpToolPayloadOverCapIsMarkedNotCut(t *testing.T) {
-	big := strings.Repeat("x", maxToolPayloadChars+10)
+	big := strings.Repeat("x", commanddetail.MaxToolPayloadChars+10)
 	params := `{"threadId":"th","turnId":"tu","item":{"type":"mcpToolCall","id":"i","server":"s","tool":"t","arguments":{"blob":"` + big + `"}}}`
 	ev := normalizeOne(t, codexproto.MethodItemCompleted, params)
 

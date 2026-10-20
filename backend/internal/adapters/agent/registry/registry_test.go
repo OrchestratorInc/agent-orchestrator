@@ -13,6 +13,54 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestGeminiAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("gemini"); !ok {
+		t.Fatal("Gemini CLI is not registered")
+	}
+	if !domain.AgentHarness("gemini").IsKnown() {
+		t.Fatal("Gemini is not selectable")
+	}
+}
+
+func TestDeepSeekHarnessAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("deepseek-harness"); !ok {
+		t.Fatal("DeepSeek Harness is not registered")
+	}
+	if !domain.AgentHarness("deepseek-harness").IsKnown() {
+		t.Fatal("DeepSeek Harness is not selectable")
+	}
+}
+
+func TestOpenCodeMajorsAreIndependentlySelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"opencode", "opencode-v2"} {
+		adapter, ok := reg.Get(id)
+		if !ok {
+			t.Fatalf("%s is not registered", id)
+		}
+		if _, ok := adapter.(ports.Agent); !ok {
+			t.Fatalf("%s does not implement Agent", id)
+		}
+		if _, ok := adapter.(ports.AgentAuthChecker); !ok {
+			t.Fatalf("%s does not report authentication", id)
+		}
+		if _, ok := adapter.(ports.AgentBinaryResolver); !ok {
+			t.Fatalf("%s does not expose its major-aware binary resolver", id)
+		}
+	}
+}
+
 // TestGetAgentHooksFootprintIsGitignored enforces a contract every shipped
 // (and future) adapter must hold: any file GetAgentHooks writes into a session
 // worktree must be covered by a sibling AO-managed self-ignoring .gitignore
@@ -35,6 +83,7 @@ func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 			if ha.Harness == "kimi" {
 				cfg.Env = map[string]string{"KIMI_CODE_HOME": filepath.Join(cfg.DataDir, "kimi")}
 			}
+			ensureAgentBinary(t, string(ha.Harness))
 			if err := ha.Agent.GetAgentHooks(context.Background(), cfg); err != nil {
 				t.Fatalf("GetAgentHooks: %v", err)
 			}
@@ -60,21 +109,32 @@ func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 }
 
 func TestEveryHarnessReportsAuthStatus(t *testing.T) {
-	authCheckerExempt := map[string]string{
-		"continue":    "Continue auth probes require sending a model prompt, so catalog refresh must not run them",
-		"prime-agent": "Prime Agent has no documented non-interactive local auth probe; spawn remains authoritative",
-	}
 	for _, ha := range Harnessed() {
-		if reason, exempt := authCheckerExempt[string(ha.Harness)]; exempt {
-			if _, ok := ha.Agent.(ports.AgentAuthChecker); ok {
-				t.Errorf("%s implements ports.AgentAuthChecker but is exempt: %s", ha.Harness, reason)
-			}
-			continue
-		}
 		if _, ok := ha.Agent.(ports.AgentAuthChecker); !ok {
 			t.Errorf("%s does not implement ports.AgentAuthChecker", ha.Harness)
 		}
 	}
+}
+
+func TestRegistryIncludesFX(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("fx")
+	if !ok {
+		t.Fatal("registry does not contain fx")
+	}
+	if manifest := adapter.Manifest(); manifest.Name != "fx" {
+		t.Fatalf("fx manifest name = %q, want fx", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessFX {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain fx")
 }
 
 func TestRegistryIncludesPrimeAgent(t *testing.T) {
@@ -119,6 +179,73 @@ func TestRegistryIncludesOMP(t *testing.T) {
 		}
 	}
 	t.Fatal("Harnessed does not contain omp")
+}
+
+func TestRegistryIncludesCommandCode(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("command-code")
+	if !ok {
+		t.Fatal("registry does not contain command-code")
+	}
+	manifest := adapter.Manifest()
+	if manifest.Name != "Command Code" {
+		t.Fatalf("command-code manifest name = %q, want Command Code", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessCommandCode {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain command-code")
+}
+
+func TestRegistryIncludesCodewhale(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("codewhale")
+	if !ok || adapter.Manifest().Name != "Codewhale" {
+		t.Fatalf("codewhale adapter = %+v, ok=%v", adapter, ok)
+	}
+}
+
+func TestRegistryIncludesMiMoCode(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("mimo-code")
+	if !ok {
+		t.Fatal("registry does not contain mimo-code")
+	}
+	if got := adapter.Manifest().Name; got != "MiMo Code" {
+		t.Fatalf("mimo-code manifest name = %q", got)
+	}
+}
+
+func TestRegistryIncludesOpenHands(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("openhands")
+	if !ok {
+		t.Fatal("registry does not contain openhands")
+	}
+	if name := adapter.Manifest().Name; name != "OpenHands" {
+		t.Fatalf("openhands manifest name = %q, want OpenHands", name)
+	}
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessOpenHands {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain openhands")
 }
 
 func TestHarnessedExcludesFakeHarness(t *testing.T) {
@@ -169,6 +296,26 @@ func workspaceFiles(t *testing.T, root string) []string {
 	return files
 }
 
+func ensureAgentBinary(t *testing.T, name string) {
+	t.Helper()
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, name)
+	version := "0.80.6"
+	if name == "omp" {
+		version = "17.1.0"
+	}
+	if name == "codewhale" {
+		version = "0.10.0"
+	}
+	script := "#!/usr/bin/env sh\nif [ \"${1:-}\" = \"--version\" ]; then\n  echo \"" + name + " " + version + "\"\nfi\nexit 0\n"
+	if err := os.WriteFile(binPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake agent binary %q: %v", binPath, err)
+	}
+
+	old := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+old)
+}
+
 func hasLine(content, line string) bool {
 	for _, l := range strings.Split(content, "\n") {
 		if strings.TrimSpace(l) == line {
@@ -176,4 +323,21 @@ func hasLine(content, line string) bool {
 		}
 	}
 	return false
+}
+
+func TestMemcodeAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("memcode")
+	if !ok || !domain.HarnessMemcode.IsKnown() {
+		t.Fatal("Memcode is not selectable")
+	}
+	if adapter.Manifest().Name != "memcode" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
 }

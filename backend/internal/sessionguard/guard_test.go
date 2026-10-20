@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -59,7 +60,12 @@ func (m *blockingMessenger) Send(context.Context, domain.SessionID, string) erro
 }
 
 func record(state domain.ActivityState, terminated bool) domain.SessionRecord {
-	return domain.SessionRecord{ID: "s1", IsTerminated: terminated, Activity: domain.Activity{State: state}}
+	return domain.SessionRecord{
+		ID:            "s1",
+		IsTerminated:  terminated,
+		Activity:      domain.Activity{State: state},
+		FirstSignalAt: time.Now(),
+	}
 }
 
 func TestGuard_OutcomeByState(t *testing.T) {
@@ -106,6 +112,134 @@ func TestGuard_OutcomeByState(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestGuard_NudgeUrgentReachesNeedsInputButNotBlocked pins NudgeUrgent's
+// outcome table directly: it is the only nudge method that may write into a
+// session idle at a needs-input prompt, and it must still refuse blocked (where
+// a paste+Enter would answer a live permission dialog on the user's behalf) and
+// a waiting_input prompt on a harness that cannot prove the prompt is a genuine
+// idle composer rather than a masked permission decision.
+func TestGuard_NudgeUrgentReachesNeedsInputButNotBlocked(t *testing.T) {
+	acceptsAll := func(domain.AgentHarness) bool { return true }
+	refusesAll := func(domain.AgentHarness) bool { return false }
+	cases := []struct {
+		name    string
+		rec     domain.SessionRecord
+		ok      bool
+		accepts func(domain.AgentHarness) bool
+		want    Outcome
+	}{
+		{"active", record(domain.ActivityActive, false), true, acceptsAll, Sent},
+		{"idle", record(domain.ActivityIdle, false), true, acceptsAll, Sent},
+		// The whole point of the method: unlike Nudge, an urgent nudge lands at
+		// an idle waiting_input prompt — but only when the harness proves that
+		// prompt is a real composer, not an ambiguous permission state.
+		{"waiting_input capability-safe", record(domain.ActivityWaitingInput, false), true, acceptsAll, Sent},
+		{"waiting_input ambiguous suppressed", record(domain.ActivityWaitingInput, false), true, refusesAll, SuppressedAwaitingUser},
+		{"waiting_input nil predicate suppressed", record(domain.ActivityWaitingInput, false), true, nil, SuppressedAwaitingUser},
+		{"blocked", record(domain.ActivityBlocked, false), true, acceptsAll, SuppressedAwaitingUser},
+		{"exited", record(domain.ActivityExited, false), true, acceptsAll, SuppressedExited},
+		{"terminated", record(domain.ActivityIdle, true), true, acceptsAll, SuppressedTerminated},
+		{"missing", domain.SessionRecord{}, false, acceptsAll, SuppressedNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msgr := &fakeMessenger{}
+			g := New(&fakeStore{rec: tc.rec, ok: tc.ok}, msgr, nil)
+			got, err := g.NudgeUrgent(context.Background(), "s1", "hello", tc.accepts)
+			if err != nil {
+				t.Fatalf("NudgeUrgent: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("outcome = %v, want %v", got, tc.want)
+			}
+			if wantSent := tc.want == Sent; (len(msgr.sent) == 1) != wantSent {
+				t.Fatalf("messenger sends = %d, want sent=%v", len(msgr.sent), wantSent)
+			}
+		})
+	}
+}
+
+// TestGuard_NudgeUrgentRespectsTUIStartupGate keeps the urgent carve-out from
+// widening past its one intended state: a TUI session that has not yet sent
+// its first hook may still be sitting on a pre-session dialog, so an urgent
+// nudge is refused there exactly as Deliver is.
+func TestGuard_NudgeUrgentRespectsTUIStartupGate(t *testing.T) {
+	msgr := &fakeMessenger{}
+	rec := domain.SessionRecord{
+		ID:       "s1",
+		Mode:     domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityWaitingInput},
+	}
+	g := New(&fakeStore{rec: rec, ok: true}, msgr, nil)
+	g.SetStartupSignalGate(func(domain.AgentHarness) bool { return true })
+
+	got, err := g.NudgeUrgent(context.Background(), "s1", "rebase", func(domain.AgentHarness) bool { return true })
+	if err != nil {
+		t.Fatalf("NudgeUrgent: %v", err)
+	}
+	if got != SuppressedStartupPending {
+		t.Fatalf("outcome = %v, want SuppressedStartupPending", got)
+	}
+	if len(msgr.sent) != 0 {
+		t.Fatalf("messenger sends = %d, want 0 before first hook", len(msgr.sent))
+	}
+}
+
+func TestGuard_TUIStartupPendingBlocksDeliver(t *testing.T) {
+	msgr := &fakeMessenger{}
+	rec := domain.SessionRecord{
+		ID:       "s1",
+		Mode:     domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	g := New(&fakeStore{rec: rec, ok: true}, msgr, nil)
+	g.SetStartupSignalGate(func(domain.AgentHarness) bool { return true })
+
+	got, err := g.Deliver(context.Background(), "s1", "follow-up")
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if got != SuppressedStartupPending {
+		t.Fatalf("outcome = %v, want SuppressedStartupPending", got)
+	}
+	if len(msgr.sent) != 0 {
+		t.Fatalf("messenger sends = %d, want 0 before first hook", len(msgr.sent))
+	}
+
+	rec.FirstSignalAt = time.Now()
+	g = New(&fakeStore{rec: rec, ok: true}, msgr, nil)
+	got, err = g.Deliver(context.Background(), "s1", "follow-up")
+	if err != nil {
+		t.Fatalf("Deliver after signal: %v", err)
+	}
+	if got != Sent {
+		t.Fatalf("outcome after signal = %v, want Sent", got)
+	}
+}
+
+func TestGuard_TUIWithoutStartupCapabilityAllowsDelivery(t *testing.T) {
+	msgr := &fakeMessenger{}
+	rec := domain.SessionRecord{
+		ID:       "s1",
+		Harness:  domain.HarnessAider,
+		Mode:     domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	g := New(&fakeStore{rec: rec, ok: true}, msgr, nil)
+	g.SetStartupSignalGate(func(domain.AgentHarness) bool { return false })
+
+	got, err := g.Deliver(context.Background(), "s1", "follow-up")
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if got != Sent {
+		t.Fatalf("outcome = %v, want Sent for adapter without startup capability", got)
+	}
+	if len(msgr.sent) != 1 {
+		t.Fatalf("messenger sends = %d, want 1", len(msgr.sent))
 	}
 }
 
@@ -235,6 +369,35 @@ func TestGuard_DeliverUnderMutationBypassesInputGateButKeepsSafetyChecks(t *test
 	}
 	if len(messenger.sent) != 1 {
 		t.Fatalf("blocked write reached messenger; sends = %d", len(messenger.sent))
+	}
+}
+
+func TestGuard_DeliverUnderMutationCheckedRunsGenerationProofBeforePaneWrite(t *testing.T) {
+	messenger := &fakeMessenger{}
+	rec := record(domain.ActivityWaitingInput, false)
+	rec.Harness = domain.HarnessFX
+	g := New(&fakeStore{rec: rec, ok: true}, messenger, nil)
+	g.SetInputLease(fixedInputLease(false))
+	staleGeneration := errors.New("target generation changed")
+
+	got, err := g.DeliverUnderMutationChecked(context.Background(), "s1", "continuation", func(_ context.Context, current domain.SessionRecord) error {
+		if current.Harness != domain.HarnessFX {
+			t.Fatalf("pre-write harness = %q, want fx", current.Harness)
+		}
+		return staleGeneration
+	})
+	if !errors.Is(err, staleGeneration) || got != SuppressedUnknown {
+		t.Fatalf("stale DeliverUnderMutationChecked = (%v, %v), want (SuppressedUnknown, stale generation)", got, err)
+	}
+	if len(messenger.sent) != 0 {
+		t.Fatalf("stale generation reached messenger: %#v", messenger.sent)
+	}
+
+	got, err = g.DeliverUnderMutationChecked(context.Background(), "s1", "continuation", func(context.Context, domain.SessionRecord) error {
+		return nil
+	})
+	if err != nil || got != Sent || len(messenger.sent) != 1 {
+		t.Fatalf("current DeliverUnderMutationChecked = (%v, %v), sends=%v", got, err, messenger.sent)
 	}
 }
 

@@ -1,0 +1,292 @@
+package worker
+
+import (
+	"encoding/json"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+)
+
+// ActivityEvent is an explicit lifecycle signal emitted by a coding-agent hook.
+type ActivityEvent struct {
+	Harness string                 `json:"harness"`
+	Event   string                 `json:"event"`
+	State   contract.ActivityState `json:"state"`
+	// SourceInterface identifies facts emitted by the interactive TUI hook.
+	// Headless Chat activity intentionally leaves this empty because its
+	// controller writes typed chat events directly.
+	SourceInterface       string `json:"sourceInterface,omitempty"`
+	ToolName              string `json:"toolName,omitempty"`
+	ToolUseID             string `json:"toolUseId,omitempty"`
+	AgentSessionID        string `json:"agentSessionId,omitempty"`
+	LatestUserPrompt      string `json:"latestUserPrompt,omitempty"`
+	LatestAssistantUpdate string `json:"latestAssistantUpdate,omitempty"`
+}
+
+const maxActivityCorrelationLength = 256
+
+// DeriveActivity maps native hook callbacks to AO's durable activity states.
+func DeriveActivity(
+	harness string,
+	event string,
+	payload []byte,
+) (contract.ActivityState, bool) {
+	switch harness {
+	case "claude-code":
+		return deriveClaudeActivity(event, payload)
+	case "codex":
+		return deriveCodexActivity(event)
+	case "cursor":
+		return deriveStandardActivity(event)
+	case "opencode":
+		return deriveOpenCodeActivity(event)
+	default:
+		return "", false
+	}
+}
+
+// ActivityEventFromHook derives an activity event and retains bounded tool
+// correlation facts used to clear only the permission dialog that completed.
+func ActivityEventFromHook(
+	harness string,
+	event string,
+	payload []byte,
+) (ActivityEvent, bool) {
+	var native struct {
+		ToolName            string `json:"tool_name"`
+		ToolUseID           string `json:"tool_use_id"`
+		SessionID           string `json:"session_id"`
+		SessionIDCamel      string `json:"sessionId"`
+		ConversationID      string `json:"conversation_id"`
+		ConversationIDCamel string `json:"conversationId"`
+		LatestUserPrompt    string `json:"prompt"`
+		// Claude Code's Stop hook sends last_assistant_message; the camelCase
+		// spelling is kept for payloads that already use it.
+		LastAssistantMessage      string `json:"last_assistant_message"`
+		LastAssistantMessageCamel string `json:"lastAssistantMessage"`
+		// SubagentStop shares the Stop shape; a subagent's reply is not the
+		// main conversation's answer.
+		SubagentID string `json:"agent_id"`
+	}
+	_ = json.Unmarshal(payload, &native)
+	latestAssistantUpdate := firstNonEmpty(native.LastAssistantMessage, native.LastAssistantMessageCamel)
+	if strings.TrimSpace(native.SubagentID) != "" {
+		latestAssistantUpdate = ""
+	}
+	if len(native.ToolName) > maxActivityCorrelationLength {
+		native.ToolName = ""
+	}
+	if len(native.ToolUseID) > maxActivityCorrelationLength {
+		native.ToolUseID = ""
+	}
+	agentSessionID := firstNonEmpty(
+		native.SessionID,
+		native.SessionIDCamel,
+		native.ConversationID,
+		native.ConversationIDCamel,
+	)
+	if len(agentSessionID) > maxActivityCorrelationLength {
+		agentSessionID = ""
+	}
+	state, hasActivity := DeriveActivity(harness, event, payload)
+	if !hasActivity && agentSessionID == "" {
+		return ActivityEvent{}, false
+	}
+	return ActivityEvent{
+		Harness:               harness,
+		Event:                 event,
+		State:                 state,
+		ToolName:              native.ToolName,
+		ToolUseID:             native.ToolUseID,
+		AgentSessionID:        agentSessionID,
+		LatestUserPrompt:      boundedConversationText(native.LatestUserPrompt),
+		LatestAssistantUpdate: boundedConversationText(latestAssistantUpdate),
+	}, true
+}
+
+const maxConversationText = 16 << 10
+
+// boundedConversationText keeps the start of an oversized prompt or answer
+// rather than dropping it, so a long terminal turn still reaches the chat. The
+// bound is on the JSON-escaped size: the worker posts this inside a size-capped
+// event, and an event over the cap would also lose the turn's activity state.
+func boundedConversationText(value string) string {
+	size := 0
+	for i, r := range value {
+		size += jsonEscapedRuneLen(r)
+		if size > maxConversationText {
+			return value[:i]
+		}
+	}
+	return value
+}
+
+// jsonEscapedRuneLen is the number of bytes encoding/json writes for r.
+func jsonEscapedRuneLen(r rune) int {
+	switch {
+	case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t' || r == '\b' || r == '\f':
+		return 2
+	case r < 0x20 || r == '<' || r == '>' || r == '&' || r == ' ' || r == ' ' || r == utf8.RuneError:
+		return 6
+	default:
+		return utf8.RuneLen(r)
+	}
+}
+
+// ValidActivityEvent ensures workers cannot pair a real hook name with an
+// impossible state when reporting activity to the control plane.
+func ValidActivityEvent(event ActivityEvent) bool {
+	if event.SourceInterface != "" && event.SourceInterface != "tui" {
+		return false
+	}
+	if len(event.ToolName) > maxActivityCorrelationLength ||
+		len(event.ToolUseID) > maxActivityCorrelationLength ||
+		len(event.AgentSessionID) > maxActivityCorrelationLength ||
+		len(event.LatestUserPrompt) > 16<<10 ||
+		len(event.LatestAssistantUpdate) > 16<<10 {
+		return false
+	}
+	switch event.Harness {
+	case "claude-code":
+		switch event.Event {
+		case "session-start":
+			return event.State == "" && event.AgentSessionID != ""
+		case "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure":
+			return event.State == contract.ActivityActive
+		case "permission-request":
+			return event.State == contract.ActivityBlocked
+		case "stop":
+			return event.State == contract.ActivityIdle
+		case "notification":
+			return event.State == contract.ActivityIdle ||
+				event.State == contract.ActivityWaitingInput ||
+				event.State == contract.ActivityBlocked
+		case "session-end":
+			return event.State == contract.ActivityExited
+		}
+	case "codex":
+		switch event.Event {
+		case "session-start":
+			return event.State == "" && event.AgentSessionID != ""
+		case "user-prompt-submit":
+			return event.State == contract.ActivityActive
+		case "permission-request":
+			return event.State == contract.ActivityWaitingInput
+		case "stop", "interrupt":
+			return event.State == contract.ActivityIdle
+		}
+	case "cursor":
+		switch event.Event {
+		case "session-start", "user-prompt-submit":
+			return event.State == contract.ActivityActive
+		case "permission-request":
+			return event.State == contract.ActivityWaitingInput
+		case "stop":
+			return event.State == contract.ActivityIdle
+		}
+	case "opencode":
+		switch event.Event {
+		case "session-start":
+			// session-start carries no state; it exists to land the plugin-reported
+			// native session id (used for --session restore).
+			return event.State == "" && event.AgentSessionID != ""
+		case "user-prompt-submit", "active":
+			return event.State == contract.ActivityActive
+		case "permission-blocked":
+			return event.State == contract.ActivityWaitingInput
+		case "stop":
+			return event.State == contract.ActivityIdle
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func deriveClaudeActivity(
+	event string,
+	payload []byte,
+) (contract.ActivityState, bool) {
+	switch event {
+	case "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure":
+		return contract.ActivityActive, true
+	case "permission-request":
+		return contract.ActivityBlocked, true
+	case "stop":
+		return contract.ActivityIdle, true
+	case "notification":
+		var notification struct {
+			Type string `json:"notification_type"`
+		}
+		_ = json.Unmarshal(payload, &notification)
+		switch notification.Type {
+		case "idle_prompt", "agent_completed":
+			return contract.ActivityIdle, true
+		case "agent_needs_input":
+			return contract.ActivityWaitingInput, true
+		case "permission_prompt":
+			return contract.ActivityBlocked, true
+		}
+	case "session-end":
+		var ended struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(payload, &ended)
+		if ended.Reason != "clear" && ended.Reason != "resume" {
+			return contract.ActivityExited, true
+		}
+	}
+	return "", false
+}
+
+func deriveCodexActivity(event string) (contract.ActivityState, bool) {
+	switch event {
+	case "user-prompt-submit":
+		return contract.ActivityActive, true
+	case "permission-request":
+		return contract.ActivityWaitingInput, true
+	case "stop", "interrupt":
+		return contract.ActivityIdle, true
+	default:
+		return "", false
+	}
+}
+
+// deriveOpenCodeActivity maps the normalized events AO's opencode activity
+// plugin emits (session-start, user-prompt-submit, active, stop,
+// permission-blocked) onto AO's durable activity states. session-start returns
+// no activity: like claude/codex it flows purely to capture the native session
+// id (State stays empty, AgentSessionID lands the durable-restore identity).
+func deriveOpenCodeActivity(event string) (contract.ActivityState, bool) {
+	switch event {
+	case "user-prompt-submit", "active":
+		return contract.ActivityActive, true
+	case "permission-blocked":
+		return contract.ActivityWaitingInput, true
+	case "stop":
+		return contract.ActivityIdle, true
+	default:
+		return "", false
+	}
+}
+
+func deriveStandardActivity(event string) (contract.ActivityState, bool) {
+	switch event {
+	case "session-start", "user-prompt-submit":
+		return contract.ActivityActive, true
+	case "permission-request":
+		return contract.ActivityWaitingInput, true
+	case "stop":
+		return contract.ActivityIdle, true
+	default:
+		return "", false
+	}
+}

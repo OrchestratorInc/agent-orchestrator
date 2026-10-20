@@ -1,8 +1,8 @@
 package sqlite
 
 import (
-	"database/sql"
-	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +105,112 @@ var shippedMigrations = map[int64]string{
 	99:  "0099_interface_transition_notice_acknowledgement.sql",
 	100: "0100_session_model.sql",
 	101: "0101_conversation_provider_ownership_epochs.sql",
+	102: "0102_canonical_usage.sql",
+	103: "0103_review_run_cdc.sql",
+	104: "0104_agent_inventory_cache.sql",
+	105: "0105_default_session_mode_chat.sql",
+	106: "0106_pr_comment_review_id.sql",
+	107: "0107_recovered_conversation_turns.sql",
+	108: "0108_conversation_retry_source.sql",
+	109: "0109_session_latest_user_prompt_at.sql",
+	110: "0110_approximate_conversation_branches.sql",
+	111: "0111_pr_auto_inject_ci_cdc.sql",
+	112: "0112_app_settings_cloud_offering.sql",
+	113: "0113_usage_cost_estimation.sql",
+	114: "0114_usage_cost_candidate_canonical_index.sql",
+	115: "0115_usage_measurement_and_provider_usage.sql",
+	116: "0116_usage_billing_provider_source.sql",
+	117: "0117_allow_kimi_usage.sql",
+	118: "0118_cancelled_conversation_turns.sql",
+	119: "0119_finalize_completed_conversation_plans.sql",
+	120: "0120_normalize_activity_last_at.sql",
+	121: "0121_session_reviewer_agent_config.sql",
+	122: "0122_drop_agent_inventory_cache.sql",
+	123: "0123_agent_install_jobs.sql",
+	124: "0124_codex_account_management.sql",
+	125: "0125_agent_switch_failure_observability.sql",
+	126: "0126_canonical_repository_identity.sql",
+	127: "0127_session_permissions.sql",
+	128: "0128_pr_author_avatar_url.sql",
+	129: "0129_change_log_retention_index.sql",
+	130: "0130_pr_review_partial.sql",
+	131: "0131_repair_intermediate_pr_review_certainty.sql",
+	132: "0132_conversation_opencode_mode.sql",
+	133: "0133_shell_terminal_lifetime.sql",
+	134: "0134_review_activity_state.sql",
+	135: "0135_review_launch_id.sql",
+	136: "0136_conversation_queued_edit_delivery.sql",
+	137: "0137_conversation_edit_delivery.sql",
+	138: "0138_conversation_edit_dispatch_boundary.sql",
+	139: "0139_conversation_steer_delivery.sql",
+	140: "0140_standalone_sessions.sql",
+	141: "0141_conversation_checkpoint_provenance.sql",
+	142: "0142_conversation_checkpoint_unsettled.sql",
+	143: "0143_conversation_checkpoint_turn.sql",
+	144: "0144_session_revision.sql",
+	145: "0145_native_checkpoint_evidence.sql",
+	146: "0146_codex_account_management_simplification.sql",
+	147: "0147_native_history_provenance.sql",
+	148: "0148_notification_dismissal.sql",
+	149: "0149_reviewer_chat_conversations.sql",
+	150: "0150_agent_model_catalog_cache_state.sql",
+	151: "0151_global_agent_model_catalog_cdc.sql",
+	152: "0152_session_effort.sql",
+	153: "0153_reports.sql",
+	154: "0154_report_delivery.sql",
+	155: "0155_allow_unreal_agent_harness.sql",
+	156: "0156_session_provisioning.sql",
+	157: "0157_task_preparations.sql",
+	158: "0158_prepared_worktree_creation_sha.sql",
+	159: "0159_pr_discussion_comment_count.sql",
+	160: "0160_pr_discussion_commenters.sql",
+	161: "0161_automations.sql",
+	162: "0162_drop_pr_discussion_columns.sql",
+	163: "0163_allow_fx_harness.sql",
+	164: "0164_allow_gemini_harness.sql",
+	165: "0165_allow_mimo_code_harness.sql",
+	166: "0166_allow_deepseek_harness.sql",
+	167: "0167_allow_opencode_v2_harness.sql",
+	168: "0168_cues.sql",
+	169: "0169_reported_pr_cdc.sql",
+	170: "0170_review_result_notifications.sql",
+	171: "0171_shell_preview_capability.sql",
+	172: "0172_client_task_requests.sql",
+	173: "0173_chat_client_payload_hash.sql",
+	174: "0174_conversation_account_cdc.sql",
+	175: "0175_codex_subagent_activity.sql",
+	176: "0176_claude_subagent_activity.sql",
+	177: "0177_review_run_rerun_same_head.sql",
+	178: "0178_archive_reviewers.sql",
+	179: "0179_conversation_message_sender.sql",
+	180: "0180_session_provision_steps.sql",
+	181: "0181_session_artifacts.sql",
+	185: "0185_worktree_startup_cues.sql",
+	186: "0186_remove_cue_description.sql",
+	187: "0187_remove_cue_startup_options.sql",
+	// 188 removes the obsolete cue worktree-startup schema; project setup now
+	// owns automatic workspace initialization.
+	188: "0188_remove_worktree_startup_cues.sql",
+	189: "0189_session_interaction.sql",
+	190: "0190_session_hibernation.sql",
+	191: "0191_session_branch_state.sql",
+	192: "0192_allow_openhands_harness.sql",
+	193: "0193_allow_codewhale_harness.sql",
+	194: "0194_allow_command_code_harness.sql",
+	195: "0195_session_requested_output.sql",
+	196: "0196_session_artifact_versions.sql",
+	197: "0197_detach_split_orchestrator_conversations.sql",
+	198: "0198_harness_defaults.sql",
+	199: "0199_conversation_message_continuation.sql",
+	200: "0200_session_artifact_version_source.sql",
+	202: "0202_allow_memcode_harness.sql",
+	206: "0206_awake.sql",
+	210: "0210_agent_accounts.sql",
+	211: "0211_account_transitions.sql",
+	212: "0212_session_runtime_released.sql",
+	213: "0213_session_stale_binary.sql",
+	214: "0214_app_settings_version_refresh.sql",
+	215: "0215_session_harness_releases.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -146,6 +252,13 @@ func TestMigrationVersionLedger(t *testing.T) {
 			t.Errorf("migration %q has no version goose can parse: %v", e.Name(), err)
 			continue
 		}
+		// Two files claiming one number is the failure this ledger exists to
+		// prevent, and it is easy to reach from a branch: goose refuses to
+		// start at all, so it takes down the daemon rather than one query.
+		if other, clash := present[version]; clash {
+			t.Errorf("migrations %q and %q both claim version %d: goose refuses to start on a duplicate version",
+				other, e.Name(), version)
+		}
 		present[version] = e.Name()
 
 		if burnedVersion(version) {
@@ -170,6 +283,67 @@ func TestMigrationVersionLedger(t *testing.T) {
 	}
 }
 
+func TestReconcileMiMoHarnessConstraintAfterBurnedVersion(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 164)
+	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (165, 1)`); err != nil {
+		t.Fatalf("seed burned MiMo migration: %v", err)
+	}
+	var schema string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(schema, "'mimo-code'") {
+		t.Fatal("burned migration unexpectedly added MiMo Code")
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate burned MiMo profile: %v", err)
+	}
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, "'fx'") || !strings.Contains(schema, "'gemini'") || !strings.Contains(schema, "'mimo-code'") {
+		t.Fatalf("repaired sessions constraint lost fx, Gemini, or MiMo Code: %s", schema)
+	}
+	if err := reconcileHarnessConstraint(db); err != nil {
+		t.Fatalf("repeat repair: %v", err)
+	}
+}
+
+// A concurrently approved branch can claim the next free number first, so this
+// branch's migrations have to survive being applied to a database that already
+// records a version they never shipped. goose runs with WithAllowMissing, which
+// is what makes the resulting gap harmless.
+func TestMigrationsApplyOverAForeignInterleavedVersion(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 103)
+
+	// Stand in for the other branch's migration: applied here, absent from this
+	// tree, and numbered below everything this branch adds.
+	if _, err := db.Exec(
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (104, 1)`,
+	); err != nil {
+		t.Fatalf("seed foreign migration: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate over a foreign interleaved version: %v", err)
+	}
+	for table, wantColumns := range expectedUsageTableColumns {
+		if got := tableColumns(t, db, table); !reflect.DeepEqual(got, wantColumns) {
+			t.Errorf("%s columns = %v, want %v", table, got, wantColumns)
+		}
+	}
+	var duplicates int
+	if err := db.QueryRow(`
+SELECT COUNT(*) FROM (
+    SELECT version_id FROM goose_db_version GROUP BY version_id HAVING COUNT(*) > 1
+)`).Scan(&duplicates); err != nil || duplicates != 0 {
+		t.Fatalf("duplicate applied versions = %d, err = %v", duplicates, err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migration over a foreign interleaved version: %v", err)
+	}
+}
+
 // TestSessionListSucceedsOnBurnedMigrationHistory reproduces the #3475/#3476
 // field profile: goose_db_version already records versions 40 through 51
 // (written by a foreign build), so goose silently skips the real
@@ -177,13 +351,7 @@ func TestMigrationVersionLedger(t *testing.T) {
 // columns. Startup schema reconciliation must repair the physical schema so
 // the session list works instead of returning 500 INTERNAL_ERROR.
 func TestSessionListSucceedsOnBurnedMigrationHistory(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	upTo(t, db, 39) // the real 0040 has not run; diff-base columns are absent
+	db := openMigratedDatabaseCopy(t, 39) // the real 0040 has not run; diff-base columns are absent
 	for v := 40; v <= 51; v++ {
 		if _, err := db.Exec(
 			`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, v,

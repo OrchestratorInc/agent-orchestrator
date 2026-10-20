@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -46,8 +48,15 @@ type conversation struct {
 	proc *process
 	log  *slog.Logger
 
-	threadID string
-	events   chan ports.ChatEvent
+	threadID        string
+	historyParentID string
+	providerScopeID string
+	readOnly        bool
+	disableNetwork  bool
+	// launchMode is the permission mode the thread started or resumed with;
+	// a turn without its own approval setting runs under it.
+	launchMode ports.PermissionMode
+	events     chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 
@@ -78,11 +87,15 @@ type conversation struct {
 	// once.
 	compactedTurn string
 
-	pumpDone  chan struct{}
-	closeOnce sync.Once
+	pumpDone     chan struct{}
+	eventsMu     sync.RWMutex
+	eventsClosed bool
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 
 // Asserted here so a refactor cannot silently drop model listing: the service
 // feature-detects this interface, and a missed method would just mean "no models"
@@ -102,15 +115,16 @@ var _ ports.ChatCompactor = (*conversation)(nil)
 // leaves a session with a dead tool server no way back.
 var _ ports.ChatMCPReloader = (*conversation)(nil)
 
-func newConversation(proc *process, log *slog.Logger) *conversation {
+func newConversation(proc *process, log *slog.Logger, providerScopeID string) *conversation {
 	c := &conversation{
-		proc:     proc,
-		log:      log,
-		events:   make(chan ports.ChatEvent, eventBuffer),
-		pending:  make(map[string]*parkedRequest),
-		pumpDone: make(chan struct{}),
+		proc:            proc,
+		log:             log,
+		events:          make(chan ports.ChatEvent, eventBuffer),
+		pending:         make(map[string]*parkedRequest),
+		pumpDone:        make(chan struct{}),
+		providerScopeID: providerScopeID,
 	}
-	c.conn = newConn(proc.stdin, proc.stdout, log, c.handleServerRequest)
+	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
 }
 
@@ -127,6 +141,14 @@ func (c *conversation) start(threadID, model, effort string) {
 // ProviderConversationID is the Codex thread id AO persists for resume.
 func (c *conversation) ProviderConversationID() string { return c.threadID }
 
+// PreservesProviderOnClose tells the daemon controller that Close only detaches
+// from a host; it must not project provider death or fail in-flight work.
+func (c *conversation) PreservesProviderOnClose() bool { return c.proc.terminate != nil }
+
+// ReconnectedLive distinguishes attachment to the same initialized process from
+// native-history resume in a replacement process.
+func (c *conversation) ReconnectedLive() bool { return c.proc.reconnected }
+
 // Capabilities reports what this conversation can do.
 func (c *conversation) Capabilities() ports.ChatCapabilities { return capabilities() }
 
@@ -137,18 +159,73 @@ func (c *conversation) Events() <-chan ports.ChatEvent { return c.events }
 // connection ends, then reports why and closes the stream.
 func (c *conversation) pump() {
 	defer close(c.pumpDone)
-	defer close(c.events)
+	defer func() {
+		c.eventsMu.Lock()
+		defer c.eventsMu.Unlock()
+		c.eventsClosed = true
+		close(c.events)
+	}()
+	retries := make(map[string]ports.ChatEvent)
+	citations := newCitationFormatter()
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		// Some normalized output events omit their thread ID. Read the native
+		// envelope so child-thread recovery cannot settle the root's retry.
+		var scope struct {
+			ThreadID string `json:"threadId"`
+		}
+		_ = json.Unmarshal(n.Params, &scope)
+		citations.observeNotification(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
 		for _, ev := range normalizeNotification(n, time.Now()) {
+			threadID := ev.ProviderConversationID
+			if threadID == "" {
+				threadID = scope.ThreadID
+			}
+			if threadID == "" {
+				threadID = c.threadID
+			}
+			var visible bool
+			ev, visible = citations.formatEvent(threadID, ev)
+			if !visible {
+				continue
+			}
+			key := threadID + ":" + ev.ProviderTurnID
+			if ev.Kind == ports.ChatEventError {
+				// Turn settlement will settle the running retry along with the failure.
+				delete(retries, key)
+			}
+			isRetry := ev.Kind == ports.ChatEventActivityStarted && strings.HasPrefix(ev.ProviderItemID, "codex-retry:")
+			if isRetry {
+				if active, ok := retries[key]; ok {
+					ev.ProviderItemID = active.ProviderItemID
+				} else {
+					// Live Codex errors have no item/replay ID. Keep attempts on one
+					// row, but never overwrite a recovered episode later in the turn.
+					ev.ProviderItemID += ":" + uuid.NewString()
+				}
+				retries[key] = ev
+			}
+			completed := ev.Kind == ports.ChatEventTurnCompleted
+			recovered := !isRetry && (ev.Kind == ports.ChatEventMessageDelta || ev.Kind == ports.ChatEventMessageCompleted ||
+				ev.Kind == ports.ChatEventActivityStarted || ev.Kind == ports.ChatEventReasoningDelta || ev.Kind == ports.ChatEventPlanUpdated)
+			if completed || recovered {
+				if retry, ok := retries[key]; ok {
+					retry.Kind = ports.ChatEventActivityCompleted
+					retry.ActivityStatus = domain.ActivityStatusCompleted
+					if !completed || (ev.TurnState != domain.TurnStateFailed && ev.Err == nil) {
+						c.emit(retry)
+					}
+					delete(retries, key)
+				}
+			}
 			rootConversation := ev.ProviderConversationID == "" || ev.ProviderConversationID == c.threadID
 			if ev.Kind == ports.ChatEventTurnStarted && ev.ProviderTurnID != "" && rootConversation {
 				c.mu.Lock()
@@ -180,7 +257,6 @@ func (c *conversation) pump() {
 			c.emit(ev)
 		}
 	}
-
 	// The connection ended. Say so explicitly rather than letting the stream go
 	// quiet: a silent channel close is indistinguishable from an idle agent.
 	state := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
@@ -194,6 +270,12 @@ func (c *conversation) pump() {
 // emit delivers an event, preferring to drop a delta over blocking the reader. A
 // lifecycle event is never dropped silently.
 func (c *conversation) emit(ev ports.ChatEvent) {
+	c.eventsMu.RLock()
+	defer c.eventsMu.RUnlock()
+	if c.eventsClosed {
+		return
+	}
+	ev = c.scopedEvent(ev)
 	select {
 	case c.events <- ev:
 		return
@@ -241,7 +323,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings)
+	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
 
 	var resp struct {
 		Turn struct {
@@ -256,7 +338,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	c.activeTurn = resp.Turn.ID
 	c.mu.Unlock()
 
-	return ports.ChatTurnRef{ProviderTurnID: resp.Turn.ID}, nil
+	return ports.ChatTurnRef{ProviderTurnID: c.scopedID(resp.Turn.ID)}, nil
 }
 
 // applyTurnSettings folds the caller's per-turn choices into a turn/start payload.
@@ -264,7 +346,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly, disableNetwork bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -280,7 +362,15 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings) {
 		// rather than assumed to be interchangeable.
 		policy, sandbox := approvalSettings(settings.Approval)
 		params["approvalPolicy"] = policy
+		params["approvalsReviewer"] = approvalReviewer(settings.Approval)
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+	}
+	if readOnly {
+		// Reviewers need gh and ao review submit; text-only background calls
+		// explicitly disable that tool network access.
+		params["approvalPolicy"] = "never"
+		params["approvalsReviewer"] = "user"
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": !disableNetwork}
 	}
 }
 
@@ -303,63 +393,87 @@ func turnSandboxPolicy(sandbox string) map[string]any {
 // account, and gated by entitlement that AO cannot see. A table in AO would be
 // wrong within a week.
 func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error) {
-	var resp struct {
+	models, err := listModels(ctx, c.conn)
+	if err != nil {
+		return nil, err
+	}
+	// Thread settings include the user's config; model/list only has generic defaults.
+	for i := range models {
+		// An omitted turn model inherits thread/start (including config.toml),
+		// not model/list's generic catalog default. If the configured model is
+		// absent, leave no catalog default rather than advertise another model.
+		if c.threadModel != "" {
+			models[i].Default = models[i].ID == c.threadModel
+		}
+		if models[i].ID == c.threadModel && c.threadEffort != "" {
+			models[i].DefaultEffort = c.threadEffort
+		}
+	}
+	return models, nil
+}
+
+func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {
+	type modelListResponse struct {
 		Data []struct {
-			ID          string `json:"id"`
-			Model       string `json:"model"`
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			IsDefault   bool   `json:"isDefault"`
-			Hidden      bool   `json:"hidden"`
-			DefaultEff  string `json:"defaultReasoningEffort"`
+			ID          string   `json:"id"`
+			Model       string   `json:"model"`
+			DisplayName string   `json:"displayName"`
+			Description string   `json:"description"`
+			IsDefault   bool     `json:"isDefault"`
+			Hidden      bool     `json:"hidden"`
+			DefaultEff  string   `json:"defaultReasoningEffort"`
+			Inputs      []string `json:"inputModalities"`
 			Efforts     []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
 		} `json:"data"`
-	}
-	if err := c.conn.request(ctx, "model/list", map[string]any{}, &resp); err != nil {
-		return nil, fmt.Errorf("model/list: %w", err)
+		NextCursor *string `json:"nextCursor"`
 	}
 
-	models := make([]ports.ChatModel, 0, len(resp.Data))
-	for _, entry := range resp.Data {
-		if entry.Hidden {
-			// The provider marks a model hidden when the account should not be
-			// offered it. Showing it anyway would offer a choice that then fails.
-			continue
+	var models []ports.ChatModel
+	var cursor string
+	for {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
 		}
-		id := entry.ID
-		if id == "" {
-			id = entry.Model
+		var resp modelListResponse
+		if err := connection.request(ctx, "model/list", params, &resp); err != nil {
+			return nil, fmt.Errorf("model/list: %w", err)
 		}
-		if id == "" {
-			continue
-		}
-		efforts := make([]string, 0, len(entry.Efforts))
-		for _, effort := range entry.Efforts {
-			if effort.ReasoningEffort != "" {
-				efforts = append(efforts, effort.ReasoningEffort)
+		for _, entry := range resp.Data {
+			if entry.Hidden {
+				// The provider marks a model hidden when the account should not be
+				// offered it. Showing it anyway would offer a choice that then fails.
+				continue
 			}
+			id := entry.ID
+			if id == "" {
+				id = entry.Model
+			}
+			if id == "" {
+				continue
+			}
+			efforts := make([]string, 0, len(entry.Efforts))
+			for _, effort := range entry.Efforts {
+				if effort.ReasoningEffort != "" {
+					efforts = append(efforts, effort.ReasoningEffort)
+				}
+			}
+			display := entry.DisplayName
+			if display == "" {
+				display = id
+			}
+			models = append(models, ports.ChatModel{
+				ID: id, DisplayName: display, Description: entry.Description,
+				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
+				Inputs: entry.Inputs,
+			})
 		}
-		display := entry.DisplayName
-		if display == "" {
-			display = id
-		}
-		models = append(models, ports.ChatModel{
-			ID:            id,
-			DisplayName:   display,
-			Description:   entry.Description,
-			Default:       entry.IsDefault,
-			Efforts:       efforts,
-			DefaultEffort: entry.DefaultEff,
-		})
-	}
-	// Thread settings include the user's config; model/list only has generic defaults.
-	for i := range models {
-		if models[i].ID == c.threadModel && c.threadEffort != "" {
-			models[i].DefaultEffort = c.threadEffort
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
 			break
 		}
+		cursor = *resp.NextCursor
 	}
 	return models, nil
 }
@@ -371,15 +485,12 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 // wants to know whether they have quota BEFORE spending a turn finding out. The
 // controller reads once at startup for exactly that reason.
 func (c *conversation) ReadRateLimits(ctx context.Context) (ports.ChatRateLimits, error) {
-	var resp rateLimitsEnvelope
+	var resp capacityReadEnvelope
 	if err := c.conn.request(ctx, "account/rateLimits/read", map[string]any{}, &resp); err != nil {
 		return ports.ChatRateLimits{}, fmt.Errorf("account/rateLimits/read: %w", err)
 	}
-	// The read result also carries rateLimitsByLimitId, a per-model breakdown, and
-	// rateLimitResetCredits. Neither is read: the meter's job is to say whether the
-	// account is near a wall, and a per-model table would be a second, finer answer
-	// to a question the user has not asked yet.
-	return rateLimitsFrom(resp, time.Now()), nil
+	observedAt := time.Now().UTC()
+	return chatRateLimitsFromCapacity(capacityObservationFromEnvelope(resp, observedAt, false), observedAt), nil
 }
 
 // Compact asks the provider to summarize earlier history and reclaim context.
@@ -494,6 +605,7 @@ func formatTokens(tokens int64) string {
 
 // Interrupt cancels a turn. An empty turn id targets the active one.
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {
+	providerTurnID = c.nativeID(providerTurnID)
 	if providerTurnID == "" {
 		c.mu.Lock()
 		providerTurnID = c.activeTurn
@@ -541,6 +653,7 @@ func isNoActiveTurn(err error) bool {
 // consuming the request on a bad one would leave the user's real answer with
 // nothing left to answer while the provider waits out its timeout.
 func (c *conversation) ResolveRequest(ctx context.Context, requestID string, decision ports.ChatDecision) error {
+	requestID = c.nativeID(requestID)
 	c.mu.Lock()
 	parked, ok := c.pending[requestID]
 	closed := c.closed
@@ -628,13 +741,16 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
 	}
+	if c.disableNetwork {
+		return nil, errors.New("background task does not permit approval or input requests")
+	}
 
 	requestID := rawID(req.ID)
 	if requestID == "" {
 		return nil, errors.New("server request carried no id")
 	}
 
-	decisions, summary, detail := parseApproval(req.Method, req.Params)
+	decisions, summary, detail, turnID := parseApproval(req.Method, req.Params)
 
 	offered := make(map[string]json.RawMessage, len(decisions))
 	for _, option := range decisions {
@@ -652,6 +768,7 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 
 	c.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventApprovalRequested,
+		ProviderTurnID: turnID,
 		ProviderItemID: requestID,
 		RequestID:      requestID,
 		ActivityKind:   kind,
@@ -731,44 +848,66 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 // provider re-announces every server's startup state as notifications afterwards, so
 // the returned list is a convenience for the caller that asked, not the only path by
 // which AO learns the outcome.
-func (c *conversation) ReloadMCPServers(ctx context.Context) ([]ports.ChatMCPServer, error) {
+func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloadResult, error) {
 	// config/mcpServer/reload takes no params, verified against a live app-server.
 	if err := c.conn.request(ctx, codexproto.MethodConfigMcpServerReload, map[string]any{}, nil); err != nil {
-		return nil, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
+		return ports.ChatMCPReloadResult{}, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
 	}
 
-	var resp struct {
-		Data []struct {
-			Name       string `json:"name"`
-			AuthStatus string `json:"authStatus"`
-		} `json:"data"`
-	}
-	if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, map[string]any{
-		// The summary form: the full one returns every tool's JSON Schema, which for a
-		// handful of servers is hundreds of kilobytes AO would immediately discard.
-		"detail":   "summary",
-		"threadId": c.threadID,
-	}, &resp); err != nil {
-		// The reload itself succeeded, and that is the part the caller asked for. The
-		// pushed notifications will report the outcome regardless.
-		c.log.Debug("mcp server list after reload failed", "error", err)
-		return nil, nil
-	}
-
-	servers := make([]ports.ChatMCPServer, 0, len(resp.Data))
-	for _, entry := range resp.Data {
-		if entry.Name == "" {
-			continue
+	// toolsAndAuthOnly avoids the resource schemas from the full response while
+	// using the provider-declared enum value. "summary" was never part of the app
+	// server protocol and made an otherwise successful reload look unenumerated.
+	detail := codexproto.McpServerStatusDetailToolsAndAuthOnly
+	threadID := c.threadID
+	var cursor *string
+	servers := make([]ports.ChatMCPServer, 0)
+	seen := make(map[string]struct{})
+	seenCursors := make(map[string]struct{})
+	for {
+		var resp codexproto.ListMcpServerStatusResponse
+		params := codexproto.ListMcpServerStatusParams{
+			Cursor:   cursor,
+			Detail:   &detail,
+			ThreadID: &threadID,
 		}
-		// A server that answers the inventory call is running. Its startup state is
-		// reported separately by mcpServer/startupStatus/updated, which is the
-		// authoritative source; this list only says who came back.
-		servers = append(servers, ports.ChatMCPServer{
-			Name:   entry.Name,
-			Status: string(codexproto.McpServerStartupStateReady),
-		})
+		if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, params, &resp); err != nil {
+			// The reload itself succeeded. Mark the inventory unavailable so the
+			// controller retains known state rather than mistaking failure for an
+			// authoritative empty configuration.
+			c.log.Debug("mcp server list after reload failed", "error", err)
+			return ports.ChatMCPReloadResult{}, nil
+		}
+		for _, entry := range resp.Data {
+			// serverInfo is supplied by the MCP initialize handshake. A configured
+			// server whose startup failed can still have a status-list row, but it
+			// must remain failed via its startup notification rather than being
+			// promoted to ready merely because configuration knows its name.
+			if entry.Name == "" || entry.ServerInfo == nil {
+				continue
+			}
+			if _, duplicate := seen[entry.Name]; duplicate {
+				continue
+			}
+			seen[entry.Name] = struct{}{}
+			// A server that answers the inventory call is running. Failed enabled
+			// servers arrive through startup-status notifications and are reconciled
+			// by the controller with this complete ready-server inventory.
+			servers = append(servers, ports.ChatMCPServer{
+				Name:   entry.Name,
+				Status: string(codexproto.McpServerStartupStateReady),
+			})
+		}
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
+			break
+		}
+		if _, repeated := seenCursors[*resp.NextCursor]; repeated {
+			c.log.Debug("mcp server list after reload repeated its cursor", "cursor", *resp.NextCursor)
+			return ports.ChatMCPReloadResult{}, nil
+		}
+		seenCursors[*resp.NextCursor] = struct{}{}
+		cursor = resp.NextCursor
 	}
-	return servers, nil
+	return ports.ChatMCPReloadResult{Servers: servers, Authoritative: true}, nil
 }
 
 func (c *conversation) discardPending(requestID string) {
@@ -792,13 +931,55 @@ func (c *conversation) failPendingApprovals() {
 // Close releases the controller without touching provider-side history.
 func (c *conversation) Close() error {
 	c.closeOnce.Do(func() {
-		c.failPendingApprovals()
+		if c.proc.terminate == nil {
+			c.failPendingApprovals()
+		}
 		if c.proc.stop != nil {
-			_ = c.proc.stop()
+			c.closeErr = c.proc.stop()
 		}
 	})
-	return nil
+	return c.closeErr
 }
+
+// Terminate destroys the provider host. Close only detaches and is used by
+// daemon-wide shutdown; explicit session/controller replacement calls this.
+func (c *conversation) Terminate() error {
+	c.closeOnce.Do(func() {
+		c.failPendingApprovals()
+		if c.proc.terminate != nil {
+			c.closeErr = c.proc.terminate()
+		} else if c.proc.stop != nil {
+			c.closeErr = c.proc.stop()
+		}
+	})
+	return c.closeErr
+}
+
+// CanHibernate reads Codex's live exec registry, since a settled turn can leave
+// a terminal running and terminating app-server also terminates those commands.
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// Subset of Codex 0.160.1's experimental background-terminal response.
+	var resp struct {
+		Data       []json.RawMessage `json:"data"`
+		NextCursor *string           `json:"nextCursor"`
+	}
+	if err := c.conn.request(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": c.threadID, "limit": 1}, &resp); err != nil {
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			return false, nil // Older builds cannot prove that background work ended.
+		}
+		return false, err
+	}
+	if resp.Data == nil {
+		return false, errors.New("background-terminal response is missing data")
+	}
+	return len(resp.Data) == 0 && (resp.NextCursor == nil || *resp.NextCursor == ""), nil
+}
+
+// Hibernate stops the app-server but leaves its native thread on disk for Resume.
+func (c *conversation) Hibernate() error { return c.Terminate() }
 
 // approvalPayload is the subset of an approval request AO renders.
 type approvalPayload struct {
@@ -822,10 +1003,10 @@ type approvalPayload struct {
 }
 
 // parseApproval extracts the decisions, label, and neutral detail for a request.
-func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionOption, string, []byte) {
+func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionOption, string, []byte, string) {
 	var p approvalPayload
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, "Approval required", nil
+		return nil, "Approval required", nil, ""
 	}
 
 	options := make([]ports.ChatDecisionOption, 0, len(p.AvailableDecisions))
@@ -868,7 +1049,7 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 	if err != nil {
 		encoded = nil
 	}
-	return options, summary, encoded
+	return options, summary, encoded, p.TurnID
 }
 
 // decisionOption reads one entry of availableDecisions, which is either a plain
@@ -885,7 +1066,9 @@ func decisionOption(raw json.RawMessage) (ports.ChatDecisionOption, bool) {
 		if asString == "" {
 			return ports.ChatDecisionOption{}, false
 		}
-		return ports.ChatDecisionOption{ID: asString, Label: decisionLabel(asString), Raw: raw}, true
+		return ports.ChatDecisionOption{
+			ID: asString, Label: decisionLabel(asString), Kind: codexDecisionKind(asString), Raw: raw,
+		}, true
 	}
 
 	var asObject map[string]json.RawMessage
@@ -893,9 +1076,24 @@ func decisionOption(raw json.RawMessage) (ports.ChatDecisionOption, bool) {
 		return ports.ChatDecisionOption{}, false
 	}
 	for key := range asObject {
-		return ports.ChatDecisionOption{ID: key, Label: decisionLabel(key), Raw: raw}, true
+		return ports.ChatDecisionOption{
+			ID: key, Label: decisionLabel(key), Kind: codexDecisionKind(key), Raw: raw,
+		}, true
 	}
 	return ports.ChatDecisionOption{}, false
+}
+
+func codexDecisionKind(id string) ports.ChatDecisionKind {
+	switch id {
+	case "accept":
+		return ports.ChatDecisionAllowOnce
+	case "acceptForSession", "acceptWithExecpolicyAmendment":
+		return ports.ChatDecisionAllowAlways
+	case "decline", "cancel":
+		return ports.ChatDecisionRejectOnce
+	default:
+		return ""
+	}
 }
 
 // decisionLabel gives known decision ids readable text. An unknown id falls back

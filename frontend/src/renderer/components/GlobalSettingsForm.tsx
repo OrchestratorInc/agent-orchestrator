@@ -1,58 +1,56 @@
-import { useState } from "react";
+import { Fragment, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
-import { ReportProblemDialog } from "./settings/ReportProblemDialog";
-import { SettingsLinkRow } from "./settings/SettingsRow";
-import { SettingsSection } from "./settings/SettingsSection";
-import { UpdatesSection } from "./settings/UpdatesSection";
+import { type GlobalSettingsSection as GlobalSettingsPage, type HarnessDiagnosticsRequest, useUiStore } from "../stores/ui-store";
+import { globalSettingsItemsFor } from "./settings/settingsCatalog";
+import { SettingsPageTitleContext } from "./settings/SettingsSection";
 
-export type GlobalSettingsSection = "general" | "updates" | "help" | "all";
+export type GlobalSettingsSection = GlobalSettingsPage | "all";
 
 export function GlobalSettingsForm({
+	cloudEnabled = true,
+	customCoder = false,
+	selfServeBilling = false,
+	focusAgentId,
+	hostId,
+	harnessView,
+	startLogin,
+	showDiagnostics,
 	section = "all",
-	onOpenKeyboardShortcuts,
-	onOpenConnectMobile,
 }: {
+	cloudEnabled?: boolean;
+	/** The org's offering includes coder (SettingsDialog reads useCloudOffering). */
+	customCoder?: boolean;
+	/** The org is on self-serve billing. */
+	selfServeBilling?: boolean;
+	focusAgentId?: string;
+	hostId?: string;
+	harnessView?: "local" | "cloud";
+	startLogin?: boolean;
+	showDiagnostics?: HarnessDiagnosticsRequest;
 	section?: GlobalSettingsSection;
-	onOpenKeyboardShortcuts?: () => void;
-	onOpenConnectMobile?: () => void;
 }) {
 	const { t } = useTranslation();
-	const [reportProblemOpen, setReportProblemOpen] = useState(false);
-	// One section per page means the dialog header already names it, so the
-	// page's leading heading would just repeat that title. Only "all" (no
-	// single-page header) shows every section's own heading.
-	const leadingTitleHidden = section !== "all";
+	const developerMode = useUiStore((state) => state.developerMode);
+	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
+	const all = section === "all";
+	const context = { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, focusAgentId, hostId, harnessView, startLogin, showDiagnostics, singlePage: !all };
+	const items = globalSettingsItemsFor(section, context);
+	// On a single page the pane's title names it; SettingsSection hides only a
+	// heading that would repeat that title, so other section headings show.
+	const pageTitle = all ? null : (items[0]?.label(t) ?? null);
 
 	return (
-		<>
+		<SettingsPageTitleContext.Provider value={pageTitle}>
 			<div
 				aria-label={t("settings.title")}
 				className="flex w-full flex-col gap-(--size-settings-section-gap)"
-				data-testid="settings-page"
 			>
-				{(section === "all" || section === "general") && (
-					<>
-						<GeneralSettingsSection
-							onConnectMobile={() => onOpenConnectMobile?.()}
-							titleHidden={leadingTitleHidden}
-						/>
-						<SettingsSection title={t("settings.preferences")} grouped>
-							<SettingsLinkRow
-								label={t("settings.keyboardShortcuts")}
-								onClick={() => onOpenKeyboardShortcuts?.()}
-							/>
-						</SettingsSection>
-					</>
-				)}
-				{(section === "all" || section === "updates") && <UpdatesSection titleHidden={leadingTitleHidden} />}
-				{(section === "all" || section === "help") && (
-					<SettingsSection title={t("settings.getHelp")} titleHidden={leadingTitleHidden} grouped>
-						<SettingsLinkRow label={t("settings.reportProblem")} onClick={() => setReportProblemOpen(true)} />
-					</SettingsSection>
-				)}
+				{items.map((item) => (
+					<Fragment key={item.id}>
+						<Suspense fallback={null}>{item.render(t, false, context)}</Suspense>
+					</Fragment>
+				))}
 			</div>
-			<ReportProblemDialog open={reportProblemOpen} onOpenChange={setReportProblemOpen} />
-		</>
+		</SettingsPageTitleContext.Provider>
 	);
 }

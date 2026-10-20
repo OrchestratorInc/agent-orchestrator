@@ -49,6 +49,28 @@ func (s *Store) WriteSCMObservation(ctx context.Context, pr domain.PullRequest, 
 	return s.writePR(ctx, pr, checks, reviews, threads, comments, reviewMode, false)
 }
 
+// MarkPRMerged records the authoritative success returned by the provider's
+// merge endpoint without replacing concurrently refreshed CI or review facts.
+// The pr_cdc_update trigger emits the corresponding pr_updated event.
+func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qr.MarkPRMerged(ctx, gen.MarkPRMergedParams{
+		MergeCommitSha: mergeCommitSHA,
+		StateChangedAt: sql.NullTime{Time: mergedAt, Valid: true},
+		UpdatedAt:      mergedAt,
+		ObservedAt:     sql.NullTime{Time: mergedAt, Valid: true},
+		URL:            prURL,
+	})
+	if err != nil {
+		return fmt.Errorf("mark pr merged %s: %w", prURL, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("mark pr merged %s: updated %d rows", prURL, rows)
+	}
+	return nil
+}
+
 // ClaimPR moves (or creates) a PR row to pr.SessionID and applies the live SCM
 // observation in the same transaction. The session_id update is what fires the
 // pr_session_changed CDC trigger added in migration 0005.
@@ -454,6 +476,36 @@ func (s *Store) GetPR(ctx context.Context, url string) (domain.PullRequest, bool
 	return prRowFromGen(p), true, nil
 }
 
+// GetPRByNumber returns the best matching tracked PR for the /prs/{id} path.
+// Active rows are preferred over terminal rows, then the newest observation
+// wins when the same provider number appears in more than one repository.
+func (s *Store) GetPRByNumber(ctx context.Context, number int) (domain.PullRequest, bool, error) {
+	if number <= 0 {
+		return domain.PullRequest{}, false, nil
+	}
+	p, err := s.qr.GetPRByNumber(ctx, int64(number))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.PullRequest{}, false, nil
+	}
+	if err != nil {
+		return domain.PullRequest{}, false, fmt.Errorf("get pr by number %d: %w", number, err)
+	}
+	return prRowFromGen(p), true, nil
+}
+
+// CountActivePRsByNumber reports whether a numeric resolve path is ambiguous
+// across simultaneously tracked repositories.
+func (s *Store) CountActivePRsByNumber(ctx context.Context, number int) (int, error) {
+	if number <= 0 {
+		return 0, nil
+	}
+	count, err := s.qr.CountActivePRsByNumber(ctx, int64(number))
+	if err != nil {
+		return 0, fmt.Errorf("count active prs by number %d: %w", number, err)
+	}
+	return int(count), nil
+}
+
 // ListPRsBySession returns every PR owned by a session, newest first.
 func (s *Store) ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error) {
 	rows, err := s.qr.ListPRsBySession(ctx, sessionID)
@@ -502,6 +554,23 @@ func (s *Store) MarkPRCommentResolved(ctx context.Context, prURL, commentID stri
 		return false, fmt.Errorf("mark pr comment resolved %s/%s: %w", prURL, commentID, err)
 	}
 	return affected > 0, nil
+}
+
+// MarkPRReviewThreadResolved records a provider-resolved review thread and
+// all of its comments locally. The two updates share the writer lock so a
+// concurrent observation cannot interleave with the targeted state change.
+func (s *Store) MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "mark pr review thread resolved", func(q *gen.Queries) error {
+		if _, err := q.MarkPRReviewThreadResolved(ctx, gen.MarkPRReviewThreadResolvedParams{PRURL: prURL, ThreadID: threadID}); err != nil {
+			return fmt.Errorf("mark pr review thread resolved %s/%s: %w", prURL, threadID, err)
+		}
+		if _, err := q.MarkPRCommentsResolvedForThread(ctx, gen.MarkPRCommentsResolvedForThreadParams{PRURL: prURL, ThreadID: threadID}); err != nil {
+			return fmt.Errorf("mark pr review comments resolved %s/%s: %w", prURL, threadID, err)
+		}
+		return nil
+	})
 }
 
 // ListPRReviewThreads returns a PR's review threads, oldest first.
@@ -569,6 +638,7 @@ func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 		Deletions:                int64(r.Deletions),
 		ChangedFiles:             int64(r.ChangedFiles),
 		Author:                   r.Author,
+		AuthorAvatarURL:          r.AuthorAvatarURL,
 		BaseSha:                  r.BaseSHA,
 		MergeCommitSha:           r.MergeCommitSHA,
 		IsDraft:                  boolInt(r.Draft),
@@ -588,25 +658,28 @@ func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 		ObservedAt:               nullTime(r.ObservedAt),
 		CIObservedAt:             nullTime(r.CIObservedAt),
 		ReviewObservedAt:         nullTime(r.ReviewObservedAt),
+		ReviewPartial:            r.ReviewPartial,
 		ID:                       r.SessionID,
 	}
 }
 
 func genLegacyPRParams(r domain.PullRequest) gen.UpsertLegacyPRParams {
 	return gen.UpsertLegacyPRParams{
-		URL:            r.URL,
-		SessionID:      r.SessionID,
-		Number:         int64(r.Number),
-		PRState:        prState(r),
-		ReviewDecision: reviewOrDefault(r.Review),
-		CIState:        ciOrDefault(r.CI),
-		Mergeability:   mergeabilityOrDefault(r.Mergeability),
-		UpdatedAt:      r.UpdatedAt,
-		StateChangedAt: nullTime(initialPRStateChangedAt(r)),
-		IsDraft:        boolInt(r.Draft),
-		IsMerged:       boolInt(r.Merged),
-		IsClosed:       boolInt(r.Closed),
-		ID:             r.SessionID,
+		URL:              r.URL,
+		SessionID:        r.SessionID,
+		Number:           int64(r.Number),
+		PRState:          prState(r),
+		ReviewDecision:   reviewOrDefault(r.Review),
+		CIState:          ciOrDefault(r.CI),
+		Mergeability:     mergeabilityOrDefault(r.Mergeability),
+		UpdatedAt:        r.UpdatedAt,
+		StateChangedAt:   nullTime(initialPRStateChangedAt(r)),
+		IsDraft:          boolInt(r.Draft),
+		IsMerged:         boolInt(r.Merged),
+		IsClosed:         boolInt(r.Closed),
+		ReviewObservedAt: nullTime(r.ReviewObservedAt),
+		ReviewPartial:    r.ReviewPartial,
+		ID:               r.SessionID,
 	}
 }
 
@@ -672,6 +745,7 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		Deletions:                int(p.Deletions),
 		ChangedFiles:             int(p.ChangedFiles),
 		Author:                   p.Author,
+		AuthorAvatarURL:          p.AuthorAvatarURL,
 		BaseSHA:                  p.BaseSha,
 		MergeCommitSHA:           p.MergeCommitSha,
 		ProviderState:            p.ProviderState,
@@ -688,6 +762,7 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		ObservedAt:               timeFromNull(p.ObservedAt),
 		CIObservedAt:             timeFromNull(p.CIObservedAt),
 		ReviewObservedAt:         timeFromNull(p.ReviewObservedAt),
+		ReviewPartial:            p.ReviewPartial,
 		AutoInjectCI:             p.AutoInjectCI,
 	}
 }
@@ -716,7 +791,7 @@ func genCommentParams(prURL string, c domain.PullRequestComment) gen.UpsertPRCom
 	return gen.UpsertPRCommentParams{
 		PRURL: prURL, CommentID: c.ID, Author: c.Author, File: c.File,
 		Line: int64(c.Line), Body: c.Body, Resolved: c.Resolved, CreatedAt: c.CreatedAt,
-		ThreadID: c.ThreadID, URL: c.URL, IsBot: boolInt(c.IsBot), AutoInjectReview: c.AutoInjectReview,
+		ThreadID: c.ThreadID, ReviewID: c.ReviewID, URL: c.URL, IsBot: boolInt(c.IsBot), AutoInjectReview: c.AutoInjectReview,
 	}
 }
 
@@ -724,13 +799,13 @@ func genLegacyCommentParams(prURL string, c domain.PullRequestComment) gen.Inser
 	return gen.InsertLegacyPRCommentParams{
 		PRURL: prURL, CommentID: c.ID, Author: c.Author, File: c.File,
 		Line: int64(c.Line), Body: c.Body, Resolved: c.Resolved, CreatedAt: c.CreatedAt,
-		ThreadID: "", URL: "", IsBot: 0,
+		ThreadID: "", ReviewID: c.ReviewID, URL: "", IsBot: 0,
 	}
 }
 
 func commentFromGen(c gen.PRComment) domain.PullRequestComment {
 	return domain.PullRequestComment{
-		ThreadID: c.ThreadID, ID: c.CommentID, Author: c.Author,
+		ThreadID: c.ThreadID, ReviewID: c.ReviewID, ID: c.CommentID, Author: c.Author,
 		File: c.File, Line: int(c.Line), Body: c.Body, URL: c.URL,
 		Resolved: c.Resolved, IsBot: c.IsBot != 0, CreatedAt: c.CreatedAt,
 		AutoInjectReview: c.AutoInjectReview,

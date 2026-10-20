@@ -19,13 +19,11 @@ const REVIEWER_HARNESS_IDS = [
 	"claude-code",
 	"codex",
 	"cline",
-	"continue",
 	"copilot",
 	"crush",
 	"cursor",
 	"devin",
 	"droid",
-	"goose",
 	"grok",
 	"kilocode",
 	"kiro",
@@ -33,9 +31,8 @@ const REVIEWER_HARNESS_IDS = [
 	"kimchi",
 	"muse",
 	"opencode",
+	"opencode-v2",
 	"pi",
-	"qwen",
-	"vibe",
 ] as const satisfies readonly ReviewerHarnessId[];
 
 type UnlistedReviewerHarness = Exclude<ReviewerHarnessId, (typeof REVIEWER_HARNESS_IDS)[number]>;
@@ -43,6 +40,14 @@ const _everyReviewerHarnessIsListed: UnlistedReviewerHarness extends never ? tru
 void _everyReviewerHarnessIsListed;
 
 export const KNOWN_REVIEWER_HARNESS_IDS: ReadonlySet<string> = new Set(REVIEWER_HARNESS_IDS);
+
+export const WORKER_DEFAULT_REVIEWERS: Readonly<Partial<Record<string, ReviewerHarnessId>>> = {
+	"claude-code": "claude-code",
+	codex: "codex",
+	opencode: "opencode",
+	muse: "muse",
+	kimchi: "kimchi",
+};
 
 export function toReviewerHarnessId(value?: string): ReviewerHarnessId | undefined {
 	return value && KNOWN_REVIEWER_HARNESS_IDS.has(value) ? (value as ReviewerHarnessId) : undefined;

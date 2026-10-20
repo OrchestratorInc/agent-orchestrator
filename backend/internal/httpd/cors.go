@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
 // corsMiddleware grants cross-origin read access to the allowlisted browser
@@ -25,14 +26,7 @@ import (
 // would otherwise execute. Same philosophy as localControlRequest on
 // /shutdown, applied to the whole surface.
 func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
-	allowed := make(map[string]struct{}, len(allowedOrigins))
-	for _, origin := range allowedOrigins {
-		origin = strings.TrimSpace(origin)
-		if origin == "" || origin == "null" || origin == "*" {
-			continue
-		}
-		allowed[origin] = struct{}{}
-	}
+	allowed := exactAllowedOrigins(allowedOrigins)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +38,19 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			// Cache keys must split on Origin even for rejected values, or a
 			// 403 could be replayed to an allowed origin.
 			w.Header().Add("Vary", "Origin")
+			// An HTML artifact framed in the chat has a real origin so its own
+			// files load same-origin, but it is an agent's page: everywhere but
+			// that host (the daemon API, other sessions, the preview origins) it
+			// is refused like any foreign origin.
+			if host, ok := inlineArtifactOriginHost(origin); ok {
+				if !strings.EqualFold(host, r.Host) {
+					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
+						"Origin is not allowed to access this daemon", nil)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			if _, ok := allowed[origin]; !ok && !isLoopbackOrigin(origin) {
 				envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
 					"Origin is not allowed to access this daemon", nil)
@@ -73,6 +80,55 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
+// codexAccountOriginMiddleware gives credential-management routes a stricter
+// browser boundary than the rest of the loopback API. Workspace previews are
+// intentionally accepted by corsMiddleware so they can use ordinary daemon
+// APIs, but they must never read account metadata or execute account
+// mutations. Native clients do not send Origin and remain unauthenticated;
+// browser clients must present one of the exact configured renderer origins.
+func codexAccountOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+	allowed := exactAllowedOrigins(allowedOrigins)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && isCodexAccountPath(r.URL.Path) {
+				w.Header().Add("Vary", "Origin")
+				if _, ok := allowed[origin]; !ok {
+					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
+						"Origin is not allowed to access Codex account management", nil)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func exactAllowedOrigins(origins []string) map[string]struct{} {
+	allowed := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" || origin == "null" || origin == "*" {
+			continue
+		}
+		allowed[origin] = struct{}{}
+	}
+	return allowed
+}
+
+func isCodexAccountPath(path string) bool {
+	for _, prefix := range []string{
+		"/api/v1/agents/codex/accounts",
+		"/api/v1/agents/codex/account-switches",
+		"/api/v1/agents/accounts",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // isLoopbackOrigin reports whether a browser origin is content served from
 // this machine's loopback (the Vite dev server / preview server on whatever
 // port it picked). Such content can already reach the no-auth daemon directly,
@@ -95,4 +151,17 @@ func isLoopbackOrigin(origin string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+// inlineArtifactOriginHost is the host of an inline-artifact origin, the one
+// the chat thread frames an HTML artifact from.
+func inlineArtifactOriginHost(origin string) (string, bool) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" {
+		return "", false
+	}
+	if _, ok := previewutil.SessionIDFromInlineArtifactHost(u.Host); !ok {
+		return "", false
+	}
+	return u.Host, true
 }

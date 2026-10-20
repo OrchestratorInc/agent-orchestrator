@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,23 +135,27 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"port":  {},
 	},
 	"ao.http.5xx": {
-		"component":     {},
-		"duration":      {},
-		"error_code":    {},
-		"error_kind":    {},
-		"fingerprint":   {},
-		"method":        {},
-		"operation":     {},
-		"path":          {},
-		"status":        {},
-		"status_family": {},
-		"count":         {},
-		"window_start":  {},
-		"window_end":    {},
+		"component":          {},
+		"duration":           {},
+		"error_code":         {},
+		"error_kind":         {},
+		"fingerprint":        {},
+		"method":             {},
+		"operation":          {},
+		"path":               {},
+		"status":             {},
+		"status_family":      {},
+		"browser_command":    {},
+		"runtime_link_state": {},
+		"count":              {},
+		"window_start":       {},
+		"window_end":         {},
 	},
 	"ao.onboarding.first_project_added": {
 		"has_git_remote": {},
 		"kind":           {},
+		"github_org":     {},
+		"scm_provider":   {},
 	},
 	"ao.onboarding.first_session_spawned": {
 		"harness":                {},
@@ -160,15 +165,21 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
+		"rerun":        {},
 		"reused":       {},
+		"trigger":      {},
 	},
 	"ao.review.trigger_failed": {
 		"error_kind": {},
+		"trigger":    {},
 	},
 	"ao.review.submitted": {
+		"auto_inject":        {},
+		"body_bytes":         {},
 		"duration_ms":        {},
 		"harness":            {},
 		"posted_to_provider": {},
+		"trigger":            {},
 		"verdict":            {},
 	},
 	"ao.review.cancelled": {
@@ -177,6 +188,8 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.projects.created": {
 		"has_git_remote": {},
 		"kind":           {},
+		"github_org":     {},
+		"scm_provider":   {},
 	},
 	"ao.session.spawn_failed": {
 		"component":   {},
@@ -189,12 +202,34 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"operation":   {},
 	},
 	"ao.session.spawned": {
-		"duration_ms": {},
-		"harness":     {},
-		"kind":        {},
+		"duration_ms":  {},
+		"harness":      {},
+		"kind":         {},
+		"github_actor": {},
 	},
 	"ao.session.waiting_input_entered": {
 		"state": {},
+	},
+	"ao.harness.update": {
+		"harness":       {},
+		"level":         {},
+		"live_sessions": {},
+		"result":        {},
+	},
+	"ao.harness.update_idle_wait": {
+		"harness":  {},
+		"sessions": {},
+		"wait_ms":  {},
+	},
+	"ao.harness.version_switch": {
+		"harness":    {},
+		"latency_ms": {},
+		"mode":       {},
+		"result":     {},
+	},
+	"ao.harness.stale_sessions": {
+		"harness":  {},
+		"sessions": {},
 	},
 	"ao.session.waiting_input_exited": {
 		"dwell_ms":  {},
@@ -214,6 +249,10 @@ type PostHogSink struct {
 	distinctID   string
 	defaultAgent string
 	tenure       *tenureTracker
+	// personProfileSet flips true the first time an event carries the operator's
+	// GitHub handle, so the identified person `$set` is sent once per process
+	// rather than on every spawn. See properties().
+	personProfileSet atomic.Bool
 	// appVersion stamps app_version/ao_version on every exported event. Empty
 	// leaves the properties off entirely rather than reporting a misleading
 	// "unknown" that would show up as a real version in release breakdowns.
@@ -223,6 +262,8 @@ type PostHogSink struct {
 	ch         chan ports.TelemetryEvent
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
+	queueMu    sync.RWMutex
+	closed     bool
 	// ctx bounds every in-flight send and its retry backoff. Close cancels it
 	// when the caller's shutdown context is done, so pending retry work stops
 	// promptly instead of outliving shutdown on an uncancellable sleep or a
@@ -267,16 +308,31 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 
 // Emit enqueues an event for best-effort export.
 func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	s.queueMu.RLock()
+	if s.closed {
+		s.queueMu.RUnlock()
+		return
+	}
+	queued := false
 	select {
 	case s.ch <- ev:
+		queued = true
 	default:
+	}
+	s.queueMu.RUnlock()
+	if !queued {
 		s.log.Warn("telemetry posthog sink buffer full; dropping event", "name", ev.Name, "source", ev.Source)
 	}
 }
 
 // Close drains the exporter until completion or context cancellation.
 func (s *PostHogSink) Close(ctx context.Context) error {
-	s.closeOnce.Do(func() { close(s.ch) })
+	s.closeOnce.Do(func() {
+		s.queueMu.Lock()
+		s.closed = true
+		close(s.ch)
+		s.queueMu.Unlock()
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -397,6 +453,8 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		// so skip PostHog person-profile processing: identified events bill at
 		// several times the anonymous rate and the profiles would hold nothing.
 		"$process_person_profile": false,
+		// PostHog's default; pinned so coarse geo breakdowns can't silently flip off.
+		"$geoip_disable": false,
 	}
 	if remoteEventName(ev.Name) != ev.Name {
 		props["legacy_event_name"] = ev.Name
@@ -438,8 +496,20 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	for k, v := range sanitizeRemotePayload(ev.Name, ev.Payload) {
 		props[k] = v
 	}
+	// Mirror the handle into a person property once per process; it is stable, so
+	// re-sending $set on every spawn would only multiply identified-event cost
+	// (see $process_person_profile above) against the 200 spawns/day the limiter
+	// allows. github_actor still rides every spawn as an event property, so
+	// activity breakdowns stay complete.
+	if actor, ok := props["github_actor"]; ok && s.personProfileSet.CompareAndSwap(false, true) {
+		props["$set"] = map[string]any{"github_actor": actor}
+		props["$unset"] = stalePersonProperties
+		props["$process_person_profile"] = true
+	}
 	return props
 }
+
+var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
 
 func remoteEventName(name string) string {
 	if alias, ok := remoteEventNameAliases[name]; ok {

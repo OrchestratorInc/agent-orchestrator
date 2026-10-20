@@ -2,9 +2,13 @@ package auggie
 
 import (
 	"context"
-	"time"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -12,29 +16,90 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	binary, err := p.ResolveBinary(ctx)
+	_, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	return auggieAccountAuthStatus(ctx, binary)
-}
-
-func auggieAccountAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
-	if binary == "" {
-		return ports.AgentAuthStatusUnknown, nil
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-
-	out, err := authprobe.CmdRunner(probeCtx, binary, "account", "status")
-	if probeCtx.Err() != nil {
-		return ports.AgentAuthStatusUnknown, probeCtx.Err()
-	}
-	if status := authprobe.StatusFromText(string(out)); status != ports.AgentAuthStatusUnknown {
+	if status, ok, err := auggieLocalAuthStatus(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	} else if ok {
 		return status, nil
 	}
-	if err == nil {
-		return ports.AgentAuthStatusAuthorized, nil
-	}
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+// auggieLocalAuthStatus checks Auggie's own login session first;
+// AUGMENT_SESSION_AUTH in the environment is the fallback.
+func auggieLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := auggieStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
+	}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodToken, "AUGMENT_SESSION_AUTH") != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	return status, ok, err
+}
+
+func auggieStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ports.AgentAuthStatusUnknown, false, err
+	}
+	path := filepath.Join(home, ".augment", "session.json")
+	status, ok, err := auggieSessionAuthStatus(path)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount))
+	}
+	return status, ok, err
+}
+
+// auggieSessionAuthStatus checks Auggie's documented login session file
+// without exposing its contents. The session is JSON and must contain a
+// non-empty token value to count as local authorization evidence.
+func auggieSessionAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return ports.AgentAuthStatusUnknown, false, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, false, err
+	}
+	var session any
+	if err := json.Unmarshal(data, &session); err != nil {
+		return ports.AgentAuthStatusUnknown, false, err
+	}
+	if auggieSessionHasToken(session) {
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+func auggieSessionHasToken(value any) bool {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if (strings.EqualFold(key, "token") || strings.EqualFold(key, "accessToken") || strings.EqualFold(key, "access_token")) && stringSetting(child) != "" {
+				return true
+			}
+			if auggieSessionHasToken(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if auggieSessionHasToken(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stringSetting(value any) string {
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
 }

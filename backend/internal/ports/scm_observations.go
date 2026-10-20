@@ -75,13 +75,11 @@ type SCMObservation struct {
 	// Mergeability contains AO's mergeability verdict and blockers.
 	Mergeability SCMMergeabilityObservation
 
-	// Error carries a transient per-observation failure from the multi-provider
-	// dispatcher (or any composite provider) when one provider in a batch fails
-	// while others succeed. It is NOT durable state: the observer must inspect
-	// it before persistence to route rate-limit errors to per-provider cooldown
-	// and non-rate-limit errors to refresh-incomplete, then nil it out so the
-	// storage layer never sees provider-error classification. A non-nil Error
-	// always implies Fetched=false.
+	// Error classifies a Fetched=false result, including a permanent not-found
+	// miss or a transient per-observation failure from a composite provider. It
+	// is NOT durable state: callers inspect it before persistence, then discard
+	// it so the storage layer never sees provider-error classification. A
+	// non-nil Error always implies Fetched=false.
 	Error error
 
 	// Changed marks which semantic buckets changed compared with the DB snapshot.
@@ -104,12 +102,6 @@ type SCMIdentity struct {
 	Login string
 	// Human is true when the provider identifies the account as a human user.
 	Human bool
-}
-
-// SCMIdentityResolver lazily resolves the account authenticated with the
-// active SCM provider.
-type SCMIdentityResolver interface {
-	AuthenticatedIdentity(ctx context.Context) (SCMIdentity, error)
 }
 
 // ScopedIdentityResolver resolves the authenticated identity for a specific
@@ -146,6 +138,8 @@ type SCMPRObservation struct {
 	// branch lives in. It matches the base repo for same-repo PRs and differs
 	// for PRs opened from a fork, so branch-prefix attribution can ignore forks.
 	HeadRepo string
+	// BaseRepo is the provider's current full name of the base repository.
+	BaseRepo string
 	// TargetBranch is the PR base/target branch name.
 	TargetBranch string
 	// HeadSHA is the current head commit SHA for the PR.
@@ -160,6 +154,9 @@ type SCMPRObservation struct {
 	ChangedFiles int
 	// Author is the provider login/name of the PR author.
 	Author string
+	// AuthorAvatarURL is the provider-hosted profile image URL for the PR author.
+	// It is optional because not every provider or historical record supplies one.
+	AuthorAvatarURL string
 	// BaseSHA is the current base branch SHA when the provider supplies it.
 	BaseSHA string
 	// MergeCommitSHA is the merge commit SHA when the PR has one.
@@ -280,6 +277,8 @@ type SCMReviewThreadObservation struct {
 type SCMReviewCommentObservation struct {
 	// ID is the provider's stable review comment identifier.
 	ID string
+	// ReviewID is the provider's stable identifier for the parent review.
+	ReviewID string
 	// Author is the provider login/name of the commenter.
 	Author string
 	// Body is the review comment text.

@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -8,19 +9,46 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 type process struct {
-	stdin  io.WriteCloser
-	stdout io.Reader
-	stop   func() error
+	stdin       io.WriteCloser
+	stdout      io.Reader
+	stop        func() error
+	terminate   func() error
+	reconnected bool
+	gate        *gatedReader
+	acpState    *persistenthost.ACPState
 }
+
+type gatedReader struct {
+	inner io.Reader
+	ready chan struct{}
+	once  sync.Once
+}
+
+func newGatedReader(inner io.Reader, open bool) *gatedReader {
+	r := &gatedReader{inner: inner, ready: make(chan struct{})}
+	if open {
+		r.Open()
+	}
+	return r
+}
+
+func (r *gatedReader) Read(dst []byte) (int, error) {
+	<-r.ready
+	return r.inner.Read(dst)
+}
+
+func (r *gatedReader) Open() { r.once.Do(func() { close(r.ready) }) }
 
 type spawnFunc func(Launch, string) (*process, error)
 
 func spawnAgent(launch Launch, workdir string) (*process, error) {
-	cmd := exec.Command(launch.Command, launch.Args...)
+	cmd := aoprocess.Command(launch.Command, launch.Args...)
 	cmd.Dir = workdir
 	cmd.Env = processenv.Merge(launch.Env)
 	configureProcessGroup(cmd)
@@ -72,6 +100,32 @@ func spawnAgent(launch Launch, workdir string) (*process, error) {
 			return stopErr
 		},
 	}, nil
+}
+
+func persistentStop(gate *gatedReader, stdin io.WriteCloser) func() error {
+	return func() error {
+		gate.Open()
+		return stdin.Close()
+	}
+}
+
+func persistentTerminate(
+	gate *gatedReader,
+	stdin io.WriteCloser,
+	shutdown func(context.Context) error,
+) func() error {
+	var once sync.Once
+	var result error
+	return func() error {
+		once.Do(func() {
+			gate.Open()
+			_ = stdin.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			result = shutdown(ctx)
+		})
+		return result
+	}
 }
 
 func processExitError(err error) error {

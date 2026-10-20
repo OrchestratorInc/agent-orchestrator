@@ -1,5 +1,6 @@
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
+import type { BrowserRuntimeState } from "./browser-view-host";
 
 const PROTOCOL_VERSION = 2;
 const BACKOFF_INIT_MS = 200;
@@ -20,13 +21,29 @@ type BrowserRuntimeCancel = {
 	requestId: string;
 };
 
+// The daemon's answer to the hello (backend/internal/browserruntime/broker.go).
+type BrowserRuntimeHelloReply =
+	| { type: "hello-ok" }
+	| { type: "hello-rejected"; error?: BrowserRuntimeCommandError };
+
+type Handshake = {
+	accept: () => void;
+	refuse: (error: BrowserRuntimeCommandError | undefined) => void;
+};
+
+const CONNECTING: BrowserRuntimeState = { connected: false, connecting: true, rejected: false };
+const CONNECTED: BrowserRuntimeState = { connected: true, connecting: false, rejected: false };
+const REJECTED: BrowserRuntimeState = { connected: false, connecting: false, rejected: true };
+export const BROWSER_RUNTIME_DISCONNECTED: BrowserRuntimeState = { connected: false, connecting: false, rejected: false };
+
 export type BrowserRuntimeCommandError = {
 	code: string;
 	message: string;
 };
 
 export interface BrowserRuntimeLinkHandle {
-	readonly connected: boolean;
+	readonly state: BrowserRuntimeState;
+	/** Tears the link down without reporting a state; the caller publishes one. */
 	dispose(): void;
 }
 
@@ -34,6 +51,7 @@ type BrowserRuntimeLinkOptions = {
 	execute: (command: BrowserRuntimeCommand, signal: AbortSignal) => Promise<unknown>;
 	token?: string;
 	log?: (message: string) => void;
+	onStateChange?: (state: BrowserRuntimeState) => void;
 };
 
 export function connectBrowserRuntime(
@@ -42,7 +60,8 @@ export function connectBrowserRuntime(
 ): BrowserRuntimeLinkHandle {
 	const log = options.log ?? (() => undefined);
 	let disposed = false;
-	let connected = false;
+	let state = CONNECTING;
+	let unansweredStreak = 0;
 	let socket: net.Socket | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	let backoff = BACKOFF_INIT_MS;
@@ -51,8 +70,38 @@ export function connectBrowserRuntime(
 	let connectionEpoch = 0;
 	const commandChains = new Map<string, Promise<void>>();
 	const commandControllers = new Map<string, AbortController>();
+	const activeCommands = new Map<
+		string,
+		{ command: BrowserRuntimeCommand; target: net.Socket; epoch: number }
+	>();
+	const setState = (next: BrowserRuntimeState) => {
+		if (disposed || state === next) return;
+		state = next;
+		options.onStateChange?.(state);
+	};
+
+	const sendCancelledResultOnTarget = (command: BrowserRuntimeCommand, target: net.Socket) => {
+		if (target.destroyed) return;
+		const frame = `${JSON.stringify({
+			type: "result",
+			requestId: command.requestId,
+			ok: false,
+			error: { code: "BROWSER_COMMAND_CANCELED", message: "Browser runtime link closed" },
+		})}\n`;
+		try {
+			target.write(frame);
+		} catch {
+			// Socket already torn down; the daemon will observe disconnect.
+		}
+	};
 
 	const cancelConnectionCommands = () => {
+		for (const { command, target } of activeCommands.values()) {
+			sendCancelledResultOnTarget(command, target);
+		}
+		// Drop tracking before aborting so in-flight respond() catch paths do not
+		// emit a second cancellation frame for the same requestId.
+		activeCommands.clear();
 		for (const controller of commandControllers.values()) controller.abort();
 		commandControllers.clear();
 		commandChains.clear();
@@ -67,10 +116,11 @@ export function connectBrowserRuntime(
 
 	const destroySocket = () => {
 		if (!socket) return;
-		connectionEpoch += 1;
+		const target = socket;
 		cancelConnectionCommands();
-		socket.removeAllListeners();
-		socket.destroy();
+		connectionEpoch += 1;
+		target.removeAllListeners();
+		target.destroy();
 		socket = null;
 	};
 
@@ -96,6 +146,27 @@ export function connectBrowserRuntime(
 		});
 	};
 
+	const sendCancelledResult = async (
+		command: BrowserRuntimeCommand,
+		target: net.Socket,
+		epoch: number,
+	) => {
+		try {
+			await send(
+				{
+					type: "result",
+					requestId: command.requestId,
+					ok: false,
+					error: { code: "BROWSER_COMMAND_CANCELED", message: "Browser runtime link closed" },
+				},
+				target,
+				epoch,
+			);
+		} catch {
+			// Socket already torn down; the daemon will observe disconnect.
+		}
+	};
+
 	const respond = async (
 		command: BrowserRuntimeCommand,
 		target: net.Socket,
@@ -108,7 +179,14 @@ export function connectBrowserRuntime(
 			controller.signal.throwIfAborted();
 			await send({ type: "result", requestId: command.requestId, ok: true, result }, target, epoch);
 		} catch (error) {
-			if (controller.signal.aborted) return;
+			if (controller.signal.aborted) {
+				// Daemon-initiated cancel frames abort one controller without clearing
+				// activeCommands; connection teardown clears the map before aborting.
+				if (activeCommands.has(command.requestId)) {
+					await sendCancelledResult(command, target, epoch);
+				}
+				return;
+			}
 			const normalized = normalizeCommandError(error);
 			try {
 				await send({ type: "result", requestId: command.requestId, ok: false, error: normalized }, target, epoch);
@@ -117,20 +195,29 @@ export function connectBrowserRuntime(
 				target.destroy();
 			}
 		} finally {
+			activeCommands.delete(command.requestId);
 			if (commandControllers.get(command.requestId) === controller) {
 				commandControllers.delete(command.requestId);
 			}
 		}
 	};
 
-	const consumeLine = (line: string, target: net.Socket, epoch: number) => {
+	const consumeLine = (line: string, target: net.Socket, epoch: number, handshake: Handshake) => {
 		if (!line.trim()) return;
-		let message: BrowserRuntimeCommand | BrowserRuntimeCancel;
+		let message: BrowserRuntimeCommand | BrowserRuntimeCancel | BrowserRuntimeHelloReply;
 		try {
-			message = JSON.parse(line) as BrowserRuntimeCommand | BrowserRuntimeCancel;
+			message = JSON.parse(line) as BrowserRuntimeCommand | BrowserRuntimeCancel | BrowserRuntimeHelloReply;
 		} catch {
 			return;
 		}
+		if (message.type === "hello-rejected") {
+			handshake.refuse(message.error);
+			return;
+		}
+		// An older daemon never sends hello-ok, but it writes commands only to a
+		// runtime it accepted, so any other frame accepts the link as well.
+		handshake.accept();
+		if (message.type === "hello-ok") return;
 		if (message.type === "cancel" && typeof message.requestId === "string") {
 			commandControllers.get(message.requestId)?.abort();
 			return;
@@ -146,6 +233,7 @@ export function connectBrowserRuntime(
 		}
 		const controller = new AbortController();
 		commandControllers.set(command.requestId, controller);
+		activeCommands.set(command.requestId, { command, target, epoch });
 		const previous = commandChains.get(command.sessionId) ?? Promise.resolve();
 		const next = previous.then(() => respond(command, target, epoch, controller));
 		commandChains.set(command.sessionId, next);
@@ -154,7 +242,7 @@ export function connectBrowserRuntime(
 		});
 	};
 
-	const consume = (chunk: Buffer, target: net.Socket, epoch: number) => {
+	const consume = (chunk: Buffer, target: net.Socket, epoch: number, handshake: Handshake) => {
 		if (socket !== target || connectionEpoch !== epoch) return;
 		buffer += decoder.write(chunk);
 		for (;;) {
@@ -173,7 +261,7 @@ export function connectBrowserRuntime(
 				target.destroy();
 				return;
 			}
-			consumeLine(line, target, epoch);
+			consumeLine(line, target, epoch, handshake);
 		}
 	};
 
@@ -193,39 +281,82 @@ export function connectBrowserRuntime(
 		const epoch = ++connectionEpoch;
 		const next = typeof address === "string" ? net.connect(address) : net.connect(address);
 		socket = next;
+		let accepted = false;
+		let refused = false;
+		// A TCP connect is not an accepted link: only the daemon's answer to the
+		// hello settles the handshake. Treating connect as success flipped the state
+		// and reset the backoff on every refused attempt (#6466).
+		const handshake: Handshake = {
+			accept: () => {
+				if (accepted || refused || socket !== next || connectionEpoch !== epoch) return;
+				accepted = true;
+				unansweredStreak = 0;
+				backoff = BACKOFF_INIT_MS;
+				setState(CONNECTED);
+				log("browser-runtime-link: connected");
+			},
+			refuse: (error) => {
+				if (accepted || refused || socket !== next || connectionEpoch !== epoch) return;
+				refused = true;
+				// Keep the daemon's reason: a stale token, a protocol mismatch and a
+				// malformed hello are all refusals, with different causes.
+				const reason = error ? `${error.code}: ${error.message}` : "no reason given";
+				log(
+					`browser-runtime-link: the AO daemon refused this app's browser runtime (${reason}); ` +
+						"run `ao stop`, then reopen AO.",
+				);
+				setState({ ...REJECTED, rejectionCode: error?.code });
+			},
+		};
 		next.on("connect", () => {
 			if (disposed) {
 				next.destroy();
 				return;
 			}
-			connected = true;
-			backoff = BACKOFF_INIT_MS;
 			void send({ type: "hello", version: PROTOCOL_VERSION, token: options.token }, next, epoch).catch((error) => {
 				log(`browser-runtime-link: hello failed: ${String(error)}`);
 				next.destroy();
 			});
-			log("browser-runtime-link: connected");
 		});
-		next.on("data", (chunk) => consume(chunk, next, epoch));
+		next.on("data", (chunk) => consume(chunk, next, epoch, handshake));
 		next.on("error", (error) => log(`browser-runtime-link: error: ${error.message}`));
-		next.on("close", () => {
-			if (socket !== next || connectionEpoch !== epoch) return;
-			connected = false;
+		let connectionTornDown = false;
+		const tearDownConnection = () => {
+			if (connectionTornDown || socket !== next || connectionEpoch !== epoch) return;
+			connectionTornDown = true;
+			cancelConnectionCommands();
 			socket = null;
 			connectionEpoch += 1;
-			cancelConnectionCommands();
+			// The same token would be refused again. Stay down until the user asks to
+			// reconnect or the daemon changes, both of which build a new link.
+			if (refused) return;
+			if (accepted) {
+				// A daemon restart or replaced link. Redial at once, and report a
+				// disconnect only if that attempt fails too.
+				setState(CONNECTING);
+			} else {
+				// An unreachable daemon, a transport error, or an older daemon closing on
+				// a hello it refused. None of these proves a refusal, so keep retrying
+				// without resetting the backoff.
+				unansweredStreak += 1;
+				if (unansweredStreak === 1) log("browser-runtime-link: link closed before the daemon answered the hello; retrying");
+				setState(BROWSER_RUNTIME_DISCONNECTED);
+			}
 			if (!disposed) scheduleReconnect();
-		});
+		};
+		// Cancel while the socket may still accept writes; 'close' can arrive too late.
+		next.on("end", tearDownConnection);
+		next.on("close", tearDownConnection);
 	}
 
+	options.onStateChange?.(state);
 	connect();
 	return {
-		get connected() {
-			return connected;
+		get state() {
+			return state;
 		},
 		dispose() {
 			disposed = true;
-			connected = false;
 			clearRetry();
 			destroySocket();
 		},

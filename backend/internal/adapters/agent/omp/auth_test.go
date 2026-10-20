@@ -1,6 +1,7 @@
 package omp
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -8,14 +9,33 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestOMPAuthStatusDoesNotLaunchInteractiveAgentAsStatusProbe(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+	previous := authprobe.CmdRunner
+	authprobe.CmdRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatalf("unexpected interactive probe: %q %#v", name, args)
+		return nil, nil
+	}
+	t.Cleanup(func() { authprobe.CmdRunner = previous })
+
+	status, err := (&Plugin{resolvedBinary: "omp"}).AuthStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
+	}
+}
 
 func TestOMPAuthJSONStatusAuthorizedWithKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	writeFile(t, path, `{"anthropic":{"type":"api-key","key":"sk-ant"}}`)
 
-	status, ok, err := ompAuthJSONStatus(path)
+	status, ok, err := ompAuthJSONStatus(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,21 +44,21 @@ func TestOMPAuthJSONStatusAuthorizedWithKey(t *testing.T) {
 	}
 }
 
-func TestOMPAuthJSONStatusUnauthorizedWhenEmpty(t *testing.T) {
+func TestOMPAuthJSONStatusUnknownWhenEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	writeFile(t, path, `{}`)
 
-	status, ok, err := ompAuthJSONStatus(path)
+	status, ok, err := ompAuthJSONStatus(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusUnauthorized {
-		t.Fatalf("status=%q ok=%v, want unauthorized true", status, ok)
+	if ok || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status=%q ok=%v, want unknown false", status, ok)
 	}
 }
 
 func TestOMPAuthJSONStatusUnknownWhenMissing(t *testing.T) {
-	status, ok, err := ompAuthJSONStatus(filepath.Join(t.TempDir(), "missing.json"))
+	status, ok, err := ompAuthJSONStatus(context.Background(), filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +94,7 @@ func TestOMPAgentDBAuthStatusAuthorizedWithEnabledCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, ok, err := ompAgentDBAuthStatus(path)
+	status, ok, err := ompAgentDBAuthStatus(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,5 +107,27 @@ func writeFile(t *testing.T, path string, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOMPDiagnosticsExplainDisabledCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE auth_credentials (data TEXT, disabled_cause TEXT);
+ INSERT INTO auth_credentials VALUES ('secret-token', 'expired');`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, _, err := ompAgentDBAuthStatus(ctx, path)
+	if err != nil || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status=%s err=%v", status, err)
+	}
+	steps := evidence.Diagnostics()
+	if len(steps) != 1 || steps[0].Code != "credentials_disabled" || steps[0].NextStep == "" {
+		t.Fatalf("steps=%+v", steps)
 	}
 }

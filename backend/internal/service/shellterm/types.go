@@ -15,7 +15,6 @@
 package shellterm
 
 import (
-	"path/filepath"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -41,17 +40,60 @@ type ShellTerminal struct {
 type OpenShellTerminalInput struct {
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
+	Shell     string           `json:"shell,omitempty"`
+	// StartOnAttach starts the shell when the requesting client attaches with
+	// its grid instead of immediately, so its first prompt is laid out for the
+	// width that client shows. Only a client that attaches as a sized viewer
+	// may ask for it: a viewer that never reports a grid would never start it.
+	StartOnAttach bool `json:"startOnAttach,omitempty"`
+	// Title names the tab. A client that already shows the tab passes the
+	// title it shows, so the tab keeps its name when the shell arrives; empty
+	// numbers it after the existing shells.
+	Title string `json:"title,omitempty"`
 }
 
-// shellTerminalTitle labels a tab by the directory the shell started in, which
-// is the only thing that distinguishes one shell pane from another in the UI.
-// A path that has no usable base (a bare root, or an empty string) falls back
-// to a generic label rather than rendering an empty tab.
-func shellTerminalTitle(workingDir string) string {
-	base := filepath.Base(workingDir)
-	switch base {
-	case "", ".", string(filepath.Separator):
-		return "Shell"
-	}
-	return base
+// InitialInputReadyState describes a terminal state relevant to the command's
+// initial input. SkipInput marks a state where the requested action is already
+// open, so the command should not be sent.
+type InitialInputReadyState struct {
+	Text      string
+	RawPrefix string
+	SkipInput bool
+}
+
+// OpenCommandTerminalInput is a daemon-trusted command terminal request. It
+// is intentionally separate from OpenShellTerminalInput: public callers may
+// open only the user's login shell, while backend callers provide a reviewed
+// command. InitialInput and InitialInputReadyStates are private backend-only
+// values from the reviewed auth registry; the input is sent only after the
+// harness renders one of its known editor-ready states.
+type OpenCommandTerminalInput struct {
+	Argv                    []string
+	Env                     map[string]string
+	WorkingDir              string
+	Title                   string
+	InitialInput            string
+	InitialInputReadyStates []InitialInputReadyState
+	// SendInitialInputOnReadyTimeout sends InitialInput once the ready wait
+	// expires without a marker, provided the terminal is still alive. Only for
+	// harnesses whose input is harmless at any point after startup.
+	SendInitialInputOnReadyTimeout bool
+}
+
+// RunCueCommandInput is the trusted, project-scoped command request
+// used by the Cue service. Each invocation opens a new normal shell.
+type RunCueCommandInput struct {
+	ProjectID domain.ProjectID
+	SessionID domain.SessionID
+	Shell     string
+	Command   string
+}
+
+// CueCommandSessionTarget contains the session facts needed to prove that a
+// Cue command can safely use its exact worktree.
+type CueCommandSessionTarget struct {
+	ProjectID     domain.ProjectID
+	WorkspacePath string
+	Activity      domain.ActivityState
+	IsTerminated  bool
 }

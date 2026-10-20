@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"time"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -21,9 +23,17 @@ type Plugin interface {
 	AuthStatus(context.Context) (ports.AgentAuthStatus, error)
 }
 
+// runtimeEnvAugmenter is the existing optional agent-plugin hook for provider
+// profile isolation and other launch environment policy. Native ACP launches
+// use it too, so Chat and TUI sessions do not acquire different answers for
+// where a provider keeps its state.
+type runtimeEnvAugmenter interface {
+	AugmentRuntimeEnv(env map[string]string, dataDir string)
+}
+
 // Configure adds provider-native arguments and environment overlays to one ACP
 // launch. The returned environment is merged over the session environment.
-type Configure func(acpdriver.LaunchConfig) (args []string, env map[string]string, err error)
+type Configure func(context.Context, acpdriver.LaunchConfig) (args []string, env map[string]string, err error)
 
 // VersionProbe checks the resolved binary's version. If set, the probe runs
 // after binary resolution and before auth status; a returned error fails the
@@ -38,6 +48,23 @@ type Config struct {
 	Configure      Configure
 	SessionMode    func(ports.PermissionMode) string
 	SessionOptions func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	// LaunchSessionOptions, RequireAdvertisedOptions, and
+	// CloseSessionBeforeReload: see acpdriver.Config.
+	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
+	RequireAdvertisedOptions bool
+	CloseSessionBeforeReload bool
+	// ValidateInitialize optionally admits only the ACP agent and version the
+	// handshake identifies. See acpdriver.Config.ValidateInitialize.
+	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// SessionPreamble delivers standing context on the first prompt. See
+	// acpdriver.Config.SessionPreamble for when a binding needs it.
+	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	PermissionPolicy             acpdriver.PermissionPolicy
+	ClientExtension              acpdriver.ClientExtensionHandler
+	ClientExtensionAliases       map[string]string
+	ValidateTurnSettings         acpdriver.TurnSettingsValidator
+	EncodeProviderConversationID func(string) string
+	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
 }
@@ -102,13 +129,16 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
-			args, overrides, err := cfg.Configure(launchCfg)
+			args, overrides, err := cfg.Configure(ctx, launchCfg)
 			if err != nil {
 				return acpdriver.Launch{}, err
 			}
 			env := make(map[string]string, len(launchCfg.Env)+len(overrides))
 			for key, value := range launchCfg.Env {
 				env[key] = value
+			}
+			if augmenter, ok := plugin.(runtimeEnvAugmenter); ok {
+				augmenter.AugmentRuntimeEnv(env, launchCfg.DataDir)
 			}
 			for key, value := range overrides {
 				env[key] = value
@@ -119,7 +149,18 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 				Env:     env,
 			}, nil
 		},
-		SessionMode:    cfg.SessionMode,
-		SessionOptions: cfg.SessionOptions,
+		SessionMode:                  cfg.SessionMode,
+		SessionOptions:               cfg.SessionOptions,
+		LaunchSessionOptions:         cfg.LaunchSessionOptions,
+		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
+		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
+		ValidateInitialize:           cfg.ValidateInitialize,
+		SessionPreamble:              cfg.SessionPreamble,
+		PermissionPolicy:             cfg.PermissionPolicy,
+		ClientExtension:              cfg.ClientExtension,
+		ClientExtensionAliases:       cfg.ClientExtensionAliases,
+		ValidateTurnSettings:         cfg.ValidateTurnSettings,
+		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
+		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 	}
 }

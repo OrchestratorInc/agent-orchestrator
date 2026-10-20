@@ -22,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
 
@@ -40,6 +41,13 @@ func New() *Plugin {
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.StartupInputReadinessSignaler = (*Plugin)(nil)
+
+// FirstSignalProvesInputReady reports that Cursor's sessionStart hook is
+// emitted only after pre-session startup dialogs, including project MCP server
+// approval, have cleared. Before that signal, pane input may be consumed by a
+// dialog instead of the agent composer.
+func (p *Plugin) FirstSignalProvesInputReady() bool { return true }
 
 // cursorDataDir returns the isolated Cursor profile AO uses for managed Cursor
 // sessions. This keeps Cursor's trust/cache state under AO_DATA_DIR instead of
@@ -56,6 +64,7 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 		return
 	}
 	env[cursorDataDirEnv] = cursorDataDir(dataDir)
+	termtheme.Apply(env, dataDir)
 }
 
 // Manifest returns the adapter's static self-description.
@@ -217,3 +226,17 @@ func (p *Plugin) cursorBinary(ctx context.Context) (string, error) {
 	p.resolvedBinary = binary
 	return binary, nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into idle restarts using the captured
+// native session ID. Restore preserves session model and permission options.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

@@ -74,7 +74,12 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 		o.outputLines = DefaultOutputLines
 	}
 	if o.clock == nil {
-		o.clock = time.Now
+		// UTC, not bare time.Now: this timestamp becomes sessions.activity_last_at,
+		// and the SQLite driver stores a time.Time by its String() form. A
+		// local-zone value keeps its monotonic reading and offset, which then
+		// fails to compare as a timestamp against the "… +0000 UTC" rows the
+		// other writers produce.
+		o.clock = func() time.Time { return time.Now().UTC() }
 	}
 	if o.logger == nil {
 		o.logger = slog.Default()
@@ -112,38 +117,58 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
+	var options ports.TerminalActivityOptions
+	if provider, ok := agent.(ports.TerminalActivityOptionsProvider); ok {
+		options = provider.TerminalActivityOptions()
+	}
+	nativeDecisionCards := options.SupportsBlocked
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
-		if session.Activity.State != domain.ActivityActive || session.Activity.LastActivityAt.IsZero() ||
+		if session.Activity.State == domain.ActivityWaitingInput {
+			waitingDetector, canRecoverWaiting := agent.(ports.WaitingTerminalActivityDetector)
+			if !canRecoverWaiting || !waitingDetector.ContinuouslyDetectTerminalActivityWhileWaiting() {
+				return
+			}
+		} else if session.Activity.State != domain.ActivityActive || session.Activity.LastActivityAt.IsZero() ||
 			now.Sub(session.Activity.LastActivityAt) < o.staleAfter {
 			return
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput {
+		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	var output string
+	var err error
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
+		output, err = rendered.GetStyledOutput(ctx, handle, o.outputLines)
+	} else {
+		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
 	}
 	state, ok := detector.DetectTerminalActivity(output)
 	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput) {
+		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && (!nativeDecisionCards || state != domain.ActivityBlocked)) {
 		return
 	}
 	event := "terminal-" + string(state)
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && (state == domain.ActivityActive || state == domain.ActivityIdle) {
+		event = "permission-resolved"
+	}
 	if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}
 	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
-		Valid:             true,
-		State:             state,
-		Timestamp:         now,
-		ExpectedUpdatedAt: session.UpdatedAt,
-		Event:             event,
-		LaunchID:          session.Metadata.RuntimeLaunchID,
+		Valid:            true,
+		State:            state,
+		Timestamp:        now,
+		ExpectedRevision: &session.Revision,
+		Event:            event,
+		LaunchID:         session.Metadata.RuntimeLaunchID,
 	})
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)

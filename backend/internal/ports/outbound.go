@@ -86,6 +86,97 @@ type Runtime interface {
 	IsAlive(ctx context.Context, handle RuntimeHandle) (bool, error)
 }
 
+// RuntimeChildInspector distinguishes running terminal children from a runtime
+// retained only to serve scrollback. False with no error confirms all children
+// have exited (or the runtime is absent); inconclusive probes must return errors.
+type RuntimeChildInspector interface {
+	IsChildAlive(ctx context.Context, handle RuntimeHandle) (bool, error)
+}
+
+// FencedLiveness is exact ownership evidence for one AO runtime generation.
+// Unknown is deliberately distinct from dead: callers must retain ownership
+// gates when an adapter cannot prove an exact match or exact absence.
+type FencedLiveness string
+
+// FencedAlive and the related constants enumerate exact-generation liveness
+// conclusions.
+const (
+	FencedAlive   FencedLiveness = "alive"
+	FencedDead    FencedLiveness = "dead"
+	FencedUnknown FencedLiveness = "unknown"
+)
+
+// FencedProbeReason explains the evidence behind a fenced liveness result.
+type FencedProbeReason string
+
+// FencedReasonExactMatch and the related constants explain the evidence behind
+// a fenced liveness conclusion.
+const (
+	FencedReasonExactMatch         FencedProbeReason = "exact_match"
+	FencedReasonExactAbsent        FencedProbeReason = "exact_absent"
+	FencedReasonIdentityMissing    FencedProbeReason = "identity_missing"
+	FencedReasonRegistryUnreadable FencedProbeReason = "registry_unreadable"
+	FencedReasonRegistryMalformed  FencedProbeReason = "registry_malformed"
+	FencedReasonProbeFailed        FencedProbeReason = "probe_failed"
+	FencedReasonGenerationMismatch FencedProbeReason = "generation_mismatch"
+)
+
+// FencedRuntimeRef identifies the exact AO-owned runtime generation whose
+// ownership must be proven. NativeIdentity is populated when the caller has a
+// provider-native identity that the adapter can inspect.
+type FencedRuntimeRef struct {
+	Handle         RuntimeHandle
+	SessionID      domain.SessionID
+	Generation     string
+	NativeIdentity string
+}
+
+// FencedProbeResult pairs an exact-generation liveness conclusion with its
+// evidence category.
+type FencedProbeResult struct {
+	Liveness FencedLiveness
+	Reason   FencedProbeReason
+}
+
+// FencedRuntimeProber determines liveness for an exact AO-owned runtime
+// generation without treating uncertainty as death.
+type FencedRuntimeProber interface {
+	ProbeFencedRuntime(context.Context, FencedRuntimeRef) FencedProbeResult
+}
+
+// RuntimeEffectOutcome describes whether a failed runtime operation may have
+// applied an external side effect.
+type RuntimeEffectOutcome string
+
+// RuntimeEffectNone and the related constants classify whether a failed
+// runtime operation may have applied an external side effect.
+const (
+	RuntimeEffectNone     RuntimeEffectOutcome = "none"
+	RuntimeEffectPossible RuntimeEffectOutcome = "possible"
+	RuntimeEffectApplied  RuntimeEffectOutcome = "applied"
+)
+
+// RuntimeCleanupOutcome describes cleanup performed after a failed runtime
+// operation that may have applied an external side effect.
+type RuntimeCleanupOutcome string
+
+// RuntimeCleanupNotAttempted and the related constants classify cleanup after
+// a failed runtime operation.
+const (
+	RuntimeCleanupNotAttempted RuntimeCleanupOutcome = "not_attempted"
+	RuntimeCleanupSucceeded    RuntimeCleanupOutcome = "succeeded"
+	RuntimeCleanupFailed       RuntimeCleanupOutcome = "failed"
+)
+
+// RuntimeEffectError preserves ownership evidence from a failed operation.
+// Callers must not replace PossibleHandle with a different persisted handle.
+type RuntimeEffectError interface {
+	error
+	PossibleHandle() RuntimeHandle
+	EffectOutcome() RuntimeEffectOutcome
+	CleanupOutcome() RuntimeCleanupOutcome
+}
+
 // StyledTerminalOutputReader is an optional runtime capability for safety
 // checks that must distinguish dim placeholder text from a human-authored
 // draft. Implementations return a bounded excerpt of the rendered current
@@ -103,6 +194,12 @@ type StyledTerminalOutputReader interface {
 // inconclusive probe and must fail closed.
 var ErrStyledTerminalOutputUnavailable = errors.New("runtime: styled terminal output unavailable for handle")
 
+// ErrRuntimeProcessExited is returned by an attached runtime stream when the
+// hosted command has definitively exited while its detached terminal host
+// remains available for scrollback. Terminal transport treats this as a clean
+// exit instead of attempting to reattach to the dead command.
+var ErrRuntimeProcessExited = errors.New("runtime: process exited")
+
 // RuntimeRestarter is an optional runtime capability for replacing the process
 // inside an existing terminal session. Implementations should preserve the
 // handle when possible so attached clients do not need a new terminal identity.
@@ -119,6 +216,24 @@ type RuntimeConfig struct {
 	WorkspacePath string
 	Argv          []string
 	Env           map[string]string
+	// ExitOnCommandCompletion prevents a recovery shell after Argv exits.
+	// User shell terminals and trusted command terminals enable it; it does
+	// not determine whether a terminal survives an app launch. Agent runtimes
+	// leave it disabled to retain scrollback and manual recovery.
+	ExitOnCommandCompletion bool
+	// StartOnAttach defers starting Argv until a viewer first attaches with its
+	// grid, so the process starts at the size that viewer shows. A shell started
+	// at a guessed grid lays its first prompt out for the wrong width (zsh's
+	// partial-line marker then leaks as a stray "%"). Only for terminals a user
+	// opened to look at: agents and scripted command terminals must start
+	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
+	StartOnAttach bool
+	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
+	// GetStyledOutput is first called for this terminal. Rendering every byte
+	// costs CPU on heavy output; terminals nothing probes for styled output
+	// (user and command shells, not agents) need not pay it continuously.
+	// Runtimes that always render ignore it.
+	LazyStyledOutput bool
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -144,6 +259,14 @@ type SupervisedProcessInspector interface {
 	IsSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
 }
 
+// RuntimeProcessRootInspector exposes the operating-system pids at the root of
+// a runtime's process tree (a tmux pane leader, a PTY host). Memory accounting
+// walks their descendants. It is an optional capability: a runtime without it
+// simply reports no memory reading rather than zero.
+type RuntimeProcessRootInspector interface {
+	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
+}
+
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
 // at agent-switch ownership boundaries. Unlike SupervisedProcessInspector it
 // must never treat an arbitrary child of a preserved shell as the requested
@@ -151,6 +274,24 @@ type SupervisedProcessInspector interface {
 // supervisor's managed agent child are both alive.
 type ExactSupervisedProcessInspector interface {
 	IsExactSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
+}
+
+// WorkloadCommandInspector counts the commands an agent is running in its
+// terminal: shells under the exact supervised agent of ref, and whatever runs
+// in them. A tool call, test run or dev server shows up here; an agent's own
+// helper processes (MCP servers, for example) do not. Restarting the agent
+// would kill those commands, so a restart waits while any run. An error means
+// the count could not be proved.
+type WorkloadCommandInspector interface {
+	RunningWorkloadCommands(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (int, error)
+}
+
+// SupervisedProcessRecordInspector reports whether a runtime handle contains
+// any AO supervisor. Review liveness uses this to keep pre-supervisor reviewer
+// launches working while still requiring an exact launch match for supervised
+// processes.
+type SupervisedProcessRecordInspector interface {
+	HasSupervisedProcessRecord(ctx context.Context, handle RuntimeHandle) (bool, error)
 }
 
 // ContainerReaper removes Docker containers a worker session owns, identified
@@ -170,7 +311,7 @@ type ContainerReaper interface {
 
 // Stream is one live terminal attach: PTY-like bytes plus resize. Returned
 // already-open by a Runtime's Attach. tmux backs it with a local PTY around
-// their attach CLI; conpty backs it with a loopback connection to the pty-host.
+// its attach CLI; detached hosts use a loopback connection to the pty-host.
 type Stream interface {
 	io.ReadWriteCloser
 	Resize(rows, cols uint16) error
@@ -183,6 +324,39 @@ type Attacher interface {
 }
 
 // The Agent port and its supporting types live in agent.go.
+
+// WorkspaceReclaim distinguishes a teardown that actually released disk from
+// one that found nothing to release. Destroy returning a nil error proves only
+// that the workspace is absent afterwards, not that this call is what removed
+// it: a directory that was already gone leaves nothing for the adapter to fail
+// on. Callers that report teardown counts need the two kept apart.
+type WorkspaceReclaim string
+
+// Workspace reclaim outcomes.
+const (
+	// WorkspaceReclaimRemoved means the workspace was present and this call
+	// released it.
+	WorkspaceReclaimRemoved WorkspaceReclaim = "removed"
+	// WorkspaceReclaimAlreadyAbsent means there was nothing on disk to release.
+	// Any stale registration is still reconciled, so the post-state matches
+	// WorkspaceReclaimRemoved; only the accounting differs.
+	WorkspaceReclaimAlreadyAbsent WorkspaceReclaim = "already_absent"
+)
+
+// WorkspaceReclaimer is the optional half of Workspace that reports which of
+// the two reclaim outcomes a teardown reached. Implementing it is optional:
+// callers fall back to Destroy and treat a nil error as
+// WorkspaceReclaimRemoved, which is the pre-existing behaviour.
+type WorkspaceReclaimer interface {
+	DestroyReclaim(ctx context.Context, info WorkspaceInfo) (WorkspaceReclaim, error)
+}
+
+// WorkspacePreparationBranchCleaner removes a discarded speculative branch
+// only when it has no commits beyond its recorded base. Ordinary session
+// teardown must keep its branch for later restoration.
+type WorkspacePreparationBranchCleaner interface {
+	DeletePreparedBranch(ctx context.Context, info WorkspaceInfo) error
+}
 
 // Workspace is the isolated checkout an agent works in (a git worktree or clone).
 type Workspace interface {
@@ -300,6 +474,13 @@ var (
 	// it holds uncommitted changes or untracked files. Teardown is never
 	// forced; callers treat the workspace as intentionally preserved.
 	ErrWorkspaceDirty = errors.New("workspace: uncommitted changes present")
+	// ErrWorkspaceRepoUnavailable reports that the project's source repository
+	// is no longer reachable on disk, so git cannot be asked to remove the
+	// session's worktree. Teardown treats this like ErrWorkspaceDirty: the
+	// directory is left alone and the session still terminates, because a
+	// session the user deleted must leave the sidebar whether or not its
+	// worktree could be reclaimed.
+	ErrWorkspaceRepoUnavailable = errors.New("workspace: project repository is unavailable")
 	// ErrWorkspaceStale reports an AO-managed workspace path no longer points
 	// at a registered git worktree. Replacement paths may skip preservation for
 	// this state after path-safety checks, while real preserve failures remain
@@ -313,6 +494,11 @@ var (
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
+	// ErrWorkspaceDeferred reports that a recognized transient handle-release
+	// failure survived the workspace removal retry budget, even though git has
+	// already unregistered the worktree so nothing is being reconciled. Session
+	// cleanup callers may preserve the directory and retry it on a later pass.
+	ErrWorkspaceDeferred = errors.New("workspace: removal deferred")
 	// ErrPreservedConflict is returned by ApplyPreserved when replaying a
 	// preserved ref onto the worktree produces merge conflicts. The ref is
 	// kept intact (never deleted on conflict); the working tree is left with
@@ -322,6 +508,9 @@ var (
 	// ErrRuntimePrerequisite reports a missing host prerequisite for the selected
 	// runtime before a session can be created.
 	ErrRuntimePrerequisite = errors.New("runtime: prerequisite missing")
+	// ErrRuntimeCommandLineTooLong reports that the fully escaped command line
+	// exceeds the host operating system's process-creation limit.
+	ErrRuntimeCommandLineTooLong = errors.New("runtime: command line too long")
 	// ErrRuntimeWorkspaceCwdMismatch reports that a runtime session's working
 	// directory never settled on the wanted workspace path after Create's
 	// retried verification (see the tmux adapter's verifyPaneWorkingDirectory).
@@ -329,15 +518,32 @@ var (
 	// actionable apierr instead of letting it fall through to an opaque 500
 	// with no message (issue #2775).
 	ErrRuntimeWorkspaceCwdMismatch = errors.New("runtime: session working directory mismatch")
-	// ErrRuntimeUnavailable reports that a liveness probe could not reach the
-	// runtime infrastructure at all (e.g. tmux "no server running" or "error
-	// connecting"). It says nothing about any individual session, so callers
-	// must treat it as an inconclusive probe, never as per-session death
-	// (issue #3475: reading a server-level outage as N session deaths archived
-	// every session on the board). Adapters wrap this sentinel via fmt.Errorf
-	// so callers can match it with errors.Is.
+	// ErrRuntimeUnavailable reports that the runtime infrastructure is
+	// conclusively absent (for example tmux reports "no server running"). Some
+	// recovery callers intentionally use that evidence to recreate a runtime.
 	ErrRuntimeUnavailable = errors.New("runtime: infrastructure unavailable")
+	// ErrRuntimeProbeInconclusive reports that a liveness probe could not inspect
+	// a possibly-live runtime (for example a transient socket error, missing
+	// compatible client, or client/server protocol mismatch). Callers must
+	// preserve the existing controller and must not recreate, destroy, archive,
+	// or otherwise treat the session as dead. Adapters wrap this sentinel via
+	// fmt.Errorf so callers can match it with errors.Is.
+	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
+
+// WorkspaceTaskNamer finalizes an unlaunched task's branch and directory names.
+// Even on error, the returned info describes the current paths and branches.
+type WorkspaceTaskNamer interface {
+	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
+	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
+}
+
+// WorkspaceTaskNamingRecovery keeps an interrupted rename recoverable until
+// the caller acknowledges that the resulting paths are durably stored.
+type WorkspaceTaskNamingRecovery interface {
+	RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (WorkspaceProjectInfo, bool, error)
+	CompleteTaskWorkspaceNaming(ctx context.Context, info WorkspaceProjectInfo) error
+}
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {
@@ -348,6 +554,9 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
+	// FreshBranch never checks out a leftover local branch for a new
+	// speculative task; a collision gets a new suffixed branch instead.
+	FreshBranch bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -365,6 +574,9 @@ type WorkspaceConfig struct {
 type WorkspaceInfo struct {
 	Path   string
 	Branch string
+	// BaseSHA pins the branch tip when this worktree was created. Speculative
+	// cleanup uses it to avoid deleting any later user commit.
+	BaseSHA string
 	// BaseRef is the repository-default ref selected for session comparisons.
 	// It can differ from the remote session ref used to seed the worktree.
 	BaseRef   string
@@ -384,12 +596,21 @@ type WorkspaceProjectConfig struct {
 	Kind          domain.SessionKind
 	SessionPrefix string
 	Branch        string
+	FreshBranch   bool
 	RootRepoPath  string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string
 	BaseRef    string
 	Repos      []WorkspaceProjectRepoConfig
+	Assets     []WorkspaceProjectAssetConfig
+}
+
+// WorkspaceProjectAssetConfig describes a non-repository child directory that
+// is copied from the canonical workspace into each session workspace.
+type WorkspaceProjectAssetConfig struct {
+	RelativePath string
+	SourcePath   string
 }
 
 // WorkspaceProjectRepoConfig describes one registered child repo in a
@@ -419,6 +640,9 @@ type WorkspaceRepoInfo struct {
 	Path     string
 	Branch   string
 	BaseSHA  string
+	// CreationSHA pins a speculative branch's initial tip for safe cleanup.
+	// BaseSHA stays the comparison base and may be a different commit.
+	CreationSHA string
 	// BaseRef is the repository-default ref persisted with BaseSHA so comparisons
 	// can recompute a merge base after that default advances or the session is
 	// rebased. It can differ from the remote session ref used to seed the worktree.

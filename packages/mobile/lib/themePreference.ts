@@ -17,6 +17,15 @@ export const THEME_KEY = "ao.theme";
 /** Default for anyone who has never opened the setting — matches desktop. */
 export const DEFAULT_PREFERENCE: ThemePreference = "system";
 
+/**
+ * Native presentations such as SwiftUI menus can escape an individual Expo UI
+ * host. Explicit app themes therefore also need a window-level appearance
+ * override; system mode removes that override so iOS keeps following the OS.
+ */
+export function nativeColorSchemeOverride(preference: ThemePreference): ColorScheme | "unspecified" {
+	return preference === "system" ? "unspecified" : preference;
+}
+
 export function isThemePreference(value: unknown): value is ThemePreference {
 	return value === "light" || value === "dark" || value === "system";
 }
@@ -26,11 +35,15 @@ export function isThemePreference(value: unknown): value is ThemePreference {
  *
  * `system` is resolved on every call rather than being frozen at pick time, so
  * the app follows the OS live instead of only at next launch. React Native
- * reports `null` for the system scheme before it has resolved, or on a platform
- * that has no notion of one; dark is the fallback because that is what the app
- * looked like before this setting existed.
+ * reports `"unspecified"` (and, on older versions, `null`) for the system scheme
+ * before it has resolved, or on a platform that has no notion of one; dark is
+ * the fallback because that is what the app looked like before this setting
+ * existed.
  */
-export function resolveScheme(preference: ThemePreference, systemScheme: ColorScheme | null | undefined): ColorScheme {
+export function resolveScheme(
+	preference: ThemePreference,
+	systemScheme: ColorScheme | "unspecified" | null | undefined,
+): ColorScheme {
 	if (preference === "light" || preference === "dark") return preference;
 	return systemScheme === "light" ? "light" : "dark";
 }
@@ -46,3 +59,10 @@ export function preferenceLabel(preference: ThemePreference): string {
 			return "System";
 	}
 }
+
+// ---- Named colour theme ----------------------------------------------------
+
+export { DEFAULT_THEME_STYLE, isThemeStyle, type ThemeStyle } from "../../shared/theme/palettes";
+
+/** The key desktop writes for its colour theme (`frontend/src/renderer/lib/theme.ts`). */
+export const THEME_STYLE_KEY = "ao.theme-style";

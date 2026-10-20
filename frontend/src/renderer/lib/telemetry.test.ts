@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
 import {
+	automationPromptLengthBucket,
 	buildPostHogConfig,
 	buildTelemetryContext,
 	isDeniedEvent,
@@ -31,6 +32,30 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the fixed session management summary schema", async () => {
+		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {
+			measurement_schema_version: 1,
+			window_id: "123e4567-e89b-12d3-a456-426614174000",
+			worker_active_seconds: 42,
+			manual_worker_open_count: 3,
+			flush_reason: "interval",
+			session_id: "must-not-leave",
+		});
+		expect(safe).toEqual({
+			measurement_schema_version: 1,
+			window_id: "123e4567-e89b-12d3-a456-426614174000",
+			worker_active_seconds: 42,
+			manual_worker_open_count: 3,
+			flush_reason: "interval",
+		});
+	});
+
+	it("exports the session management summary under the v2 name", () => {
+		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
+			"ao.v2.renderer.session_management_summary",
+		);
+	});
+
 	it("isolates anonymous AO installation identity from persisted PostHog person state", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
@@ -102,6 +127,18 @@ describe("telemetry sanitizers", () => {
 		expect(bogus.phase).toBeUndefined();
 	});
 
+	it("retains bounded update transfer observations and drops untrusted values", async () => {
+		const observation = {
+			differential_eligible: true, transfer_mode: "differential", fallback: true,
+			transferred_bytes: 12345, target_bytes: 99999,
+		};
+		expect(await sanitizeRendererProperties("ao.renderer.update_downloaded", observation)).toEqual(observation);
+		expect(await sanitizeRendererProperties("ao.renderer.update_failed", {
+			differential_eligible: "true", transfer_mode: "https://secret", fallback: 1,
+			transferred_bytes: -1, target_bytes: Infinity, url: "https://secret",
+		})).toEqual({});
+	});
+
 	it("reports a support submission with only the destination and outcome", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.support_submitted", {
 			destination: "discord",
@@ -128,6 +165,16 @@ describe("telemetry sanitizers", () => {
 			summary: "everything is broken",
 		});
 		expect(safe).toEqual({});
+	});
+
+	it("reports the session auto-review switch with only its direction", async () => {
+		const safe = await sanitizeRendererProperties("ao.renderer.review_auto_review_toggled", {
+			enabled: true,
+			// Must be dropped: the session's id and the title the user typed.
+			session_id: "sess-1",
+			session_name: "fix the login bug",
+		});
+		expect(safe).toEqual({ enabled: true });
 	});
 
 	it("reports the mobile connect open with only the bridge state", async () => {
@@ -240,6 +287,46 @@ describe("telemetry sanitizers", () => {
 		expect(routeSurface("/projects/demo")).toBe("project_board");
 		expect(routeSurface("/projects/demo/settings")).toBe("project_settings");
 		expect(routeSurface("/projects/demo/sessions/demo-1")).toBe("session_detail");
+		expect(routeSurface("/automations")).toBe("automations");
+		expect(routeSurface("/automations/demo-automation")).toBe("automations");
+		expect(routeSurface("/artifacts")).toBe("artifacts");
+	});
+
+	it("keeps automation funnel events free of prompt text and raw ids", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.automation_create_succeeded", {
+			project_id: "demo-project",
+			schedule_preset: "weekly",
+			prompt_length_bucket: "m",
+			prompt: "review the nightly CI failures in acme/private-repo",
+			display_name: "Nightly CI triage",
+		});
+
+		expect(Object.keys(props).sort()).toEqual(["project_id_hash", "prompt_length_bucket", "schedule_preset"]);
+		expect(props.schedule_preset).toBe("weekly");
+		expect(props.prompt_length_bucket).toBe("m");
+		expect(props.project_id_hash).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it("drops automation funnel values outside the closed vocabularies", async () => {
+		expect(
+			await sanitizeRendererProperties("ao.renderer.automation_create_requested", {
+				schedule_preset: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9",
+				prompt_length_bucket: "4096",
+			}),
+		).toEqual({});
+		expect(await sanitizeRendererProperties("ao.renderer.automation_create_opened", { project_id: "demo-project" })).toEqual({});
+	});
+
+	it("bands prompt length in the bytes the daemon counts", () => {
+		expect(automationPromptLengthBucket("")).toBe("xs");
+		expect(automationPromptLengthBucket("a".repeat(80))).toBe("xs");
+		expect(automationPromptLengthBucket("a".repeat(81))).toBe("s");
+		expect(automationPromptLengthBucket("a".repeat(240))).toBe("s");
+		expect(automationPromptLengthBucket("a".repeat(800))).toBe("m");
+		expect(automationPromptLengthBucket("a".repeat(2000))).toBe("l");
+		expect(automationPromptLengthBucket("a".repeat(2001))).toBe("xl");
+		// Three bytes per character, so 27 of them outrank 27 ASCII ones.
+		expect(automationPromptLengthBucket("每天检查持续集成失败并提交修复".repeat(2))).toBe("s");
 	});
 
 	it("hashes renderer ids and drops raw route identifiers", async () => {
@@ -385,6 +472,18 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
+	it("keeps only the scope enum on artifact_create events", async () => {
+		for (const event of [
+			"ao.renderer.artifact_create_requested",
+			"ao.renderer.artifact_create_succeeded",
+			"ao.renderer.artifact_create_failed",
+		]) {
+			expect(await sanitizeRendererProperties(event, { scope: "project", project_id: "demo-project", name: "plan.md" })).toEqual({ scope: "project" });
+			expect(await sanitizeRendererProperties(event, { scope: "standalone" })).toEqual({ scope: "standalone" });
+			expect(await sanitizeRendererProperties(event, { scope: "/Users/alice/secret" })).toEqual({});
+		}
+	});
+
 	it("keeps only the source enum on orchestrator_spawn events", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_requested", {
 			project_id: "demo-project",
@@ -428,6 +527,46 @@ describe("telemetry sanitizers", () => {
 		expect(
 			await sanitizeRendererProperties("ao.renderer.notification_mark_read_requested", { scope: "everything" }),
 		).toEqual({});
+	});
+
+	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_requested", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_requested", {
+			project_id: "demo-project",
+			editor_id: "vscode",
+			target_kind: "editor",
+		});
+		expect(Object.keys(props).sort()).toEqual(["editor_id", "project_id_hash", "target_kind"]);
+		expect(props.editor_id).toBe("vscode");
+		expect(props.target_kind).toBe("editor");
+
+		const bogus = await sanitizeRendererProperties("ao.renderer.open_in_editor_requested", {
+			project_id: "demo-project",
+			// Not a real editor id — must not be forwarded as-is.
+			editor_id: "/Users/alice/bin/notepad",
+			target_kind: "everything",
+		});
+		expect(bogus).not.toHaveProperty("editor_id");
+		expect(bogus).not.toHaveProperty("target_kind");
+	});
+
+	it("keeps the editor id and target kind on open_in_editor_succeeded", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
+			project_id: "demo-project",
+			editor_id: "cursor",
+			target_kind: "editor",
+		});
+		expect(Object.keys(props).sort()).toEqual(["editor_id", "project_id_hash", "target_kind"]);
+		expect(props.editor_id).toBe("cursor");
+		expect(props.target_kind).toBe("editor");
+	});
+
+	it("reports open_in_editor_failed with only the hashed project id", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_failed", {
+			project_id: "demo-project",
+			// Never part of the contract; must not leak through.
+			error: "EDITOR_LAUNCH_FAILED: Could not launch VS Code",
+		});
+		expect(Object.keys(props)).toEqual(["project_id_hash"]);
 	});
 
 	it("whitelists coarse daemon failure fields and drops messages", async () => {

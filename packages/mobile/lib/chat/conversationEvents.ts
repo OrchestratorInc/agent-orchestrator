@@ -1,7 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect } from "react";
-import { isConfigured, type ServerConfig } from "../config";
+import { isConfigured, machineIdentity, type ServerConfig } from "../config";
 import { streamGlobalConversationEvents } from "./api";
+import { eventCursorKey, initialCursorFor } from "./eventCursor";
 import {
 	createConversationEventRegistry,
 	createCursorPersister,
@@ -13,10 +14,11 @@ const RECONNECT_MAX_MS = 15_000;
 const registry = createConversationEventRegistry();
 
 export function subscribeConversationEvents(
+	cfg: ServerConfig,
 	sessionId: string,
 	listener: (event: ConversationEvent) => void,
 ): () => void {
-	return registry.subscribe(sessionId, listener);
+	return registry.subscribe(machineIdentity(cfg), sessionId, listener);
 }
 
 /** Own the daemon's global CDC stream for the lifetime of the configured app. */
@@ -25,12 +27,15 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 		if (!cfg || !isConfigured(cfg)) return;
 		let stopped = false;
 		let controller: AbortController | undefined;
+		const hostId = machineIdentity(cfg);
 		const cursorKey = eventCursorKey(cfg);
 		const cursorPersister = createCursorPersister((cursor) =>
 			AsyncStorage.setItem(cursorKey, String(cursor)),
 		);
 		const run = async () => {
-			let cursor = Number(await AsyncStorage.getItem(cursorKey)) || 0;
+			// Missing or unusable starts at head, not zero: a fresh client has no
+			// reason to replay the whole change log to reach the live tail.
+			let cursor = initialCursorFor(await AsyncStorage.getItem(cursorKey));
 			let delay = RECONNECT_MIN_MS;
 			while (!stopped) {
 				controller = new AbortController();
@@ -42,11 +47,21 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 						(event) => {
 							cursor = Math.max(cursor, event.seq);
 							cursorPersister.update(cursor);
-							registry.publish(event);
+							registry.publish(hostId, event);
 						},
 						(resetCursor) => {
 							cursor = resetCursor;
 							cursorPersister.replace(resetCursor);
+						},
+						{
+							// Only the chat screen currently on top subscribes, so most frames
+							// have no reader — and during a cold-start replay, when no chat is
+							// open at all, none of them do. Those only need to move the cursor.
+							wantsPayload: () => registry.hasListeners(hostId),
+							onCursorAdvance: (seq) => {
+								cursor = Math.max(cursor, seq);
+								cursorPersister.update(cursor);
+							},
 						},
 					);
 					delay = RECONNECT_MIN_MS;
@@ -64,10 +79,6 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 			cursorPersister.flush();
 		};
 	}, [cfg]);
-}
-
-function eventCursorKey(cfg: ServerConfig): string {
-	return `ao.chat.events.${cfg.secure ? "https" : "http"}.${cfg.host}.${cfg.httpPort}`;
 }
 
 function wait(ms: number): Promise<void> {

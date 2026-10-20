@@ -1,12 +1,12 @@
 # AO CLI
 
 The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
-It starts, discovers, inspects, and stops the daemon through the loopback HTTP
-surface and the `running.json` handshake. It must not open SQLite directly or
-call runtime, workspace, tracker, or agent adapters in-process.
+It opens the desktop app and discovers, inspects, or stops its daemon through the
+loopback HTTP surface and the `running.json` handshake. It must not open SQLite
+directly or call runtime, workspace, tracker, or agent adapters in-process.
 
 When using the CLI directly from a shell, make sure the daemon is running first
-with `ao start` or by opening the desktop app. Product commands such as
+by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
 `ao agent ls` and `ao spawn` call the loopback daemon and will fail with a
 "daemon is not running" error if no `running.json` points at a live process. From
 a source checkout, build and run the local binary explicitly, for example:
@@ -26,13 +26,29 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 
 | Command                       | Purpose                                                                                                                           |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `ao start`                    | Start the daemon in the background and wait for `/readyz`.                                                                        |
+| `ao start`                    | Open the desktop application, downloading a release if necessary; the app supervises its daemon.                                                                        |
 | `ao stop`                     | Gracefully stop the daemon via loopback `POST /shutdown` after verifying daemon identity.                                         |
 | `ao status` / `--json`        | Report daemon state from `running.json`, process liveness, `/healthz`, and `/readyz`.                                             |
 | `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
 | `ao completion <shell>`       | Generate completions for `bash`, `zsh`, `fish`, or `powershell`.                                                                  |
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
-| `ao daemon`                   | Hidden internal daemon entrypoint used by `ao start`.                                                                             |
+| `ao daemon`                   | Run the daemon in the foreground (normally supervised by the desktop app or an OS service manager).                               |
+| `ao remote-host status/enable/disable` | Inspect or toggle this machine's authenticated remote listener through the local daemon. |
+
+For a self-hosted machine, use the [host setup command](../self-hosted-remote.md)
+to install the daemon with its Claude Chat runtime and start the OS user
+service. It calls `ao remote-host enable` and prints the host ID, address, and
+pairing password for **Settings → Remote hosts** on another desktop. With
+`cloudflared` installed, setup `--tunnel` calls `ao remote-host enable
+--tunnel-only`: its authenticated listener binds only to loopback. Direct
+`ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
+who deliberately want both. Check `ao remote-host status` when the HTTPS
+address is ready.
+Running `enable` again prints the current details without rotating the
+password. `status` shows the password from the host's local shell. The LAN
+listener uses plain HTTP; do not publish its port directly to the internet.
+Cloudflare terminates tunnel TLS and can see its traffic; quick-tunnel
+addresses change on restart.
 
 ### Product commands
 
@@ -43,13 +59,17 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao project get <id>`               | `GET /api/v1/projects/{id}`                    |
 | `ao project set-config <id>`        | `PUT /api/v1/projects/{id}/config`             |
 | `ao project rm <id>`                | `DELETE /api/v1/projects/{id}`                 |
-| `ao agent ls`                       | `GET /api/v1/agents`                           |
-| `ao agent ls --refresh`             | `POST /api/v1/agents/refresh`                  |
-| `ao spawn`                          | `POST /api/v1/sessions`                        |
-| `ao session ls`                     | `GET /api/v1/sessions`                         |
+| `ao agent ls`                       | `POST /api/v1/agents/readiness/ensure` (`display`) |
+| `ao agent ls --refresh`             | `POST /api/v1/agents/refresh` (forced checks) |
+| `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
+| `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
+| `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
+| `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`                    |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
+| `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
+| `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session switch-agent <id> <target-harness>` | `POST /api/v1/sessions/{id}/switch-agent` |
 | `ao session agent-switch ls <session-id>` | `GET /api/v1/sessions/{id}/agent-switches` |
 | `ao session handoff submit`         | `POST /api/v1/sessions/{id}/agent-switches/{switchId}/handoff` |
@@ -58,20 +78,25 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
+| `ao report ...`                     | `POST /api/v1/reports`                         |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
 | `ao browser ...`                    | `GET /api/v1/browser/status`, `POST /api/v1/browser/commands` |
 | `ao hooks <agent> <event>`          | `POST /api/v1/sessions/{id}/activity` (hidden) |
 
-`ao agent ls` prints the daemon-supported agent catalog with local install/auth
-readiness. Use `--refresh` to rerun the bounded local probes and `--json` to
-print the raw inventory response.
+`ao agent ls` asks the daemon to ensure display readiness, then prints the
+existing table or legacy JSON projection. The daemon alone decides whether a
+native check is needed. `--refresh` is a deprecated compatibility flag that
+forces fresh installation and authentication checks before printing.
 
 `ao spawn` resolves project context in this order: explicit `--project`,
 `AO_PROJECT_ID`, `AO_SESSION_ID` (by fetching the current session from the
 daemon), then the current working directory matched against registered project
 paths. If `AO_SESSION_ID` is set but the session cannot be fetched, pass
-`--project` explicitly.
+`--project` explicitly. Use `ao spawn --standalone --agent <agent> --name
+<name>` to launch a worker in an AO-managed plain directory without resolving
+or registering a project. Standalone sessions do not support orchestrator,
+branch, issue, or PR-claim options.
 
 Agent switching is initially available only for worker sessions whose source
 and target harnesses are Claude Code or Codex. The main command
@@ -111,12 +136,54 @@ native history and compaction.
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
 remains supported for backward compatibility and cross-session coordination.
 
+Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata
+only. The claim step does not check out a branch or change HEAD, so
+`branchChanged: false` renders as `checkout: not performed; workspace unchanged`
+without asserting that HEAD matches the provider PR. `ao session claim-pr --json`
+preserves that field; `spawn` has no JSON mode. Verify the branch and HEAD before
+editing or pushing. Automatic checkout is deferred until exact-head verification,
+takeover, concurrent provider changes, and worktree preservation can be handled
+together.
+
+`ao report` persists a worker-originated coordination claim before reporting
+success. Checkpoints, free-form messages, and output-only reports batch until
+another flush or the first report's one-hour fallback. The first `--done`
+report opens a fixed five-minute settlement window. `--needs-input` delivers
+immediately without interrupting current orchestrator work. `--stuck` requests
+an interrupt at most once per worker every three minutes and coalesces equal
+repeats. Reports route to the active project orchestrator at each attempt and
+remain pending when none is active. AO never spawns an orchestrator to deliver
+a report.
+
+Scheduled delivery and exact same-turn user-message piggyback use Chat's
+durable semantic message boundary. Supported TUIs acknowledge delivery only
+after their native prompt hook reports acceptance of the exact durable batch
+identity. A successful terminal write is never acknowledgement. Reports remain
+pending for TUI adapters that cannot expose this semantic boundary.
+
+`GET /api/v1/reports?projectId=<id>` is the read-only persisted report
+projection. Consumers such as Project Summary can read ordered report facts
+and outputs through it without claiming, acknowledging, waking, or interrupting
+delivery.
+
 If `--agent` / `--harness` is omitted, `ao spawn` uses the resolved project's
-`worker.agent` config. Before spawning, the CLI refreshes the advisory agent
-catalog and fails early when the selected agent is unsupported, not installed,
-or unauthorized. It warns-but-continues when auth remains unknown because daemon
-spawn remains the authoritative runtime validation point. Use
-`--skip-agent-check` to bypass only this CLI-side preflight.
+`worker.agent` config. Before spawning, the CLI performs one targeted launch
+ensure. It fails early for unsupported or definitely missing harnesses and
+warns-but-continues for unauthorized or unknown observations; daemon session
+creation repeats launch validation and native launch remains authoritative.
+`--skip-agent-check` suppresses only the CLI warnings and early check, never the
+daemon validation.
+
+Standalone spawns require `--agent` because there is no project configuration
+from which to resolve a default harness.
+
+`ao spawn --output artifact` marks a worker whose deliverable is a file rather
+than a pull request. The daemon persists the kind with the session and adds an
+artifact-delivery section to the worker's system prompt, including after
+restore and agent switching. It does not change derived status or the Kanban
+column: the session shows artifact output once a file exists in its artifact
+directory. Any other value exits 2; the API rejects unknown `requestedOutput` values
+with `400 INVALID_REQUESTED_OUTPUT`.
 
 `ao preview` resolves its session from the `AO_SESSION_ID` environment variable
 (it is meant to run inside a session), not a flag. With no argument it
@@ -159,9 +226,9 @@ command reports `STALE_REFERENCE`.
 Browser waits cover load completion, text or selector appearance and
 disappearance, URL matching, fixed delays, and a configurable DOM-stability
 window for HMR-driven verification.
-Browser tabs in the same worker share a memory-only Electron profile. Different
-workers receive distinct partitions, so cookies, authentication, local storage,
-and session storage do not leak between their browser runtimes.
+Temporary browser profiles are isolated per worker. Named profiles persist and
+can be reused across sessions, intentionally sharing cookies and storage.
+Profile selection does not broaden the session authorization on browser commands.
 Network capture is disabled by default and must be started explicitly. It is
 scoped to the active tab at start time, expires after 60 seconds by default
 (maximum 300), retains at most 200 in-memory entries, and is cleared with the
@@ -190,7 +257,8 @@ The CLI and daemon share the same environment-driven config:
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 
-The daemon always binds `127.0.0.1`.
+The primary daemon always binds `127.0.0.1`. Connect Mobile is a separate,
+opt-in authenticated listener; see [network boundaries](../architecture.md#multi-listener-architecture-loopback--lan).
 
 ## Manual smoke test
 
@@ -205,7 +273,8 @@ export AO_PORT=3037
 
 /tmp/ao status --json
 /tmp/ao doctor
-/tmp/ao start
+/tmp/ao daemon &
+# In another shell with the same AO_* values, after /readyz succeeds:
 /tmp/ao status --json
 /tmp/ao stop
 /tmp/ao status --json
@@ -222,3 +291,59 @@ actions.
 
 Do not port old in-process TypeScript CLI behavior that mixed command handling
 with storage and runtime implementation details.
+
+### Claiming workspace PRs
+
+Workspace projects can claim a PR/MR on their root origin or any registered
+child repository origin. Use the child's full PR/MR URL: numbers still resolve
+against the root's canonical repository or origin, and a root without a remote
+cannot resolve numbers. Check registered children with `ao project get <id> --json`.
+Unregistered repositories are rejected even if a checkout has an additional Git
+remote for them. `canonicalRepoURL` requires a valid root origin; it is not a
+workspace child allowlist. Scratch projects cannot claim PRs.
+
+For automatic attribution, workspace sessions recorded on a bare branch such as
+`ao/ws-1` or `ao/ws-1-2` can use hyphen siblings (`ao/ws-1-fix` or
+`ao/ws-1-2-fix`) in registered repositories. Keep the entire recorded branch,
+including collision suffixes. Exact and stacked branches and `/root` slash
+siblings remain supported. Matching prefers the most specific owner and leaves
+ambiguous ownership for explicit claiming. Custom branches and single-repository
+projects do not gain hyphen-sibling ownership.
+
+### Claiming upstream PRs from a fork
+
+The registered origin remains the checkout and push repository. An optional
+`canonicalRepoURL` in project config explicitly authorizes one upstream repository
+for PR claims. Git remotes, including a remote named `upstream`, never grant claim
+permission automatically. Both identities must have the same provider and host;
+claims match the entire namespace and repository, including GitLab subgroups.
+
+For a project with no other config:
+
+```bash
+ao project set-config my-project \
+  --canonical-repo-url https://github.com/my-org/my-repo
+```
+
+`set-config` replaces the whole config. For an existing configured project, read
+`ao project get my-project --json`, preserve its `project.config` fields, add
+`canonicalRepoURL`, and submit the complete object with `--config-json`. The same
+object is accepted by `PUT /api/v1/projects/{id}/config` as `{"config": {...}}`.
+Use an HTTPS repository URL, without a PR/MR suffix, credentials, query, or fragment.
+Self-managed GitLab URLs and nested namespaces are supported. Explicit ports
+are preserved and must match too; `gitlab.example.com:8443` is a different
+authority from `gitlab.example.com`.
+
+Both `ao session claim-pr 42` and `ao spawn --claim-pr 42` resolve numbers against
+canonical when configured, otherwise origin. A full PR/MR URL may name either
+identity. Unrelated repositories and different hosts/providers remain rejected.
+Removing `canonicalRepoURL` restores origin-only claims. This does not unlink PRs
+already claimed or move existing worktrees. Repository identity is read at claim
+time, so existing sessions need no restart or duplicate project.
+
+Migration 0126 adds an empty canonical identity to existing non-NULL config JSON
+where absent, preserving all other settings and any explicit canonical value.
+NULL configs retain their defaults. No Git discovery runs during migration, and
+no earlier migration is modified. Downgrading preserves config data; older
+versions do not support canonical claims and may drop this field when saving
+project settings.

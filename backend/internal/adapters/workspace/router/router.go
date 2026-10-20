@@ -40,6 +40,8 @@ var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
+var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
+var _ ports.WorkspacePreparationBranchCleaner = (*Workspace)(nil)
 
 // New returns a router over git and scratch workspace implementations.
 func New(deps Deps) *Workspace {
@@ -58,6 +60,40 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 // FetchDefaultBranch delegates default-branch fetching to the git workspace adapter.
 func (w *Workspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
 	return w.git.FetchDefaultBranch(ctx, repoPath, target)
+}
+
+// NameTaskWorkspace delegates task naming to the Git adapter.
+func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo, branch, name string) (ports.WorkspaceProjectInfo, error) {
+	namer, ok := w.git.(ports.WorkspaceTaskNamer)
+	if !ok {
+		return info, errors.New("workspace router: Git adapter does not support task naming")
+	}
+	return namer.NameTaskWorkspace(ctx, info, branch, name)
+}
+
+// RepairTaskWorkspace repairs registrations after interrupted task naming.
+func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	namer, ok := w.git.(ports.WorkspaceTaskNamer)
+	if !ok {
+		return info, errors.New("workspace router: Git adapter does not support task naming")
+	}
+	return namer.RepairTaskWorkspace(ctx, info)
+}
+
+// RecoverTaskWorkspace resumes a Git naming journal when the adapter supports it.
+func (w *Workspace) RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (ports.WorkspaceProjectInfo, bool, error) {
+	if recovery, ok := w.git.(ports.WorkspaceTaskNamingRecovery); ok {
+		return recovery.RecoverTaskWorkspace(ctx, projectID, id)
+	}
+	return ports.WorkspaceProjectInfo{}, false, nil
+}
+
+// CompleteTaskWorkspaceNaming acknowledges a saved or destroyed Git workspace.
+func (w *Workspace) CompleteTaskWorkspaceNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
+	if recovery, ok := w.git.(ports.WorkspaceTaskNamingRecovery); ok {
+		return recovery.CompleteTaskWorkspaceNaming(ctx, info)
+	}
+	return nil
 }
 
 // Create delegates session workspace creation to the project-appropriate
@@ -88,6 +124,33 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 		return err
 	}
 	return adapter.Destroy(ctx, info)
+}
+
+// DestroyReclaim delegates teardown to the project-appropriate adapter and
+// reports whether that adapter actually released anything. An adapter that does
+// not report reclaim outcomes falls back to Destroy, whose nil error keeps the
+// pre-existing meaning of a completed removal.
+func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return ports.WorkspaceReclaimAlreadyAbsent, err
+	}
+	if reclaimer, ok := adapter.(ports.WorkspaceReclaimer); ok {
+		return reclaimer.DestroyReclaim(ctx, info)
+	}
+	return ports.WorkspaceReclaimRemoved, adapter.Destroy(ctx, info)
+}
+
+// DeletePreparedBranch delegates safe speculative-branch cleanup to Git workspaces.
+func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.WorkspaceInfo) error {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return err
+	}
+	if cleaner, ok := adapter.(ports.WorkspacePreparationBranchCleaner); ok {
+		return cleaner.DeletePreparedBranch(ctx, info)
+	}
+	return nil
 }
 
 // ForceDestroy delegates forced session workspace cleanup to the
@@ -168,6 +231,14 @@ func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.Work
 func (w *Workspace) adapterForProject(ctx context.Context, projectID domain.ProjectID) (ports.Workspace, error) {
 	if w == nil {
 		return nil, errors.New("workspace router: nil router")
+	}
+	// Projectless sessions use AO-managed plain directories. They deliberately
+	// have no Git worktree, branch, tracker, or project row behind them.
+	if projectID == "" {
+		if w.scratch == nil {
+			return nil, errors.New("workspace router: standalone workspace is not configured")
+		}
+		return w.scratch, nil
 	}
 	if w.projects != nil && projectID != "" {
 		project, ok, err := w.projects.GetProject(ctx, string(projectID))

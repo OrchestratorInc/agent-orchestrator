@@ -1,14 +1,16 @@
 import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceSession } from "../types/workspace";
 import { agentSwitchesQueryKey, type AgentSwitch } from "./useAgentSwitches";
 import {
-	conversationConfigOptionsQueryKey,
-	conversationModelsQueryKey,
+	clearConversationProviderCatalogs,
 	conversationQueryKey,
 } from "./useConversation";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type SwitchAgentHarness = components["schemas"]["SwitchAgentRequest"]["targetHarness"];
 
@@ -41,12 +43,13 @@ function useSwitchAgentMutations() {
 	});
 }
 
-export function useSwitchAgentState(sessionId: string) {
+export function useSwitchAgentState(sessionId: string, hostId?: string) {
 	const mutations = useSwitchAgentMutations();
+	const targetKey = sessionUiKey(sessionId, hostId);
 	let latest: SwitchAgentMutationState | undefined;
 	let pending: SwitchAgentMutationState | undefined;
 	for (const mutation of mutations) {
-		if (mutation.input?.session.id !== sessionId) continue;
+		if (!mutation.input || sessionUiKey(mutation.input.session.id, mutation.input.session.hostId) !== targetKey) continue;
 		if (!latest || mutation.submittedAt > latest.submittedAt) latest = mutation;
 		if (
 			mutation.status === "pending" &&
@@ -68,11 +71,12 @@ export function useSwitchAgentState(sessionId: string) {
 	};
 }
 
-export function clearSwitchAgentState(queryClient: QueryClient, sessionId: string) {
+export function clearSwitchAgentState(queryClient: QueryClient, sessionId: string, hostId?: string) {
 	const mutationCache = queryClient.getMutationCache();
+	const targetKey = sessionUiKey(sessionId, hostId);
 	for (const mutation of mutationCache.findAll({ mutationKey: switchAgentMutationKey })) {
 		const input = mutation.state.variables as SwitchAgentInput | undefined;
-		if (input?.session.id === sessionId && mutation.state.status !== "pending") {
+		if (input && sessionUiKey(input.session.id, input.session.hostId) === targetKey && mutation.state.status !== "pending") {
 			mutationCache.remove(mutation);
 		}
 	}
@@ -87,6 +91,7 @@ export function useSwitchAgent() {
 	return useMutation({
 		mutationKey: switchAgentMutationKey,
 		mutationFn: async ({ session, targetHarness, model, idempotencyKey }: SwitchAgentInput) => {
+			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 			const body: {
 				targetHarness: SwitchAgentHarness;
 				model?: string;
@@ -94,7 +99,7 @@ export function useSwitchAgent() {
 			} = { targetHarness, idempotencyKey };
 			const normalizedModel = model.trim();
 			if (normalizedModel) body.model = normalizedModel;
-			const { data, error, response } = await apiClient.POST(
+			const { data, error, response } = await clientForSessionHost(session.hostId).POST(
 				"/api/v1/sessions/{sessionId}/switch-agent",
 				{
 					params: { path: { sessionId: session.id } },
@@ -112,18 +117,15 @@ export function useSwitchAgent() {
 		onSuccess: (agentSwitch, variables) => {
 			if (!agentSwitch) return;
 			queryClient.setQueryData<AgentSwitch[]>(
-				agentSwitchesQueryKey(variables.session.id),
+				agentSwitchesQueryKey(variables.session.id, variables.session.hostId),
 				(current = []) => [agentSwitch, ...current.filter((entry) => entry.id !== agentSwitch.id)],
 			);
-			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(variables.session.id) });
-			void queryClient.invalidateQueries({ queryKey: conversationModelsQueryKey(variables.session.id) });
-			void queryClient.invalidateQueries({
-				queryKey: conversationConfigOptionsQueryKey(variables.session.id),
-			});
+			clearConversationProviderCatalogs(queryClient, variables.session.id, variables.session.hostId);
+			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(variables.session.id, variables.session.hostId) });
 		},
 		onSettled: (_data, _error, variables) => {
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(variables.session.id) });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(variables.session.hostId) });
+			void queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(variables.session.id, variables.session.hostId) });
 		},
 	});
 }
@@ -132,8 +134,8 @@ export function useRecoverAgentSwitch() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: recoverAgentSwitchMutationKey,
-		mutationFn: async ({ sessionId, switchId }: { sessionId: string; switchId: string }) => {
-			const { data, error, response } = await apiClient.POST(
+		mutationFn: async ({ sessionId, switchId, hostId }: { sessionId: string; switchId: string; hostId?: string }) => {
+			const { data, error, response } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/agent-switches/{switchId}/recover",
 				{ params: { path: { sessionId, switchId } } },
 			);
@@ -147,13 +149,13 @@ export function useRecoverAgentSwitch() {
 		},
 		onSuccess: (agentSwitch, variables) => {
 			queryClient.setQueryData<AgentSwitch[]>(
-				agentSwitchesQueryKey(variables.sessionId),
+				agentSwitchesQueryKey(variables.sessionId, variables.hostId),
 				(current = []) => [agentSwitch, ...current.filter((entry) => entry.id !== agentSwitch.id)],
 			);
 		},
 		onSettled: (_data, _error, variables) => {
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(variables.sessionId) });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(variables.hostId) });
+			void queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(variables.sessionId, variables.hostId) });
 		},
 	});
 }

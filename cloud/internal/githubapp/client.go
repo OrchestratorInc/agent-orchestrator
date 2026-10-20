@@ -1,0 +1,1444 @@
+package githubapp
+
+import (
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	defaultAPIBaseURL = "https://api.github.com"
+	defaultWebBaseURL = "https://github.com"
+	maxResponseBytes  = 8 << 20
+)
+
+type Config struct {
+	AppID         int64
+	AppSlug       string
+	ClientID      string
+	ClientSecret  string
+	PrivateKeyPEM string
+	PublicURL     string
+	APIBaseURL    string
+	WebBaseURL    string
+}
+
+type Client struct {
+	appID        int64
+	appSlug      string
+	clientID     string
+	clientSecret string
+	privateKey   *rsa.PrivateKey
+	publicURL    string
+	apiBaseURL   string
+	webBaseURL   string
+	httpClient   *http.Client
+	now          func() time.Time
+	// readTokens reuses contents:read checkout tokens (see readTokenCache).
+	readTokens readTokenCache
+}
+
+type HTTPError struct {
+	StatusCode int
+	Message    string
+	// RateLimited is a 403 or 429 GitHub sent because a rate limit ran out,
+	// not because the caller lacks access; it says nothing about access.
+	RateLimited bool
+}
+
+// ErrUserAuthorizationRejected is GitHub refusing a user token exchange or
+// refresh outright (for example an expired, revoked or already used refresh
+// token), as opposed to failing to answer.
+var ErrUserAuthorizationRejected = errors.New("GitHub user authorization was rejected")
+
+// githubRateLimited reports whether a failed GitHub response is a rate limit
+// (primary: X-RateLimit-Remaining 0; secondary: Retry-After or the message).
+func githubRateLimited(response *http.Response, message string) bool {
+	switch response.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden:
+	default:
+		return false
+	}
+	return response.Header.Get("X-RateLimit-Remaining") == "0" ||
+		response.Header.Get("Retry-After") != "" ||
+		strings.Contains(strings.ToLower(message), "rate limit")
+}
+
+func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("GitHub request returned status %d: %s", e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("GitHub request returned status %d", e.StatusCode)
+}
+
+type Installation struct {
+	ID                  int64             `json:"id"`
+	Account             InstallationOwner `json:"account"`
+	RepositorySelection string            `json:"repository_selection"`
+	Permissions         map[string]string `json:"permissions"`
+	Events              []string          `json:"events"`
+	SuspendedAt         *time.Time        `json:"suspended_at"`
+}
+
+type App struct {
+	ID   int64  `json:"id"`
+	Slug string `json:"slug"`
+}
+
+type InstallationOwner struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Type  string `json:"type"`
+}
+
+type Repository struct {
+	ID            int64           `json:"id"`
+	Owner         RepositoryOwner `json:"owner"`
+	Name          string          `json:"name"`
+	FullName      string          `json:"full_name"`
+	HTMLURL       string          `json:"html_url"`
+	CloneURL      string          `json:"clone_url"`
+	SSHURL        string          `json:"ssh_url"`
+	DefaultBranch string          `json:"default_branch"`
+	Visibility    string          `json:"visibility"`
+	Private       bool            `json:"private"`
+	Archived      bool            `json:"archived"`
+	Disabled      bool            `json:"disabled"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+type RepositoryOwner struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Type  string `json:"type"`
+}
+
+type User struct {
+	ID        int64  `json:"id"`
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+// UserAccessToken redacts GitHub user-to-server credentials from formatting
+// and JSON. Callers should encrypt it immediately.
+type UserAccessToken struct {
+	value            string
+	refreshValue     string
+	ExpiresAt        *time.Time
+	RefreshExpiresAt *time.Time
+}
+
+func (token UserAccessToken) Token() string        { return token.value }
+func (token UserAccessToken) RefreshToken() string { return token.refreshValue }
+func (UserAccessToken) String() string             { return "[REDACTED GitHub user token]" }
+func (UserAccessToken) GoString() string           { return "[REDACTED GitHub user token]" }
+
+type installationAccessToken struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func InstallationSupportsAuthorityProof(installation Installation) bool {
+	switch installation.Account.Type {
+	case "User":
+		return true
+	case "Organization":
+		permission := installation.Permissions["members"]
+		return permission == "read" || permission == "write"
+	default:
+		return false
+	}
+}
+
+func New(config Config, httpClient *http.Client) (*Client, error) {
+	if config.AppID <= 0 || strings.TrimSpace(config.AppSlug) == "" ||
+		strings.TrimSpace(config.ClientID) == "" || config.ClientSecret == "" ||
+		strings.TrimSpace(config.PublicURL) == "" {
+		return nil, errors.New("GitHub App configuration is incomplete")
+	}
+	privateKey, err := parsePrivateKey(config.PrivateKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 15 * time.Second}
+	}
+	apiBaseURL := strings.TrimRight(config.APIBaseURL, "/")
+	if apiBaseURL == "" {
+		apiBaseURL = defaultAPIBaseURL
+	}
+	webBaseURL := strings.TrimRight(config.WebBaseURL, "/")
+	if webBaseURL == "" {
+		webBaseURL = defaultWebBaseURL
+	}
+	return &Client{
+		appID:        config.AppID,
+		appSlug:      strings.TrimSpace(config.AppSlug),
+		clientID:     strings.TrimSpace(config.ClientID),
+		clientSecret: config.ClientSecret,
+		privateKey:   privateKey,
+		publicURL:    strings.TrimRight(config.PublicURL, "/"),
+		apiBaseURL:   apiBaseURL,
+		webBaseURL:   webBaseURL,
+		httpClient:   httpClient,
+		now:          time.Now,
+	}, nil
+}
+
+// NewRESTClient builds a Client that can only make bearer-token REST calls
+// (CreatePullRequest, GetPullRequestRecord, CreatePullRequestReview,
+// GetRepositoryAsUser, ...). It has no GitHub App credentials, so the
+// installation-token-minting helpers will fail. It exists so an environment
+// without a local GitHub App (e.g. staging, which reaches GitHub read-only
+// through the remote capability broker) can still perform user-PAT
+// authenticated writes: the caller supplies the token per request.
+func NewRESTClient(apiBaseURL string, httpClient *http.Client) *Client {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 15 * time.Second}
+	}
+	base := strings.TrimRight(apiBaseURL, "/")
+	if base == "" {
+		base = defaultAPIBaseURL
+	}
+	return &Client{
+		apiBaseURL: base,
+		httpClient: httpClient,
+		now:        time.Now,
+	}
+}
+
+func (c *Client) InstallationURL(state string) string {
+	query := url.Values{"state": {state}}
+	return c.webBaseURL + "/apps/" + url.PathEscape(c.appSlug) +
+		"/installations/new?" + query.Encode()
+}
+
+func (c *Client) Check(ctx context.Context) error {
+	var app App
+	if err := c.appJSON(ctx, http.MethodGet, "/app", nil, &app); err != nil {
+		return err
+	}
+	if app.ID != c.appID || app.Slug != c.appSlug {
+		return errors.New("GitHub returned a different App identity")
+	}
+	return nil
+}
+
+func (c *Client) OAuthURL(state, challenge string) string {
+	query := url.Values{
+		"client_id":             {c.clientID},
+		"redirect_uri":          {c.OAuthCallbackURL()},
+		"state":                 {state},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	return c.webBaseURL + "/login/oauth/authorize?" + query.Encode()
+}
+
+func (c *Client) SetupCallbackURL() string {
+	return c.publicURL + "/api/cloud/v1/github/install/setup"
+}
+
+func (c *Client) OAuthCallbackURL() string {
+	return c.publicURL + "/api/cloud/v1/github/oauth/callback"
+}
+
+func (c *Client) UserOAuthCallbackURL() string {
+	return c.publicURL + "/api/cloud/v1/github/user/callback"
+}
+
+func (c *Client) UserAuthorizationURL(state, challenge string) string {
+	query := url.Values{
+		"client_id":             {c.clientID},
+		"redirect_uri":          {c.UserOAuthCallbackURL()},
+		"state":                 {state},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"allow_signup":          {"false"},
+	}
+	return c.webBaseURL + "/login/oauth/authorize?" + query.Encode()
+}
+
+func (c *Client) GetInstallation(ctx context.Context, installationID int64) (Installation, error) {
+	var installation Installation
+	err := c.appJSON(ctx, http.MethodGet, "/app/installations/"+strconv.FormatInt(installationID, 10), nil, &installation)
+	return installation, err
+}
+
+func (c *Client) ExchangeOAuthCode(ctx context.Context, code, verifier string) (string, error) {
+	payload := map[string]string{
+		"client_id":     c.clientID,
+		"client_secret": c.clientSecret,
+		"code":          code,
+		"redirect_uri":  c.OAuthCallbackURL(),
+	}
+	// Only send code_verifier when we actually issued a PKCE challenge. The
+	// bundled installation+OAuth flow (CompleteInstallationOAuth) has no verifier
+	// because GitHub authorized during installation without our code_challenge;
+	// sending an empty code_verifier would make GitHub reject the exchange.
+	if verifier = strings.TrimSpace(verifier); verifier != "" {
+		payload["code_verifier"] = verifier
+	}
+	var response struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+	}
+	if err := c.jsonRequest(
+		ctx,
+		http.MethodPost,
+		c.webBaseURL+"/login/oauth/access_token",
+		"",
+		payload,
+		&response,
+	); err != nil {
+		return "", err
+	}
+	if response.Error != "" || response.AccessToken == "" {
+		return "", errors.New("GitHub OAuth exchange was rejected")
+	}
+	return response.AccessToken, nil
+}
+
+// ExchangeOAuthCodeForUser is ExchangeOAuthCode returning the whole user token
+// (with its refresh token and expiries), so the installation callback can keep
+// the user's GitHub authorization. verifier is omitted when empty, as in the
+// bundled installation-and-authorization flow.
+func (c *Client) ExchangeOAuthCodeForUser(ctx context.Context, code, verifier string) (UserAccessToken, error) {
+	payload := map[string]string{
+		"client_id":     c.clientID,
+		"client_secret": c.clientSecret,
+		"code":          strings.TrimSpace(code),
+		"redirect_uri":  c.OAuthCallbackURL(),
+	}
+	if verifier = strings.TrimSpace(verifier); verifier != "" {
+		payload["code_verifier"] = verifier
+	}
+	return c.exchangeUserToken(ctx, payload)
+}
+
+func (c *Client) ExchangeUserCode(
+	ctx context.Context,
+	code, verifier string,
+) (UserAccessToken, error) {
+	return c.exchangeUserToken(ctx, map[string]string{
+		"client_id":     c.clientID,
+		"client_secret": c.clientSecret,
+		"code":          strings.TrimSpace(code),
+		"redirect_uri":  c.UserOAuthCallbackURL(),
+		"code_verifier": strings.TrimSpace(verifier),
+	})
+}
+
+func (c *Client) RefreshUserAccessToken(
+	ctx context.Context,
+	refreshToken string,
+) (UserAccessToken, error) {
+	return c.exchangeUserToken(ctx, map[string]string{
+		"client_id":     c.clientID,
+		"client_secret": c.clientSecret,
+		"grant_type":    "refresh_token",
+		"refresh_token": strings.TrimSpace(refreshToken),
+	})
+}
+
+func (c *Client) exchangeUserToken(
+	ctx context.Context,
+	payload map[string]string,
+) (UserAccessToken, error) {
+	for key, value := range payload {
+		if strings.TrimSpace(value) == "" {
+			return UserAccessToken{}, fmt.Errorf("GitHub user token %s is required", key)
+		}
+	}
+	var response struct {
+		AccessToken           string `json:"access_token"`
+		ExpiresIn             int64  `json:"expires_in"`
+		RefreshToken          string `json:"refresh_token"`
+		RefreshTokenExpiresIn int64  `json:"refresh_token_expires_in"`
+		Error                 string `json:"error"`
+	}
+	if err := c.jsonRequest(
+		ctx,
+		http.MethodPost,
+		c.webBaseURL+"/login/oauth/access_token",
+		"",
+		payload,
+		&response,
+	); err != nil {
+		return UserAccessToken{}, err
+	}
+	response.AccessToken = strings.TrimSpace(response.AccessToken)
+	if response.Error != "" || response.AccessToken == "" {
+		return UserAccessToken{}, ErrUserAuthorizationRejected
+	}
+	token := UserAccessToken{
+		value:        response.AccessToken,
+		refreshValue: strings.TrimSpace(response.RefreshToken),
+	}
+	if response.ExpiresIn > 0 {
+		expiresAt := c.now().Add(time.Duration(response.ExpiresIn) * time.Second)
+		token.ExpiresAt = &expiresAt
+	}
+	if response.RefreshTokenExpiresIn > 0 {
+		expiresAt := c.now().Add(time.Duration(response.RefreshTokenExpiresIn) * time.Second)
+		token.RefreshExpiresAt = &expiresAt
+	}
+	if token.refreshValue != "" && token.RefreshExpiresAt == nil {
+		return UserAccessToken{}, errors.New("GitHub omitted the refresh token expiry")
+	}
+	return token, nil
+}
+
+func (c *Client) GetUser(ctx context.Context, token string) (User, error) {
+	var user User
+	if err := c.userJSON(ctx, token, http.MethodGet, "/user", nil, &user); err != nil {
+		return User{}, err
+	}
+	if user.ID <= 0 || strings.TrimSpace(user.Login) == "" {
+		return User{}, errors.New("GitHub returned an invalid user")
+	}
+	return user, nil
+}
+
+func (c *Client) ListUserInstallations(
+	ctx context.Context,
+	token string,
+) ([]Installation, error) {
+	var installations []Installation
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			Installations []Installation `json:"installations"`
+		}
+		path := fmt.Sprintf("/user/installations?per_page=100&page=%d", page)
+		if err := c.userJSON(
+			ctx,
+			token,
+			http.MethodGet,
+			path,
+			nil,
+			&response,
+		); err != nil {
+			return nil, err
+		}
+		installations = append(installations, response.Installations...)
+		if len(response.Installations) < 100 {
+			return installations, nil
+		}
+	}
+	return nil, errors.New("GitHub user installation pagination exceeded limit")
+}
+
+func (c *Client) RevokeUserAuthorization(
+	ctx context.Context,
+	token string,
+) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("GitHub user token is required")
+	}
+	endpoint := c.apiBaseURL + "/applications/" +
+		url.PathEscape(c.clientID) + "/grant"
+	body, err := json.Marshal(map[string]string{"access_token": token})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodDelete,
+		endpoint,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	request.SetBasicAuth(c.clientID, c.clientSecret)
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("revoke GitHub user authorization: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNoContent ||
+		response.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return &HTTPError{StatusCode: response.StatusCode}
+}
+
+func (c *Client) CreateRepositoryAsUser(
+	ctx context.Context,
+	token, accountLogin, accountType, name string,
+	private bool,
+) (Repository, error) {
+	accountLogin = strings.TrimSpace(accountLogin)
+	name = strings.TrimSpace(name)
+	path := "/user/repos"
+	switch strings.ToLower(strings.TrimSpace(accountType)) {
+	case "user":
+	case "organization":
+		path = "/orgs/" + url.PathEscape(accountLogin) + "/repos"
+	default:
+		return Repository{}, errors.New("unsupported GitHub account type")
+	}
+	if accountLogin == "" || name == "" {
+		return Repository{}, errors.New("GitHub repository owner and name are required")
+	}
+	var repository Repository
+	if err := c.userJSON(ctx, token, http.MethodPost, path, map[string]any{
+		"name":      name,
+		"private":   private,
+		"auto_init": true,
+	}, &repository); err != nil {
+		return Repository{}, err
+	}
+	return repository, nil
+}
+
+// PullRequestResponse is the GitHub API's pull request shape, trimmed to the
+// fields this client needs.
+type PullRequestResponse struct {
+	ID           int64  `json:"id"`
+	Number       int    `json:"number"`
+	HTMLURL      string `json:"html_url"`
+	State        string `json:"state"`
+	Draft        bool   `json:"draft"`
+	Title        string `json:"title"`
+	User         User   `json:"user"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changed_files"`
+	Head         struct {
+		SHA string `json:"sha"`
+		Ref string `json:"ref"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	// Mergeable and MergeableState come from the REST pulls endpoint, which — unlike
+	// GraphQL — triggers GitHub's async mergeability computation. They resolve the
+	// GraphQL "UNKNOWN" that otherwise strands a PR at mergeability=unknown.
+	Mergeable      *bool  `json:"mergeable"`
+	MergeableState string `json:"mergeable_state"`
+}
+
+// GetPullRequestRecord fetches the full pull request fields required to
+// durably claim a PR that was created by worker-side tooling.
+func (c *Client) GetPullRequestRecord(
+	ctx context.Context,
+	token, owner, repo string,
+	number int,
+) (PullRequestResponse, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	if owner == "" || repo == "" || number <= 0 {
+		return PullRequestResponse{}, errors.New("pull request owner, repo, and number are required")
+	}
+	var pullRequest PullRequestResponse
+	if err := c.userJSON(
+		ctx,
+		token,
+		http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number),
+		nil,
+		&pullRequest,
+	); err != nil {
+		return PullRequestResponse{}, err
+	}
+	if pullRequest.Number != number || pullRequest.HTMLURL == "" || pullRequest.Head.SHA == "" ||
+		pullRequest.Head.Ref == "" || pullRequest.Base.Ref == "" {
+		return PullRequestResponse{}, errors.New("GitHub returned an incomplete pull request response")
+	}
+	return pullRequest, nil
+}
+
+// MergePullRequest asks GitHub to squash the exact head the user reviewed.
+// GitHub rejects a moved head or unmet branch protection atomically.
+func (c *Client) MergePullRequest(ctx context.Context, token, owner, repo string, number int, expectedHeadSHA string) error {
+	if owner == "" || repo == "" || number <= 0 || expectedHeadSHA == "" {
+		return errors.New("pull request identity and expected head are required")
+	}
+	return c.userJSON(ctx, token, http.MethodPut,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number)+"/merge",
+		map[string]string{"sha": expectedHeadSHA, "merge_method": "squash"}, nil)
+}
+
+// CreatePullRequestInput is the request to open a pull request.
+type CreatePullRequestInput struct {
+	Title string
+	Body  string
+	Head  string
+	Base  string
+}
+
+// CreatePullRequest opens a pull request using an installation access token
+// (from repositoryWriteToken, not repositoryToken — this needs pull_requests
+// write, not just contents read).
+func (c *Client) CreatePullRequest(
+	ctx context.Context,
+	token, owner, repo string,
+	input CreatePullRequestInput,
+) (PullRequestResponse, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	head := strings.TrimSpace(input.Head)
+	base := strings.TrimSpace(input.Base)
+	title := strings.TrimSpace(input.Title)
+	if owner == "" || repo == "" || head == "" || base == "" || title == "" {
+		return PullRequestResponse{}, errors.New(
+			"pull request owner, repo, head, base, and title are required",
+		)
+	}
+	var pr PullRequestResponse
+	if err := c.userJSON(
+		ctx,
+		token,
+		http.MethodPost,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls",
+		map[string]any{
+			"title": title,
+			"body":  input.Body,
+			"head":  head,
+			"base":  base,
+		},
+		&pr,
+	); err != nil {
+		return PullRequestResponse{}, err
+	}
+	if pr.Number <= 0 || pr.HTMLURL == "" || pr.Head.SHA == "" {
+		return PullRequestResponse{}, errors.New(
+			"GitHub returned an incomplete pull request response",
+		)
+	}
+	return pr, nil
+}
+
+func (c *Client) GetRepositoryAsUser(
+	ctx context.Context,
+	token, owner, name string,
+) (Repository, error) {
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if owner == "" || name == "" {
+		return Repository{}, errors.New("GitHub repository owner and name are required")
+	}
+	var repository Repository
+	if err := c.userJSON(
+		ctx,
+		token,
+		http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name),
+		nil,
+		&repository,
+	); err != nil {
+		return Repository{}, err
+	}
+	return repository, nil
+}
+
+func (c *Client) DeleteRepositoryAsUser(
+	ctx context.Context,
+	token, owner, name string,
+) error {
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if owner == "" || name == "" {
+		return errors.New("GitHub repository owner and name are required")
+	}
+	return c.userJSON(
+		ctx,
+		token,
+		http.MethodDelete,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name),
+		nil,
+		nil,
+	)
+}
+
+func (c *Client) UserHasInstallation(ctx context.Context, accessToken string, installationID int64) (bool, error) {
+	for page := 1; page <= 20; page++ {
+		var response struct {
+			Installations []Installation `json:"installations"`
+		}
+		path := fmt.Sprintf("/user/installations?per_page=100&page=%d", page)
+		if err := c.userJSON(ctx, accessToken, http.MethodGet, path, nil, &response); err != nil {
+			return false, err
+		}
+		for _, installation := range response.Installations {
+			if installation.ID == installationID {
+				return true, nil
+			}
+		}
+		if len(response.Installations) < 100 {
+			return false, nil
+		}
+	}
+	return false, errors.New("GitHub user installation pagination exceeded limit")
+}
+
+func (c *Client) UserCanAdministerInstallation(
+	ctx context.Context,
+	accessToken string,
+	installation Installation,
+) (bool, error) {
+	var user struct {
+		ID int64 `json:"id"`
+	}
+	if err := c.userJSON(
+		ctx,
+		accessToken,
+		http.MethodGet,
+		"/user",
+		nil,
+		&user,
+	); err != nil {
+		return false, err
+	}
+	switch installation.Account.Type {
+	case "User":
+		return user.ID == installation.Account.ID, nil
+	case "Organization":
+		var membership struct {
+			State string `json:"state"`
+			Role  string `json:"role"`
+		}
+		path := "/user/memberships/orgs/" + url.PathEscape(installation.Account.Login)
+		if err := c.userJSON(
+			ctx,
+			accessToken,
+			http.MethodGet,
+			path,
+			nil,
+			&membership,
+		); err != nil {
+			return false, err
+		}
+		return membership.State == "active" && membership.Role == "admin", nil
+	default:
+		// Enterprise installation administration requires a separate enterprise
+		// role proof, so it is denied until that proof is implemented.
+		return false, nil
+	}
+}
+
+func (c *Client) ListRepositories(ctx context.Context, installationID int64) ([]Repository, error) {
+	token, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	var repositories []Repository
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			Repositories []Repository `json:"repositories"`
+		}
+		path := fmt.Sprintf("/installation/repositories?per_page=100&page=%d", page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &response); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, response.Repositories...)
+		if len(response.Repositories) < 100 {
+			return repositories, nil
+		}
+	}
+	return nil, errors.New("GitHub repository pagination exceeded limit")
+}
+
+// ListUserInstallationRepositories lists the repositories of an installation
+// that the user behind token can access: GitHub's intersection of the
+// installation's repository selection and the user's own permissions. A
+// user-scoped installation connection is synced from this list.
+func (c *Client) ListUserInstallationRepositories(
+	ctx context.Context,
+	token string,
+	installationID int64,
+) ([]Repository, error) {
+	if installationID <= 0 {
+		return nil, errors.New("GitHub installation id is invalid")
+	}
+	var repositories []Repository
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			Repositories []Repository `json:"repositories"`
+		}
+		path := fmt.Sprintf("/user/installations/%d/repositories?per_page=100&page=%d", installationID, page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &response); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, response.Repositories...)
+		if len(response.Repositories) < 100 {
+			return repositories, nil
+		}
+	}
+	return nil, errors.New("GitHub repository pagination exceeded limit")
+}
+
+// UserRepositoryAccess reports whether the user behind token can read and push
+// to a repository, addressed by its stable ID. A repository the user cannot see
+// is (false, false, nil): GitHub answers 404 (or 403) rather than revealing it.
+// A rate-limited answer is an error, not a denial.
+func (c *Client) UserRepositoryAccess(
+	ctx context.Context,
+	token string,
+	repositoryID int64,
+) (pull, push bool, err error) {
+	if repositoryID <= 0 {
+		return false, false, errors.New("GitHub repository id is invalid")
+	}
+	var repository struct {
+		Permissions struct {
+			Admin    bool `json:"admin"`
+			Maintain bool `json:"maintain"`
+			Push     bool `json:"push"`
+			Pull     bool `json:"pull"`
+		} `json:"permissions"`
+	}
+	path := fmt.Sprintf("/repositories/%d", repositoryID)
+	if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &repository); err != nil {
+		var httpError *HTTPError
+		if errors.As(err, &httpError) && !httpError.RateLimited &&
+			(httpError.StatusCode == http.StatusNotFound || httpError.StatusCode == http.StatusForbidden) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	permissions := repository.Permissions
+	push = permissions.Push || permissions.Maintain || permissions.Admin
+	return permissions.Pull || push, push, nil
+}
+
+func (c *Client) installationToken(ctx context.Context, installationID int64) (string, error) {
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	return response.Token, nil
+}
+
+func (c *Client) repositoryToken(
+	ctx context.Context,
+	installationID, repositoryID int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || repositoryID <= 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	return c.readToken(ctx, installationID, []int64{repositoryID})
+}
+
+// readToken returns a contents:read installation token for exactly the given
+// repositories, reusing a cached one for the same scope while it has enough
+// lifetime left.
+func (c *Client) readToken(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	return c.readTokens.get(ctx, readTokenKey(installationID, repositoryIDs), c.now,
+		func(ctx context.Context) (installationAccessToken, error) {
+			return c.mintReadToken(ctx, installationID, repositoryIDs)
+		})
+}
+
+// mintReadToken always asks GitHub for a new contents:read token. Callers that
+// use the mint as a live permission check (is this repository still granted to
+// the installation?) call it directly so a cached token cannot vouch for
+// access that has since been removed.
+func (c *Client) mintReadToken(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+		"repository_ids": repositoryIDs,
+		"permissions": map[string]string{
+			"contents": "read",
+		},
+	})
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
+// resolveInstallationRepositoryIDs maps declared extra-repository full names
+// ("owner/repo") to their numeric IDs, but only for repositories the
+// installation can actually mint a token for. It first enumerates the
+// installation's repositories; any declared name the enumeration does not cover
+// is retried with a direct GET /repos/{owner}/{repo} and then confirmed grantable
+// by minting a single-repo token. The GET matters because the installation
+// listing is eventually consistent: a repository the App can access may not
+// appear in the paginated list for a short window after it is granted or flipped
+// to private, and without the retry a (typically private) extra would be dropped
+// from the checkout scope even though the App can read it. The mint confirmation
+// matters because GET /repos answers 200 for ANY public repository, including ones
+// outside this installation that it cannot scope a token to; adding such an ID
+// would 422 the whole broadened checkout token and fail the primary clone too. A
+// repository that is not grantable (404 on the GET, or a failed confirming mint)
+// is reported as unresolved rather than force-added, so every returned ID is still
+// one the installation can mint a token for and a broadened checkout token never
+// 422s. The result preserves input order, contains no duplicates, and returns the
+// declared names that could not be resolved.
+func (c *Client) resolveInstallationRepositoryIDs(
+	ctx context.Context,
+	installationID int64,
+	fullNames []string,
+) (ids []int64, unresolved []string, err error) {
+	if installationID <= 0 || len(fullNames) == 0 {
+		return nil, nil, nil
+	}
+	repositories, err := c.ListRepositories(ctx, installationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	byName := make(map[string]int64, len(repositories))
+	for _, repository := range repositories {
+		byName[strings.ToLower(strings.Trim(repository.FullName, "/"))] = repository.ID
+	}
+	// The fallback token is minted at most once, and only if a declared name is
+	// missing from the listing. A failure to mint it leaves matched extras intact
+	// and marks the rest unresolved, so a hiccup here never regresses the repos
+	// that already resolved from the listing.
+	var (
+		fallbackToken    string
+		fallbackTokenErr error
+		fallbackMinted   bool
+	)
+	ids = make([]int64, 0, len(fullNames))
+	seen := make(map[int64]bool, len(fullNames))
+	for _, fullName := range fullNames {
+		normalized := strings.ToLower(strings.Trim(strings.TrimSpace(fullName), "/"))
+		if normalized == "" {
+			continue
+		}
+		id, ok := byName[normalized]
+		if !ok {
+			if !fallbackMinted {
+				fallbackToken, fallbackTokenErr = c.installationToken(ctx, installationID)
+				fallbackMinted = true
+			}
+			if fallbackTokenErr != nil {
+				unresolved = append(unresolved, normalized)
+				continue
+			}
+			resolvedID, resolveErr := c.installationRepositoryID(ctx, fallbackToken, normalized)
+			if resolveErr != nil {
+				unresolved = append(unresolved, normalized)
+				continue
+			}
+			// GET /repos returns 200 for any public repo, including one outside
+			// this installation, but the installation can only scope a token to a
+			// repo it was granted. Confirm the repo is grantable before adding it,
+			// so a declared public extra outside the installation is dropped here
+			// instead of 422ing the whole checkout token mint (which would fail the
+			// primary clone). This keeps every returned ID one the installation can
+			// mint, exactly as the listing-only path guaranteed.
+			// A live check, so never from the read-token cache.
+			if _, mintErr := c.mintReadToken(ctx, installationID, []int64{resolvedID}); mintErr != nil {
+				unresolved = append(unresolved, normalized)
+				continue
+			}
+			id = resolvedID
+		}
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, unresolved, nil
+}
+
+// installationRepositoryID resolves a single "owner/repo" to its numeric ID via a
+// direct GET /repos/{owner}/{repo} with the installation token. It backs
+// resolveInstallationRepositoryIDs' fallback for repositories missing from the
+// eventually-consistent installation listing. A repository the installation
+// cannot access returns an *HTTPError with StatusCode 404, which the caller treats
+// as unresolved; the token minted here is the installation's own, so this never
+// widens access beyond what the App is already granted.
+func (c *Client) installationRepositoryID(
+	ctx context.Context,
+	installationToken, fullName string,
+) (int64, error) {
+	owner, name, ok := strings.Cut(strings.Trim(strings.TrimSpace(fullName), "/"), "/")
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return 0, errors.New("GitHub repository full name is invalid")
+	}
+	var repository Repository
+	if err := c.userJSON(
+		ctx,
+		installationToken,
+		http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name),
+		nil,
+		&repository,
+	); err != nil {
+		return 0, err
+	}
+	if repository.ID <= 0 {
+		return 0, errors.New("GitHub returned a repository without an ID")
+	}
+	return repository.ID, nil
+}
+
+// repositoryReadTokenForRepos mints a short-lived installation token scoped to a
+// set of repositories with read-only contents access. It backs a checkout that
+// clones the project's primary repository plus any declared extra repositories;
+// repositoryToken remains the single-repository path used by capability
+// redemption. The scope is exactly the given IDs — nothing is granted
+// installation-wide.
+func (c *Client) repositoryReadTokenForRepos(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || len(repositoryIDs) == 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	for _, id := range repositoryIDs {
+		if id <= 0 {
+			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+		}
+	}
+	return c.readToken(ctx, installationID, repositoryIDs)
+}
+
+// repositoryWriteToken mints a short-lived installation token scoped to one
+// repository with write access to its contents and pull requests. Unlike
+// repositoryToken (contents:read, used for checkout), this is minted only
+// right before a push or a pull-request API call and is never handed to a
+// worker directly — the control plane holds it for the duration of one
+// server-side operation and lets it expire otherwise.
+func (c *Client) repositoryWriteToken(
+	ctx context.Context,
+	installationID, repositoryID int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || repositoryID <= 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+		"repository_ids": []int64{repositoryID},
+		"permissions": map[string]string{
+			"contents":      "write",
+			"pull_requests": "write",
+		},
+	})
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
+// repositoryWriteTokenForRepos is repositoryWriteToken's multi-repository
+// counterpart: it mints one short-lived installation token scoped to a set of
+// repositories with write access to their contents and pull requests. It backs
+// a worker's push and gh-CLI pull-request creation across the project's primary
+// repository plus any declared extra repositories that resolve within the same
+// installation — the write-side mirror of repositoryReadTokenForRepos. The
+// scope is exactly the given IDs; nothing is granted installation-wide.
+func (c *Client) repositoryWriteTokenForRepos(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || len(repositoryIDs) == 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	for _, id := range repositoryIDs {
+		if id <= 0 {
+			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+		}
+	}
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+		"repository_ids": repositoryIDs,
+		"permissions": map[string]string{
+			"contents":      "write",
+			"pull_requests": "write",
+		},
+	})
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
+// statusReadToken mints a short-lived installation token scoped to one
+// repository with read access to contents, pull requests, checks and commit
+// statuses. The snapshot GraphQL query traverses commit and branch fields in
+// private repos, including status-only CI such as CodeRabbit.
+func (c *Client) statusReadToken(
+	ctx context.Context,
+	installationID, repositoryID int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || repositoryID <= 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	permissions := map[string]string{
+		"contents": "read", "pull_requests": "read", "checks": "read", "statuses": "read",
+	}
+	request := map[string]any{
+		"repository_ids": []int64{repositoryID},
+		"permissions":    permissions,
+	}
+	response, err := c.createInstallationToken(ctx, installationID, request)
+	var permissionErr *HTTPError
+	if errors.As(err, &permissionErr) && permissionErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(permissionErr.Message, "The permissions requested are not granted to this installation") {
+		// Installations may not have approved newer optional check permissions.
+		// Keep the same repository scope and never request write access or an
+		// unrestricted token when retrying with their actual grants.
+		installation, lookupErr := c.GetInstallation(ctx, installationID)
+		if lookupErr != nil {
+			return installationAccessToken{}, lookupErr
+		}
+		for name := range permissions {
+			if granted := installation.Permissions[name]; granted != "read" && granted != "write" {
+				delete(permissions, name)
+			}
+		}
+		if permissions["contents"] == "" || permissions["pull_requests"] == "" {
+			return installationAccessToken{}, errors.New("GitHub installation requires Contents and Pull requests read access to refresh PR status")
+		}
+		response, err = c.createInstallationToken(ctx, installationID, request)
+	}
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
+// PullRequestDetail is the subset of GitHub's pull request detail response
+// used to refresh a tracked pull request's lifecycle and mergeability.
+type PullRequestDetail struct {
+	Number         int    `json:"number"`
+	State          string `json:"state"`
+	Draft          bool   `json:"draft"`
+	Merged         bool   `json:"merged"`
+	MergeableState string `json:"mergeable_state"`
+	Additions      int    `json:"additions"`
+	Deletions      int    `json:"deletions"`
+	ChangedFiles   int    `json:"changed_files"`
+	Head           struct {
+		SHA string `json:"sha"`
+	} `json:"head"`
+}
+
+// GetPullRequest fetches one pull request's current lifecycle and
+// mergeability state.
+func (c *Client) GetPullRequest(
+	ctx context.Context,
+	token, owner, repo string,
+	number int,
+) (PullRequestDetail, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	if owner == "" || repo == "" || number <= 0 {
+		return PullRequestDetail{}, errors.New("pull request owner, repo, and number are required")
+	}
+	var detail PullRequestDetail
+	if err := c.userJSON(
+		ctx, token, http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number),
+		nil, &detail,
+	); err != nil {
+		return PullRequestDetail{}, err
+	}
+	if detail.Number <= 0 {
+		return PullRequestDetail{}, errors.New("GitHub returned an incomplete pull request response")
+	}
+	return detail, nil
+}
+
+// CheckRun is one GitHub Checks API run against a commit.
+type CheckRun struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	HTMLURL    string `json:"html_url"`
+}
+
+// ListCheckRuns returns every check run GitHub has recorded against ref
+// (typically a pull request's head SHA), most recent GitHub Checks API page
+// only — sufficient to aggregate an overall CI state.
+func (c *Client) ListCheckRuns(
+	ctx context.Context,
+	token, owner, repo, ref string,
+) ([]CheckRun, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	ref = strings.TrimSpace(ref)
+	if owner == "" || repo == "" || ref == "" {
+		return nil, errors.New("check run owner, repo, and ref are required")
+	}
+	var response struct {
+		CheckRuns []CheckRun `json:"check_runs"`
+	}
+	if err := c.userJSON(
+		ctx, token, http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/commits/"+url.PathEscape(ref)+"/check-runs?per_page=100",
+		nil, &response,
+	); err != nil {
+		return nil, err
+	}
+	return response.CheckRuns, nil
+}
+
+// PullRequestReview is one submitted review on a pull request. ID and
+// SubmittedAt exist to order a reviewer's reviews chronologically — GitHub
+// returns every review event ever submitted, not just each reviewer's
+// current standing verdict.
+type PullRequestReview struct {
+	ID          int64     `json:"id"`
+	User        User      `json:"user"`
+	State       string    `json:"state"`
+	Body        string    `json:"body"`
+	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+// ListPullRequestReviews returns every review submitted on a pull request.
+func (c *Client) ListPullRequestReviews(
+	ctx context.Context,
+	token, owner, repo string,
+	number int,
+) ([]PullRequestReview, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	if owner == "" || repo == "" || number <= 0 {
+		return nil, errors.New("pull request review owner, repo, and number are required")
+	}
+	var reviews []PullRequestReview
+	if err := c.userJSON(
+		ctx, token, http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number)+"/reviews?per_page=100",
+		nil, &reviews,
+	); err != nil {
+		return nil, err
+	}
+	return reviews, nil
+}
+
+// FindPullRequestReviewByMarker scans every available page before a retry
+// decides whether an earlier, response-lost POST reached GitHub. Exhausting
+// the scan without a definitive result fails closed: it must not post again.
+func (c *Client) FindPullRequestReviewByMarker(
+	ctx context.Context, token, owner, repo string, number int, marker string,
+) (int64, error) {
+	if owner == "" || repo == "" || number <= 0 || marker == "" {
+		return 0, errors.New("pull request review identity and marker are required")
+	}
+	const pageSize = 100
+	const maxPages = 100
+	for page := 1; page <= maxPages; page++ {
+		var reviews []PullRequestReview
+		path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+			"/pulls/" + strconv.Itoa(number) + "/reviews?per_page=100&page=" + strconv.Itoa(page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &reviews); err != nil {
+			return 0, err
+		}
+		for _, review := range reviews {
+			if strings.Contains(review.Body, marker) && review.ID > 0 {
+				return review.ID, nil
+			}
+		}
+		if len(reviews) < pageSize {
+			return 0, nil
+		}
+	}
+	return 0, errors.New("pull request review history exceeded reconciliation limit")
+}
+
+// pullRequestReviewResponse is the subset of GitHub's create-review response
+// this client needs.
+type pullRequestReviewResponse struct {
+	ID int64 `json:"id"`
+}
+
+// CreatePullRequestReview posts a review comment on a pull request. It
+// always submits event "COMMENT" — GitHub refuses to let the same identity
+// that opened a pull request APPROVE or REQUEST_CHANGES on it, so a comment
+// is the only decisive-looking event this identity can actually post; the
+// verdict itself lives in the comment body and in AO's own review-run
+// record, not in GitHub's native review state.
+func (c *Client) CreatePullRequestReview(
+	ctx context.Context,
+	token, owner, repo string,
+	number int,
+	body string,
+) (int64, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	if owner == "" || repo == "" || number <= 0 || strings.TrimSpace(body) == "" {
+		return 0, errors.New("pull request review owner, repo, number, and body are required")
+	}
+	var review pullRequestReviewResponse
+	if err := c.userJSON(
+		ctx, token, http.MethodPost,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number)+"/reviews",
+		map[string]any{"body": body, "event": "COMMENT"},
+		&review,
+	); err != nil {
+		return 0, err
+	}
+	if review.ID <= 0 {
+		return 0, errors.New("GitHub returned an incomplete pull request review response")
+	}
+	return review.ID, nil
+}
+
+func (c *Client) createInstallationToken(
+	ctx context.Context,
+	installationID int64,
+	body map[string]any,
+) (installationAccessToken, error) {
+	var response installationAccessToken
+	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
+	if err := c.appJSON(ctx, http.MethodPost, path, body, &response); err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.Token == "" {
+		return installationAccessToken{}, errors.New("GitHub returned an empty installation token")
+	}
+	return response, nil
+}
+
+func (c *Client) appJSON(ctx context.Context, method, path string, body, destination any) error {
+	token, err := c.appJWT()
+	if err != nil {
+		return err
+	}
+	return c.jsonRequest(ctx, method, c.apiBaseURL+path, "Bearer "+token, body, destination)
+}
+
+func (c *Client) userJSON(ctx context.Context, token, method, path string, body, destination any) error {
+	return c.jsonRequest(ctx, method, c.apiBaseURL+path, "Bearer "+token, body, destination)
+}
+
+func (c *Client) graphQL(ctx context.Context, token, query string, variables map[string]any, destination any) error {
+	return c.jsonRequest(ctx, http.MethodPost, c.apiBaseURL+"/graphql", "Bearer "+token,
+		map[string]any{"query": query, "variables": variables}, destination)
+}
+
+func (c *Client) jsonRequest(
+	ctx context.Context,
+	method, endpoint, authorization string,
+	body, destination any,
+) error {
+	var requestBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if authorization != "" {
+		request.Header.Set("Authorization", authorization)
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("GitHub request: %w", err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxResponseBytes {
+		return errors.New("GitHub response exceeded size limit")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var failure struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(raw, &failure)
+		return &HTTPError{
+			StatusCode:  response.StatusCode,
+			Message:     failure.Message,
+			RateLimited: githubRateLimited(response, failure.Message),
+		}
+	}
+	if destination == nil {
+		return nil
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
+		return errors.New("GitHub returned invalid JSON")
+	}
+	return nil
+}
+
+func (c *Client) appJWT() (string, error) {
+	now := c.now().UTC()
+	header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
+	payload, _ := json.Marshal(map[string]any{
+		"iat": now.Add(-60 * time.Second).Unix(),
+		"exp": now.Add(9 * time.Minute).Unix(),
+		"iss": c.appID,
+	})
+	unsigned := base64.RawURLEncoding.EncodeToString(header) + "." +
+		base64.RawURLEncoding.EncodeToString(payload)
+	digest := sha256.Sum256([]byte(unsigned))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, c.privateKey, crypto.SHA256, digest[:])
+	if err != nil {
+		return "", err
+	}
+	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+func parsePrivateKey(value string) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(value))
+	if block == nil {
+		return nil, errors.New("GitHub App private key is not PEM")
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, errors.New("GitHub App private key is invalid")
+	}
+	key, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("GitHub App private key must be RSA")
+	}
+	return key, nil
+}

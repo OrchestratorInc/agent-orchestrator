@@ -69,12 +69,15 @@ func TestShellTerminalsAPI_OpenReturnsHandleForMuxAttach(t *testing.T) {
 	svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
 	srv := newShellTerminalTestServer(t, svc)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals", `{"projectId":"portfolio"}`)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals", `{"projectId":"portfolio","shell":"git-bash"}`)
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", status, body)
 	}
 	if svc.gotOpenInput.ProjectID != "portfolio" {
 		t.Errorf("project id = %q, want portfolio", svc.gotOpenInput.ProjectID)
+	}
+	if svc.gotOpenInput.Shell != "git-bash" {
+		t.Errorf("shell = %q, want git-bash", svc.gotOpenInput.Shell)
 	}
 	var resp struct {
 		ShellTerminal struct {
@@ -126,6 +129,40 @@ func TestShellTerminalsAPI_OpenAcceptsEmptyBody(t *testing.T) {
 	}
 }
 
+// The desktop renderer attaches with its measured grid, so it asks the daemon
+// to start the shell then; older and secondary clients omit it.
+func TestShellTerminalsAPI_OpenPassesStartOnAttachThrough(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"projectId":"portfolio","startOnAttach":true}`, true},
+		{`{"projectId":"portfolio"}`, false},
+	} {
+		svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
+		srv := newShellTerminalTestServer(t, svc)
+		body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals", tc.body)
+		if status != http.StatusCreated {
+			t.Fatalf("%s: status = %d, want 201; body=%s", tc.body, status, body)
+		}
+		if svc.gotOpenInput.StartOnAttach != tc.want {
+			t.Errorf("%s: StartOnAttach = %v, want %v", tc.body, svc.gotOpenInput.StartOnAttach, tc.want)
+		}
+	}
+}
+
+func TestShellTerminalsAPI_OpenPassesTitleThrough(t *testing.T) {
+	svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
+	srv := newShellTerminalTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals", `{"projectId":"portfolio","title":"Terminal 3"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", status, body)
+	}
+	if svc.gotOpenInput.Title != "Terminal 3" {
+		t.Errorf("Title = %q, want Terminal 3", svc.gotOpenInput.Title)
+	}
+}
+
 func TestShellTerminalsAPI_OpenRejectsMalformedBody(t *testing.T) {
 	srv := newShellTerminalTestServer(t, &fakeShellTerminalService{opened: sampleShellTerminal()})
 
@@ -167,6 +204,19 @@ func TestShellTerminalsAPI_CloseReturnsNoContent(t *testing.T) {
 	}
 }
 
+func TestShellTerminalsAPI_CloseDecodesDirectHostHandle(t *testing.T) {
+	svc := &fakeShellTerminalService{}
+	srv := newShellTerminalTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "DELETE", "/api/v1/shell-terminals/ptyhost-v1%3Ashellterm-abc123", "")
+	if status != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", status, body)
+	}
+	if svc.gotCloseID != "ptyhost-v1:shellterm-abc123" {
+		t.Errorf("closed handle = %q", svc.gotCloseID)
+	}
+}
+
 func TestShellTerminalsAPI_CloseUnknownHandleReturnsNotFoundEnvelope(t *testing.T) {
 	svc := &fakeShellTerminalService{err: apierr.NotFound("SHELL_TERMINAL_NOT_FOUND", "No such shell terminal")}
 	srv := newShellTerminalTestServer(t, svc)
@@ -198,6 +248,21 @@ func TestShellTerminalsAPI_RenameReturnsUpdatedTerminal(t *testing.T) {
 	mustJSON(t, body, &resp)
 	if resp.ShellTerminal.Title != "deploy" {
 		t.Errorf("response title = %q, want deploy", resp.ShellTerminal.Title)
+	}
+}
+
+func TestShellTerminalsAPI_RenameDecodesDirectHostHandle(t *testing.T) {
+	renamed := sampleShellTerminal()
+	renamed.Title = "deploy"
+	svc := &fakeShellTerminalService{renamed: renamed}
+	srv := newShellTerminalTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "PATCH", "/api/v1/shell-terminals/ptyhost-v1%3Ashellterm-abc123", `{"title":"deploy"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.gotRenameID != "ptyhost-v1:shellterm-abc123" {
+		t.Errorf("renamed handle = %q", svc.gotRenameID)
 	}
 }
 

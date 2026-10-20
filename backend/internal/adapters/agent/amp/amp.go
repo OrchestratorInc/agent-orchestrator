@@ -1,9 +1,8 @@
 // Package amp implements the Amp agent adapter: launching new interactive Amp
 // sessions and resuming sessions when a native Amp thread id is known.
 //
-// AO injects standing session instructions through a workspace-local Amp
-// TypeScript plugin. Activity hooks and SessionInfo derivation will likely
-// require more Amp-specific plugin work, so SessionInfo remains a no-op.
+// AO injects standing session instructions and reports Amp lifecycle activity
+// through a workspace-local TypeScript plugin.
 package amp
 
 import (
@@ -33,8 +32,13 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// EmitsSemanticMessageAcceptance reports that AO's Amp hook includes the
+// accepted prompt text in its user-prompt-submit callback.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -122,7 +126,7 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Amp session
+// GetRestoreCommand uses the native threads continue command to resume Amp
 // when plugin-derived native session metadata is available. Until that metadata
 // exists, ok is false and callers fall back to fresh launch behavior.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
@@ -144,8 +148,19 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if mode := strings.TrimSpace(cfg.Config.Mode); mode != "" {
 		cmd = append(cmd, "--mode", mode)
 	}
-	cmd = append(cmd, "--resume", agentSessionID)
+	cmd = append(cmd, "threads", "continue", agentSessionID)
 	return cmd, true, nil
+}
+
+// SessionInfo surfaces the native Amp thread id captured by the managed
+// session-start callback. Other standard hook-derived metadata is forwarded
+// when present.
+func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.SessionInfo{}, false, err
+	}
+	info, ok := agentbase.StandardSessionInfo(session)
+	return info, ok, nil
 }
 
 var ampBinarySpec = binaryutil.BinarySpec{
@@ -181,4 +196,12 @@ func (p *Plugin) ampBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

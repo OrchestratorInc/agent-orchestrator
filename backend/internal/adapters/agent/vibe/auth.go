@@ -4,20 +4,18 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	binary, err := p.ResolveBinary(ctx)
+	_, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
@@ -26,13 +24,12 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	} else if ok {
 		return status, nil
 	}
-	return authprobe.CLIStatus(ctx, binary, nil)
+	return ports.AgentAuthStatusUnknown, nil
 }
 
 const (
 	// This names the default env var Vibe reads; it is not a credential value.
 	vibeDefaultAPIKeyEnvVar = "MISTRAL_API_KEY" //nolint:gosec // env var name, not a credential value
-	vibeKeychainService     = "vibe"
 )
 
 func vibeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
@@ -51,25 +48,39 @@ func vibeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		vibeHome = filepath.Join(home, ".vibe")
 	}
 
+	// AuthStatus is a catalog-level probe and has no session workspace. Do not
+	// inspect a project .vibe/config.toml from the daemon's current directory:
+	// it could belong to an unrelated checkout and report its credentials for
+	// every session. The global Vibe config remains valid evidence here.
 	envVars, err := vibeAPIKeyEnvVars(filepath.Join(vibeHome, "config.toml"))
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
+	// Vibe's own ~/.vibe/.env decides first; the same variables in the
+	// process environment are the fallback.
+	envFile := filepath.Join(vibeHome, ".env")
+	fileStatus, fileOK := ports.AgentAuthStatusUnknown, false
+	var fileErr error
 	for _, envVar := range envVars {
-		if strings.TrimSpace(os.Getenv(envVar)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
+		status, ok, err := vibeEnvFileAuthStatus(envFile, envVar)
+		if err != nil {
+			fileErr = err
+			break
 		}
-		if status, ok, err := vibeEnvFileAuthStatus(filepath.Join(vibeHome, ".env"), envVar); err != nil || ok {
-			return status, ok, err
+		if ok {
+			if status == ports.AgentAuthStatusAuthorized {
+				ports.RecordAuthEvidence(ctx, authprobe.FileSource(envFile).WithMethod(domain.AgentAccountMethodAPIKey))
+				return status, true, nil
+			}
+			fileStatus, fileOK = status, true
+			break
 		}
 	}
-	if status, ok, err := vibeSessionLogAuthStatus(ctx, filepath.Join(vibeHome, "logs", "session")); err != nil || ok {
-		return status, ok, err
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, envVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	for _, envVar := range envVars {
-		if status, ok, err := vibeKeychainAuthStatus(ctx, envVar); err != nil || ok {
-			return status, ok, err
-		}
+	if fileErr != nil || fileOK {
+		return fileStatus, fileOK, fileErr
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }
@@ -116,62 +127,9 @@ func vibeEnvFileAuthStatus(path, envVar string) (ports.AgentAuthStatus, bool, er
 		if strings.Trim(strings.TrimSpace(value), `"'`) != "" {
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
-		return ports.AgentAuthStatusUnauthorized, true, nil
-	}
-	return ports.AgentAuthStatusUnknown, false, nil
-}
-
-func vibeKeychainAuthStatus(ctx context.Context, envVar string) (ports.AgentAuthStatus, bool, error) {
-	if runtime.GOOS != "darwin" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	if strings.TrimSpace(envVar) == "" {
-		return ports.AgentAuthStatusUnknown, false, nil
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	out, err := aoprocess.CommandContext(probeCtx, "security", "find-generic-password", "-s", vibeKeychainService, "-a", envVar, "-w").CombinedOutput()
-	if probeCtx.Err() != nil {
-		return ports.AgentAuthStatusUnknown, false, nil
-	}
-	if err == nil && strings.TrimSpace(string(out)) != "" {
-		return ports.AgentAuthStatusAuthorized, true, nil
-	}
 	return ports.AgentAuthStatusUnknown, false, nil
-}
-
-func vibeSessionLogAuthStatus(ctx context.Context, dir string) (ports.AgentAuthStatus, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
-	}
-	paths, err := filepath.Glob(filepath.Join(dir, "session_*", "messages.jsonl"))
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
-	}
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
-		}
-		data, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
-		}
-		if vibeMessagesShowModelUse(string(data)) {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
-	}
-	return ports.AgentAuthStatusUnknown, false, nil
-}
-
-func vibeMessagesShowModelUse(text string) bool {
-	return strings.Contains(text, `"role": "assistant"`) ||
-		strings.Contains(text, `"role":"assistant"`) ||
-		strings.Contains(text, `"reasoning_content"`) ||
-		strings.Contains(text, `"session_completion_tokens"`)
 }
 
 func containsString(values []string, target string) bool {

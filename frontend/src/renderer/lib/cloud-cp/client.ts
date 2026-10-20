@@ -1,0 +1,936 @@
+// Typed client for the cloud control plane's renderer-facing v0 surface
+// (`/api/cloud/v1/*`). The transport is injected — `getToken` supplies the
+// WorkOS bearer token and `fetchImpl` can be `window.fetch` today or an
+// Electron-main-proxied fetch later — so this module never imports Electron
+// APIs. Every call attaches `Authorization: Bearer <token>`; a 401 (or a
+// missing token) surfaces as `CloudCpAuthError`, any other non-2xx as
+// `CloudCpError` carrying the status and the control plane's envelope fields.
+// No retries in v0: callers own retry policy.
+
+import { CloudCpAuthError, CloudCpError } from "./errors";
+import { createSseFrameParser } from "./sse";
+import type {
+	CloudCpOffering,
+	CloudCpAgentProvider,
+	CloudCpCancelTurnResponse,
+	CloudCpChatEventsQuery,
+	CloudCpChatEventsResponse,
+	CloudCpChatModelsResponse,
+	CloudCpCoderTemplateParametersResponse,
+	CloudCpCoderTemplatesResponse,
+	CloudCpClientEvent,
+	CloudCpCreateOrganizationRequest,
+	CloudCpCreateOrganizationResponse,
+	CloudCpCreateGitHubProjectRequest,
+	CloudCpCreateStandaloneProjectRequest,
+	CloudCpCreateProjectRequest,
+	CloudCpCreateSessionRequest,
+	CloudCpErrorEnvelope,
+	CloudCpInvitationsResponse,
+	CloudCpListQuery,
+	CloudCpListSessionsQuery,
+	CloudCpMeResponse,
+	CloudCpNotificationEventsResponse,
+	CloudCpNotificationListQuery,
+	CloudCpNotificationListResponse,
+	CloudCpOrgCoderConfigResponse,
+	CloudCpBillingLinkResponse,
+	CloudCpBillingSummary,
+	CloudCpPutOrgCoderConfigRequest,
+	CloudCpProjectDeletedResponse,
+	CloudCpProjectListResponse,
+	CloudCpProjectResponse,
+	CloudCpSessionPullRequestsResponse,
+	CloudCpSessionReviewState,
+	CloudCpProjectSettingsRequest,
+	CloudCpProviderConnectionResponse,
+	CloudCpProviderConnectionsResponse,
+	CloudCpGitHubReposResponse,
+	CloudCpStartGitHubInstallationResponse,
+	CloudCpGitHubInstallationsResponse,
+	CloudCpSyncGitHubInstallationResponse,
+	CloudCpGitHubUserConnection,
+	CloudCpGitHubRepositoriesPage,
+	CloudCpPutAgentConnectionRequest,
+	CloudCpPutGitHubPATRequest,
+	CloudCpSendMessageRequest,
+	CloudCpSendMessageResponse,
+	CloudCpSteerTurnResponse,
+	CloudCpSessionChildrenResponse,
+	CloudCpHarnessInspectResponse,
+	CloudCpHarnessStatus,
+	CloudCpSessionDeletedResponse,
+	CloudCpSessionListResponse,
+	CloudCpResumeSessionResponse,
+	CloudCpRestoreSessionResponse,
+	CloudCpRetrySessionStartupResponse,
+	CloudCpSessionResponse,
+	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
+	CloudCpCancelInterfaceTransitionResponse,
+	CloudCpInterfaceTransitionStatusResponse,
+	CloudCpStartInterfaceTransitionRequest,
+	CloudCpStartInterfaceTransitionResponse,
+	CloudCpWorkspaceDiff,
+	CloudCpWorkspaceDiffFileDetail,
+	CloudCpWorkspaceReviewDiffsRequest,
+	CloudCpWorkspaceReviewDiffsResponse,
+	CloudCpWorkspaceReviewFileQuery,
+	CloudCpWorkspaceReviewFileResponse,
+	CloudCpWorkspaceReviewResponse,
+	CloudCpWorkspaceReviewRevisionQuery,
+	CloudCpWorkspaceReviewRevisionResponse,
+	CloudCpWorkspaceReviewSearchQuery,
+	CloudCpWorkspaceReviewSearchResponse,
+	CloudCpWorkspaceReviewTreeResponse,
+	CloudCpWorkspaceReviewWriteRequest,
+	CloudCpWorkspaceReviewWriteResponse,
+	CloudCpTerminalTicketRequest,
+	CloudCpTerminalTicketResponse,
+	CloudCpUpdateProjectRequest,
+	CloudCpUpdateSessionPreferencesRequest,
+	CloudCpValidateRepositoryAccessRequest,
+	CloudCpValidateRepositoryAccessResponse,
+} from "./types";
+
+const API_PREFIX = "/api/cloud/v1";
+
+export interface CloudCpClientOptions {
+	/** Control-plane origin, e.g. "https://cloud.example.com". A trailing slash is tolerated. */
+	baseUrl: string;
+	/** Returns the current bearer token, or null when signed out. Called per request. */
+	getToken: () => Promise<string | null>;
+	/** Transport override; defaults to the global fetch. */
+	fetchImpl?: typeof fetch;
+	/**
+	 * Called whenever a request is rejected with 403. A 403 from the control
+	 * plane means the caller is not a member of the org the request was scoped
+	 * to ("You do not have access to this organization") — i.e. the app's
+	 * selected org is stale (membership changed). The renderer wires this to
+	 * re-resolve the current org so callers stop hammering a dead org.
+	 */
+	onForbidden?: () => void;
+	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
+	onPlanRefused?: (code: string) => void;
+}
+
+export interface CloudCpRequestOptions {
+	signal?: AbortSignal;
+}
+
+/**
+ * Options for a session workspace call (/sessions/{id}/workspace/*). In a
+ * multi-repository session, `repository` is the folder name of one of the
+ * session's additional repositories (from the review summary's
+ * `repositories`); absent means the main repository.
+ */
+export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
+	repository?: string;
+}
+
+/**
+ * Options for calls the control plane requires an `Idempotency-Key` header on
+ * (create project, create session, send message). A random UUID is generated
+ * when the caller does not pin one; pin it to make client-side retries safe.
+ */
+export interface CloudCpMutationOptions extends CloudCpRequestOptions {
+	idempotencyKey?: string;
+}
+
+export interface CloudCpSessionEventsOptions {
+	/** Invoked once per parsed event, in stream order. */
+	onEvent: (event: CloudCpClientEvent) => void;
+	/** Invoked on setup or mid-stream failure. Aborts via `signal` are silent. */
+	onError?: (error: CloudCpError) => void;
+	/** Aborting closes the stream and resolves the subscription promise. */
+	signal?: AbortSignal;
+	/** Resume strictly after this sequence; omit to replay from the beginning. */
+	after?: number;
+}
+
+export interface CloudCpNotificationEventsOptions {
+	onEvent: (event: import("./types").CloudCpNotificationEvent) => void;
+	onError?: (error: CloudCpError) => void;
+	signal?: AbortSignal;
+	after?: number;
+}
+
+export interface CloudCpClient {
+	me(options?: CloudCpRequestOptions): Promise<CloudCpMeResponse>;
+	createOrganization(
+		body: CloudCpCreateOrganizationRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCreateOrganizationResponse>;
+	listMyInvitations(options?: CloudCpRequestOptions): Promise<CloudCpInvitationsResponse>;
+
+	listProjects(
+		orgId: string,
+		query?: CloudCpListQuery,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpProjectListResponse>;
+	createProject(
+		orgId: string,
+		body: CloudCpCreateProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
+	getProject(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
+	updateProjectSettings(orgId: string, projectId: string, body: CloudCpProjectSettingsRequest, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
+	updateProject(
+		orgId: string,
+		projectId: string,
+		body: CloudCpUpdateProjectRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpProjectResponse>;
+	deleteProject(
+		orgId: string,
+		projectId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpProjectDeletedResponse>;
+
+	listSessions(
+		orgId: string,
+		query?: CloudCpListSessionsQuery,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionListResponse>;
+	createSession(
+		orgId: string,
+		body: CloudCpCreateSessionRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSessionResponse>;
+	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	updateSessionPreferences(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpUpdateSessionPreferencesRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionResponse>;
+	inspectSessionReviewerHarnesses(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpHarnessInspectResponse>;
+	installSessionReviewerHarness(
+		orgId: string,
+		sessionId: string,
+		harness: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpHarnessStatus>;
+	getInterfaceTransition(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpInterfaceTransitionStatusResponse>;
+	startInterfaceTransition(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpStartInterfaceTransitionRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpStartInterfaceTransitionResponse>;
+	cancelInterfaceTransition(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCancelInterfaceTransitionResponse>;
+	acknowledgeInterfaceTransitionNotice(
+		orgId: string,
+		sessionId: string,
+		transitionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpAcknowledgeInterfaceTransitionNoticeResponse>;
+	setSessionAutoInjectCI(orgId: string, sessionId: string, autoInjectCI: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	setSessionAutoInjectReview(orgId: string, sessionId: string, autoInjectReview: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
+	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
+	/**
+	 * Lists the rich parameters of a Coder template's active version. An older
+	 * control plane without the route answers 404.
+	 */
+	getCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
+	/**
+	 * A Coder template's parameters with draft values applied, so a parameter
+	 * the template declares only for some value of another appears once it
+	 * applies. An older control plane without the route answers 404 or 405.
+	 */
+	evaluateCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		values: Readonly<Record<string, string>>,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
+	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
+	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
+	/** The org's plan, its limits, and usage against them. */
+	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
+	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/**
+	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
+	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
+	 */
+	createBillingPortal(orgId: string, flow?: "cancel", options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/** Spend one of the plan's manual resets of the weekly usage limit. Admins only. */
+	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
+	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/**
+	 * Set the org's default sandbox provider (org admins; only an org offered
+	 * more than one provider). "" clears it. Returns the org's updated offering.
+	 */
+	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
+	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
+	putOrgCoderConfig(
+		orgId: string,
+		body: CloudCpPutOrgCoderConfigRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpOrgCoderConfigResponse>;
+	/** Removes the org's bring-your-own-Coder connection. */
+	deleteOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Lists the sessions an orchestrator spawned, with each child's pull requests. */
+	listSessionChildren(
+		orgId: string,
+		sessionId: string,
+		query?: CloudCpListQuery,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionChildrenResponse>;
+	listSessionPullRequests(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionPullRequestsResponse>;
+	getSessionReviewState(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionReviewState>;
+	triggerSessionReviews(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionReviewState>;
+	cancelSessionReviews(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionReviewState>;
+	mergePullRequest(orgId: string, sessionId: string, number: number, prUrl: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ status: string }>;
+	deleteSession(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionDeletedResponse>;
+	resumeSession(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpResumeSessionResponse>;
+	requestWorkspaceCheckout(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
+	/** Docker-only changed-file summary for a cloud session. */
+	getWorkspaceDiff(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceDiff>;
+	/** Docker-only selected-file review details for a cloud session. */
+	readWorkspaceDiffFile(
+		orgId: string,
+		sessionId: string,
+		path: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpWorkspaceDiffFileDetail>;
+	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
+	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
+	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
+	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
+	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
+	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
+	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
+	/** Re-provision a deleted session, keeping its conversation and work intact. */
+	restoreSession(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpRestoreSessionResponse>;
+	/**
+	 * Re-arm startup for a session whose worker never started: resets the
+	 * startup window and retries bootstrap on the existing workspace. 409
+	 * `startup_retry_unavailable` when the session is not retryable.
+	 */
+	retrySessionStartup(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpRetrySessionStartupResponse>;
+
+	sendSessionMessage(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpSendMessageRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSendMessageResponse>;
+	sendSessionReviewToWorker(
+		orgId: string,
+		sessionId: string,
+		reviewRunId: string,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSendMessageResponse>;
+	listChatModels(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
+	cancelTurn(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCancelTurnResponse>;
+	steerTurn(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		body: CloudCpSendMessageRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSteerTurnResponse>;
+	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
+	listChatEvents(
+		orgId: string,
+		sessionId: string,
+		query?: CloudCpChatEventsQuery,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpChatEventsResponse>;
+	/**
+	 * Subscribe to the session's live SSE stream. Resolves when the stream ends
+	 * (server close or abort); failures are reported through `onError`, never as
+	 * a rejection, so fire-and-forget callers cannot leak unhandled rejections.
+	 */
+	subscribeSessionEvents(orgId: string, sessionId: string, options: CloudCpSessionEventsOptions): Promise<void>;
+	listNotifications(orgId: string, query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
+	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
+	markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
+	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
+
+	createTerminalTicket(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpTerminalTicketRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpTerminalTicketResponse>;
+
+	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
+	putUserAgentConnection(
+		agent: CloudCpAgentProvider,
+		body: CloudCpPutAgentConnectionRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpProviderConnectionResponse>;
+	putGitHubPAT(body: CloudCpPutGitHubPATRequest, options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionResponse>;
+	deleteGitHubPAT(options?: CloudCpRequestOptions): Promise<void>;
+	listGitHubRepos(options?: CloudCpRequestOptions): Promise<CloudCpGitHubReposResponse>;
+	validateSavedRepositoryAccess(
+		body: CloudCpValidateRepositoryAccessRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpValidateRepositoryAccessResponse>;
+
+	// GitHub App connect flow. See the type comments in ./types for the flow.
+	startGitHubInstallation(
+		orgId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpStartGitHubInstallationResponse>;
+	getGitHubUser(options?: CloudCpRequestOptions): Promise<CloudCpGitHubUserConnection>;
+	listGitHubInstallations(
+		orgId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpGitHubInstallationsResponse>;
+	syncGitHubInstallation(
+		orgId: string,
+		installationId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSyncGitHubInstallationResponse>;
+	listGitHubRepositories(
+		orgId: string,
+		query?: CloudCpListQuery,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpGitHubRepositoriesPage>;
+	createGitHubProject(
+		orgId: string,
+		body: CloudCpCreateGitHubProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
+	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
+	createStandaloneProject(
+		orgId: string,
+		body: CloudCpCreateStandaloneProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
+}
+
+type QueryParams = Record<string, string | number | undefined>;
+
+interface SendOptions {
+	body?: unknown;
+	query?: QueryParams;
+	signal?: AbortSignal;
+	idempotencyKey?: string;
+	accept?: string;
+}
+
+function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
+	let url = `${baseUrl.replace(/\/+$/, "")}${API_PREFIX}${path}`;
+	if (query !== undefined) {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(query)) {
+			if (value !== undefined) params.set(key, String(value));
+		}
+		const search = params.toString();
+		if (search !== "") url += `?${search}`;
+	}
+	return url;
+}
+
+/** The `repository` query parameter of a workspace call; undefined for the main repository. */
+function repositoryQuery(options: CloudCpWorkspaceRequestOptions | undefined): QueryParams | undefined {
+	const repository = options?.repository?.trim();
+	return repository ? { repository } : undefined;
+}
+
+/** Build one path segment from a caller-supplied identifier. */
+function seg(value: string): string {
+	return encodeURIComponent(value);
+}
+
+/** Error codes the control plane uses when a plan does not allow the request. */
+export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+	"PLAN_REQUIRED",
+	"ORCHESTRATOR_SLOTS_FULL",
+	"WORKER_SLOTS_FULL",
+	"SESSION_LIMIT_REACHED",
+	"WINDOW_LIMIT_REACHED",
+	"WEEKLY_LIMIT_REACHED",
+]);
+
+async function errorFromResponse(response: Response): Promise<CloudCpError> {
+	let message = `Cloud control plane request failed with status ${response.status}.`;
+	let code: string | undefined;
+	let requestId: string | undefined;
+	try {
+		const body = (await response.json()) as Partial<CloudCpErrorEnvelope> | null;
+		if (typeof body?.message === "string" && body.message !== "") {
+			message = body.message;
+		} else if (typeof body?.error === "string" && body.error !== "") {
+			message = body.error;
+		}
+		if (typeof body?.code === "string" && body.code !== "") code = body.code;
+		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+	} catch {
+		// Non-JSON or empty body: keep the status-derived message.
+	}
+	const options = { status: response.status, code, requestId };
+	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
+}
+
+function toCloudCpError(error: unknown): CloudCpError {
+	if (error instanceof CloudCpError) return error;
+	const message = error instanceof Error ? error.message : String(error);
+	return new CloudCpError(message, { status: 0, cause: error });
+}
+
+function isAbortError(error: unknown): boolean {
+	return error instanceof Error && error.name === "AbortError";
+}
+
+function newIdempotencyKey(): string {
+	return crypto.randomUUID();
+}
+
+export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
+	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
+	// Wrap the default so the global fetch is never invoked detached from its
+	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
+	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
+
+	async function send(method: string, path: string, init: SendOptions = {}): Promise<Response> {
+		const token = await getToken();
+		if (token === null || token === "") {
+			throw new CloudCpAuthError("No cloud control-plane token is available. Sign in and try again.", {
+				status: 401,
+				code: "no_token",
+			});
+		}
+		const headers = new Headers({
+			Authorization: `Bearer ${token}`,
+			Accept: init.accept ?? "application/json",
+		});
+		if (init.body !== undefined) headers.set("Content-Type", "application/json");
+		if (init.idempotencyKey !== undefined) headers.set("Idempotency-Key", init.idempotencyKey);
+		const response = await doFetch(buildUrl(baseUrl, path, init.query), {
+			method,
+			headers,
+			body: init.body === undefined ? undefined : JSON.stringify(init.body),
+			signal: init.signal,
+		});
+		if (!response.ok) {
+			// A 403 means the selected org is stale (membership changed) — notify so
+			// the renderer re-resolves the current org instead of stranding every
+			// org-scoped call. Fire before throwing so callers still see the error.
+			if (response.status === 403) onForbidden?.();
+			const error = await errorFromResponse(response);
+			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
+			throw error;
+		}
+		return response;
+	}
+
+	async function requestJson<T>(method: string, path: string, init: SendOptions = {}): Promise<T> {
+		const response = await send(method, path, init);
+		return (await response.json()) as T;
+	}
+
+	async function requestVoid(method: string, path: string, init: SendOptions = {}): Promise<void> {
+		await send(method, path, init);
+	}
+
+	async function subscribeSessionEvents(
+		orgId: string,
+		sessionId: string,
+		subscribeOptions: CloudCpSessionEventsOptions,
+	): Promise<void> {
+		const { onEvent, onError, signal, after } = subscribeOptions;
+		const fail = (error: unknown): void => {
+			if (signal?.aborted === true || isAbortError(error)) return;
+			onError?.(toCloudCpError(error));
+		};
+
+		let response: Response;
+		try {
+			response = await send("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/events`, {
+				query: { after },
+				signal,
+				accept: "text/event-stream",
+			});
+		} catch (error) {
+			fail(error);
+			return;
+		}
+		if (response.body === null) {
+			fail(
+				new CloudCpError("The event stream response has no body.", {
+					status: response.status,
+				}),
+			);
+			return;
+		}
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		const parser = createSseFrameParser();
+		const deliver = (data: string): void => {
+			let event: CloudCpClientEvent;
+			try {
+				event = JSON.parse(data) as CloudCpClientEvent;
+			} catch {
+				fail(new CloudCpError("The event stream sent a frame with malformed JSON.", { status: 200 }));
+				return;
+			}
+			onEvent(event);
+		};
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (value !== undefined) {
+					for (const frame of parser.push(decoder.decode(value, { stream: true }))) deliver(frame.data);
+				}
+				if (done) break;
+			}
+			for (const frame of parser.push(decoder.decode())) deliver(frame.data);
+			for (const frame of parser.flush()) deliver(frame.data);
+		} catch (error) {
+			fail(error);
+		} finally {
+			reader.releaseLock();
+		}
+	}
+
+	async function subscribeNotificationEvents(orgId: string, subscribeOptions: CloudCpNotificationEventsOptions): Promise<void> {
+		const { onEvent, onError, signal, after } = subscribeOptions;
+		const fail = (error: unknown): void => {
+			if (signal?.aborted === true || isAbortError(error)) return;
+			onError?.(toCloudCpError(error));
+		};
+		let response: Response;
+		try {
+			response = await send("GET", `/orgs/${seg(orgId)}/notification-events`, { query: { after }, signal, accept: "text/event-stream" });
+		} catch (error) { fail(error); return; }
+		if (response.body === null) { fail(new CloudCpError("The notification stream response has no body.", { status: response.status })); return; }
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		const parser = createSseFrameParser();
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (value !== undefined) for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
+					try { onEvent(JSON.parse(frame.data)); } catch { fail(new CloudCpError("The notification stream sent a frame with malformed JSON.", { status: 200 })); }
+				}
+				if (done) break;
+			}
+		} catch (error) { fail(error); } finally { reader.releaseLock(); }
+	}
+
+	return {
+		me: (o) => requestJson("GET", "/me", { signal: o?.signal }),
+		createOrganization: (body, o) => requestJson("POST", "/orgs", { body, signal: o?.signal }),
+		listMyInvitations: (o) => requestJson("GET", "/invitations", { signal: o?.signal }),
+
+		listProjects: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects`, {
+				query: { limit: query?.limit, cursor: query?.cursor },
+				signal: o?.signal,
+			}),
+		createProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		updateProject: (orgId, projectId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, {
+				body,
+				signal: o?.signal,
+			}),
+		getProject: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, { signal: o?.signal }),
+		updateProjectSettings: (orgId, projectId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/settings`, { body, signal: o?.signal }),
+		deleteProject: (orgId, projectId, o) =>
+			requestJson("DELETE", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, {
+				signal: o?.signal,
+			}),
+
+		listSessions: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions`, {
+				query: {
+					projectId: query?.projectId,
+					limit: query?.limit,
+					cursor: query?.cursor,
+				},
+				signal: o?.signal,
+			}),
+		createSession: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		getSession: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+		getInterfaceTransition: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, { signal: o?.signal }),
+		startInterfaceTransition: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		cancelInterfaceTransition: (orgId, sessionId, o) =>
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, {
+				signal: o?.signal,
+			}),
+		acknowledgeInterfaceTransitionNotice: (orgId, sessionId, transitionId, o) =>
+			requestJson(
+				"PUT",
+				`/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition/${seg(transitionId)}/notice-acknowledgement`,
+				{ signal: o?.signal },
+			),
+		setSessionAutoInjectCI: (orgId, sessionId, autoInjectCI, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/auto-inject-ci`, { body: { autoInjectCI }, signal: o?.signal }),
+		setSessionAutoInjectReview: (orgId, sessionId, autoInjectReview, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/auto-inject-review`, { body: { autoInjectReview }, signal: o?.signal }),
+		setSessionMergePolicy: (orgId, sessionId, terminateOnPrMerge, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/merge-policy`, { body: { terminateOnPrMerge }, signal: o?.signal }),
+		updateSessionPreferences: (orgId, sessionId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/preferences`, { body, signal: o?.signal }),
+		inspectSessionReviewerHarnesses: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviewer-harnesses`, { signal: o?.signal }),
+		installSessionReviewerHarness: (orgId, sessionId, harness, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviewer-harnesses/${seg(harness)}/install`, {
+				signal: o?.signal,
+			}),
+		listCoderTemplates: (orgId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
+		getCoderTemplateParameters: (orgId, templateId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters`, { signal: o?.signal }),
+		evaluateCoderTemplateParameters: (orgId, templateId, values, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters/evaluate`, {
+				body: { values },
+				signal: o?.signal,
+			}),
+		getOrgCoderConfig: (orgId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
+		createBillingCheckout: (orgId, plan, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
+		createBillingPortal: (orgId, flow, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: flow ? { flow } : {}, signal: o?.signal }),
+		resetBillingUsage: (orgId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
+		touchSessionPresence: (orgId, sessionId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
+		putOrgSandboxProvider: (orgId, defaultProvider, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sandbox-provider`, { body: { defaultProvider }, signal: o?.signal }),
+		putOrgCoderConfig: (orgId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
+		deleteOrgCoderConfig: (orgId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		listSessionChildren: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/children`, {
+				query: { limit: query?.limit, cursor: query?.cursor },
+				signal: o?.signal,
+			}),
+		listSessionPullRequests: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests`, {
+				signal: o?.signal,
+			}),
+		mergePullRequest: (orgId, sessionId, number, prUrl, expectedHeadSha, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge`, {
+				body: { prUrl, expectedHeadSha }, signal: o?.signal,
+			}),
+		getSessionReviewState: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews`, { signal: o?.signal }),
+		triggerSessionReviews: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/trigger`, { signal: o?.signal }),
+		cancelSessionReviews: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
+		deleteSession: (orgId, sessionId, o) =>
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+				signal: o?.signal,
+			}),
+		resumeSession: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/resume`, {
+				signal: o?.signal,
+			}),
+		requestWorkspaceCheckout: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/checkout`, {
+				signal: o?.signal,
+			}),
+		getWorkspaceDiff: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/diff`, {
+				signal: o?.signal,
+			}),
+		readWorkspaceDiffFile: (orgId, sessionId, path, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/file/diff`, {
+				query: { path },
+				signal: o?.signal,
+			}),
+		getWorkspaceReview: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, {
+				query: repositoryQuery(o), signal: o?.signal,
+			}),
+		getWorkspaceReviewTree: (orgId, sessionId, path, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/tree`, {
+				query: { path, ...repositoryQuery(o) }, signal: o?.signal,
+			}),
+		searchWorkspaceReview: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/search`, {
+				query: { query: query.query, cursor: query.cursor, limit: query.limit, ...repositoryQuery(o) }, signal: o?.signal,
+			}),
+		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
+				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...repositoryQuery(o) }, signal: o?.signal,
+			}),
+		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
+				body, query: repositoryQuery(o), signal: o?.signal,
+			}),
+		getWorkspaceReviewRevision: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
+				query: {
+					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
+					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...repositoryQuery(o),
+				}, signal: o?.signal,
+			}),
+		updateWorkspaceReviewFile: (orgId, sessionId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
+				body, query: repositoryQuery(o), signal: o?.signal,
+			}),
+		restoreSession: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
+				signal: o?.signal,
+			}),
+		retrySessionStartup: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/startup-retry`, {
+				signal: o?.signal,
+			}),
+
+		sendSessionMessage: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/messages`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		sendSessionReviewToWorker: (orgId, sessionId, reviewRunId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/${seg(reviewRunId)}/send`, {
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		listChatModels: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-models`, { signal: o?.signal }),
+		cancelTurn: (orgId, sessionId, turnId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/cancel`, {
+				signal: o?.signal,
+			}),
+		steerTurn: (orgId, sessionId, turnId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/steer`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		decideChatApproval: (orgId, sessionId, requestId, decisionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/approvals/${seg(requestId)}/decide`, {
+				body: { decisionId }, signal: o?.signal,
+			}),
+		listChatEvents: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-events`, {
+				query: { after: query?.after, limit: query?.limit },
+				signal: o?.signal,
+			}),
+		subscribeSessionEvents,
+		listNotifications: (orgId, query, o) => requestJson("GET", `/orgs/${seg(orgId)}/notifications`, { query: { status: query?.status, limit: query?.limit, cursor: query?.cursor }, signal: o?.signal }),
+		listNotificationEvents: (orgId, after, o) => requestJson("GET", `/orgs/${seg(orgId)}/notification-events`, { query: { after }, signal: o?.signal }),
+		markNotificationsRead: (orgId, notificationIds, o) => notificationIds === undefined || notificationIds.length === 0
+			? requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { signal: o?.signal })
+			: Promise.all(notificationIds.map((id) => requestJson<{ updated: number }>("PATCH", `/orgs/${seg(orgId)}/notifications/${seg(id)}`, { body: { status: "read" }, signal: o?.signal }))).then((rows) => ({ updated: rows.reduce((total, row) => total + row.updated, 0) })),
+		subscribeNotificationEvents,
+
+		createTerminalTicket: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {
+				body,
+				signal: o?.signal,
+			}),
+
+		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
+		putUserAgentConnection: (agent, body, o) =>
+			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
+		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),
+		deleteGitHubPAT: (o) => requestVoid("DELETE", "/me/github-pat", { signal: o?.signal }),
+		listGitHubRepos: (o) => requestJson("GET", "/me/github/repos", { signal: o?.signal }),
+		validateSavedRepositoryAccess: (body, o) =>
+			requestJson("POST", "/me/github-pat/validate-saved-repository", { body, signal: o?.signal }),
+
+		startGitHubInstallation: (orgId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/github/installations/start`, { signal: o?.signal }),
+		getGitHubUser: (o) => requestJson("GET", "/github/user", { signal: o?.signal }),
+		listGitHubInstallations: (orgId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/github/installations`, { signal: o?.signal }),
+		syncGitHubInstallation: (orgId, installationId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/github/installations/${seg(installationId)}/sync`, {
+				signal: o?.signal,
+			}),
+		listGitHubRepositories: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/github/repositories`, {
+				query: { limit: query?.limit, cursor: query?.cursor },
+				signal: o?.signal,
+			}),
+		createGitHubProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/github/projects`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createStandaloneProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+	};
+}

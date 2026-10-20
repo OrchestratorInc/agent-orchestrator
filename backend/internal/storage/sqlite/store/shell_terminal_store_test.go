@@ -27,6 +27,7 @@ func TestSelectShellTerminalsBySessionID(t *testing.T) {
 
 	recA1 := shellTerminalRecord("shellterm-a1", "run-1")
 	recA1.SessionID = sessA.ID
+	recA1.PreviewCapabilityVerifier = "preview-verifier-a1"
 	recA2 := shellTerminalRecord("shellterm-a2", "run-1")
 	recA2.SessionID = sessA.ID
 	recB := shellTerminalRecord("shellterm-b", "run-1")
@@ -47,6 +48,9 @@ func TestSelectShellTerminalsBySessionID(t *testing.T) {
 	for _, rec := range got {
 		if rec.SessionID != sessA.ID {
 			t.Errorf("terminal %s session id = %q, want %q", rec.HandleID, rec.SessionID, sessA.ID)
+		}
+		if rec.HandleID == recA1.HandleID && rec.PreviewCapabilityVerifier != recA1.PreviewCapabilityVerifier {
+			t.Errorf("preview verifier = %q, want %q", rec.PreviewCapabilityVerifier, recA1.PreviewCapabilityVerifier)
 		}
 	}
 }
@@ -212,5 +216,38 @@ func TestSelectAndDeleteShellTerminalsFromPreviousAppRuns(t *testing.T) {
 	}
 	if len(remaining) != 1 {
 		t.Errorf("remaining = %+v, want the current run's shell untouched", remaining)
+	}
+}
+
+func TestRestorableShellTerminalsAcrossAppLaunches(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		id, run   string
+		transient bool
+	}{
+		{"shell-old", "old", false}, {"command-old", "old", true},
+		{"shell-new", "new", false}, {"command-new", "new", true},
+	} {
+		rec := shellTerminalRecord(tc.id, tc.run)
+		rec.Transient = tc.transient
+		if err := s.InsertShellTerminal(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.SelectRestorableShellTerminals(ctx, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("restorable rows = %+v", rows)
+	}
+	for _, row := range rows {
+		if row.HandleID == "command-old" {
+			t.Fatal("restored previous launch's command")
+		}
+		if row.HandleID == "command-new" && !row.Transient {
+			t.Fatal("lost transient lifetime")
+		}
 	}
 }

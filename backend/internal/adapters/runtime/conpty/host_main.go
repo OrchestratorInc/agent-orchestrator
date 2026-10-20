@@ -1,6 +1,6 @@
 // host_main.go is the RunHost entrypoint for the "ao pty-host" subcommand.
 // It is cross-platform: the loopback TCP bind and signal wiring work on all
-// OSes; only the ConPTY creation (newConPTY) is OS-gated via build tags.
+// OSes; native PTY creation is OS-gated via build tags.
 package conpty
 
 import (
@@ -14,9 +14,13 @@ import (
 )
 
 // RunHost is the "ao pty-host" entrypoint. argv is everything after the
-// subcommand name: <sessionId> <cwd> <shellCmd> [shellArg...]
+// subcommand name: [--start=attach] <sessionId> <cwd> <shellCmd> [shellArg...]
 //
-// It binds 127.0.0.1:0 (OS assigns the port), creates the ConPTY, prints
+// --start=attach defers starting the process until a client first reports its
+// grid (see deferredPTY), so it starts at the size its viewer shows. Without it
+// the process starts immediately at the default grid.
+//
+// It binds 127.0.0.1:0 (OS assigns the port), creates the native PTY, prints
 // "READY:<pid> <port>\n" to stdout (the parent process reads this to learn the
 // port), installs SIGTERM/SIGINT handlers, then runs Serve. Returns a process
 // exit code.
@@ -25,8 +29,9 @@ import (
 // the assigned port. A per-session random token handshake is the upgrade path
 // if multi-user isolation is needed.
 func RunHost(args []string, stdout io.Writer) int {
+	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: ao pty-host <sessionId> <cwd> <shellCmd> [shellArg...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
 		return 1
 	}
 
@@ -53,11 +58,22 @@ func RunHost(args []string, stdout io.Writer) int {
 	}
 	port := tcpAddr.Port
 
-	pty, err := newConPTY(cwd, shellCmd, shellArgs)
-	if err != nil {
-		_ = ln.Close()
-		fmt.Fprintf(os.Stderr, "pty-host [%s]: newConPTY: %v\n", sessionID, err)
-		return 1
+	var pty ptyConn
+	if opts.StartOnAttach {
+		pty = newDeferredPTY(func(cols, rows uint16) (ptyConn, error) {
+			conn, err := newConPTY(cwd, shellCmd, shellArgs, cols, rows)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "pty-host [%s]: newConPTY: %v\n", sessionID, err)
+			}
+			return conn, err
+		})
+	} else {
+		pty, err = newConPTY(cwd, shellCmd, shellArgs, initialConPTYColumns, initialConPTYRows)
+		if err != nil {
+			_ = ln.Close()
+			fmt.Fprintf(os.Stderr, "pty-host [%s]: newConPTY: %v\n", sessionID, err)
+			return 1
+		}
 	}
 
 	// Print READY after both the listener and the PTY are up.
@@ -80,10 +96,11 @@ func RunHost(args []string, stdout io.Writer) int {
 
 	ring := NewRing()
 	cfg := ServeConfig{
-		SessionID: sessionID,
-		Listener:  ln,
-		PTY:       pty,
-		Ring:      ring,
+		SessionID:   sessionID,
+		Listener:    ln,
+		PTY:         pty,
+		Ring:        ring,
+		LazySurface: opts.LazySurface,
 	}
 
 	if err := Serve(ctx, cfg); err != nil {

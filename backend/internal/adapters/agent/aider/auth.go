@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -44,20 +46,27 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	for _, name := range aiderAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
-	}
-
+	// Aider's own config and .env files decide first; a key in the
+	// environment is the fallback. A file read error only surfaces when no
+	// key is set either.
+	var fileErr error
 	for _, path := range aiderConfigPaths() {
 		status, ok, err := aiderAuthStatusFromFile(path)
 		if err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
+			fileErr = err
+			break
 		}
 		if ok {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 			return status, true, nil
 		}
+	}
+
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, aiderAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	if fileErr != nil {
+		return ports.AgentAuthStatusUnknown, false, fileErr
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }
@@ -73,6 +82,7 @@ func aiderConfigPaths() []string {
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		paths = append(paths,
+			filepath.Join(home, ".aider", "oauth-keys.env"),
 			filepath.Join(home, ".env"),
 			filepath.Join(home, ".aider.conf.yml"),
 			filepath.Join(home, ".aider.conf.yaml"),
@@ -106,7 +116,8 @@ func fileContainsAPIKey(text string) bool {
 			continue
 		}
 		lower := strings.ToLower(line)
-		if !strings.Contains(lower, "api") || !strings.Contains(lower, "key") {
+		listEntry := strings.HasPrefix(line, "-") && strings.Contains(line, "=")
+		if !listEntry && (!strings.Contains(lower, "api") || !strings.Contains(lower, "key")) {
 			continue
 		}
 		if valueAfterAssignment(line) != "" {
@@ -125,6 +136,18 @@ func valueAfterAssignment(line string) string {
 		value := strings.Trim(strings.TrimSpace(after), `"'`)
 		if value != "" && !strings.EqualFold(value, "null") && !strings.EqualFold(value, "none") {
 			return value
+		}
+	}
+	// Aider's documented `api-key` YAML option is a list of provider=value
+	// entries (for example `- gemini=...`), so it does not have the word
+	// "key" on the left side of the assignment.
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "-") {
+		if _, after, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")), "="); ok {
+			value := strings.Trim(strings.TrimSpace(after), `"'`)
+			if value != "" && !strings.EqualFold(value, "null") && !strings.EqualFold(value, "none") {
+				return value
+			}
 		}
 	}
 	return ""

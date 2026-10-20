@@ -1,3 +1,5 @@
+import { AppLink } from "../AppLink";
+import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
  *
@@ -7,13 +9,23 @@
  * re-sorting. Those belong to the daemon.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { ChatImage } from "./ChatImage";
+import {
+	ACCENT_ACTION_SEGMENT,
+	ACCENT_ACTION_SHELL,
+	QUIET_ACTION_PILL,
+} from "./action-pill";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
-	Archive,
 	Brain,
+	ChevronDown,
 	ChevronRight,
 	CircleAlert,
+	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
 	FileDiff,
@@ -22,6 +34,7 @@ import {
 	Keyboard,
 	ListChecks,
 	Loader2,
+	MousePointer2,
 	Pencil,
 	Plug,
 	Shuffle,
@@ -29,7 +42,9 @@ import {
 	ShieldQuestion,
 	ShieldX,
 	SquareTerminal,
+	Undo2,
 	User,
+	X,
 } from "lucide-react";
 
 /** Fixed icon column, matching the prototype's row anatomy. */
@@ -49,19 +64,30 @@ const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
 import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
-import { ChatMarkdown } from "./ChatMarkdown";
+import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
+import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
+import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
+	commandBinaryLabel,
 	commandCategory,
 	exploredFileCount,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { Button } from "../ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import {
 	fileChangeFiles,
 	reviewedPaths,
@@ -73,54 +99,390 @@ import {
 	type DeliveryState,
 	type DiffStatus,
 	type FileChangeFile,
+	type ConversationItem,
 	type TurnDiff,
 } from "../../types/conversation";
+import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
+import {
+	parseBrowserAnnotationMessage,
+	type ParsedBrowserAnnotationMessage,
+} from "../../../shared/browser-annotations";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
-	hour: "numeric",
+	hour: "2-digit",
 	minute: "2-digit",
+	hourCycle: "h23",
+});
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
 });
 
 const ORIGIN_REPORT_COLLAPSE_AT = 600;
 const ORIGIN_REPORT_PREVIEW_LENGTH = 240;
 
-// These are AO-owned prompt suffixes, not general markdown. Chat and spawn used
-// slightly different wording, and older conversations used "Attached images";
-// accepting every shipped form lets the transcript improve without rewriting
-// its durable history.
-const ATTACHMENT_REFERENCE_BLOCK =
-	/(?:^|\n\n)(?:Attached files \(read these files in the workspace(?: for context)?\)|Attached images \(read these files in the workspace for visual context\)):\n((?:- [^\n]+(?:\n|$))+)$/;
-const STAGED_ATTACHMENT_PATH = /^\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const IMAGE_ATTACHMENT_PATH = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
+function originReportPreview(text: string): string {
+	const cut = text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH);
+	const lastCompleteLine = cut.lastIndexOf("\n");
+	const preview = lastCompleteLine > 0 ? cut.slice(0, lastCompleteLine) : cut;
+	return `${preview.trimEnd()}…`;
+}
 
-function humanMessageParts(text: string): { body: string; attachments: string[] } {
-	const match = ATTACHMENT_REFERENCE_BLOCK.exec(text);
-	if (!match?.[1]) return { body: text, attachments: [] };
+/**
+ * Each update reveals the share of the backlog that decays over STREAM_SETTLE_MS, so
+ * bursts of provider text spread across the gap before the next one instead of landing
+ * at once. Updates are capped at ~30 Hz: every one re-parses the message's markdown.
+ */
+const STREAM_SETTLE_MS = 140;
+const STREAM_MIN_FRAME_MS = 32;
+const STREAM_MAX_FRAME_DELTA_MS = 100;
+// No frame for this long means the tab was occluded or throttled: nobody watched the
+// animation, so show the current text instead of replaying it.
+const STREAM_STALL_MS = 1000;
+const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-	const attachments = match[1]
-		.trimEnd()
-		.split("\n")
-		.map((line) => line.slice(2));
-	// Only reinterpret paths AO itself stages. A user can write an identically
-	// worded example about docs/screenshot.png; that prose must remain untouched.
-	if (attachments.length === 0 || attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path))) {
-		return { body: text, attachments: [] };
+function streamGraphemes(text: string): string[] {
+	return Array.from(STREAM_GRAPHEME_SEGMENTER.segment(text), ({ segment }) => segment);
+}
+
+function reconciledStreamPrefix(visibleText: string, targetGraphemes: string[]) {
+	let boundary = 0;
+	let count = 0;
+	for (const grapheme of targetGraphemes) {
+		const nextBoundary = boundary + grapheme.length;
+		if (nextBoundary > visibleText.length) break;
+		boundary = nextBoundary;
+		count++;
 	}
-	// The match begins at the generated separator, so slicing at its index
-	// removes only AO-owned text and preserves the authored body byte-for-byte.
-	return { body: text.slice(0, match.index), attachments };
+	return { text: visibleText.slice(0, boundary), count };
 }
 
-function attachmentName(path: string): string {
-	return path.slice(path.lastIndexOf("/") + 1);
+function useSmoothStreamingText(message: ConversationMessage): string {
+	// A snapshot can first reach the renderer after the provider has already emitted
+	// text. Keep that first durable burst visible; only later deltas need smoothing.
+	const [visibleText, setVisibleText] = useState(() => message.text);
+	const visibleRef = useRef(visibleText);
+	const targetRef = useRef(message.text);
+	const targetGraphemes = useMemo(
+		() => message.streaming ? streamGraphemes(message.text) : [],
+		[message.text, message.streaming],
+	);
+	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
+	const targetGraphemesRef = useRef(targetGraphemes);
+	const messageIdRef = useRef(message.id);
+	const frameRef = useRef<number | undefined>(undefined);
+	const lastFrameAtRef = useRef<number | undefined>(undefined);
+	const [reducedMotion, setReducedMotion] = useState(
+		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+	);
+
+	useEffect(() => {
+		const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const update = () => setReducedMotion(mediaQuery.matches);
+		mediaQuery.addEventListener("change", update);
+		return () => mediaQuery.removeEventListener("change", update);
+	}, []);
+
+	const cancelDrain = useCallback(() => {
+		if (frameRef.current !== undefined) {
+			window.cancelAnimationFrame(frameRef.current);
+			frameRef.current = undefined;
+		}
+		lastFrameAtRef.current = undefined;
+	}, []);
+
+	const scheduleDrain = useCallback(() => {
+		if (frameRef.current !== undefined) return;
+		const scheduledAt = performance.now();
+
+		const tick = (now: number) => {
+			frameRef.current = undefined;
+			const target = targetGraphemesRef.current;
+			const currentCount = visibleGraphemeCountRef.current;
+			const backlog = target.length - currentCount;
+			if (backlog <= 0) {
+				lastFrameAtRef.current = undefined;
+				return;
+			}
+
+			if (document.hidden || now - (lastFrameAtRef.current ?? scheduledAt) > STREAM_STALL_MS) {
+				visibleRef.current = targetRef.current;
+				visibleGraphemeCountRef.current = target.length;
+				setVisibleText(targetRef.current);
+				cancelDrain();
+				return;
+			}
+
+			const previousFrameAt = lastFrameAtRef.current;
+			if (previousFrameAt !== undefined && now - previousFrameAt < STREAM_MIN_FRAME_MS) {
+				frameRef.current = window.requestAnimationFrame(tick);
+				return;
+			}
+			lastFrameAtRef.current = now;
+			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, previousFrameAt === undefined ? STREAM_MIN_FRAME_MS : now - previousFrameAt);
+			const count = Math.ceil(backlog * (1 - Math.exp(-elapsedMs / STREAM_SETTLE_MS)));
+			const nextCount = Math.min(target.length, currentCount + count);
+			const next = visibleRef.current + target.slice(currentCount, nextCount).join("");
+			visibleRef.current = next;
+			visibleGraphemeCountRef.current = nextCount;
+			setVisibleText(next);
+			if (nextCount < target.length) frameRef.current = window.requestAnimationFrame(tick);
+			else lastFrameAtRef.current = undefined;
+		};
+
+		frameRef.current = window.requestAnimationFrame(tick);
+	}, [cancelDrain]);
+
+	useEffect(() => {
+		if (message.id !== messageIdRef.current) {
+			cancelDrain();
+			messageIdRef.current = message.id;
+			targetRef.current = message.text;
+			targetGraphemesRef.current = targetGraphemes;
+			const initial = message.text;
+			visibleRef.current = initial;
+			visibleGraphemeCountRef.current = targetGraphemes.length;
+			setVisibleText(initial);
+			return;
+		}
+
+		targetRef.current = message.text;
+		targetGraphemesRef.current = targetGraphemes;
+		if (!message.streaming || reducedMotion) {
+			cancelDrain();
+			visibleRef.current = message.text;
+			visibleGraphemeCountRef.current = targetGraphemes.length;
+			setVisibleText(message.text);
+			return;
+		}
+		// A provider correction or rollback can replace the current prefix. In that
+		// case the durable snapshot is authoritative and should be shown immediately.
+		if (!message.text.startsWith(visibleRef.current)) {
+			cancelDrain();
+			visibleRef.current = message.text;
+			visibleGraphemeCountRef.current = targetGraphemes.length;
+			setVisibleText(message.text);
+			return;
+		}
+		// A later combining mark or ZWJ can merge the last visible grapheme into a
+		// different target grapheme. Reconcile that trailing fragment before using
+		// the old grapheme count, otherwise the drain can skip the merged suffix.
+		const reconciled = reconciledStreamPrefix(visibleRef.current, targetGraphemesRef.current);
+		visibleGraphemeCountRef.current = reconciled.count;
+		if (reconciled.text !== visibleRef.current) {
+			visibleRef.current = reconciled.text;
+			setVisibleText(reconciled.text);
+		}
+		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();
+	}, [cancelDrain, message.id, message.text, message.streaming, reducedMotion, scheduleDrain, targetGraphemes]);
+
+	useEffect(
+		() => cancelDrain,
+		[cancelDrain],
+	);
+
+	return visibleText;
 }
 
-function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
-	const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path
-		.split("/")
-		.map(encodeURIComponent)
-		.join("/")}`;
-	return apiBaseUrl ? new URL(route, apiBaseUrl).toString() : route;
+/** A status message followed by a full-width rule, with no text inside the rule. */
+function TwoRowTimelineMarker({
+	message,
+	detail,
+	tone = "text-muted-foreground/70",
+	detailTone = "text-muted-foreground/70",
+	action,
+	wrapDetail = false,
+}: {
+	message: string;
+	detail?: string;
+	tone?: string;
+	detailTone?: string;
+	action?: ReactNode;
+	/** The detail is an instruction the reader needs whole, so it wraps instead of truncating. */
+	wrapDetail?: boolean;
+}) {
+	return (
+		<div className="flex min-w-0 flex-col gap-1 py-1">
+			<div className={cn("flex min-w-0 items-baseline gap-x-2 gap-y-0.5 text-xs", wrapDetail && "flex-wrap", tone)}>
+				<span className="shrink-0">{message}</span>
+				{detail ? (
+					<span
+						className={cn("min-w-0", wrapDetail ? "text-pretty" : "truncate", detailTone)}
+						title={detail}
+					>
+						{detail}
+					</span>
+				) : null}
+				{action}
+			</div>
+			<span aria-hidden="true" className="h-px w-full bg-border" />
+		</div>
+	);
+}
+
+export function CompactionMarker({ activity }: { activity: ConversationActivity }) {
+	const reclaimed = activity.detail?.tokensReclaimed;
+	const after = activity.detail?.tokensAfter;
+	const contextWindow = activity.detail?.contextWindow;
+	const detail = reclaimed ? `−${formatTokens(reclaimed)}` : undefined;
+	const fullness = after && contextWindow ? `${Math.round((after / contextWindow) * 100)}% full` : undefined;
+
+	return (
+		<TwoRowTimelineMarker
+			message="The conversation history was compacted"
+			detail={[detail, fullness].filter(Boolean).join(" · ") || undefined}
+		/>
+	);
+}
+
+export interface TurnOutcomeRetryControl {
+	onRetry: () => void;
+	pending?: boolean;
+	error?: string;
+	disabled?: boolean;
+}
+
+/** Where the user continued a stopped turn: a marker in place of the continue message. */
+export function ContinuedMarker() {
+	return <TwoRowTimelineMarker message="Continued" />;
+}
+
+export function TurnOutcome({
+	state,
+	error,
+	retry,
+}: {
+	state: "recovered" | "interrupted" | "failed";
+	error?: string;
+	retry?: TurnOutcomeRetryControl;
+}) {
+	const copy = {
+		recovered: {
+			label: "This turn was recovered from an earlier session",
+			tone: "text-muted-foreground/70",
+		},
+		interrupted: {
+			label: "The agent was interrupted by you",
+			tone: "text-muted-foreground/70",
+		},
+		failed: { label: "The agent ran into a problem", tone: "text-destructive" },
+	}[state];
+
+	const action = retry ? (
+		<>
+			{retry.error ? (
+				<span role="alert" className="max-w-[50%] text-pretty text-right text-xs leading-tight text-destructive">
+					{retry.error}
+				</span>
+			) : null}
+			<button
+				type="button"
+				onClick={retry.onRetry}
+				disabled={retry.pending || retry.disabled}
+				aria-label="Retry this turn"
+				title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+				data-testid="retry-turn"
+				className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
+			>
+				{retry.pending ? "Retrying…" : "Retry"}
+			</button>
+		</>
+	) : undefined;
+	if (state === "failed") {
+		return (
+			<div className="flex min-w-0 flex-col gap-2 py-3">
+				<div className="flex items-baseline justify-between gap-3 text-sm font-medium text-destructive">
+					<span>{copy.label}</span>
+					{action}
+				</div>
+				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+			</div>
+		);
+	}
+	return <TwoRowTimelineMarker message={copy.label} detail={error} tone={copy.tone} action={action} />;
+}
+
+function formatTokens(tokens: number): string {
+	if (tokens < 1000) return `${tokens}`;
+	return `${(tokens / 1000).toFixed(1)}k`;
+}
+
+/**
+ * Prose whose inline staged image paths (written by the composer's image chips)
+ * render as chips that open the image. "Image N" counts images in attachment
+ * order, the same label the attachment row and the composer use.
+ */
+function ProseWithInlineImages({
+	text,
+	attachments,
+	sessionId,
+	apiBaseUrl,
+	renderText,
+}: {
+	text: string;
+	attachments: string[];
+	sessionId: string;
+	apiBaseUrl: string | null;
+	renderText: (text: string) => ReactNode;
+}) {
+	const { t } = useTranslation();
+	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	if (apiBaseUrl === null || images.length === 0) return renderText(text);
+	return splitInlineImagePaths(text, (path) => images.includes(path)).map((segment, index) =>
+		segment.path === undefined ? (
+			<Fragment key={index}>{renderText(segment.text)}</Fragment>
+		) : (
+			<ChatImage
+				key={index}
+				inline
+				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
+				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
+			/>
+		),
+	);
+}
+
+function StagedAttachmentItems({
+	paths,
+	sessionId,
+	apiBaseUrl,
+	ariaLabel,
+	className,
+}: {
+	paths: string[];
+	sessionId: string;
+	apiBaseUrl: string | null;
+	ariaLabel: string;
+	className?: string;
+}) {
+	const { t } = useTranslation();
+	if (paths.length === 0) return null;
+	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	return (
+		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
+			{paths.map((path) => {
+				const name = attachmentName(path);
+				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
+					<li key={path} className="max-w-full">
+						<ChatImage
+							src={attachmentURL(apiBaseUrl, sessionId, path)}
+							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
+						/>
+					</li>
+				) : (
+					<li
+						key={path}
+						title={path}
+						className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
+					>
+						<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
+						<span className="truncate">{name}</span>
+					</li>
+				);
+			})}
+		</ul>
+	);
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
@@ -129,9 +491,29 @@ function shortenPaths(text: string): string {
 }
 
 function formatDuration(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-	return `${Math.round(ms / 60_000)}m`;
+	// Status labels are intentionally discrete: start at one second and advance
+	// in whole seconds so the live and settled rows never show fractional time.
+	if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;
+	const totalMinutes = Math.floor(ms / 60_000);
+	if (totalMinutes < 60) return `${totalMinutes}m`;
+	const hours = Math.floor(totalMinutes / 60);
+	const minutes = totalMinutes % 60;
+	return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+function formatDecisionDuration(ms: number): string {
+	if (ms < 1_000) return `${Math.max(0, Math.round(ms))}ms`;
+	return `${(ms / 1_000).toFixed(1)}s`;
+}
+
+export function ResponseSpinner() {
+	return (
+		<Loader2
+			aria-hidden="true"
+			data-testid="response-spinner"
+			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+		/>
+	);
 }
 
 function formatTime(iso: string): string {
@@ -139,65 +521,114 @@ function formatTime(iso: string): string {
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
 
+function formatMessageTimestamp(iso: string, now = new Date()): string {
+	const parsed = new Date(iso);
+	if (Number.isNaN(parsed.getTime())) return "";
+
+	const messageDay = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
+	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+	const daysAgo = Math.round((today - messageDay) / 86_400_000);
+	if (daysAgo === 0) return timeFormatter.format(parsed);
+	if (daysAgo === 1) return `Yesterday · ${timeFormatter.format(parsed)}`;
+	return dateFormatter.format(parsed);
+}
+
 /* -------------------------------------------------------------------------- */
 /* messages                                                                    */
 /* -------------------------------------------------------------------------- */
 
 /** What the user typed. Right-aligned and enclosed so it reads as theirs. */
+const WORKER_REPORT_OPEN = "<ao-worker-reports>";
+const WORKER_REPORT_CLOSE = "</ao-worker-reports>";
+
+export function humanVisibleText(text: string): string {
+	if (!text.endsWith(WORKER_REPORT_CLOSE)) return text;
+	const reportStart = text.lastIndexOf(`\n\n${WORKER_REPORT_OPEN}\n`);
+	if (reportStart < 0) return text;
+	return text.slice(0, reportStart);
+}
+
 export function HumanMessage({
 	message,
 	sessionId,
 	apiBaseUrl = getApiBaseUrl(),
 	queued,
+	animateIn = false,
 	onEdit,
 	editing = false,
 	editText,
+	editReconstructedContext = false,
 	onEditStart,
 	onEditDraftChange,
 	onEditCancel,
+	onEditAbandonRecovery,
 	editPending = false,
+	editSendBlocked = false,
+	editRecoveryLabel,
 	editBusy = false,
 	editError,
 	branchPoint,
 	onActivateBranch,
 	activateBranchPending = false,
 	activateBranchError,
+	onSelectAnnotation,
 }: {
 	message: ConversationMessage;
 	/** The staged paths are relative to this session's workspace. */
 	sessionId: string;
 	/** The live daemon origin; passed by the timeline so daemon restarts refresh images. */
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 	/** Typed while the agent was busy, and not sent yet. */
 	queued?: boolean;
+	/** True only for a human message added after the timeline first mounted. */
+	animateIn?: boolean;
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
+	editReconstructedContext?: boolean;
 	onEditStart?: () => void;
 	onEditDraftChange?: (text: string) => void;
 	onEditCancel?: () => void;
+	onEditAbandonRecovery?: () => void;
 	editPending?: boolean;
+	editSendBlocked?: boolean;
+	editRecoveryLabel?: string;
 	editBusy?: boolean;
 	editError?: string;
 	branchPoint?: ConversationBranchPoint;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
-	const { body, attachments } = humanMessageParts(message.text);
+	const visibleMessageText = humanVisibleText(message.text);
+	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
+	const excerptReferences = (message.content ?? []).filter(
+		(content) => content.type === "excerpt" && Boolean(content.text),
+	);
 	return (
-		<div className="group/message flex flex-col items-end gap-1">
+		<div
+			className="group/message flex flex-col items-end gap-1"
+			data-chat-message-id={!queued && !editing ? message.id : undefined}
+			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
+			data-chat-message-role={!queued && !editing ? message.role : undefined}
+		>
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
 				<HumanMessageEditor
-					text={editText ?? message.text}
+					text={editText ?? visibleMessageText}
 					content={message.content ?? []}
 					pending={editPending}
+					locked={Boolean(editRecoveryLabel)}
+					recoveryLabel={editRecoveryLabel}
+					sendBlocked={editSendBlocked}
 					busy={editBusy}
+					reconstructedContext={editReconstructedContext}
 					error={editError}
 					onDraftChange={onEditDraftChange}
 					onCancel={() => onEditCancel?.()}
+					onAbandonRecovery={onEditAbandonRecovery}
 					onSend={(text) => {
 						if (!message.turnId || !onEdit) return;
 						return onEdit(message.turnId, text);
@@ -205,48 +636,79 @@ export function HumanMessage({
 				/>
 			) : (
 				<div
+					/* Themes draw sent and queued differently; light theme needs to tell them
+					   apart in CSS because it paints an enclosure only around a sent one. */
+					data-queued={queued ? "" : undefined}
 					className={cn(
-						"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] border px-3 py-2.5 text-sm leading-[1.55]",
+						"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
+						animateIn && "chat-human-message-enter",
 						queued
-							? "border-dashed border-border-strong bg-transparent text-muted-foreground"
-							: "border-border bg-raised text-foreground",
+							? "border border-dashed border-border-strong bg-transparent text-muted-foreground"
+							: "bg-raised text-foreground",
 					)}
 				>
-					{body ? <p className="break-words whitespace-pre-wrap text-pretty">{body}</p> : null}
-					{attachments.length > 0 ? (
-						<ul aria-label="Attached files" className={cn("flex max-w-full flex-wrap gap-2", body && "mt-2")}>
-							{attachments.map((path) => {
-								const name = attachmentName(path);
-								return IMAGE_ATTACHMENT_PATH.test(path) ? (
-									<li key={path} className="max-w-full overflow-hidden rounded-md border border-border bg-background">
-										<img src={attachmentURL(apiBaseUrl, sessionId, path)} alt={name} loading="lazy" className="block h-auto max-h-80 max-w-full object-contain" />
-									</li>
-								) : (
-									<li key={path} title={path} className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground">
-										<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
-										<span className="truncate">{name}</span>
-									</li>
-								);
-							})}
-						</ul>
+					{excerptReferences.length > 0 ? (
+						<ChatAnnotationSummary
+							annotations={excerptReferences.map((excerpt) => ({
+								text: excerpt.text ?? "",
+								conversationId: excerpt.sourceConversationId,
+ messageId: excerpt.sourceMessageId,
+								revision: excerpt.sourceRevision,
+							}))}
+							onSelect={onSelectAnnotation}
+							className="mb-2"
+						/>
 					) : null}
+					{body ? (
+						<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+							<ProseWithInlineImages
+								text={body}
+								attachments={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								renderText={(text) => <SessionLinkedText text={text} />}
+							/>
+						</p>
+					) : null}
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel="Attached files"
+						className={cn(body && "mt-2")}
+					/>
 				</div>
 			)}
 			{editing ? null : (
-				<div className="flex h-[18px] items-center gap-0.5">
-					<div className="flex items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/message:opacity-100">
-						<CopyButton text={message.text} label="Copy user message" compact className="-mr-1" />
+				<div className="mt-1 flex h-7 items-center gap-1">
+					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
+						<span
+							className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75"
+							aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
+						>
+							{formatMessageTimestamp(message.createdAt)}
+						</span>
 						{onEdit && onEditStart && message.turnId ? (
-							<button
-								type="button"
-								onClick={onEditStart}
-								aria-label="Edit user message"
-								title="Edit user message"
-								className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
-							>
-								<Pencil aria-hidden="true" className="size-3" />
-							</button>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										onClick={onEditStart}
+										aria-label="Edit user message"
+										className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+									>
+										<Pencil aria-hidden="true" className="size-3" />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">Edit user message</TooltipContent>
+							</Tooltip>
 						) : null}
+						<CopyButton
+							text={visibleMessageText}
+							label="Copy user message"
+							compact
+							className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+						/>
 					</div>
 					{branchPoint && onActivateBranch ? (
 						<ConversationBranchNavigator
@@ -259,11 +721,11 @@ export function HumanMessage({
 				</div>
 			)}
 			{queued ? (
-				<div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+				<div className="flex items-center gap-2 text-xs text-muted-foreground">
 					<span>Queued · sends when the agent finishes</span>
 				</div>
 			) : null}
-			{message.delivery && message.delivery !== "accepted" ? (
+			{message.delivery && message.delivery !== "accepted" && message.delivery !== "sending" ? (
 				<DeliveryNote state={message.delivery} />
 			) : null}
 		</div>
@@ -275,91 +737,266 @@ export function HumanMessage({
  * durable origin field, never from a prefix parsed out of the text.
  */
 export function OriginMessage({ message }: { message: ConversationMessage }) {
-	const longReport = message.text.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const [expanded, setExpanded] = useState(false);
+	const browserAnnotations = parseBrowserAnnotationMessage(message.text);
+	if (browserAnnotations) {
+		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
+	}
+
+	const senderSessionId = message.senderSessionId?.trim();
+	const senderProjectId = message.senderProjectId?.trim();
+	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
+	const senderHref = senderSessionId && senderProjectId
+		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
+		: undefined;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(message.text, senderSessionId) : message.text;
+	const longReport = visibleText.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
-		? `${message.text.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
-		: message.text;
+		? originReportPreview(visibleText)
+		: visibleText;
 
 	return (
-		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-				<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-				<span className="truncate">{message.senderLabel ?? message.origin}</span>
-				<span className="ml-auto shrink-0 font-normal tabular-nums">
-					{formatTime(message.createdAt)}
-				</span>
-			</div>
-			{longReport && expanded ? (
-				<ChatMarkdown text={message.text} muted />
+		<AutomationMessageFrame
+			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : message.senderLabel ?? message.origin}
+			createdAt={message.createdAt}
+		>
+			{longReport && !expanded ? (
+				<div className="line-clamp-3">
+					<OriginPreviewMarkdown text={preview} />
+				</div>
 			) : (
-				<p className={cn("text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					{preview}
-				</p>
+				<ChatMarkdown text={visibleText} muted safeOrigin className="whitespace-pre-wrap text-sm leading-relaxed" />
 			)}
-			{longReport ? (
-				<button
-					type="button"
-					onClick={() => setExpanded((current) => !current)}
-					aria-expanded={expanded}
-					className="mt-2 flex items-center gap-1 text-[11px] font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
-				>
-					<ChevronRight
-						aria-hidden="true"
-						className={cn("size-3 transition-transform", expanded && "rotate-90")}
-					/>
-					{expanded ? "Hide report" : "Show full report"}
-				</button>
+			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
+		</AutomationMessageFrame>
+	);
+}
+
+function AutomationMessageFrame({
+	label,
+	createdAt,
+	children,
+}: {
+	label: ReactNode;
+	createdAt: string;
+	children: ReactNode;
+}) {
+	return (
+		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
+			<div className="mb-1.5 flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+				<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
+				<span className="min-w-0 truncate">{label}</span>
+				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(createdAt)}</span>
+			</div>
+			{children}
+		</div>
+	);
+}
+
+function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-expanded={expanded}
+			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+		>
+			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
+			{expanded ? "Hide report" : "Show full report"}
+		</button>
+	);
+}
+
+function BrowserAnnotationOrigin({
+	message,
+	annotations,
+}: {
+	message: ConversationMessage;
+	annotations: ParsedBrowserAnnotationMessage;
+}) {
+	const count = annotations.items.length;
+	return (
+		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
+			<div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+				<MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
+				<span>Browser feedback</span>
+				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(message.createdAt)}</span>
+			</div>
+			<p className="text-sm text-foreground">
+				{count} annotation{count === 1 ? "" : "s"} on {annotations.pageTitle}
+			</p>
+			<div className="mt-2 space-y-1.5">
+				{annotations.items.map((item) => (
+					<div key={item.number} className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
+						<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-logo-accent text-micro font-semibold text-white">
+							{item.number}
+						</span>
+						<div className="min-w-0">
+							<p className="truncate text-foreground">
+								{item.comment ||
+									(item.kind === "adjustment"
+										? `${item.changes.length} visual change${item.changes.length === 1 ? "" : "s"}`
+										: "Comment")}
+							</p>
+							{item.target ? <p className="truncate text-foreground">{item.target}</p> : null}
+							{item.text ? <p className="truncate">{item.text}</p> : null}
+						</div>
+					</div>
+				))}
+			</div>
+			{annotations.screenshotCount > 0 ? (
+				<p className="mt-2 text-xs text-muted-foreground">
+					{annotations.screenshotCount} reference screenshot{annotations.screenshotCount === 1 ? "" : "s"}
+				</p>
 			) : null}
 		</div>
 	);
 }
 
-/** The agent's prose. A trailing caret marks text still arriving. */
+/** The agent's prose. Streaming is represented by text arriving in place. */
 export function AssistantMessage({
 	message,
 	showCopy = false,
-	showStreamingIndicator = message.streaming,
+	live = false,
+	onRollback,
+	rollbackDisabled = false,
 }: {
 	message: ConversationMessage;
-	/** Only the final answer of a finished turn owns the turn's copy action. */
+	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
-	/** Only the newest item can still be visibly writing; older streaming fragments
-	 * are waiting on a tool rather than missing content. */
-	showStreamingIndicator?: boolean;
+	/** The enclosing turn is still active, even if its last text chunk has landed. */
+	live?: boolean;
+	/**
+	 * Discard this turn and everything after it. Lives next to copy so the finished
+	 * answer owns both "keep this" and "undo from here".
+	 */
+	onRollback?: () => void;
+	/** Keep the rollback action mounted while another response is streaming. */
+	rollbackDisabled?: boolean;
 }) {
-	const visiblyStreaming = message.streaming && showStreamingIndicator;
-	const hasText = message.text.trim().length > 0;
+	const visibleText = useSmoothStreamingText(message);
+	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
+	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
 	return (
-		<div className={cn("group/message relative", visiblyStreaming && hasText && "chat-assistant-streaming")}>
-			<ChatMarkdown text={message.text} streaming={message.streaming} />
-			{visiblyStreaming ? (
-				hasText ? (
-					<span aria-label="still writing" className="sr-only" />
-				) : (
+		<div
+			className="group/message relative"
+			data-chat-streaming-output={renderingStreaming ? "" : undefined}
+			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
+			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
+			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
+		>
+			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
+			{showActions ? (
+				// One action row for the completed answer, not one after every prose
+				// fragment the provider emitted while working. Copy, rollback, and
+				// duration stay visible; only the wall-clock time reveals on hover.
+				<div className="mt-1 flex h-7 items-center gap-0.5">
+					{showCopy ? (
+						<div className="-ml-1.5 size-7 shrink-0">
+							{/* The stored markdown, not a re-serialization of what was rendered:
+							   pasting it into an editor has to give back what the agent wrote. */}
+							<CopyButton
+								text={message.text}
+								label="Copy message as markdown"
+								compact
+								className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+							/>
+						</div>
+					) : null}
+					{onRollback ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={onRollback}
+									disabled={rollbackDisabled}
+									aria-label="Roll back to here"
+									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100"
+								>
+									<Undo2 aria-hidden="true" className="size-3" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">Roll back to here</TooltipContent>
+						</Tooltip>
+					) : null}
 					<span
-						role="status"
-						aria-label="still writing"
-						className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground"
+						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
+						aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
 					>
-						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
-						Writing…
+						{formatMessageTimestamp(message.createdAt)}
 					</span>
-				)
-			) : showCopy ? (
-				// One action for the completed answer, not one after every prose fragment
-				// the provider emitted while working.
-				<div className="flex h-[18px] items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/message:opacity-100">
-					{/* The stored markdown, not a re-serialization of what was rendered:
-					    pasting it into an editor has to give back what the agent wrote. */}
-					<CopyButton
-						text={message.text}
-						label="Copy message as markdown"
-						compact
-						className="-ml-1.5"
-					/>
 				</div>
 			) : null}
+		</div>
+	);
+}
+
+
+export function LiveResponseStatus({ startedAt, settling = false, startupLabel, failed = false, children }: {
+	startedAt?: string;
+	settling?: boolean;
+	startupLabel?: string;
+	failed?: boolean;
+	children?: ReactNode;
+}) {
+	const reducedMotion = useReducedMotion();
+	const started = useMemo(() => {
+		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
+		return Number.isFinite(parsed) ? parsed : Date.now();
+	}, [startedAt]);
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (settling) {
+			// The interval stops while settling; refresh once so the frozen label
+			// matches the final duration instead of lagging up to a second.
+			setNow(Date.now());
+			return;
+		}
+		const timer = window.setInterval(() => setNow(Date.now()), 1000);
+		return () => window.clearInterval(timer);
+	}, [settling]);
+	const elapsedMs = Math.max(0, now - started);
+	// Settling animates opacity and transform only, never layout, so it stays smooth
+	// even when the main thread is busy finishing the turn. These are keyframe
+	// animations rather than transitions so they also play when the row first
+	// mounts already settled. The spinner shrinks and fades in place while the label
+	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
+	// the settled "Worked for" row puts it. The label keeps its shimmer class
+	// throughout (only the highlight fades), so the text never changes paint
+	// technique and cannot blink.
+	return (
+		<div className="min-w-0">
+			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
+				<span
+					aria-hidden={settling || undefined}
+					data-settling={settling || undefined}
+					className="chat-working-spinner-slot flex shrink-0 origin-center"
+				>
+					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
+				</span>
+				<span
+					role={failed ? "alert" : "status"}
+					data-testid="live-working-label"
+					data-settling={settling || undefined}
+					className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}
+				>
+					{startupLabel ?? `${settling ? "Worked for" : "Working for"} ${formatDuration(elapsedMs)}`}
+				</span>
+			</div>
+			<AnimatePresence initial={false}>
+				{children ? (
+					<motion.div
+						key="startup-checklist"
+						initial={false}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.2, ease: "easeOut" }}
+						className="overflow-hidden"
+					>
+						{children}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }
@@ -380,7 +1017,7 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
 	return (
 		<span
 			className={cn(
-				"text-[11px] leading-none",
+				"text-caption leading-none",
 				state === "uncertain" || state === "failed" ? "text-warning" : "text-muted-foreground",
 			)}
 		>
@@ -402,13 +1039,71 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * would hide work the agent really did.
  */
 export function ActivityRow({ activity }: { activity: ConversationActivity }) {
-	if (activity.activityKind === "mcp_tool") return <McpToolRow activity={activity} />;
-	if (activity.activityKind === "auto_review") return <AutoReviewRow activity={activity} />;
-	if (activity.activityKind === "reasoning") return <ReasoningBlock activity={activity} />;
-	if (activity.activityKind === "error") return <ErrorActivityRow activity={activity} />;
-	if (activity.detail?.event === "model.rerouted") return <RerouteRow activity={activity} />;
-	if (activity.detail?.event === "auth.reauth_required") return <ReauthRow activity={activity} />;
-	return <GenericActivityRow activity={activity} />;
+	const toolActivity =
+		activity.activityKind === "command" ||
+		activity.activityKind === "file_change" ||
+		activity.activityKind === "mcp_tool" ||
+		activity.activityKind === "auto_review";
+	// AO records pages as system rows; a page named by any other row (a cloud
+	// session's, say) is not one this daemon serves.
+	const renderRef = activity.activityKind === "system" ? readRenderRef(activity.detail) : undefined;
+	const artifactRef = activity.activityKind === "system" ? readArtifactRef(activity.detail) : undefined;
+
+	let content: ReactNode;
+	if (activity.activityKind === "mcp_tool") content = <McpToolRow activity={activity} />;
+	else if (activity.activityKind === "auto_review") content = <AutoReviewRow activity={activity} />;
+	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
+	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
+	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
+	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
+	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
+	else if (renderRef) content = <RenderFrame render={renderRef} />;
+	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
+	else content = <GenericActivityRow activity={activity} />;
+
+	if (!toolActivity) return content;
+	return (
+		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`}>
+			{content}
+		</ActivityTransition>
+	);
+}
+
+export function ActivityTransition({
+	value,
+	children,
+	inline = false,
+}: {
+	value: string;
+	children: ReactNode;
+	inline?: boolean;
+}) {
+	const reducedMotion = useReducedMotion();
+	const previousValue = useRef(value);
+	const [settling, setSettling] = useState(false);
+
+	useEffect(() => {
+		if (previousValue.current === value) return;
+		previousValue.current = value;
+		setSettling(true);
+	}, [value]);
+
+	const MotionElement = inline ? motion.span : motion.div;
+	return (
+		<MotionElement
+			initial={reducedMotion ? false : { opacity: 0 }}
+			animate={
+				reducedMotion || !settling
+					? { opacity: 1 }
+					: { opacity: 0.72 }
+			}
+			transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+			onAnimationComplete={() => setSettling(false)}
+		>
+			{children}
+		</MotionElement>
+	);
 }
 
 /**
@@ -423,15 +1118,27 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
 	// a finished row open.
 	const [override, setOverride] = useState<boolean | null>(null);
+	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
+	const isFileChange = activity.activityKind === "file_change";
+	// A single edit with no patch has nothing to expand into — the header already
+	// named the file. Multi-file edits expand to a list; a lone patch expands to
+	// the diff itself.
+	const hasFileBody =
+		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
 	const hasBody = Boolean(
 		detail?.command ||
-			detail?.output || detail?.reason || detail?.text || detail?.terminalInput || files.length,
+		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
 	const { label, path } = splitSummary(activity);
-	const compactCommand = activity.activityKind === "command";
+	// Commands and file edits share the explore-style summary line: muted label,
+	// no icon column, always-visible chevron. Everything else keeps the denser
+	// bordered activity row.
+	const compactSummary =
+		activity.activityKind === "command" || activity.activityKind === "file_change";
+	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
 
 	// Live output is only live if it is on screen, so a command that is still
 	// running and already printing opens itself.
@@ -442,7 +1149,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		<div
 			className={cn(
 				"min-w-0 max-w-full",
-				compactCommand ? "flex flex-col" : "group/activity border-t border-border first:border-t-0",
+				compactSummary ? "flex flex-col" : "group/activity border-t border-border first:border-t-0",
 			)}
 		>
 			<button
@@ -451,52 +1158,73 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
-					compactCommand
+					compactSummary
 						? ACTIVITY_SUMMARY_BUTTON_CLASS
-						: "flex min-h-[35px] w-full min-w-0 items-center gap-[9px] px-[11px] py-2 text-left text-[11px] transition-colors",
-					hasBody && !compactCommand && "hover:bg-interactive-hover",
+						: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
+					"activity-row-toggle",
+					hasBody && !compactSummary && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
 			>
-				{compactCommand ? null : (
+				{compactSummary ? null : (
 					<Icon
 						aria-hidden="true"
 						className={cn(
 							"w-[15px] shrink-0 text-center",
 							activity.status === "failed" ? "text-destructive" : "text-muted-foreground/70",
 						)}
-						size={13}
+						size={14}
 					/>
 				)}
-				<strong
-					className={cn(
-						compactCommand
-							? "shrink-0 text-[11.5px] font-normal text-muted-foreground"
-							: "min-w-0 truncate font-medium",
-						!compactCommand &&
-							(activity.status === "failed" ? "text-destructive" : "text-foreground"),
-					)}
-					title={compactCommand ? undefined : label}
-				>
-					{label}
-				</strong>
-				{path ? (
+				{singleEdit ? (
+					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+						<span className="shrink-0 text-muted-foreground">
+							{fileChangeVerb(singleEdit.status ?? "modified")}
+						</span>
+						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} />
+						{singleEdit.additions > 0 ? (
+							<span className="shrink-0 font-mono text-micro tabular-nums text-success">
+								+{singleEdit.additions}
+						</span>
+						) : null}
+						{singleEdit.deletions > 0 ? (
+							<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
+								&minus;{singleEdit.deletions}
+							</span>
+						) : null}
+					</span>
+				) : (
+					<strong
+						className={cn(
+							compactSummary
+								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
+								: "min-w-0 truncate font-medium",
+							!compactSummary &&
+								(activity.status === "failed" ? "text-destructive" : "text-foreground"),
+						)}
+						title={compactSummary ? undefined : label}
+					>
+						<ActivityTitle text={label} />
+					</strong>
+				)}
+				{path && !singleEdit ? (
 					<span
-						className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground"
+						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
 						title={path}
 					>
 						{path}
 					</span>
-				) : compactCommand ? null : (
+				) : compactSummary ? null : (
 					<span className="flex-1" />
 				)}
 				<ActivityState
 					activity={activity}
 					open={open}
 					hasBody={hasBody}
-					showDisclosure={!compactCommand}
+					inlineFileStats={Boolean(singleEdit)}
+					showDisclosure={!compactSummary}
 				/>
-				{compactCommand && hasBody ? (
+				{compactSummary && hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
 						className={cn(
@@ -507,31 +1235,111 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				) : null}
 			</button>
 
-			{open && hasBody ? (
-				<div className="flex flex-col gap-1.5 px-[11px] pb-2.5">
-					{files.length ? <FileChangeList files={files} /> : null}
-					{detail?.command ? (
-						// Said explicitly rather than implied by the label: "Ran command"
-						// alone never tells the reader what ran, and the collapsed row
-						// deliberately keeps only the category.
-						<pre className="overflow-x-auto rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed text-foreground">
-							{detail.command}
-						</pre>
-					) : null}
-					{detail?.reason || detail?.text ? (
-						<p className="whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
-							{detail.reason ?? detail.text}
-						</p>
-					) : null}
-					{detail?.terminalInput ? (
-						<TerminalInput
-							text={detail.terminalInput}
-							truncated={detail.terminalInputTruncated}
-						/>
-					) : null}
-					{detail?.output ? <CommandOutput activity={activity} /> : null}
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden rounded-lg"
+					>
+						{compactSummary &&
+						activity.activityKind === "command" &&
+						(detail?.command || detail?.output || detail?.terminalInput) ? (
+							<CommandExploreBody activity={activity} />
+						) : (
+							<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
+						{/* One file: open straight onto its patch. Listing the same
+						    basename again under "Edited name" is noise. */}
+						{files.length === 1 && fileChangePatch(files[0]) ? (
+							<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
+						) : null}
+						{files.length > 1 ? <FileChangeList files={files} /> : null}
+						{!isFileChange && detail?.command ? (
+							// Said explicitly rather than implied by the label: "Ran command"
+							// alone never tells the reader what ran, and the collapsed row
+							// deliberately keeps only the category.
+							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+								{detail.command}
+							</pre>
+						) : null}
+						{!isFileChange && (detail?.reason || detail?.text) ? (
+							<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
+								{detail.reason ?? detail.text}
+							</p>
+						) : null}
+						{!isFileChange && detail?.terminalInput ? (
+							<TerminalInput
+								text={detail.terminalInput}
+								truncated={detail.terminalInputTruncated}
+							/>
+						) : null}
+						{!isFileChange && detail?.output ? <CommandOutput activity={activity} /> : null}
+							</div>
+						)}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
+	);
+}
+
+/**
+ * Expanded command / explore body: one soft chat-surface card with the shell
+ * line nested in its own chip, then muted monospace output underneath — the
+ * same anatomy as the Cursor explore block, restated in AO chat tokens.
+ */
+function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
+	const detail = activity.detail;
+	const command = detail?.command?.trim();
+	const reason = (detail?.reason ?? detail?.text)?.trim();
+	const binary = command ? commandBinaryLabel(command) : undefined;
+	const showPrompt = Boolean(reason && reason !== command);
+
+	return (
+		<div className="cursor-chat-explore-box mt-1 flex min-w-0 flex-col overflow-hidden rounded-lg border">
+			{showPrompt ? (
+				<div className="flex min-w-0 items-start gap-2 border-b border-border/60 px-3 py-2">
+					<span
+						aria-hidden="true"
+						className="shrink-0 select-none pt-px font-mono text-caption leading-relaxed text-muted-foreground/70"
+					>
+						&gt;_
+					</span>
+					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+						<span className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
+							{reason}
+						</span>
+						{binary ? (
+							<span className="shrink-0 font-mono text-caption text-muted-foreground/55">
+								{binary}
+							</span>
+						) : null}
+					</div>
 				</div>
 			) : null}
+
+			{command ? (
+				<pre
+					className={cn(
+						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
+						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
+					)}
+				>
+					{command}
+				</pre>
+			) : null}
+
+			{detail?.terminalInput ? (
+				<div className={cn("px-3 py-2", detail?.output && "border-b border-border/60")}>
+					<TerminalInput
+						text={detail.terminalInput}
+						truncated={detail.terminalInputTruncated}
+					/>
+				</div>
+			) : null}
+			{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
 		</div>
 	);
 }
@@ -553,15 +1361,15 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 	const shown = useMemo(() => caretNotation(text), [text]);
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+			<span className="flex items-center gap-1.5 text-caption text-muted-foreground/70">
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre className="overflow-x-auto rounded-md border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed text-accent">
+			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
 				{shown}
 			</pre>
 			{truncated ? (
-				<p className="text-[10px] text-muted-foreground/70">
+				<p className="text-micro text-muted-foreground/70">
 					AO stopped recording keystrokes at its cap; more were sent.
 				</p>
 			) : null}
@@ -584,7 +1392,14 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
  * hundred stacked copies of itself. See `lib/ansi.ts` for why this is a text pass
  * rather than a terminal.
  */
-function CommandOutput({ activity }: { activity: ConversationActivity }) {
+function CommandOutput({
+	activity,
+	embedded = false,
+}: {
+	activity: ConversationActivity;
+	/** Inside the explore card: no second bordered surface. */
+	embedded?: boolean;
+}) {
 	const pre = useRef<HTMLPreElement>(null);
 	const detail = activity.detail;
 	// Older ACP-backed conversations may contain the provider's structured
@@ -611,12 +1426,17 @@ function CommandOutput({ activity }: { activity: ConversationActivity }) {
 			<pre
 				ref={pre}
 				aria-live={streaming ? "polite" : undefined}
-				className="max-h-64 overflow-auto rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-muted-foreground"
+				className={cn(
+					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",
+					embedded
+						? "cursor-chat-explore-output px-3 py-2 text-caption"
+						: "border border-border bg-background px-2.5 py-2 text-caption",
+				)}
 			>
 				{output}
 			</pre>
 			{detail?.outputTruncated ? (
-				<p className="text-[10px] leading-relaxed text-warning">
+				<p className="text-xs leading-relaxed text-warning">
 					This command printed more than AO stores, so the output above stops early. Open a shell in
 					the worktree to see the rest.
 				</p>
@@ -653,13 +1473,17 @@ function splitSummary(activity: ConversationActivity): { label: string; path?: s
 		const category = commandCategory(rawCommand);
 		if (category === "read" || category === "search") {
 			const count = exploredFileCount(rawCommand);
-			return { label: count ? `Explored ${count} ${count === 1 ? "file" : "files"}` : "Explored files" };
+			if (category === "search") return { label: "Search" };
+			return { label: count && count > 1 ? "Read files" : "Read file" };
 		}
 		return { label: category === "vcs" ? "Checked repository" : "Ran command" };
 	}
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
-		return { label: "Edited", path: shortenPaths(files[0]!.path) };
+		// Basename sits in the chip next to the status verb; the full path is the hover.
+		return {
+			label: `${fileChangeVerb(files[0]!.status ?? "modified")} ${fileBasename(files[0]!.path)}`,
+		};
 	}
 	return { label: activity.summary };
 }
@@ -668,11 +1492,13 @@ function ActivityState({
 	activity,
 	open,
 	hasBody,
+	inlineFileStats = false,
 	showDisclosure = true,
 }: {
 	activity: ConversationActivity;
 	open: boolean;
 	hasBody: boolean;
+	inlineFileStats?: boolean;
 	showDisclosure?: boolean;
 }) {
 	const { status, detail } = activity;
@@ -686,11 +1512,11 @@ function ActivityState({
 			/>
 		);
 	}
-	if (files.length) {
+	if (files.length && !inlineFileStats) {
 		const additions = files.reduce((sum, file) => sum + file.additions, 0);
 		const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
 		return (
-			<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
 				<span className="text-success">+{additions}</span>{" "}
 				<span className="text-destructive">&minus;{deletions}</span>
 			</span>
@@ -700,7 +1526,7 @@ function ActivityState({
 		return (
 			<span
 				className={cn(
-					"shrink-0 font-mono text-[10px] tabular-nums",
+					"shrink-0 font-mono text-micro tabular-nums",
 					isNonzeroCommandExit(activity) ? "text-muted-foreground/70" : "text-destructive",
 				)}
 			>
@@ -708,9 +1534,16 @@ function ActivityState({
 			</span>
 		);
 	}
+	if (status === "recovered") {
+		return (
+			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
+				outcome unknown
+			</span>
+		);
+	}
 	if (status === "cancelled") {
 		return (
-			<span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
 				stopped
 			</span>
 		);
@@ -735,17 +1568,14 @@ function ActivityState({
 /**
  * The files one edit touched, and what it did to them.
  *
- * Every field here is new signal. The daemon normalizes the provider's change kind
- * — which arrives as an object — into a plain status, so a row can finally say
- * whether a file was added, deleted or renamed instead of only counting lines. And
- * each file now carries its own patch, which is the difference between being told
- * something changed and being able to read the change without leaving the
- * conversation.
+ * Styled like the explore summary's nested lines — "Edited FAQ.tsx +1 −1" — so an
+ * expanded edit reads the same as the turn-level changed-files list. Hovering the
+ * basename shows the full location; a file that carries a patch can still open it.
  */
 export function FileChangeList({ files }: { files: FileChangeFile[] }) {
 	if (!files.length) return null;
 	return (
-		<ul className="flex flex-col gap-0.5">
+		<ul className="flex flex-col">
 			{files.map((file) => (
 				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} />
 			))}
@@ -757,31 +1587,19 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 	const [open, setOpen] = useState(false);
 	const status = diffStatusMark[file.status ?? "modified"] ?? diffStatusMark.modified;
 	const hasPatch = Boolean(file.patch);
+	const accessibleName = `${status.label} ${file.path}`;
 
 	const line = (
 		<>
-			<span
-				aria-label={status.label}
-				className={cn("w-3 shrink-0 text-center font-mono text-[10px] font-semibold", status.tone)}
-				title={status.label}
-			>
-				{status.mark}
+			<span className="sr-only">{status.label}</span>
+			<span className="shrink-0 text-xs text-muted-foreground">
+				{fileChangeVerb(file.status ?? "modified")}
 			</span>
-			<span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={file.path}>
-				{file.oldPath ? (
-					<>
-						<span className="text-muted-foreground/60">{shortenPaths(file.oldPath)}</span>
-						<span aria-hidden="true" className="px-1 text-muted-foreground/40">
-							&rarr;
-						</span>
-					</>
-				) : null}
-				{shortenPaths(file.path)}
-			</span>
-			<span className="shrink-0 font-mono text-[10px] tabular-nums text-success">
+			<FileLocationLabel path={file.path} oldPath={file.oldPath} />
+			<span className="shrink-0 font-mono text-micro tabular-nums text-success">
 				+{file.additions}
 			</span>
-			<span className="shrink-0 font-mono text-[10px] tabular-nums text-destructive">
+			<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
 				&minus;{file.deletions}
 			</span>
 		</>
@@ -790,7 +1608,11 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 	// A file with no patch is not a button: nothing opens, and a control that does
 	// nothing when pressed is worse than plain text.
 	if (!hasPatch) {
-		return <li className="flex items-center gap-2.5 px-0.5 py-1">{line}</li>;
+		return (
+			<li className="flex items-center gap-1.5 py-0.5 pr-1" aria-label={accessibleName}>
+				{line}
+			</li>
+		);
 	}
 
 	return (
@@ -799,13 +1621,14 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 				type="button"
 				onClick={() => setOpen((prev) => !prev)}
 				aria-expanded={open}
-				className="flex items-center gap-2.5 rounded-sm px-0.5 py-1 text-left transition-colors hover:bg-interactive-hover"
+				aria-label={accessibleName}
+				className="flex items-center gap-1.5 rounded-sm py-0.5 pr-1 text-left"
 			>
 				{line}
 				<ChevronRight
 					aria-hidden="true"
 					className={cn(
-						"size-3 shrink-0 text-muted-foreground/50 transition-transform",
+						"size-3 shrink-0 text-muted-foreground/40 transition-transform",
 						open && "rotate-90",
 					)}
 				/>
@@ -826,18 +1649,28 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
  * grammar renders as plain text. That is the right outcome: there is no diff to
  * colour, only a new file to read.
  */
+function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
+	if (!file) return undefined;
+	if (file.patch) return file.patch;
+	if (file.oldText === undefined && file.newText === undefined) return undefined;
+	const oldLines = file.oldText?.split("\n") ?? [];
+	const newLines = file.newText?.split("\n") ?? [];
+	const header = `--- ${file.path}\n+++ ${file.path}`;
+	return [
+		header,
+		...oldLines.map((line) => `-${line}`),
+		...newLines.map((line) => `+${line}`),
+	].join("\n");
+}
+
 function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 	return (
 		// `chat-code` is what the token colours are scoped to, so a patch without it
 		// tokenizes correctly and renders in one flat colour.
-		<div className="chat-code mb-1 mt-0.5 overflow-hidden rounded-md border border-border bg-background">
-			<pre className="max-h-72 overflow-auto px-2.5 py-2">
-				<code className="font-mono text-[10.5px] leading-[1.55] text-foreground">
-					<HighlightedCode code={patch} language="diff" />
-				</code>
-			</pre>
+			<div className="mb-1 mt-0.5 overflow-hidden bg-background">
+			<ToolDiffCode text={patch} />
 			{truncated ? (
-				<p className="border-t border-border px-2.5 py-1.5 text-[10px] leading-relaxed text-warning">
+				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
 					This patch is longer than AO stores, so it stops early. The whole change is in the
 					worktree and in the turn&rsquo;s diff.
 				</p>
@@ -874,7 +1707,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 			<Brain aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground/70" />
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2">
-					<span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+					<span className="text-caption text-muted-foreground/70">
 						{streaming ? "Thinking" : "Thought"}
 					</span>
 					{streaming ? (
@@ -886,7 +1719,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 				</div>
 				<ChatMarkdown text={text} streaming={streaming} muted />
 				{activity.detail?.textTruncated ? (
-					<p className="mt-1 text-[10px] text-muted-foreground/70">
+					<p className="mt-1 text-micro text-muted-foreground/70">
 						This summary is longer than AO stores, so it stops early.
 					</p>
 				) : null}
@@ -910,83 +1743,77 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
+	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
 	const tool = detail?.toolName ?? activity.summary;
 	const server = detail?.server ?? detail?.namespace;
+	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
-		detail?.arguments !== undefined ||
+			detail?.arguments !== undefined ||
 			detail?.result !== undefined ||
+			detail?.content !== undefined ||
 			detail?.error ||
 			detail?.progress,
 	);
 
 	return (
-		<div className="group/activity border-t border-border first:border-t-0">
+		<div className="min-w-0 max-w-full">
 			<button
 				type="button"
 				onClick={() => setOpen((prev) => !prev)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
-					"flex min-h-[35px] w-full items-center gap-[9px] px-[11px] py-2 text-left text-[11px] transition-colors",
-					hasBody && "hover:bg-interactive-hover",
+					ACTIVITY_SUMMARY_BUTTON_CLASS,
+					"activity-row-toggle",
 					!hasBody && "cursor-default",
 				)}
 			>
-				<Plug
-					aria-hidden="true"
-					className={cn(
-						"w-[15px] shrink-0 text-center",
-						failed ? "text-destructive" : "text-accent-dim",
-					)}
-					size={13}
-				/>
-				{/* The server is named first and in its own colour: which server answered is
-				    the part a shell command row could never have said. */}
-				{server ? (
-					<span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">
-						{server}
-						<span aria-hidden="true" className="px-0.5 text-muted-foreground/40">
-							/
-						</span>
-					</span>
-				) : null}
 				<strong
 					className={cn(
-						"shrink-0 text-[10.5px] font-medium",
-						failed ? "text-destructive" : "text-foreground",
+						"activity-row-label shrink-0 text-xs font-normal",
+						failed ? "text-destructive" : "text-muted-foreground",
 					)}
 				>
-					{tool}
+					<span>{tool}</span>
 				</strong>
-				<span className="min-w-0 flex-1 truncate text-[10.5px] text-muted-foreground/70">
-					{detail?.progress ? lastLine(detail.progress) : "MCP tool"}
-				</span>
+				{sourceLabel ? (
+					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-hover/activity:text-foreground">
+						{sourceLabel}
+					</span>
+				) : null}
 				{activity.status === "running" ? (
 					<Loader2
 						aria-label="running"
 						className="size-3 shrink-0 animate-spin text-muted-foreground/60"
 					/>
 				) : failed ? (
-					<span className="shrink-0 text-[10px] text-destructive">failed</span>
+					<span className="shrink-0 text-xs text-destructive">failed</span>
+				) : activity.status === "recovered" ? (
+					<span className="shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
 				) : activity.status === "cancelled" ? (
-					<span className="shrink-0 text-[10px] text-muted-foreground/70">stopped</span>
+					<span className="shrink-0 text-xs text-muted-foreground/70">stopped</span>
 				) : hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
-						className={cn(
-							"size-3 shrink-0 text-muted-foreground/50 transition-all",
-							open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
-						)}
+						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
 					/>
 				) : null}
 			</button>
 
-			{open && hasBody ? (
-				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden rounded-lg"
+					>
+						<div className="flex flex-col gap-2 pb-2.5">
 					{detail?.error ? (
-						<p className="rounded border border-destructive/30 bg-background px-2.5 py-1.5 text-[10.5px] leading-relaxed text-destructive">
+						<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
 							{detail.error}
 						</p>
 					) : null}
@@ -996,20 +1823,106 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 					{detail?.result !== undefined ? (
 						<JsonPayload label="Result" value={detail.result} />
 					) : null}
+					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
 					{detail?.progress ? (
 						<div className="flex flex-col gap-1">
-							<span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+							<span className="text-caption text-muted-foreground/70">
 								Progress
 							</span>
-							<pre className="max-h-40 overflow-auto rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+							<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
 								{detail.progress}
 							</pre>
 						</div>
 					) : null}
-				</div>
-			) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
+}
+
+function ToolContent({ value }: { value: unknown }) {
+	const text = normalizeToolCode(toolContentText(value));
+	if (text) {
+		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
+		return (
+			<pre className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
+				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
+					{ text }
+				</code>
+			</pre>
+		);
+	}
+	const truncated = truncationNote(value);
+	return (
+		<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
+			<code className="font-mono text-caption leading-[1.55] text-foreground">
+				{truncated ?? formatJson(value)}
+			</code>
+		</pre>
+	);
+}
+
+function normalizeToolCode(text: string): string {
+	const fenced = text.match(/^\s*```[^\n]*\n([\s\S]*?)\n```\s*$/);
+	return (fenced?.[1] ?? text).replace(/\r\n?/g, "\n");
+}
+
+function looksLikeUnifiedDiff(text: string): boolean {
+	const lines = text.split("\n");
+	return (
+		lines.some((line) => line.startsWith("@@")) ||
+		(lines.some((line) => line.startsWith("---")) && lines.some((line) => line.startsWith("+++"))) ||
+		(lines.some((line) => line.startsWith("-")) && lines.some((line) => line.startsWith("+")))
+	);
+}
+
+function ToolDiffCode({ text }: { text: string }) {
+	return (
+		<div className="chat-code max-h-64 overflow-auto rounded-lg border border-border bg-background px-0 py-1 font-mono text-caption leading-[1.55]">
+			{ text.split("\n").map((line, index) => {
+				const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
+				const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
+				const content = kind === "context" ? line : line.slice(1);
+				return (
+					<div
+						key={`${index}-${line}`}
+						data-tool-diff-row=""
+						className={cn(
+							"flex min-w-max whitespace-pre px-2.5",
+							kind === "add" && "bg-success/10",
+							kind === "del" && "bg-error/10",
+						)}
+					>
+						<span
+							aria-hidden="true"
+							className={cn(
+								"w-4 shrink-0 select-none text-center",
+								kind === "add" && "text-success",
+								kind === "del" && "text-error",
+							)}
+						>
+							{marker}
+						</span>
+						<span className="whitespace-pre text-foreground/90">{content}</span>
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+function toolContentText(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) return value.map(toolContentText).filter(Boolean).join("\n");
+	if (!value || typeof value !== "object") return "";
+	const record = value as Record<string, unknown>;
+	for (const key of ["text", "content", "output", "data"]) {
+		const text = toolContentText(record[key]);
+		if (text) return text;
+	}
+	return "";
 }
 
 /**
@@ -1025,16 +1938,16 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+			<span className="text-caption text-muted-foreground/70">
 				{label}
 			</span>
 			{capped ? (
-				<p className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+				<p className="border border-border bg-background px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">
 					{capped}
 				</p>
 			) : (
-				<pre className="chat-code max-h-56 overflow-auto rounded-md border border-border bg-background px-2.5 py-1.5">
-					<code className="font-mono text-[10.5px] leading-[1.55] text-foreground">
+				<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
+					<code className="font-mono text-caption leading-[1.55] text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>
 				</pre>
@@ -1111,8 +2024,8 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
-					"flex min-h-[35px] w-full items-center gap-[9px] px-[11px] py-2 text-left text-[11px] transition-colors",
-					hasBody && "hover:bg-interactive-hover",
+					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
+					hasBody && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
 			>
@@ -1122,21 +2035,21 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 						"w-[15px] shrink-0 text-center",
 						denied ? "text-destructive" : "text-muted-foreground/70",
 					)}
-					size={13}
+					size={14}
 				/>
 				<strong className="shrink-0 font-medium text-foreground">
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
 				<span
-					className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground"
+					className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground"
 					title={activity.summary}
 				>
-					{shortenPaths(activity.summary)}
+					<ActivityTitle text={shortenPaths(activity.summary)} />
 				</span>
 				{detail?.riskLevel ? (
 					<span
 						className={cn(
-							"shrink-0 text-[10px] uppercase tracking-[0.06em]",
+							"shrink-0 text-xs",
 							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
 						)}
 						title={`Risk assessed as ${detail.riskLevel}`}
@@ -1159,17 +2072,17 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
 					{/* Said in full rather than implied by the label: "auto-approved" alone
 					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-[11px] leading-relaxed text-muted-foreground">
+					<p className="text-xs leading-relaxed text-muted-foreground">
 						{denied
 							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
 							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
 					</p>
 					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-[11px] leading-relaxed text-foreground">
+						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
 							{detail.rationale}
 						</p>
 					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[10.5px] leading-relaxed">
+					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
 						{detail?.command ? (
 							<>
 								<dt className="text-muted-foreground/70">command</dt>
@@ -1207,7 +2120,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 									    for it is carried rather than flattened to "automatically". */}
 									{detail.decisionSource}
 									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDuration(detail.durationMs)}`
+										? ` · ${formatDecisionDuration(detail.durationMs)}`
 										: ""}
 								</dd>
 							</>
@@ -1236,7 +2149,7 @@ function RerouteRow({ activity }: { activity: ConversationActivity }) {
 		<div className="flex items-start gap-2.5 rounded-md border border-border bg-surface/60 px-3 py-2">
 			<Shuffle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 			<div className="flex min-w-0 flex-col gap-0.5">
-				<span className="text-[11px] text-foreground">
+				<span className="text-xs text-foreground">
 					Answered by{" "}
 					<strong className="font-medium">{detail?.toModel ?? "another model"}</strong>
 					{detail?.fromModel ? (
@@ -1247,7 +2160,7 @@ function RerouteRow({ activity }: { activity: ConversationActivity }) {
 					) : null}
 				</span>
 				{detail?.reason ? (
-					<span className="text-[10.5px] leading-snug text-muted-foreground">{detail.reason}</span>
+					<span className="text-xs leading-snug text-muted-foreground">{detail.reason}</span>
 				) : null}
 			</div>
 		</div>
@@ -1269,19 +2182,72 @@ function RerouteRow({ activity }: { activity: ConversationActivity }) {
  */
 function ErrorActivityRow({ activity }: { activity: ConversationActivity }) {
 	const { headline, detail } = providerErrorCopy(activity);
+	const actionUrl = String(activity.detail?.actionUrl ?? "").trim();
+	const standaloneActionUrl = actionUrl && !detail?.includes(actionUrl) ? actionUrl : undefined;
 	return (
-		<div className="flex min-w-0 max-w-full items-start gap-2.5 overflow-hidden rounded-md border border-destructive/40 bg-surface px-3 py-2">
-			<AlertTriangle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<strong className="wrap-anywhere text-[11px] font-medium leading-snug text-destructive">
-					{headline}
-				</strong>
+		<div className="flex min-w-0 max-w-full items-baseline overflow-hidden py-0.5 text-xs leading-snug text-muted-foreground">
+			<span className="wrap-anywhere min-w-0 whitespace-pre-wrap">
+				<span>{linkifiedProviderErrorText(headline)}</span>
 				{detail ? (
-					<p className="wrap-anywhere text-[10.5px] leading-snug text-muted-foreground">{detail}</p>
+					<>
+						{" — "}
+						<span className="text-muted-foreground/80">{linkifiedProviderErrorText(detail)}</span>
+					</>
 				) : null}
-			</div>
+				{standaloneActionUrl ? (
+					<>
+						{detail ? " " : " — "}
+						{isWebLink(standaloneActionUrl) ? (
+							<ProviderErrorLink href={standaloneActionUrl} />
+						) : (
+							<span className="text-muted-foreground/80">{standaloneActionUrl}</span>
+						)}
+					</>
+				) : null}
+			</span>
 		</div>
 	);
+}
+
+const providerErrorWebUrlPattern = /\bhttps?:\/\/[^\s<>"'`]+/giu;
+const trailingProviderUrlPunctuation = /[),.;!?}\]]+$/u;
+
+function ProviderErrorLink({ href }: { href: string }) {
+	return (
+		<AppLink
+			href={href}
+			target="_blank"
+			rel="noreferrer noopener"
+			onClick={(event) => {
+				event.preventDefault();
+				void openLinkInSystemBrowser(href);
+			}}
+			className="text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"
+		>
+			{href}
+		</AppLink>
+	);
+}
+
+/** Render provider prose verbatim, activating only literal HTTP(S) URLs. */
+function linkifiedProviderErrorText(text: string): ReactNode[] {
+	const parts: ReactNode[] = [];
+	let cursor = 0;
+	for (const match of text.matchAll(providerErrorWebUrlPattern)) {
+		const start = match.index;
+		const rawUrl = match[0];
+		const href = rawUrl.replace(trailingProviderUrlPunctuation, "");
+		if (start > cursor) parts.push(text.slice(cursor, start));
+		if (href && isWebLink(href)) {
+			parts.push(<ProviderErrorLink key={`${start}-${href}`} href={href} />);
+			if (href.length < rawUrl.length) parts.push(rawUrl.slice(href.length));
+		} else {
+			parts.push(rawUrl);
+		}
+		cursor = start + rawUrl.length;
+	}
+	if (cursor < text.length) parts.push(text.slice(cursor));
+	return parts;
 }
 
 /**
@@ -1370,16 +2336,82 @@ function parseJsonObjectSuffix(raw: string): Record<string, unknown> | undefined
  * when it happened, so a turn that failed for this reason is not left looking like an
  * ordinary failure.
  */
+/** Whole seconds for a short duration, minutes and seconds past a minute. */
+function setupDuration(durationMs: number): { minutes: number; seconds: number } {
+	const total = Math.max(0, Math.round(durationMs / 1000));
+	return { minutes: Math.floor(total / 60), seconds: total % 60 };
+}
+
+/**
+ * How the project's Setup commands (Project settings > Scripts) ended, before
+ * the agent started. Compact like the other system rows; the failed step's
+ * output (the tail the worker kept, already redacted) opens below it in
+ * monospace.
+ */
+function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const detail = activity.detail;
+	const status = detail?.setupStatus ?? (activity.status === "completed" ? "succeeded" : "failed");
+	const step = detail?.setupStep ?? 1;
+	const duration = typeof detail?.durationMs === "number" ? setupDuration(detail.durationMs) : undefined;
+	const durationText = duration
+		? duration.minutes > 0
+			? t("chat.projectSetup.durationMinutes", { minutes: duration.minutes, seconds: duration.seconds })
+			: t("chat.projectSetup.durationSeconds", { seconds: duration.seconds })
+		: undefined;
+	const headline = status === "succeeded"
+		? durationText ? t("chat.projectSetup.succeededIn", { duration: durationText }) : t("chat.projectSetup.succeeded")
+		: status === "timed_out"
+			? t("chat.projectSetup.timedOut", { step })
+			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
+				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
+				: t("chat.projectSetup.failed", { step });
+	const output = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	const failed = status !== "succeeded";
+	const Icon = failed ? CircleAlert : SquareTerminal;
+	return (
+		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
+			<div className="flex items-center gap-2.5">
+				<Icon aria-hidden="true" className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")} />
+				<span className={cn("min-w-0 flex-1 text-xs", failed ? "text-destructive" : "text-foreground")}>{headline}</span>
+				{output ? (
+					<button
+						type="button"
+						aria-expanded={expanded}
+						className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						onClick={() => setExpanded((value) => !value)}
+					>
+						{expanded ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
+						{expanded ? t("chat.projectSetup.hideOutput") : t("chat.projectSetup.showOutput")}
+					</button>
+				) : null}
+			</div>
+			{output && expanded ? (
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground">{output}</pre>
+			) : null}
+		</div>
+	);
+}
+
+/** Where an account switch stopped the turn: not a failure, the conversation
+ * continues on the new account with the next message. */
+function AccountSwitchedRow({ accountId }: { accountId?: string }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
+}
+
 function ReauthRow({ activity }: { activity: ConversationActivity }) {
 	return (
 		<div className="flex items-start gap-2.5 rounded-md border border-destructive/40 bg-surface px-3 py-2">
 			<KeyRound aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			<div className="flex min-w-0 flex-col gap-0.5">
-				<strong className="text-[11px] font-medium text-destructive">
+				<strong className="text-xs font-medium text-destructive">
 					The provider asked you to sign in again
 				</strong>
 				{activity.detail?.reason ? (
-					<span className="text-[10.5px] leading-snug text-muted-foreground">
+					<span className="text-xs leading-snug text-muted-foreground">
 						{activity.detail.reason}
 					</span>
 				) : null}
@@ -1397,26 +2429,115 @@ function ReauthRow({ activity }: { activity: ConversationActivity }) {
  * back needs to see that this arrived mid-turn, since it explains why the agent
  * changed course without a new exchange starting.
  */
-export function SteerMessage({ activity }: { activity: ConversationActivity }) {
+export function SteerMessage({
+	activity,
+	sessionId,
+	apiBaseUrl = getApiBaseUrl(),
+}: {
+	activity: ConversationActivity;
+	sessionId: string;
+	apiBaseUrl?: string | null;
+}) {
+	const [expanded, setExpanded] = useState(false);
 	const text = activity.detail?.text ?? activity.summary;
-	return (
-		<div className="flex flex-col items-end gap-1">
-			<div className="w-fit max-w-[min(78%,560px)] break-words whitespace-pre-wrap rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-sm leading-[1.55] text-foreground">
-				{text ? <p>{text}</p> : null}
-				<ConversationContentItems
-					content={activity.detail?.content ?? []}
+	const senderSessionId = activity.detail?.senderSessionId?.trim();
+	const senderProjectId = activity.detail?.senderProjectId?.trim();
+	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
+	const automationSteer = Boolean(senderSessionId);
+	const senderHref = senderSessionId && senderProjectId
+		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
+		: undefined;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
+	const { body, attachments } = stagedAttachmentParts(visibleText);
+	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
+	const preview = longReport
+		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
+		: body;
+	let stagedImagesToMatch = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path)).length;
+	// Composer images are recorded twice: once as durable staged paths and once as
+	// native prompt blocks. Suppress only the corresponding leading native images;
+	// later image blocks may be distinct provider content and must remain visible.
+	const remainingContent = (activity.detail?.content ?? []).filter((item) => {
+		if (item.type !== "image" || stagedImagesToMatch === 0) return true;
+		stagedImagesToMatch -= 1;
+		return false;
+	});
+	const automationBody = (
+		<>
+			{longReport && expanded ? (
+				<ChatMarkdown text={body} muted />
+			) : body ? (
+				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
+					<SessionLinkedText text={preview} />
+				</p>
+			) : null}
+				<StagedAttachmentItems
+					paths={attachments}
+					sessionId={sessionId}
+					apiBaseUrl={apiBaseUrl}
 					ariaLabel="Steered attachments"
+					className={cn(body && "mt-2")}
+				/>
+				<ConversationContentItems
+					content={remainingContent}
+					ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
 					imageLabel="Image"
 					imageAlt={(position) => `Steered attachment ${position}`}
-					className={cn(text && "mt-2")}
+					className={cn((body || attachments.length > 0) && "mt-2")}
 				/>
-			</div>
-			<span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
+		</>
+	);
+	return (
+		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")}>
+			{automationSteer ? (
+				<AutomationMessageFrame
+					label={<>[from {senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}]</>}
+					createdAt={activity.createdAt}
+				>
+					{automationBody}
+				</AutomationMessageFrame>
+			) : (
+				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
+					{body ? (
+						<p>
+							<ProseWithInlineImages
+								text={body}
+								attachments={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								renderText={(text) => text}
+							/>
+						</p>
+					) : null}
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel="Steered attachments"
+						className={cn(body && "mt-2")}
+					/>
+					<ConversationContentItems
+						content={remainingContent}
+						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
+						imageLabel="Image"
+						imageAlt={(position) => `Steered attachment ${position}`}
+						className={cn((body || attachments.length > 0) && "mt-2")}
+					/>
+				</div>
+			)}
+			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
 				Steered into the running turn
 			</span>
 		</div>
 	);
+}
+
+function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
+	const escaped = senderSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const prefix = new RegExp(`^\\[from (?:worker\\s+)?${escaped}(?:\\s+"[^"]*")?\\]\\s*`);
+	return text.replace(prefix, "");
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1426,134 +2547,306 @@ export function SteerMessage({ activity }: { activity: ConversationActivity }) {
 /**
  * A decision the agent is blocked on.
  *
- * Buttons come from `activity.decisions` — the provider's own list — never from a
- * fixed set. A real captured approval offered `accept`, an object-shaped
- * `acceptWithExecpolicyAmendment`, and `cancel`, and offered **no decline**: a
- * hardcoded three-button row would have drawn a control that cannot be honored.
+ * Decisions come from `activity.decisions` — the provider's own list — never from
+ * a fixed set. The UI still presents common permission choices with AO/Codex copy
+ * so provider-flavored labels do not leak into the chat surface.
  */
 export function ApprovalCard({
 	activity,
 	onDecide,
 	busy,
+	embedded,
 }: {
 	activity: ConversationActivity;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	busy?: boolean;
+	/** Render inside the shared chat composer instead of drawing another card shell. */
+	embedded?: boolean;
 }) {
 	const resolved = activity.status !== "pending";
-	const decisions: DecisionOption[] = activity.decisions ?? [];
+	const decisions = orderedApprovalDecisions(activity.decisions ?? []);
 	const detail = activity.detail;
+	const command = detail?.command ?? activity.summary;
+	const subjectKind = approvalSubjectKind(activity);
+	const rejectOnceDecision = decisions.find(
+		(decision) => approvalDecisionKind(decision) === "reject_once",
+	);
+	const denyDecision =
+		rejectOnceDecision ??
+		decisions.find((decision) => approvalDecisionKind(decision) === "reject_always");
+	const allowOnceDecision = decisions.find(
+		(decision) => approvalDecisionKind(decision) === "allow_once",
+	);
+	const alternateAllowDecisions = allowOnceDecision
+		? decisions.filter((decision) => approvalDecisionKind(decision) === "allow_always")
+		: [];
+	const otherDecisions = decisions.filter(
+		(decision) =>
+			decision !== denyDecision &&
+			decision !== allowOnceDecision &&
+			!alternateAllowDecisions.includes(decision),
+	);
+	// Some agents ask a question through a permission request, offering each
+	// answer as its own option of the same kind. A generic per-kind label would
+	// render identical buttons, so a kind offered more than once keeps the
+	// provider's own wording.
+	const repeatedKinds = repeatedDecisionKinds(decisions);
+	const decisionLabel = (decision: DecisionOption) =>
+		repeatedKinds.has(approvalDecisionKind(decision) ?? "") && decision.label.trim()
+			? decision.label
+			: approvalDecisionLabel(decision, subjectKind);
+	const requestId = activity.requestId ?? "";
+	const cardRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!embedded || resolved || busy || !requestId) return;
+		const card = cardRef.current;
+		if (card && (document.activeElement === document.body || !document.activeElement)) card.focus();
+	}, [busy, embedded, requestId, resolved]);
+
+	if (resolved) {
+		return <ResolvedApprovalRow activity={activity} command={command} />;
+	}
 
 	return (
 		<div
+			ref={cardRef}
+			role="group"
+			tabIndex={-1}
+			aria-label={`Approval request ${requestId}`.trim()}
 			className={cn(
-				"rounded-lg border bg-surface",
-				resolved ? "border-border" : "border-warning/40 ring-1 ring-warning/10",
+				"cursor-chat-activity-panel",
+				embedded ? "px-1 py-0.5" : "rounded-lg border border-border px-3 py-2.5",
 			)}
+			onKeyDown={(event) => {
+				if (busy || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+				if (event.key === "Escape" && rejectOnceDecision) {
+					event.preventDefault();
+					onDecide?.(requestId, rejectOnceDecision.id);
+					return;
+				}
+				const target = event.target;
+				const interactive =
+					target instanceof HTMLElement &&
+					Boolean(target.closest("button, a, input, textarea, select, [contenteditable='true']"));
+				if (event.key === "Enter" && !event.shiftKey && !interactive && allowOnceDecision) {
+					event.preventDefault();
+					onDecide?.(requestId, allowOnceDecision.id);
+				}
+			}}
 		>
-			<div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
-				<ShieldQuestion
-					aria-hidden="true"
-					className={cn("size-4 shrink-0", resolved ? "text-muted-foreground" : "text-warning")}
-				/>
-				<strong className="text-xs font-semibold text-foreground">
-					{resolved ? "Approval resolved" : "Approval required"}
-				</strong>
-				<span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
-					req {activity.requestId}
-				</span>
-			</div>
+			<div className="flex flex-col">
+				<p className="whitespace-pre-wrap text-sm leading-[1.4] text-foreground/90">
+					{detail?.reason ?? approvalPrompt(subjectKind)}
+				</p>
 
-			<div className="flex flex-col gap-2.5 px-3.5 py-3">
-				{detail?.reason ? (
-					<p className="text-sm leading-relaxed text-muted-foreground">{detail.reason}</p>
-				) : null}
+				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-xs leading-[1.45] text-muted-foreground">
+					{detail?.rawCommand ?? command}
+				</pre>
 
-				<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded bg-background px-2.5 py-2 font-mono text-[11px] leading-relaxed">
-					<dt className="text-muted-foreground">command</dt>
-					<dd className="min-w-0 break-all text-foreground">{detail?.command ?? activity.summary}</dd>
-					{detail?.cwd ? (
-						<>
-							<dt className="text-muted-foreground">cwd</dt>
-							<dd className="min-w-0 break-all text-muted-foreground">{detail.cwd}</dd>
-						</>
+				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
+					{denyDecision ? (
+						<button
+							type="button"
+							className={QUIET_ACTION_PILL}
+							disabled={busy}
+							onClick={() => onDecide?.(requestId, denyDecision.id)}
+						>
+							{decisionLabel(denyDecision)}
+							{denyDecision === rejectOnceDecision ? (
+								<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
+									Esc
+								</kbd>
+							) : null}
+						</button>
 					) : null}
-				</dl>
 
-				{resolved ? (
-					<p className="text-[11px] text-muted-foreground">
-						Already answered. This card is kept for the record.
-					</p>
-				) : (
-					<div className="flex flex-wrap gap-2 pt-0.5">
-						{decisions.map((decision, index) => (
-							<Button
-								key={decision.id}
+					{allowOnceDecision ? (
+						<div className={ACCENT_ACTION_SHELL}>
+							<button
 								type="button"
-								size="sm"
-								variant={index === 0 ? "primary" : "outline"}
+								className={ACCENT_ACTION_SEGMENT}
 								disabled={busy}
-								onClick={() => onDecide?.(activity.requestId ?? "", decision.id)}
+								onClick={() => onDecide?.(requestId, allowOnceDecision.id)}
 							>
-								{decision.label}
-							</Button>
-						))}
-						{decisions.length === 0 ? (
-							<p className="text-[11px] text-warning">
-								The agent offered no decisions AO can present. Open diagnostics.
-							</p>
-						) : null}
-					</div>
-				)}
+								{decisionLabel(allowOnceDecision)}
+								<kbd className="rounded-full bg-logo-accent-foreground/15 p-0.5" aria-label="Press Return">
+									<CornerDownLeft aria-hidden="true" className="size-3" />
+								</kbd>
+							</button>
+							{alternateAllowDecisions.length > 0 ? (
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<button
+											type="button"
+											aria-label="More approval options"
+											className="flex w-7 items-center justify-center border-l border-logo-accent-foreground/20 transition-colors hover:bg-logo-accent-bright focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+											disabled={busy}
+										>
+											<ChevronDown aria-hidden="true" className="size-3.5" />
+										</button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent
+										align="end"
+										side="bottom"
+										className="min-w-52"
+										data-approval-menu=""
+										onEscapeKeyDown={(event) => event.stopPropagation()}
+									>
+										{alternateAllowDecisions.map((decision) => (
+											<DropdownMenuItem
+												key={decision.id}
+												disabled={busy}
+												onSelect={() => onDecide?.(activity.requestId ?? "", decision.id)}
+											>
+												{decisionLabel(decision)}
+											</DropdownMenuItem>
+										))}
+									</DropdownMenuContent>
+								</DropdownMenu>
+							) : null}
+						</div>
+					) : null}
+					{otherDecisions.map((decision) => (
+						<button
+							key={decision.id}
+							type="button"
+							className={QUIET_ACTION_PILL}
+							disabled={busy}
+							onClick={() => onDecide?.(requestId, decision.id)}
+						>
+							{decisionLabel(decision)}
+						</button>
+					))}
+					{decisions.length === 0 ? (
+						<p className="text-xs text-warning">
+							The agent offered no decisions AO can present. Open diagnostics.
+						</p>
+					) : null}
+				</div>
 			</div>
 		</div>
 	);
 }
 
-/* -------------------------------------------------------------------------- */
-/* compaction                                                                  */
-/* -------------------------------------------------------------------------- */
+function approvalSubjectKind(activity: ConversationActivity): ActivityKind | undefined {
+	if (activity.detail?.subjectKind) return activity.detail.subjectKind;
+	if (activity.detail?.method === "item/fileChange/requestApproval") return "file_change";
+	if (activity.detail?.method === "item/commandExecution/requestApproval") return "command";
+	return undefined;
+}
 
-/**
- * Where the conversation's earlier history was summarized to reclaim context.
- *
- * It renders as a divider rather than an activity row because that is what it is:
- * everything above it is no longer what the agent sees verbatim. Without the
- * marker, a conversation that quietly lost half its history reads as if the agent
- * simply forgot — the user would have no way to tell a compaction from a bug.
- *
- * Figures are shown only when the provider's reports allowed them to be computed.
- * A compaction right after a daemon restart genuinely does not know what it saved,
- * and a "0 tokens freed" label would be a lie rather than a gap.
- */
-export function CompactionMarker({ activity }: { activity: ConversationActivity }) {
-	const reclaimed = activity.detail?.tokensReclaimed;
-	const after = activity.detail?.tokensAfter;
-	const window = activity.detail?.contextWindow;
+function approvalPrompt(subjectKind?: ActivityKind): string {
+	return subjectKind === "file_change"
+		? "Do you want to allow these file changes?"
+		: "Do you want to run this command?";
+}
+
+function approvalDecisionKind(decision: DecisionOption): DecisionOption["kind"] | "unknown" {
+	return decision.kind ?? "unknown";
+}
+
+function approvalDecisionRank(decision: DecisionOption): number {
+	switch (approvalDecisionKind(decision)) {
+		case "reject_once":
+			return 10;
+		case "reject_always":
+			return 15;
+		case "allow_once":
+			return 20;
+		case "allow_always":
+			return 30;
+		default:
+			return 40;
+	}
+}
+
+function approvalDecisionLabel(decision: DecisionOption, subjectKind?: ActivityKind): string {
+	switch (approvalDecisionKind(decision)) {
+		case "allow_always":
+			return subjectKind === "file_change"
+				? "Always allow these file changes"
+				: "Always allow this command";
+		case "allow_once":
+			return "Allow once";
+		case "reject_once":
+			return "Deny";
+		case "reject_always":
+			return "Always deny";
+		default:
+			return decision.label;
+	}
+}
+
+function repeatedDecisionKinds(decisions: DecisionOption[]): Set<string> {
+	const seen = new Set<string>();
+	const repeated = new Set<string>();
+	for (const decision of decisions) {
+		const kind = approvalDecisionKind(decision);
+		if (!kind) continue;
+		if (seen.has(kind)) repeated.add(kind);
+		seen.add(kind);
+	}
+	return repeated;
+}
+
+function orderedApprovalDecisions(decisions: DecisionOption[]): DecisionOption[] {
+	return decisions
+		.map((decision, index) => ({ decision, index }))
+		.sort((left, right) => {
+			const byRank = approvalDecisionRank(left.decision) - approvalDecisionRank(right.decision);
+			return byRank || left.index - right.index;
+		})
+		.map(({ decision }) => decision);
+}
+
+function ResolvedApprovalRow({
+	activity,
+	command,
+}: {
+	activity: ConversationActivity;
+	command: string;
+}) {
+	const detail = activity.detail;
+	const decision = typeof detail?.decision === "string" ? detail.decision : undefined;
+	const decisionKind = activity.decisions?.find((option) => option.id === decision)?.kind;
+	const outcome = resolvedApprovalOutcome(activity.status, decision, detail?.resolvedBy, decisionKind);
+	const title = detail?.cwd ? `${command}\n${detail.cwd}` : command;
 
 	return (
-		<div className="flex items-center gap-2 py-1" data-compaction="true">
-			<span aria-hidden="true" className="h-px flex-1 bg-border" />
-			<Archive aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
-			<span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
-				History compacted
+		<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border/80 bg-surface/45 px-2.5 py-1.5 text-xs text-muted-foreground">
+			<strong className="shrink-0 font-medium text-foreground">{outcome.label}</strong>
+			<span className="min-w-0 truncate text-right font-mono" title={title}>
+				{command}
 			</span>
-			{reclaimed ? (
-				<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-					&minus;{formatTokens(reclaimed)}
-				</span>
-			) : null}
-			{after && window ? (
-				<span
-					className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70"
-					title={`${after.toLocaleString()} of ${window.toLocaleString()} context tokens in use`}
-				>
-					{Math.round((after / window) * 100)}% full
-				</span>
-			) : null}
-			<span aria-hidden="true" className="h-px flex-1 bg-border" />
 		</div>
 	);
+}
+
+function resolvedApprovalOutcome(
+	status: ConversationActivity["status"],
+	decision?: string,
+	resolvedBy?: string,
+	decisionKind?: DecisionOption["kind"],
+): { label: string; success: boolean } {
+	const value = decision?.toLowerCase() ?? "";
+	if (status === "failed") return { label: "Approval expired", success: false };
+	if (
+		status === "cancelled" ||
+		decisionKind === "reject_once" ||
+		decisionKind === "reject_always" ||
+		/(deny|decline|reject|cancel)/.test(value)
+	) {
+		return { label: "Cancelled", success: false };
+	}
+	if (decisionKind === "allow_always" || /(remember|always|amendment|policy)/.test(value)) {
+		return { label: "Approved and remembered", success: true };
+	}
+	if (decisionKind === "allow_once" || /(allow|approve|accept)/.test(value)) {
+		return { label: "Approved", success: true };
+	}
+	if (resolvedBy === "provider") return { label: "Resolved elsewhere", success: false };
+	return { label: "Resolved", success: false };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1568,37 +2861,64 @@ const diffStatusMark: Record<DiffStatus, { mark: string; tone: string; label: st
 	renamed: { mark: "R", tone: "text-muted-foreground", label: "renamed" },
 };
 
+/** Match the daemon's file_change summary verbs (Created/Deleted/Renamed/Edited). */
+function fileChangeVerb(status: DiffStatus): string {
+	switch (status) {
+		case "added":
+			return "Created";
+		case "deleted":
+			return "Deleted";
+		case "renamed":
+			return "Renamed";
+		default:
+			return "Edited";
+	}
+}
+
 /**
  * What a turn changed on disk.
  *
- * One panel per turn rather than a row per update: the provider re-sends the whole
- * diff as the turn progresses, and the daemon overwrites it, so this is current
- * state and not history. It grows while the turn runs, which is the point — seeing
- * a file appear as the agent touches it is the difference between watching work and
- * waiting for it.
+ * A bordered summary card at the end of the turn (kept near rollback), not the
+ * compact explore line used for mid-turn activity. Always shows the changed
+ * files; Review opens the Files rail, and clicking a row focuses that path.
  *
  * Rendered only when the daemon reported a diff. An agent that cannot report one
  * gets no empty panel implying it changed nothing.
  */
-export function TurnChangedFiles({ diff, live }: { diff: TurnDiff; live?: boolean }) {
-	const [open, setOpen] = useState(false);
+export function TurnChangedFiles({
+	diff,
+	live,
+	onReview,
+	onOpenFile,
+	items,
+}: {
+	diff: TurnDiff;
+	live?: boolean;
+	/** Opens the session Files inspector for the full workspace diff. */
+	onReview?: () => void;
+	/** Opens the Files inspector focused on this path. */
+	onOpenFile?: (path: string, line?: number) => void;
+	/**
+	 * Timeline items from the same turn. Turn diffs often carry repo-relative
+	 * basenames (`random_words.txt`); file_change rows and command cwds often
+	 * carry the absolute worktree path the Edited tooltip already shows.
+	 */
+	items?: ConversationItem[];
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const pathHints = useMemo(() => turnPathHints(items), [items]);
 	if (diff.files.length === 0) return null;
 
-	const additions = diff.files.reduce((sum, file) => sum + file.additions, 0);
-	const deletions = diff.files.reduce((sum, file) => sum + file.deletions, 0);
+	const previewLimit = 4;
+	const hidden = Math.max(0, diff.files.length - previewLimit);
+	const visible = expanded ? diff.files : diff.files.slice(0, previewLimit);
 
 	return (
-		<div className="rounded-lg border border-border bg-surface">
-			<button
-				type="button"
-				onClick={() => setOpen((prev) => !prev)}
-				aria-expanded={open}
-				className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left transition-colors hover:bg-interactive-hover"
-			>
-				<FileDiff aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-				<strong className="shrink-0 text-xs font-semibold text-foreground">
-					{diff.files.length === 1 ? "1 file changed" : `${diff.files.length} files changed`}
-				</strong>
+		<div className="overflow-hidden rounded-lg bg-surface">
+			<div className="flex items-center gap-2 px-3 py-2">
+				<span className="shrink-0 text-xs text-muted-foreground">
+					{diff.files.length === 1 ? "1 File Changed" : `${diff.files.length} Files Changed`}
+				</span>
 				{live ? (
 					<Loader2
 						aria-label="still changing"
@@ -1606,138 +2926,198 @@ export function TurnChangedFiles({ diff, live }: { diff: TurnDiff; live?: boolea
 					/>
 				) : null}
 				<span className="flex-1" />
-				<span className="shrink-0 font-mono text-[10.5px] tabular-nums">
-					<span className="text-success">+{additions}</span>{" "}
-					<span className="text-destructive">&minus;{deletions}</span>
-				</span>
-				<ChevronRight
-					aria-hidden="true"
-					className={cn(
-						"size-3.5 shrink-0 text-muted-foreground/50 transition-transform",
-						open && "rotate-90",
-					)}
-				/>
-			</button>
+				{onReview ? (
+					<button
+						type="button"
+						onClick={onReview}
+						className="shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
+					>
+						Review
+					</button>
+				) : null}
+			</div>
 
-			{open ? (
-				<ul className="flex flex-col border-t border-border">
-					{diff.files.map((file) => {
-						const status = diffStatusMark[file.status] ?? diffStatusMark.modified;
-						return (
-							<li
-								key={`${file.status}-${file.oldPath ?? ""}-${file.path}`}
-								className="flex items-center gap-2.5 px-3.5 py-1.5 text-[11px]"
+			<ul className="flex flex-col px-1.5 pb-1.5">
+				{visible.map((file) => {
+					const status = diffStatusMark[file.status] ?? diffStatusMark.modified;
+					const rowClass =
+						"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-interactive-hover";
+					const tooltipPath = resolveTurnFilePath(file.path, pathHints);
+					const tooltipOldPath = file.oldPath
+						? resolveTurnFilePath(file.oldPath, pathHints)
+						: undefined;
+					const openPath = turnFileOpenPath(file.path, pathHints);
+					const location = fileLocationLabel(tooltipPath, tooltipOldPath);
+
+					const body = (
+						<>
+							<span className="sr-only">{status.label}</span>
+							<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+							<span
+								className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+								title=""
 							>
-								<span
-									aria-label={status.label}
-									className={cn("w-3 shrink-0 text-center font-mono font-semibold", status.tone)}
-									title={status.label}
-								>
-									{status.mark}
-								</span>
-								<span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={file.path}>
-									{/* A rename shows both ends. Only the new path would read as an addition
-									    and lose the fact that something moved. */}
-									{file.oldPath ? (
-										<>
-											<span className="text-muted-foreground/60">
-												{shortenPaths(file.oldPath)}
-											</span>
-											<span aria-hidden="true" className="px-1 text-muted-foreground/40">
-												&rarr;
-											</span>
-											{shortenPaths(file.path)}
-										</>
-									) : (
-										shortenPaths(file.path)
-									)}
-								</span>
-								<span className="shrink-0 font-mono tabular-nums text-success">
+								{fileBasename(file.path)}
+							</span>
+							{file.additions > 0 ? (
+								<span className="shrink-0 font-mono text-caption tabular-nums text-success">
 									+{file.additions}
 								</span>
-								<span className="shrink-0 font-mono tabular-nums text-destructive">
+							) : null}
+							{file.deletions > 0 ? (
+								<span className="shrink-0 font-mono text-caption tabular-nums text-destructive">
 									&minus;{file.deletions}
 								</span>
-							</li>
-						);
-					})}
-					{diff.truncated ? (
-						<li className="px-3.5 py-2 text-[10px] leading-relaxed text-warning">
-							This turn changed more files than AO lists here. Use the Diff tab for the whole change.
+							) : null}
+							{file.additions === 0 && file.deletions === 0 ? (
+								<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground/50">
+									0
+								</span>
+							) : null}
+						</>
+					);
+
+					return (
+						<li key={`${file.status}-${file.oldPath ?? ""}-${file.path}`}>
+							{onOpenFile ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											onClick={() => onOpenFile(tooltipPath)}
+											aria-label={`Open ${openPath} in Files`}
+											className={rowClass}
+										>
+											{body}
+										</button>
+									</TooltipTrigger>
+									<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
+										{location}
+									</TooltipContent>
+								</Tooltip>
+							) : (
+								<div className={rowClass}>
+									<span className="sr-only">{status.label}</span>
+									<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+									<FileLocationLabel
+										path={file.path}
+										oldPath={file.oldPath}
+										locationPath={tooltipPath}
+										locationOldPath={tooltipOldPath}
+										className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+									/>
+									{file.additions > 0 ? (
+										<span className="shrink-0 font-mono text-caption tabular-nums text-success">
+											+{file.additions}
+										</span>
+									) : null}
+									{file.deletions > 0 ? (
+										<span className="shrink-0 font-mono text-caption tabular-nums text-destructive">
+											&minus;{file.deletions}
+										</span>
+									) : null}
+									{file.additions === 0 && file.deletions === 0 ? (
+										<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground/50">
+											0
+										</span>
+									) : null}
+								</div>
+							)}
 						</li>
-					) : null}
-				</ul>
+					);
+				})}
+			</ul>
+
+			{hidden > 0 ? (
+				<button
+					type="button"
+					onClick={() => setExpanded((prev) => !prev)}
+					aria-expanded={expanded}
+					className="flex w-full items-center gap-1.5 px-3 pb-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+				>
+					{expanded ? "Show less" : `Show ${hidden} more`}
+				</button>
+			) : null}
+
+			{diff.truncated ? (
+				<p className="px-3 pb-2 text-xs leading-relaxed text-warning">
+					This turn changed more files than AO lists here.
+					{onReview ? " Use Review for the whole change." : " Open the Files tab for the whole change."}
+				</p>
 			) : null}
 		</div>
 	);
 }
 
-/** Exact below a thousand, because that is where the digits still mean something. */
-function formatTokens(tokens: number): string {
-	if (tokens < 1000) return `${tokens}`;
-	return `${(tokens / 1000).toFixed(1)}k`;
+/**
+ * Basename only — color distinguishes it from "Edited", no hover fill. Hovering
+ * shows the home-shortened worktree path in a monospace tooltip.
+ */
+function FileLocationLabel({
+	path,
+	oldPath,
+	locationPath,
+	locationOldPath,
+	className,
+}: {
+	path: string;
+	oldPath?: string;
+	/** Absolute/worktree path for the tooltip when `path` is only a basename. */
+	locationPath?: string;
+	locationOldPath?: string;
+	className?: string;
+}) {
+	const location = fileLocationLabel(locationPath ?? path, locationOldPath ?? oldPath);
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				{/* `title=""` blocks Chromium's native ellipsis tooltip so only the
+				    path tooltip below appears — otherwise hover shows the basename. */}
+				<span
+					className={cn(
+						"min-w-0 truncate text-xs text-foreground/65 outline-none",
+						className,
+					)}
+					title=""
+				>
+					{fileBasename(path)}
+				</span>
+			</TooltipTrigger>
+			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
+				{location}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+function fileLocationLabel(path: string, oldPath?: string): string {
+	return oldPath ? `${shortenPaths(oldPath)} → ${shortenPaths(path)}` : shortenPaths(path);
+}
+
+/** Basename only — the row is too narrow for a full path; the tooltip carries that. */
+function fileBasename(path: string): string {
+	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	return slash >= 0 ? path.slice(slash + 1) : path;
 }
 
 /* -------------------------------------------------------------------------- */
 /* turn boundary                                                               */
 /* -------------------------------------------------------------------------- */
 
-/**
- * How a turn ended. `interrupted` is reported as its own outcome because the
- * provider reports it that way — relabelling it as failed would misattribute a
- * deliberate cancellation.
- */
-export function TurnOutcome({
-	state,
-	durationMs,
-	error,
-	onRollback,
-}: {
-	state: "completed" | "interrupted" | "failed";
-	durationMs?: number;
-	error?: string;
-	/**
-	 * Discard this turn and everything after it. Absent means the operation is not
-	 * available right now — the agent cannot undo, or it is mid-turn — and the
-	 * control is not drawn rather than drawn and then refused.
-	 */
-	onRollback?: () => void;
-}) {
-	const copy = {
-		completed: { label: "Done", tone: "text-muted-foreground/70" },
-		interrupted: { label: "Stopped", tone: "text-muted-foreground/70" },
-		failed: { label: "Failed", tone: "text-destructive" },
-	}[state];
-
+/** Turn wall-clock duration; lives on the action row next to rollback, not the Done divider. */
+export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
+	if (durationMs <= 0) return null;
 	return (
-		<div className="group/turn flex items-center gap-2 pt-1">
-			<span aria-hidden="true" className="h-px flex-1 bg-border" />
-			{onRollback ? (
-				// Revealed on hover or keyboard focus. Undo belongs on the turn it undoes,
-				// but a permanent button on every turn would compete with the conversation
-				// for attention.
-				<button
-					type="button"
-					onClick={onRollback}
-					className="shrink-0 rounded px-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/turn:opacity-100"
-				>
-					Roll back to here
-				</button>
-			) : null}
-			<span className={cn("shrink-0 text-[10px] uppercase tracking-[0.08em]", copy.tone)}>
-				{copy.label}
-			</span>
-			{durationMs !== undefined && durationMs > 0 ? (
-				<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-					{formatDuration(durationMs)}
-				</span>
-			) : null}
-			{error ? (
-				<span className="shrink-0 text-[10px] text-destructive" title={error}>
-					{error.slice(0, 60)}
-				</span>
-			) : null}
-		</div>
+		<span
+			className={cn(
+				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
+				inline && "group-hover/row:text-foreground",
+				!inline && "px-1",
+			)}
+		>
+			{formatDuration(durationMs)}
+		</span>
 	);
 }
 

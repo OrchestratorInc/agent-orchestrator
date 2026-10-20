@@ -186,6 +186,42 @@ func TestServerLifecycle(t *testing.T) {
 	}
 }
 
+func TestServerRunWithReadyPublishesBeforeCallback(t *testing.T) {
+	runPath := filepath.Join(t.TempDir(), "running.json")
+	cfg := config.Config{
+		Host:            "127.0.0.1",
+		Port:            0,
+		ShutdownTimeout: 5 * time.Second,
+		RunFilePath:     runPath,
+	}
+	srv, err := NewWithDeps(cfg, discardLogger(), nil, APIDeps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- srv.RunWithReady(ctx, func() { close(ready) })
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ready callback was not called")
+	}
+	if info, err := runfile.Read(runPath); err != nil || info == nil {
+		t.Fatalf("run-file unavailable in ready callback: info=%v err=%v", info, err)
+	}
+	waitForHealth(t, "http://"+srv.Addr().String())
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("RunWithReady returned error on graceful shutdown: %v", err)
+	}
+}
+
 func TestServerShutdownEndpoint(t *testing.T) {
 	runPath := filepath.Join(t.TempDir(), "running.json")
 	cfg := config.Config{
@@ -206,7 +242,13 @@ func TestServerShutdownEndpoint(t *testing.T) {
 	base := "http://" + srv.Addr().String()
 	waitForHealth(t, base)
 
-	resp, err := http.Post(base+"/shutdown", "application/json", nil)
+	// Not http.Post: the shared DefaultTransport races the health poll's conn
+	// return-to-pool and dials a spare that never carries a request; the server
+	// then waits on that silent conn for the whole ShutdownTimeout (observed as
+	// a flaky 5s failure under -race). DisableKeepAlives keeps this POST off
+	// the shared pool entirely.
+	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Post(base+"/shutdown", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST /shutdown: %v", err)
 	}

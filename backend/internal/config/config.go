@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,6 +32,16 @@ const (
 	// DefaultShutdownTimeout is the hard cap on graceful shutdown. After this
 	// the process exits even if connections are still draining.
 	DefaultShutdownTimeout = 10 * time.Second
+	// DefaultHarnessUpdateInterval is how often the daemon re-checks installed
+	// harnesses for updates after its startup check. A full pass probes each
+	// harness CLI, so it runs a few times a day rather than continuously.
+	DefaultHarnessUpdateInterval = 6 * time.Hour
+	// DefaultVersionRefreshIdle is how long an open session must be quiet before
+	// it moves to a newly installed harness release. Provider prompt caches
+	// expire well within it, so the move costs no cached context.
+	DefaultVersionRefreshIdle = 10 * time.Minute
+	// MinHarnessUpdateInterval is the shortest AO_HARNESS_UPDATE_INTERVAL accepted.
+	MinHarnessUpdateInterval = time.Hour
 	// DefaultAgent is the compatibility value used when AO_AGENT is unset. The
 	// daemon validates it at startup, but worker/orchestrator spawns resolve from
 	// explicit requests or project role config instead of falling back to it.
@@ -38,6 +49,11 @@ const (
 	// DefaultTelemetryPostHogHost is the default PostHog ingestion host when
 	// remote telemetry is enabled and AO_TELEMETRY_POSTHOG_HOST is unset.
 	DefaultTelemetryPostHogHost = "https://us.i.posthog.com"
+
+	// defaultCloudControlPlaneURL is the control plane a build talks to when no
+	// override is set. Production, now that the hosted offering is live;
+	// AO_CLOUD_CONTROL_PLANE_URL still overrides it (e.g. staging-api for dev).
+	defaultCloudControlPlaneURL = "https://api.aoagents.dev"
 )
 
 // TelemetryRemote selects the remote telemetry exporter.
@@ -52,11 +68,15 @@ const (
 
 // TelemetryConfig controls local and remote telemetry behavior.
 type TelemetryConfig struct {
-	Events      bool
-	Metrics     bool
-	Remote      TelemetryRemote
-	PostHogKey  string
-	PostHogHost string
+	Events bool
+	// EventsExplicit distinguishes an operator/supervisor choice from the
+	// default. A missing policy file may use a boot-scoped headless token only
+	// when AO_TELEMETRY_EVENTS was explicitly set to on.
+	EventsExplicit bool
+	Metrics        bool
+	Remote         TelemetryRemote
+	PostHogKey     string
+	PostHogHost    string
 	// DisabledEvents names event streams that must never reach the remote
 	// (billed) sink. This is the kill switch: a stream that turns out to be
 	// noisy or expensive can be silenced by configuration, without waiting for
@@ -67,6 +87,11 @@ type TelemetryConfig struct {
 	// binary has no reliable version of its own (see cli.Version, which release
 	// tooling does not currently override), so the supervisor passes it in.
 	AppVersion string
+	// SentryDSN, when set (AO_SENTRY_DSN), enables daemon-side Sentry capture of
+	// genuine server faults (5xx and panics) with their Go stack. Blank keeps
+	// Sentry a no-op. Kept separate from the PostHog key: the two are different
+	// processors with different projects.
+	SentryDSN string
 }
 
 // GitLabConfig carries the self-managed GitLab host allowlist and per-host
@@ -85,9 +110,10 @@ type GitLabConfig struct {
 }
 
 // DefaultAllowedOrigins are the browser origins the daemon's CORS boundary
-// trusts, beyond loopback-served content (which the middleware always trusts —
-// local pages can reach the no-auth daemon directly anyway). The daemon has no
-// auth, so every entry must be an origin web content cannot present:
+// trusts. General routes additionally admit loopback-served content, while
+// credential-management routes accept only this exact list (plus native
+// callers without an Origin header). The daemon has no auth, so every default
+// entry must be an origin ordinary web content cannot present:
 // app://renderer is the packaged Electron renderer, served from a custom
 // scheme only the desktop app registers — no website can bear it. The opaque
 // "null" origin (file:// pages, sandboxed iframes on any website) must never
@@ -113,23 +139,55 @@ type Config struct {
 	// DataDir is the directory holding durable SQLite state: DB and WAL files.
 	// It is created on first use by the storage layer.
 	DataDir string
+	// StateDir is the root for non-SQLite AO state. It defaults to ~/.ao. When
+	// AO_DATA_DIR is explicitly set, that override is also the state root so an
+	// isolated daemon never leaks account state into the default home.
+	StateDir string
 	// Agent is the compatibility agent adapter id selected by AO_AGENT;
 	// startSession fails fast if no adapter with this id is registered.
 	Agent string
-	// AppRunID identifies one desktop-app launch. The Electron supervisor mints
-	// it and passes it down (AO_APP_RUN_ID), holding it constant across daemon
-	// restarts it performs, so standalone shell terminals can survive a daemon
-	// restart while still being reaped when the APP itself goes away.
-	//
-	// Empty means no supervising app (a bare `ao daemon`): the daemon mints a
-	// fresh id per boot, which correctly makes any surviving shell terminals
-	// from an earlier run look like orphans and get cleaned up.
+	// AppRunID identifies one desktop-app launch and scopes transient command
+	// terminals to it. User shells survive across launches. The supervisor keeps
+	// this constant across daemon restarts; bare daemons mint a fresh id per boot.
 	AppRunID string
 	// AllowedOrigins are the browser origins granted CORS read access (see
 	// DefaultAllowedOrigins). Overridden by AO_ALLOWED_ORIGINS.
 	AllowedOrigins []string
 	// Telemetry controls local/remote telemetry sinks.
 	Telemetry TelemetryConfig
+	// HarnessUpdateChecks lets the daemon compare installed harnesses with their
+	// release sources over the network. AO_HARNESS_UPDATE_CHECKS=off disables
+	// it for offline or policy-restricted machines.
+	HarnessUpdateChecks bool
+	// HarnessUpdateInterval is how often the daemon re-checks installed
+	// harnesses after its startup check. AO_HARNESS_UPDATE_INTERVAL overrides
+	// it; values below MinHarnessUpdateInterval are rejected.
+	HarnessUpdateInterval time.Duration
+	// UpdateWhileRunning lets a harness update run while the harness's
+	// sessions stay open, when its installer keeps the running release usable
+	// and the user confirms. AO_UPDATE_WHILE_RUNNING=off makes every update
+	// wait for those sessions to end again.
+	UpdateWhileRunning bool
+	// VersionRefresh lets idle open sessions move to a harness release an
+	// update installed while they ran. AO_VERSION_REFRESH=off is the kill
+	// switch; the user's Settings toggle applies on top of it.
+	VersionRefresh bool
+	// VersionRefreshIdle is how long a session must be quiet before it moves,
+	// so a warm prompt cache is not thrown away (AO_VERSION_REFRESH_IDLE).
+	VersionRefreshIdle time.Duration
+	// TUIVersionRefresh also restarts idle terminal sessions on a newly
+	// installed release (AO_TUI_VERSION_REFRESH=off disables it).
+	TUIVersionRefresh bool
+	// WindowsUpdateWhenIdle lets a Windows harness update wait until the
+	// harness's sessions are idle, then stop them, update and resume them,
+	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE=off
+	// disables it).
+	WindowsUpdateWhenIdle bool
+	// ManagedHarnessInstalls installs npm, Bun, uv and pipx harness updates
+	// side by side under the AO data dir and switches to them atomically, so
+	// no update touches files a running session uses
+	// (AO_MANAGED_HARNESS_INSTALLS=off updates the installed copy in place).
+	ManagedHarnessInstalls bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -137,6 +195,34 @@ type Config struct {
 	// GitLab carries the self-managed GitLab host allowlist and per-host
 	// token overrides, loaded once at boot from environment variables.
 	GitLab GitLabConfig
+	// TrackerIntake gates the issue-intake observer daemon-wide
+	// (AO_TRACKER_INTAKE).
+	TrackerIntake bool
+	// Client identifies which client this deployment serves (AO_CLIENT). It is
+	// reported to clients through the settings API and gates nothing in the
+	// daemon: the cloud offering (B2B/B2C, providers, billing) is decided per
+	// organization by the cloud control plane.
+	Client string
+	// CloudOffering reports whether the cloud offering flag is switched on
+	// (AO_CLOUD_OFFERING). It forces the cloud gate on regardless of the user's
+	// toggle; the settings service still requires a configured control plane.
+	CloudOffering bool
+	// LocalOffering reports whether the local offering is available
+	// (AO_LOCAL_OFFERING). It defaults to true; only an explicit false/0
+	// switches it off.
+	LocalOffering bool
+	// CloudControlPlaneURL is the cloud control plane base URL
+	// (AO_CLOUD_CONTROL_PLANE_URL). When set it must be an http(s) URL; empty
+	// means no control plane is configured, which keeps the cloud offering off.
+	CloudControlPlaneURL string
+	// AgentBrowserURL is the host's agent browser (AO_AGENT_BROWSER_URL): the
+	// Chromium its sessions' agents drive, which clients show as the agent's
+	// tab through /sessions/{id}/agent-browser. A loopback http URL; empty
+	// means this host has none.
+	AgentBrowserURL string
+	// AgentBrowserToken is the agent browser's own credential
+	// (AO_AGENT_BROWSER_TOKEN). The daemon adds it; clients never see it.
+	AgentBrowserToken string
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -167,6 +253,12 @@ func (c Config) Addr() string {
 //	AO_TELEMETRY_POSTHOG_HOST  PostHog host (default DefaultTelemetryPostHogHost)
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
+//	AO_CLIENT                  client identity reported to clients (trimmed, default empty)
+//	AO_CLOUD_OFFERING          cloud offering flag off|on (default off)
+//	AO_LOCAL_OFFERING          local offering off|on (default on)
+//	AO_CLOUD_CONTROL_PLANE_URL cloud control plane base URL (trimmed, must be http(s))
+//	AO_AGENT_BROWSER_URL       the host's agent browser (loopback http URL, default none)
+//	AO_AGENT_BROWSER_TOKEN     that browser's credential (trimmed, required with AO_AGENT_BROWSER_URL)
 //
 // The bind host is not configurable: the daemon is loopback-only by design.
 func Load() (Config, error) {
@@ -181,6 +273,15 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
+		LocalOffering:          true,
+		HarnessUpdateChecks:    true,
+		HarnessUpdateInterval:  DefaultHarnessUpdateInterval,
+		UpdateWhileRunning:     true,
+		VersionRefresh:         true,
+		VersionRefreshIdle:     DefaultVersionRefreshIdle,
+		TUIVersionRefresh:      true,
+		WindowsUpdateWhenIdle:  true,
+		ManagedHarnessInstalls: true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -242,12 +343,72 @@ func Load() (Config, error) {
 		cfg.AllowedOrigins = origins
 	}
 
-	if raw := os.Getenv("AO_TELEMETRY_EVENTS"); raw != "" {
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_CHECKS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_HARNESS_UPDATE_CHECKS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.HarnessUpdateChecks = v
+	}
+	if raw, present := os.LookupEnv("AO_UPDATE_WHILE_RUNNING"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_UPDATE_WHILE_RUNNING", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.UpdateWhileRunning = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_TUI_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TUI_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TUIVersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_WINDOWS_UPDATE_WHEN_IDLE"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_WINDOWS_UPDATE_WHEN_IDLE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.WindowsUpdateWhenIdle = v
+	}
+	if raw, present := os.LookupEnv("AO_MANAGED_HARNESS_INSTALLS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_MANAGED_HARNESS_INSTALLS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ManagedHarnessInstalls = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefreshIdle = d
+	}
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		if d < MinHarnessUpdateInterval {
+			return Config{}, fmt.Errorf("invalid AO_HARNESS_UPDATE_INTERVAL %q: must be at least %s", raw, MinHarnessUpdateInterval)
+		}
+		cfg.HarnessUpdateInterval = d
+	}
+	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
 		if err != nil {
 			return Config{}, err
 		}
 		cfg.Telemetry.Events = v
+		cfg.Telemetry.EventsExplicit = true
 	}
 	if raw := os.Getenv("AO_TELEMETRY_METRICS"); raw != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_METRICS", raw)
@@ -275,6 +436,9 @@ func Load() (Config, error) {
 	if raw := os.Getenv("AO_TELEMETRY_APP_VERSION"); raw != "" {
 		cfg.Telemetry.AppVersion = strings.TrimSpace(raw)
 	}
+	if raw := os.Getenv("AO_SENTRY_DSN"); raw != "" {
+		cfg.Telemetry.SentryDSN = strings.TrimSpace(raw)
+	}
 
 	if raw, ok := os.LookupEnv("AO_GITLAB_ALLOWED_HOSTS"); ok && raw != "" {
 		hosts := make([]string, 0, 4)
@@ -296,6 +460,56 @@ func Load() (Config, error) {
 		cfg.GitLab.HostTokens = tokens
 	}
 
+	if raw, ok := os.LookupEnv("AO_TRACKER_INTAKE"); ok && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TRACKER_INTAKE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TrackerIntake = v
+	}
+
+	if raw := os.Getenv("AO_CLIENT"); raw != "" {
+		cfg.Client = strings.TrimSpace(raw)
+	}
+	if raw := os.Getenv("AO_CLOUD_OFFERING"); raw != "" {
+		v, err := parseToggleEnv("AO_CLOUD_OFFERING", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.CloudOffering = v
+	}
+	if raw := os.Getenv("AO_LOCAL_OFFERING"); raw != "" {
+		v, err := parseToggleEnv("AO_LOCAL_OFFERING", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.LocalOffering = v
+	}
+	// The control-plane URL is public client configuration (like the WorkOS
+	// client id), so it ships as a baked default and the env var is only a
+	// development override. Users never configure it; the Settings toggle is
+	// the sole cloud switch.
+	cfg.CloudControlPlaneURL = defaultCloudControlPlaneURL
+	if raw := os.Getenv("AO_CLOUD_CONTROL_PLANE_URL"); strings.TrimSpace(raw) != "" {
+		u, err := parseCloudControlPlaneURL(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.CloudControlPlaneURL = u
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_URL")); raw != "" {
+		u, err := parseAgentBrowserURL(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.AgentBrowserURL = u
+		cfg.AgentBrowserToken = strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_TOKEN"))
+		if cfg.AgentBrowserToken == "" {
+			return Config{}, fmt.Errorf("AO_AGENT_BROWSER_URL is set but AO_AGENT_BROWSER_TOKEN is empty: the agent browser refuses every request without its token")
+		}
+	}
+
 	runFile, err := resolveRunFilePath()
 	if err != nil {
 		return Config{}, err
@@ -307,8 +521,40 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.DataDir = dataDir
+	if raw, ok := os.LookupEnv("AO_DATA_DIR"); ok && raw != "" {
+		cfg.StateDir = dataDir
+	} else {
+		cfg.StateDir = filepath.Dir(dataDir)
+	}
 
 	return cfg, nil
+}
+
+// telemetryEnvKeys are the variables the desktop stamps on the daemon so it
+// exports product telemetry. Load reads them once; nothing else in the daemon
+// does.
+var telemetryEnvKeys = []string{
+	"AO_TELEMETRY_EVENTS",
+	"AO_TELEMETRY_METRICS",
+	"AO_TELEMETRY_REMOTE",
+	"AO_TELEMETRY_POSTHOG_KEY",
+	"AO_TELEMETRY_POSTHOG_HOST",
+	"AO_TELEMETRY_DISABLED_EVENTS",
+	"AO_TELEMETRY_APP_VERSION",
+	"AO_SENTRY_DSN",
+}
+
+// ScrubTelemetryEnv removes the telemetry export variables from the process
+// environment after Load has consumed them. Every child the daemon starts
+// (tmux and pty shells, ACP agents, git) inherits os.Environ(), so without this
+// an agent working on the AO repo that boots a test daemon with a scratch
+// AO_DATA_DIR inherits the export settings and the host app's version, mints a
+// fresh install id, and reports to the production PostHog project as a new
+// install. The daemon keeps its own copy of the settings in Config.
+func ScrubTelemetryEnv() {
+	for _, key := range telemetryEnvKeys {
+		_ = os.Unsetenv(key)
+	}
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {
@@ -377,6 +623,38 @@ func parseHostTokenMap(name, raw string) (map[string]string, error) {
 		tokens[host] = token
 	}
 	return tokens, nil
+}
+
+// parseCloudControlPlaneURL validates the cloud control plane base URL. Only
+// http(s) with a host is accepted: clients dial this value, so a stray scheme
+// or a bare host (which url.Parse reads as a path) must fail boot loudly
+// rather than surface later as an unreachable cloud.
+func parseCloudControlPlaneURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid AO_CLOUD_CONTROL_PLANE_URL %q: %w", raw, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("invalid AO_CLOUD_CONTROL_PLANE_URL %q: must be an http(s) URL", raw)
+	}
+	return trimmed, nil
+}
+
+// parseAgentBrowserURL accepts only a loopback http URL: the daemon proxies
+// to it with clients' requests, so it must never reach another machine.
+func parseAgentBrowserURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: %w", raw, err)
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	loopback := strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
+	if u.Scheme != "http" || u.User != nil || u.RawQuery != "" || !loopback {
+		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: must be a loopback http URL without credentials or query", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 // parsePositiveDuration rejects zero and negative durations: a zero

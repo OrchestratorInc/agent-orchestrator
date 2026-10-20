@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -34,6 +35,17 @@ type browserCommandResponseDTO struct {
 	SessionID string         `json:"sessionId"`
 	Action    string         `json:"action"`
 	Result    map[string]any `json:"result"`
+}
+
+type browserScreenshotFileResult struct {
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	Annotations []any  `json:"annotations,omitempty"`
+	// True when --annotate was requested but the browser returned no usable
+	// annotations, so the image may carry no labels.
+	AnnotationsUnavailable bool `json:"annotationsUnavailable,omitempty"`
 }
 
 const browserCapabilityHeader = "X-AO-Browser-Capability"
@@ -85,26 +97,117 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 		},
 	})
 
-	var interactiveOnly bool
+	var interactiveOnly, snapshotDelta, snapshotFull bool
 	snapshot := &cobra.Command{
 		Use:   "snapshot",
 		Short: "Print a compact accessibility snapshot with actionable element refs",
-		Args:  noArgs,
+		Long: "Print a compact accessibility snapshot with actionable element refs.\n\n" +
+			"With --delta, the first call returns the full tree and later calls return only\n" +
+			"\"unchanged\" or the changes since the snapshot you last received. Use --delta --full\n" +
+			"to get the full tree again.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return ctx.runBrowserAction(cmd, "snapshot", map[string]any{"interactive": interactiveOnly}, jsonOutput)
+			if snapshotFull && !snapshotDelta {
+				return usageError{errors.New("--full requires --delta")}
+			}
+			args := map[string]any{"interactive": interactiveOnly}
+			if snapshotDelta {
+				args["delta"] = true
+			}
+			if snapshotFull {
+				args["full"] = true
+			}
+			return ctx.runBrowserAction(cmd, "snapshot", args, jsonOutput)
 		},
 	}
 	snapshot.Flags().BoolVar(&interactiveOnly, "interactive", false, "include only actionable elements")
+	snapshot.Flags().BoolVar(&snapshotDelta, "delta", false, "return the full tree once, then only unchanged or the changes since your last snapshot")
+	snapshot.Flags().BoolVar(&snapshotFull, "full", false, "with --delta, return the full tree and reset the delta baseline")
 	cmd.AddCommand(snapshot)
 
-	cmd.AddCommand(&cobra.Command{
+	var actVerb, actValue, actExpectURL, actExpectText string
+	var actNth int
+	var actNthSet, actExpectDialog, actExpectNavigation, actExpectDOMChange bool
+	var actPostconditionTimeout int
+	act := &cobra.Command{
+		Use:   "act <instruction>",
+		Short: "Resolve an element by description and act on it, snapshotting and retrying automatically",
+		Long: "Snapshots, finds the best-matching element for <instruction> against role/name/text\n" +
+			"(no LLM call — deterministic matching, same as reading a snapshot yourself), and performs\n" +
+			"--action on it (default click). Retries once on a stale reference. If the match is\n" +
+			"ambiguous or absent, returns the candidates or snapshot instead of guessing — fall back\n" +
+			"to a manual snapshot/click, retry with --nth, or refine the instruction.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			actArgs := map[string]any{"instruction": args[0], "action": actVerb}
+			if cmd.Flags().Changed("value") {
+				actArgs["value"] = actValue
+			}
+			if actNthSet {
+				actArgs["nth"] = actNth
+			}
+			var postcondition map[string]any
+			switch {
+			case actExpectURL != "":
+				postcondition = map[string]any{"kind": "url", "value": actExpectURL}
+			case actExpectText != "":
+				postcondition = map[string]any{"kind": "text", "value": actExpectText}
+			case actExpectDialog:
+				postcondition = map[string]any{"kind": "dialog"}
+			case actExpectNavigation:
+				postcondition = map[string]any{"kind": "navigation"}
+			case actExpectDOMChange:
+				postcondition = map[string]any{"kind": "dom-change"}
+			}
+			if postcondition != nil {
+				postcondition["timeoutMs"] = actPostconditionTimeout
+				actArgs["postcondition"] = postcondition
+			}
+			return ctx.runBrowserAction(cmd, "act", actArgs, jsonOutput)
+		},
+	}
+	act.Flags().StringVar(&actVerb, "action", "click", "verb to perform on the matched element (click, dblclick, focus, hover, fill, type, check, uncheck)")
+	act.Flags().StringVar(&actValue, "value", "", "text to fill/type; required when --action is fill or type")
+	act.Flags().IntVar(&actNth, "nth", 0, "0-based index to disambiguate when multiple candidates match equally")
+	act.Flags().StringVar(&actExpectURL, "expect-url", "", "wait for a URL containing this value after dispatch")
+	act.Flags().StringVar(&actExpectText, "expect-text", "", "wait for this page text after dispatch")
+	act.Flags().BoolVar(&actExpectDialog, "expect-dialog", false, "wait for a pending confirm or prompt dialog after dispatch")
+	act.Flags().BoolVar(&actExpectNavigation, "expect-navigation", false, "wait for a main-frame or in-page navigation after dispatch")
+	act.Flags().BoolVar(&actExpectDOMChange, "expect-dom-change", false, "wait for the accessibility snapshot to change after dispatch")
+	act.Flags().IntVar(&actPostconditionTimeout, "postcondition-timeout", 10_000, "postcondition timeout in milliseconds")
+	act.PreRunE = func(cmd *cobra.Command, _ []string) error {
+		actNthSet = cmd.Flags().Changed("nth")
+		selected := 0
+		for _, active := range []bool{actExpectURL != "", actExpectText != "", actExpectDialog, actExpectNavigation, actExpectDOMChange} {
+			if active {
+				selected++
+			}
+		}
+		if selected > 1 {
+			return usageError{errors.New("choose at most one action postcondition")}
+		}
+		if actPostconditionTimeout < 1 || actPostconditionTimeout > maxBrowserWaitMillis {
+			return usageError{fmt.Errorf("--postcondition-timeout must be between 1 and %d milliseconds", maxBrowserWaitMillis)}
+		}
+		return nil
+	}
+	cmd.AddCommand(act)
+
+	var clickHuman bool
+	click := &cobra.Command{
 		Use:   "click <ref>",
 		Short: "Click an element reference from the latest snapshot",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.runBrowserAction(cmd, "click", map[string]any{"ref": args[0]}, jsonOutput)
+			clickArgs := map[string]any{"ref": args[0]}
+			if clickHuman {
+				clickArgs["human"] = true
+			}
+			return ctx.runBrowserAction(cmd, "click", clickArgs, jsonOutput)
 		},
-	})
+	}
+	click.Flags().BoolVar(&clickHuman, "human", false, "approach the element along a curved, human-like pointer path")
+	cmd.AddCommand(click)
 
 	for _, action := range []struct {
 		name  string
@@ -124,14 +227,21 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 		})
 	}
 
-	cmd.AddCommand(&cobra.Command{
+	var dragHuman bool
+	drag := &cobra.Command{
 		Use:   "drag <source-ref> <target-ref>",
 		Short: "Drag one element onto another",
 		Args:  exactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.runBrowserAction(cmd, "drag", map[string]any{"ref": args[0], "targetRef": args[1]}, jsonOutput)
+			dragArgs := map[string]any{"ref": args[0], "targetRef": args[1]}
+			if dragHuman {
+				dragArgs["human"] = true
+			}
+			return ctx.runBrowserAction(cmd, "drag", dragArgs, jsonOutput)
 		},
-	})
+	}
+	drag.Flags().BoolVar(&dragHuman, "human", false, "move along a curved, human-like pointer path")
+	cmd.AddCommand(drag)
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "fill <ref> <text>",
@@ -392,25 +502,43 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 	waitCmd.Flags().IntVar(&timeoutMS, "timeout", 10_000, "condition timeout in milliseconds")
 	cmd.AddCommand(waitCmd)
 
-	cmd.AddCommand(&cobra.Command{
+	var screenshotBase64, screenshotAnnotate bool
+	screenshot := &cobra.Command{
 		Use:   "screenshot [path]",
 		Short: "Capture the current page to a PNG file",
-		Args:  atMostOneArg,
+		Long: "Capture the current page to a PNG file. JSON output writes the file and returns compact metadata.\n" +
+			"To return inline base64 image data instead, omit the path and use --base64 with --json.\n" +
+			"With --annotate, interactive elements are numbered in the image and the matching\n" +
+			"snapshot refs are listed alongside it.",
+		Args: atMostOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := ctx.browserAction(cmd.Context(), "screenshot", nil)
+			if screenshotBase64 && !jsonOutput {
+				return usageError{errors.New("--base64 requires --json")}
+			}
+			if screenshotBase64 && len(args) != 0 {
+				return usageError{errors.New("--base64 cannot be combined with a screenshot path")}
+			}
+			var actionArgs map[string]any
+			if screenshotAnnotate {
+				actionArgs = map[string]any{"annotate": true}
+			}
+			resp, err := ctx.browserAction(cmd.Context(), "screenshot", actionArgs)
 			if err != nil {
 				return err
 			}
-			if jsonOutput {
+			if screenshotBase64 {
 				return writeJSON(cmd.OutOrStdout(), resp)
 			}
 			path := "ao-browser-" + ctx.deps.Now().Format("20060102-150405.000") + ".png"
 			if len(args) == 1 {
 				path = args[0]
 			}
-			return writeBrowserScreenshot(cmd, resp.Result, path)
+			return writeBrowserScreenshot(cmd, resp.Result, path, jsonOutput, screenshotAnnotate)
 		},
-	})
+	}
+	screenshot.Flags().BoolVar(&screenshotBase64, "base64", false, "include inline base64 image data in JSON output (cannot be used with a path)")
+	screenshot.Flags().BoolVar(&screenshotAnnotate, "annotate", false, "number interactive elements in the image and list their snapshot refs")
+	cmd.AddCommand(screenshot)
 
 	var networkDuration int
 	networkCmd := &cobra.Command{
@@ -579,7 +707,13 @@ func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, arg
 }
 
 func writeBrowserResult(cmd *cobra.Command, action string, result map[string]any) error {
+	if action == "act" {
+		return writeBrowserActResult(cmd, result)
+	}
 	if action == "snapshot" {
+		if kind, ok := result["kind"].(string); ok {
+			return writeBrowserSnapshotDelta(cmd, kind, result)
+		}
 		if text, ok := result["text"].(string); ok {
 			_, err := fmt.Fprintln(cmd.OutOrStdout(), browserUntrustedText(text))
 			return err
@@ -658,6 +792,128 @@ func browserUntrustedText(value string) string {
 	return browserUntrustedBegin + "\n" + value + "\n" + browserUntrustedEnd
 }
 
+func writeBrowserSnapshotDelta(cmd *cobra.Command, kind string, result map[string]any) error {
+	revision := numberInt(result["revision"])
+	baseRevision := numberInt(result["baseRevision"])
+	out := cmd.OutOrStdout()
+	switch kind {
+	case "full":
+		text, _ := result["text"].(string)
+		_, err := fmt.Fprintf(out, "Snapshot revision %d (full):\n%s\n", revision, browserUntrustedText(text))
+		return err
+	case "unchanged":
+		_, err := fmt.Fprintf(out, "Snapshot unchanged since revision %d (now revision %d).\n", baseRevision, revision)
+		return err
+	case "delta":
+		var body []string
+		changes, _ := result["changes"].([]any)
+		for _, raw := range changes {
+			change, _ := raw.(map[string]any)
+			op, _ := change["op"].(string)
+			ref, _ := change["ref"].(string)
+			line := op + " " + ref
+			if node, ok := change["node"].(map[string]any); ok {
+				role, _ := node["role"].(string)
+				name, _ := node["name"].(string)
+				line += fmt.Sprintf(" %s %q", role, name)
+			}
+			body = append(body, line)
+		}
+		if tree, ok := result["treeChange"].(map[string]any); ok {
+			lines, _ := tree["lines"].([]any)
+			body = append(body, fmt.Sprintf("replace %d line(s) starting at 0-based line %d with %d line(s):",
+				numberInt(tree["deleteCount"]), numberInt(tree["startLine"]), len(lines)))
+			for _, line := range lines {
+				text, _ := line.(string)
+				body = append(body, text)
+			}
+		}
+		if len(body) == 0 {
+			_, err := fmt.Fprintf(out,
+				"Snapshot delta from revision %d to %d reported no element changes (rerun with --delta --full for the whole tree).\n",
+				baseRevision, revision)
+			return err
+		}
+		_, err := fmt.Fprintf(out,
+			"Snapshot delta from revision %d to %d (apply to the revision %d tree, or rerun with --delta --full):\n%s\n",
+			baseRevision, revision, baseRevision, browserUntrustedText(strings.Join(body, "\n")))
+		return err
+	default:
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, browserUntrustedText(string(encoded)))
+		return err
+	}
+}
+
+func writeBrowserActResult(cmd *cobra.Command, result map[string]any) error {
+	outcome, _ := result["outcome"].(string)
+	switch outcome {
+	case "matched":
+		candidate, _ := result["candidate"].(map[string]any)
+		role, _ := candidate["role"].(string)
+		name, _ := candidate["name"].(string)
+		ref, _ := result["resolvedRef"].(string)
+		retried, _ := result["retried"].(bool)
+		suffix := ""
+		if retried {
+			suffix = " (after retrying a stale reference)"
+		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Element matched; input dispatched: %s [ref=%s]%s\n%s\n", role, ref, suffix, browserUntrustedText(name)); err != nil {
+			return err
+		}
+		if postcondition, ok := result["postcondition"].(map[string]any); ok {
+			status, _ := postcondition["status"].(string)
+			kind, _ := postcondition["kind"].(string)
+			reason, _ := postcondition["reason"].(string)
+			if reason != "" {
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "Postcondition %s: %s (%s)\n", kind, status, reason)
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Postcondition %s: %s\n", kind, status)
+			return err
+		}
+		if navigation, ok := result["navigation"].(map[string]any); ok {
+			status, _ := navigation["status"].(string)
+			reason, _ := navigation["reason"].(string)
+			if status == "cancelled" {
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "Navigation: cancelled (%s)\n", reason)
+				return err
+			}
+		}
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No application postcondition requested; element matching is not proof of application success.")
+		return err
+	case "ambiguous":
+		candidates, _ := result["candidates"].([]any)
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Ambiguous — multiple elements matched equally well:"); err != nil {
+			return err
+		}
+		for _, raw := range candidates {
+			candidate, _ := raw.(map[string]any)
+			role, _ := candidate["role"].(string)
+			name, _ := candidate["name"].(string)
+			ref, _ := candidate["ref"].(string)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  %s [ref=%s]\n%s\n", role, ref, browserUntrustedText(name)); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Pick a ref and act/click directly, retry with --nth, or refine the instruction.")
+		return err
+	case "no-match":
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "No element matched that instruction. Latest snapshot:"); err != nil {
+			return err
+		}
+		text, _ := result["snapshot"].(string)
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), browserUntrustedText(text))
+		return err
+	default:
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Browser act completed.")
+		return err
+	}
+}
+
 func writeBrowserNetworkResult(cmd *cobra.Command, action string, result map[string]any) error {
 	if action == "network-clear" {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Browser network capture cleared.")
@@ -731,7 +987,7 @@ func writeBrowserNetworkResult(cmd *cobra.Command, action string, result map[str
 	return err
 }
 
-func writeBrowserScreenshot(cmd *cobra.Command, result map[string]any, target string) error {
+func writeBrowserScreenshot(cmd *cobra.Command, result map[string]any, target string, jsonOutput, annotate bool) error {
 	encoded, _ := result["data"].(string)
 	if encoded == "" {
 		return errors.New("browser returned an empty screenshot")
@@ -751,18 +1007,79 @@ func writeBrowserScreenshot(cmd *cobra.Command, result map[string]any, target st
 		}
 		return err
 	}
-	defer func() { _ = file.Close() }()
-	if _, err := file.Write(data); err != nil {
+	written, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	width := numberInt(result["width"])
+	height := numberInt(result["height"])
+	if jsonOutput {
+		annotations, _ := result["annotations"].([]any)
+		unavailable := annotationsMissing(result, annotate)
+		return writeJSON(cmd.OutOrStdout(), browserScreenshotFileResult{
+			Path:                   abs,
+			Size:                   int64(written),
+			Width:                  width,
+			Height:                 height,
+			Annotations:            annotations,
+			AnnotationsUnavailable: unavailable,
+		})
+	}
+	size := ""
+	if width > 0 && height > 0 {
+		size = fmt.Sprintf(" (%dx%d)", width, height)
+	}
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s%s\n", abs, size); err != nil {
 		return err
 	}
-	width := numberString(result["width"])
-	height := numberString(result["height"])
-	size := ""
-	if width != "" && height != "" {
-		size = " (" + width + "x" + height + ")"
+	return writeBrowserAnnotations(cmd, result, annotate)
+}
+
+// An older desktop host ignores an argument it does not know, so a capture that
+// came back without annotations is reported rather than passed off as annotated.
+func annotationsMissing(result map[string]any, annotate bool) bool {
+	if unavailable, _ := result["annotationsUnavailable"].(bool); unavailable {
+		return true
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s%s\n", abs, size)
+	annotations, _ := result["annotations"].([]any)
+	return annotate && len(annotations) == 0
+}
+
+func writeBrowserAnnotations(cmd *cobra.Command, result map[string]any, annotate bool) error {
+	if annotationsMissing(result, annotate) {
+		_, err := fmt.Fprintln(cmd.OutOrStdout(),
+			"The browser returned no annotations for this capture, so the image may carry no labels.")
+		return err
+	}
+	annotations, _ := result["annotations"].([]any)
+	if len(annotations) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(annotations))
+	for _, raw := range annotations {
+		annotation, _ := raw.(map[string]any)
+		role, _ := annotation["role"].(string)
+		name, _ := annotation["name"].(string)
+		ref, _ := annotation["ref"].(string)
+		lines = append(lines, fmt.Sprintf("[%d] %s %q (ref=%s)", numberInt(annotation["number"]), role, name, ref))
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "Annotated elements:\n%s\n", browserUntrustedText(strings.Join(lines, "\n")))
 	return err
+}
+
+func numberInt(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
+	}
 }
 
 func numberString(v any) string {

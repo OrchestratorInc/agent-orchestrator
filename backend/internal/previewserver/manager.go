@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -110,8 +111,9 @@ type Configuration struct {
 }
 
 type serverRun struct {
-	status Status
-	cmd    *exec.Cmd
+	status     Status
+	projectEnv map[string]string
+	cmd        *exec.Cmd
 	// startTime pins cmd's PID to the process AO launched (kernel start time,
 	// captured right after Start). Every group/tree kill re-verifies against
 	// it: once the child is reaped the bare PID may already belong to an
@@ -139,6 +141,13 @@ type persistedProcess struct {
 	StartTime string `json:"startTime,omitempty"`
 }
 
+// OnExitFunc is invoked from the manager's wait goroutine when a managed
+// preview process exits on its own (i.e. the caller did not request the
+// stop). It runs synchronously off the manager's lock, so it is safe to call
+// back into the session service. The status passed in carries the post-failure
+// State/Error so callers can decide whether to clear the session's preview URL.
+type OnExitFunc func(ctx context.Context, sessionID domain.SessionID, status Status)
+
 // Manager supervises at most one managed preview server per AO session.
 type Manager struct {
 	log    *slog.Logger
@@ -150,6 +159,9 @@ type Manager struct {
 	operationsMu sync.Mutex
 	operations   map[domain.SessionID]*sessionOperation
 	registryPath string
+
+	onExitMu sync.Mutex
+	onExit   OnExitFunc
 }
 
 // New creates a managed preview-server supervisor.
@@ -187,6 +199,22 @@ func New(log *slog.Logger, dataDir ...string) *Manager {
 	return manager
 }
 
+// SetOnExit registers a callback fired from the wait goroutine when a managed
+// preview process exits without being stopped. Pass nil to clear. The callback
+// is invoked with a fresh context that is not tied to any request; it runs off
+// the manager's mutex so it may safely call back into the session service.
+func (m *Manager) SetOnExit(fn OnExitFunc) {
+	m.onExitMu.Lock()
+	m.onExit = fn
+	m.onExitMu.Unlock()
+}
+
+func (m *Manager) onExitCallback() OnExitFunc {
+	m.onExitMu.Lock()
+	defer m.onExitMu.Unlock()
+	return m.onExit
+}
+
 // Start loads a named configuration, replaces any existing managed server for
 // the session, and waits until the configured loopback URL responds.
 func (m *Manager) Start(
@@ -194,6 +222,7 @@ func (m *Manager) Start(
 	sessionID domain.SessionID,
 	workspacePath string,
 	configurationName string,
+	projectEnv map[string]string,
 ) (Status, error) {
 	releaseOperation := m.acquireOperation(sessionID)
 	operationLocked := true
@@ -250,12 +279,13 @@ func (m *Manager) Start(
 
 	cmd := previewCommand(executable, args...)
 	cmd.Dir = workingDir
-	cmd.Env = previewEnvironment(os.Environ(), cfg.Env, sessionID, port)
+	cmd.Env = previewEnvironment(os.Environ(), projectEnv, cfg.Env, sessionID, port)
 	logs := newLineBuffer(maxBufferedLogLines)
 	cmd.Stdout = logs
 	cmd.Stderr = logs
 
 	run := &serverRun{
+		projectEnv: agentlaunch.MergeEnv(projectEnv, nil),
 		status: Status{
 			SessionID:     sessionID,
 			State:         StateStarting,
@@ -280,7 +310,7 @@ func (m *Manager) Start(
 	if err := cmd.Start(); err != nil {
 		run.cmd = nil
 		run.status.State = StateFailed
-		run.status.Error = fmt.Sprintf("start preview server: %v", err)
+		run.status.Error = agentlaunch.RedactValues(fmt.Sprintf("start preview server: %v", err), projectEnv)
 		return m.statusFor(run), serviceError("PREVIEW_START_FAILED", run.status.Error)
 	}
 	run.startTime = previewProcessStartTime(cmd.Process.Pid)
@@ -293,7 +323,11 @@ func (m *Manager) Start(
 	m.runs[sessionID] = run
 	m.persistProcessesLocked()
 	m.mu.Unlock()
-	go m.waitForExit(sessionID, run)
+	// Pass the request-scoped context into the wait goroutine so OnExit
+	// callbacks (issue #4500) inherit a context the gosec G118 check accepts.
+	// The wait goroutine detaches cancellation with context.WithoutCancel so a
+	// caller request ending after launch does not cancel the OnExit call.
+	go m.waitForExit(context.WithoutCancel(ctx), sessionID, run)
 	releaseOperation()
 	operationLocked = false
 
@@ -482,12 +516,13 @@ func (m *Manager) Close() {
 	}
 }
 
-func (m *Manager) waitForExit(sessionID domain.SessionID, run *serverRun) {
+func (m *Manager) waitForExit(ctx context.Context, sessionID domain.SessionID, run *serverRun) {
 	err := run.cmd.Wait()
 	// Wait has returned, so the PID is back in the OS pool and no longer
 	// provably AO's. No escalation happens here: descendants the dead root
 	// left behind are leaked rather than group-killed on a number that may
 	// already belong to something else (issue #3475).
+	crashed := false
 	m.mu.Lock()
 	if m.runs[sessionID] == run {
 		run.cmd = nil
@@ -503,11 +538,28 @@ func (m *Manager) waitForExit(sessionID domain.SessionID, run *serverRun) {
 			} else {
 				run.status.Error = "preview server exited"
 			}
+			crashed = true
 		}
 	}
 	m.persistProcessesLocked()
 	m.mu.Unlock()
 	close(run.done)
+	if crashed {
+		// Snapshot the failed status under the lock and notify the registered
+		// listener (e.g. the daemon's session service) so the Browser panel
+		// can be told the backing server is gone. After failedStatusRetention
+		// the failed run is removed and status reports "stopped" with no
+		// error, so this is the only window to surface the failure.
+		// ctx is the request-scoped context passed by Start with
+		// context.WithoutCancel, so caller cancellation cannot kill the
+		// callback (gosec G118 wants a request-scoped ancestor).
+		status := m.statusFor(run)
+		if fn := m.onExitCallback(); fn != nil {
+			notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			fn(notifyCtx, sessionID, status)
+			cancel()
+		}
+	}
 	time.AfterFunc(failedStatusRetention, func() {
 		m.mu.Lock()
 		if m.runs[sessionID] == run && run.cmd == nil {
@@ -527,7 +579,7 @@ func (m *Manager) failAndStop(
 	m.mu.Lock()
 	if m.runs[sessionID] == run {
 		run.status.State = StateFailed
-		run.status.Error = message
+		run.status.Error = agentlaunch.RedactValues(message, run.projectEnv)
 		run.stopping = true
 	}
 	cmd := run.cmd
@@ -542,7 +594,7 @@ func (m *Manager) failAndStop(
 			_ = forceKillPreviewProcess(cmd, startTime)
 		}
 	}
-	return m.statusFor(run), serviceError(code, message)
+	return m.statusFor(run), serviceError(code, agentlaunch.RedactValues(message, run.projectEnv))
 }
 
 func (m *Manager) probe(ctx context.Context, target string) error {
@@ -573,6 +625,10 @@ func (m *Manager) statusFor(run *serverRun) Status {
 func (m *Manager) statusForLocked(run *serverRun) Status {
 	status := run.status
 	status.Logs = run.logs.Last(statusLogLines)
+	status.Error = agentlaunch.RedactValues(status.Error, run.projectEnv)
+	for i := range status.Logs {
+		status.Logs[i] = agentlaunch.RedactValues(status.Logs[i], run.projectEnv)
+	}
 	if status.Logs == nil {
 		status.Logs = []string{}
 	}
@@ -775,6 +831,7 @@ func reservePort(preferred int, auto bool) (int, net.Listener, error) {
 
 func previewEnvironment(
 	base []string,
+	projectEnv map[string]string,
 	configured map[string]string,
 	sessionID domain.SessionID,
 	port int,
@@ -784,15 +841,19 @@ func previewEnvironment(
 		"PATHEXT": {}, "TEMP": {}, "TMP": {}, "TMPDIR": {}, "SHELL": {}, "LANG": {},
 		"LC_ALL": {}, "APPDATA": {}, "LOCALAPPDATA": {},
 	}
-	env := make([]string, 0, len(allowed)+len(configured)+3)
+	env := make([]string, 0, len(allowed)+len(projectEnv)+len(configured)+3)
 	for _, item := range base {
 		key, _, ok := strings.Cut(item, "=")
 		if _, keep := allowed[strings.ToUpper(key)]; ok && keep {
 			env = append(env, item)
 		}
 	}
+	interpolated := make(map[string]string, len(configured))
 	for key, value := range configured {
-		env = append(env, key+"="+interpolatePort(value, port))
+		interpolated[key] = interpolatePort(value, port)
+	}
+	for key, value := range agentlaunch.MergeEnv(projectEnv, interpolated) {
+		env = append(env, key+"="+value)
 	}
 	env = append(env,
 		"PORT="+strconv.Itoa(port),

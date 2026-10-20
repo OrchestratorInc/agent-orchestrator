@@ -23,12 +23,9 @@
 // out-of-band; GetRestoreCommand reads it back from metadata. ok=false when no
 // native id is known (manager falls back to a fresh launch).
 //
-// Hooks/activity: Pi exposes lifecycle hooks only through in-process TypeScript
-// extensions (pi.on("session_start", ...), etc.), not a config file AO can
-// install, and it has no Claude Code hook compatibility. There is therefore no
-// Tier A native hook installer nor a Tier B Claude-compat delegation; hook
-// installation and SessionInfo are intentionally no-ops until a Pi-specific
-// extension exists.
+// Hooks/activity: AO installs a workspace-local TypeScript extension and passes
+// it explicitly with --extension. It reports Pi's session and agent lifecycle
+// without depending on project-local extension auto-discovery or trust state.
 package pi
 
 import (
@@ -58,8 +55,13 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// EmitsSemanticMessageAcceptance reports that AO's Pi extension includes the
+// accepted prompt text in its user-prompt-submit callback.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -104,6 +106,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 
 	cmd = []string{binary}
+	appendPiExtensionFlag(&cmd, cfg.WorkspacePath)
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "--append-system-prompt", cfg.SystemPrompt)
 	} else if cfg.SystemPromptFile != "" {
@@ -138,6 +141,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd = []string{binary}
+	appendPiExtensionFlag(&cmd, cfg.Session.WorkspacePath)
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "--append-system-prompt", cfg.SystemPrompt)
 	} else if cfg.SystemPromptFile != "" {
@@ -152,9 +156,22 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
+// SessionInfo surfaces the native Pi session id captured by the managed
+// extension's lifecycle callbacks.
+func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.SessionInfo{}, false, err
+	}
+	info, ok := agentbase.StandardSessionInfo(session)
+	return info, ok, nil
+}
+
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
+	}
+	if effort := strings.TrimSpace(cfg.Effort); effort != "" {
+		*cmd = append(*cmd, "--thinking", effort)
 	}
 }
 
@@ -192,3 +209,18 @@ func (p *Plugin) piBinary(ctx context.Context) (string, error) {
 	p.resolvedBinary = binary
 	return binary, nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

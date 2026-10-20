@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -16,16 +17,23 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	binary, err := p.ResolveBinary(ctx)
+	_, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if status, ok, err := clineProviderAuthStatus(ctx); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
+	// Cline's own provider settings decide first; CLINE_API_KEY is the
+	// fallback. A settings read error only surfaces when no key is set either.
+	status, ok, providerErr := clineProviderAuthStatus(ctx)
+	if providerErr == nil && ok {
 		return status, nil
 	}
-	return authprobe.CLIStatus(ctx, binary, nil)
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "CLINE_API_KEY") != "" {
+		return ports.AgentAuthStatusAuthorized, nil
+	}
+	if providerErr != nil {
+		return ports.AgentAuthStatusUnknown, providerErr
+	}
+	return ports.AgentAuthStatusUnknown, nil
 }
 
 type clineProvidersFile struct {
@@ -70,7 +78,7 @@ func clineProviderAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return ports.AgentAuthStatusUnauthorized, true, nil
+		return ports.AgentAuthStatusUnknown, false, nil
 	}
 
 	var file clineProvidersFile
@@ -78,14 +86,23 @@ func clineProviderAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if len(file.Providers) == 0 {
-		return ports.AgentAuthStatusUnauthorized, true, nil
+		return ports.AgentAuthStatusUnknown, false, nil
 	}
 
 	if provider, ok := configuredClineProvider(file); ok {
 		if providerAuthorized(provider.Settings) {
+			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence.Provider = provider.Settings.Provider
+			if strings.TrimSpace(provider.Settings.APIKey) != "" || strings.TrimSpace(provider.Settings.APIKeyAlt) != "" {
+				evidence.Method = domain.AgentAccountMethodAPIKey
+			} else if provider.Settings.Auth != nil {
+				// A Cline account login carries who signed in in its access token.
+				evidence.Email, evidence.Name = authprobe.TokenIdentity(provider.Settings.Auth.AccessToken)
+			}
+			ports.RecordAuthEvidence(ctx, evidence)
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
-		return ports.AgentAuthStatusUnauthorized, true, nil
+		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }
