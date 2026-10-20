@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 )
 
 // preservedRefPrefix namespaces the git ref that carries a session's uncommitted
@@ -39,6 +40,13 @@ type checkpointer struct {
 	lastTranscriptHash string
 	lastPreservedRef   string
 	lastTreeSHA        string
+
+	// siblings are the additional repositories' checkouts. Their uncommitted
+	// work is preserved under the same refs/ao/preserved/<session-id> ref in
+	// each repository's own origin; siblingTrees remembers the last tree
+	// pushed (or cleared, "") per checkout.
+	siblings     []string
+	siblingTrees map[string]*string
 }
 
 func newCheckpointer(
@@ -56,13 +64,24 @@ func newCheckpointer(
 			launchAgentSessionID: bootstrap.Launch.AgentSessionID,
 			aoSessionID:          bootstrap.SessionID,
 		},
-		git:       worker.ExecGitRunner{},
-		workspace: workspace,
-		sessionID: bootstrap.SessionID,
-		harness:   bootstrap.Launch.Harness,
-		scratch:   worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL),
-		logger:    logger,
+		git:          worker.ExecGitRunner{},
+		workspace:    workspace,
+		sessionID:    bootstrap.SessionID,
+		harness:      bootstrap.Launch.Harness,
+		scratch:      worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL),
+		logger:       logger,
+		siblings:     siblingCheckoutPaths(bootstrap.Launch, workspace),
+		siblingTrees: map[string]*string{},
 	}
+}
+
+// siblingCheckoutPaths lists the additional repositories' checkout paths.
+func siblingCheckoutPaths(launch worker.LaunchContext, workspace string) []string {
+	var paths []string
+	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+		paths = append(paths, checkout.Path)
+	}
+	return paths
 }
 
 // checkpoint captures the transcript and uncommitted work once. It is invoked by
@@ -87,6 +106,7 @@ func (cp *checkpointer) checkpoint(ctx context.Context) {
 		cp.logger.Warn("checkpoint: preserve uncommitted work", "error", err)
 		ref, treeSHA = "", ""
 	}
+	cp.preserveSiblingWork(ctx)
 
 	hash := sha256Hex(data)
 	cp.mu.Lock()
@@ -127,7 +147,7 @@ func (cp *checkpointer) preserveWork(ctx context.Context) (ref, treeSHA string, 
 		return "", "", nil
 	}
 	ref = preservedRefPrefix + cp.sessionID
-	treeSHA, headSHA, clean, err := cp.buildPreserveTree(ctx)
+	treeSHA, headSHA, clean, err := cp.buildPreserveTree(ctx, cp.workspace)
 	if err != nil {
 		return "", "", err
 	}
@@ -146,7 +166,7 @@ func (cp *checkpointer) preserveWork(ctx context.Context) (ref, treeSHA string, 
 		return lastRef, treeSHA, nil
 	}
 
-	commitSHA, err := cp.commitPreserveTree(ctx, treeSHA, headSHA)
+	commitSHA, err := cp.commitPreserveTree(ctx, cp.workspace, treeSHA, headSHA)
 	if err != nil {
 		return "", treeSHA, err
 	}
@@ -164,11 +184,64 @@ func (cp *checkpointer) preserveWork(ctx context.Context) (ref, treeSHA string, 
 	return ref, treeSHA, nil
 }
 
+// preserveSiblingWork preserves each additional repository's uncommitted work
+// the way preserveWork does for the main checkout, pushing it to
+// refs/ao/preserved/<session-id> on that repository's own origin. A clean
+// checkout deletes the ref once (per worker process), so a later restore never
+// replays work that was since committed or discarded. Best-effort: a failure
+// is logged and leaves the main checkpoint unaffected.
+func (cp *checkpointer) preserveSiblingWork(ctx context.Context) {
+	if cp.scratch {
+		return
+	}
+	ref := preservedRefPrefix + cp.sessionID
+	for _, dir := range cp.siblings {
+		if info, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !info.IsDir() {
+			continue
+		}
+		treeSHA, headSHA, clean, err := cp.buildPreserveTree(ctx, dir)
+		if err != nil {
+			cp.logger.Warn("checkpoint: preserve an additional repository's work", "path", dir, "error", err)
+			continue
+		}
+		cp.mu.Lock()
+		last := cp.siblingTrees[dir]
+		cp.mu.Unlock()
+		if clean {
+			if last == nil || *last != "" {
+				// Nothing uncommitted: drop any earlier preserved work.
+				_, _ = cp.git.Run(ctx, dir, nil, "push", "--quiet", "origin", "--delete", ref)
+				cleared := ""
+				cp.mu.Lock()
+				cp.siblingTrees[dir] = &cleared
+				cp.mu.Unlock()
+			}
+			continue
+		}
+		if last != nil && *last == treeSHA {
+			continue
+		}
+		commitSHA, err := cp.commitPreserveTree(ctx, dir, treeSHA, headSHA)
+		if err != nil {
+			cp.logger.Warn("checkpoint: preserve an additional repository's work", "path", dir, "error", err)
+			continue
+		}
+		if _, err := cp.git.Run(ctx, dir, nil, "push", "--force", "origin", commitSHA+":"+ref); err != nil {
+			cp.logger.Warn("checkpoint: push an additional repository's preserved work", "path", dir, "error", err)
+			continue
+		}
+		pushed := treeSHA
+		cp.mu.Lock()
+		cp.siblingTrees[dir] = &pushed
+		cp.mu.Unlock()
+	}
+}
+
 // buildPreserveTree stages every tracked and non-ignored untracked change into a
 // temporary index and writes it to a tree object, without mutating the real
 // index or working tree. clean is true when the tree equals HEAD's tree (no
 // uncommitted work). headSHA is empty for an unborn HEAD.
-func (cp *checkpointer) buildPreserveTree(ctx context.Context) (treeSHA, headSHA string, clean bool, err error) {
+func (cp *checkpointer) buildPreserveTree(ctx context.Context, dir string) (treeSHA, headSHA string, clean bool, err error) {
 	// git requires GIT_INDEX_FILE to be either absent (it creates it) or a valid
 	// index, so reserve a unique name and remove it before invoking git.
 	tmp, err := os.CreateTemp("", "ao-preserve-idx-*")
@@ -183,35 +256,35 @@ func (cp *checkpointer) buildPreserveTree(ctx context.Context) (treeSHA, headSHA
 
 	// Seed the temp index from HEAD so `add -A` records deletions too. An unborn
 	// HEAD (no commits yet) simply starts from an empty index.
-	if out, herr := cp.git.Run(ctx, cp.workspace, nil, "rev-parse", "--verify", "HEAD"); herr == nil {
+	if out, herr := cp.git.Run(ctx, dir, nil, "rev-parse", "--verify", "HEAD"); herr == nil {
 		headSHA = strings.TrimSpace(out)
-		if _, rerr := cp.git.Run(ctx, cp.workspace, env, "read-tree", headSHA); rerr != nil {
+		if _, rerr := cp.git.Run(ctx, dir, env, "read-tree", headSHA); rerr != nil {
 			return "", "", false, fmt.Errorf("seed preserve index from HEAD: %w", rerr)
 		}
 	}
-	if _, aerr := cp.git.Run(ctx, cp.workspace, env, "add", "-A"); aerr != nil {
+	if _, aerr := cp.git.Run(ctx, dir, env, "add", "-A"); aerr != nil {
 		return "", "", false, fmt.Errorf("stage preserve tree: %w", aerr)
 	}
-	treeOut, terr := cp.git.Run(ctx, cp.workspace, env, "write-tree")
+	treeOut, terr := cp.git.Run(ctx, dir, env, "write-tree")
 	if terr != nil {
 		return "", "", false, fmt.Errorf("write preserve tree: %w", terr)
 	}
 	treeSHA = strings.TrimSpace(treeOut)
 
 	if headSHA != "" {
-		if htOut, herr := cp.git.Run(ctx, cp.workspace, nil, "rev-parse", headSHA+"^{tree}"); herr == nil {
+		if htOut, herr := cp.git.Run(ctx, dir, nil, "rev-parse", headSHA+"^{tree}"); herr == nil {
 			clean = strings.TrimSpace(htOut) == treeSHA
 		}
 	}
 	return treeSHA, headSHA, clean, nil
 }
 
-func (cp *checkpointer) commitPreserveTree(ctx context.Context, treeSHA, headSHA string) (string, error) {
+func (cp *checkpointer) commitPreserveTree(ctx context.Context, dir, treeSHA, headSHA string) (string, error) {
 	args := []string{"commit-tree", treeSHA, "-m", "ao preserved " + cp.sessionID}
 	if headSHA != "" {
 		args = []string{"commit-tree", treeSHA, "-p", headSHA, "-m", "ao preserved " + cp.sessionID}
 	}
-	out, err := cp.git.Run(ctx, cp.workspace, nil, args...)
+	out, err := cp.git.Run(ctx, dir, nil, args...)
 	if err != nil {
 		return "", fmt.Errorf("commit preserve tree: %w", err)
 	}
@@ -248,7 +321,25 @@ func rehydrateSession(
 		}
 	}
 
-	if err := writeCapturedTranscript(captured, workspace, dataDir); err != nil {
+	ref := preservedRefPrefix + bootstrap.SessionID
+	if !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
+		for _, dir := range siblingCheckoutPaths(bootstrap.Launch, workspace) {
+			if info, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !info.IsDir() {
+				continue
+			}
+			// The ref exists only when the repository had uncommitted work at
+			// the last checkpoint; a missing ref is the normal case.
+			if err := applyPreservedRef(ctx, worker.ExecGitRunner{}, dir, ref); err != nil {
+				logger.Debug("rehydrate: no preserved work for an additional repository", "path", dir, "error", err)
+			} else {
+				logger.Info("rehydrate: restored an additional repository's uncommitted work", "path", dir)
+			}
+		}
+	}
+
+	// Claude resumes from the transcript under the folder the agent starts in,
+	// which is the parent folder for a project that starts agents there.
+	if err := writeCapturedTranscript(captured, workerexec.AgentDirectory(bootstrap.Launch, workspace), dataDir); err != nil {
 		logger.Warn("rehydrate: write transcript", "error", err)
 		return
 	}

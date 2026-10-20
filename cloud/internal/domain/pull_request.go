@@ -53,6 +53,10 @@ type RaisePullRequest struct {
 	Body       string
 	HeadBranch string
 	BaseBranch string
+	// Repository is the owner/name of the project repository to open the pull
+	// request in; empty means the main repository. Any other value must be
+	// one of the project's additional repositories.
+	Repository string
 }
 
 // PullRequestRef identifies a pull request for background status polling.

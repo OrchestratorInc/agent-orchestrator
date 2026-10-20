@@ -46,6 +46,10 @@ jobs:
           mkdir -p "$HOME/.ao/build-cache/wake-helper/tests"
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/PolicyTests.swift -o "$HOME/.ao/build-cache/wake-helper/policy-tests"
           "$HOME/.ao/build-cache/wake-helper/policy-tests"
+          xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/WakeLights.swift native/wake-helper/WakeEffects.swift native/wake-helper/EffectsTests.swift -o "$HOME/.ao/build-cache/wake-helper/effects-tests"
+          "$HOME/.ao/build-cache/wake-helper/effects-tests"
+          xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/WakeLowPower.swift native/wake-helper/LowPowerTests.swift -o "$HOME/.ao/build-cache/wake-helper/low-power-tests"
+          "$HOME/.ao/build-cache/wake-helper/low-power-tests"
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
       - name: Compile helper for both macOS architectures

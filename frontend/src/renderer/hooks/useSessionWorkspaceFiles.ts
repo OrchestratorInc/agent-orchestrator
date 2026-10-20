@@ -2,10 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
-import { apiErrorMessage, getApiBaseUrl } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
-import { isRasterImagePath } from "../lib/image-files";
+import { fileMediaKind } from "../lib/file-media";
+import { artifactContentUrl } from "../lib/artifact-content-url";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
@@ -40,6 +41,8 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	refreshing?: boolean;
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
+	/** HTTP validator for streamed artifacts, so an unchanged refetch keeps playing. */
+	mediaVersion?: string;
 	editable?: boolean;
 	previousPath?: string;
 	compareMode?: WorkspaceCompareMode;
@@ -154,26 +157,16 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 // already identify their content endpoint and must keep their original routing.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	let contentUrl = rawUrl;
-	const { hostname } = new URL(rawUrl);
-	if (hostname.startsWith("ao-preview-artifact.") && hostname.endsWith(".localhost")) {
-		const baseUrl = getApiBaseUrl();
-		// Reject dot segments before URL normalization could move the request out
-		// of the artifact route. The daemon still enforces filesystem confinement.
-		if (!baseUrl || !path || path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => part === "." || part === "..")) {
-			throw new Error(errorMessage);
-		}
-		const escapedPath = path.split("/").map(encodeURIComponent).join("/");
-		contentUrl = `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${escapedPath}?source=artifact&raw=true`;
-	}
+	const contentUrl = artifactContentUrl(sessionId, path, rawUrl);
+	if (!contentUrl) throw new Error(errorMessage);
+	const media = fileMediaKind(path);
+	// The artifact route only supports GET; media elements stream their own body.
 	const response = await fetch(contentUrl);
+	if (media) void response.body?.cancel();
 	if (!response.ok) throw new Error(errorMessage);
-	// An image renders from rawUrl in an <img>, so its bytes aren't read here.
-	if (isRasterImagePath(path)) {
-		void response.body?.cancel();
-		return artifactImageDetail(sessionId, path, response);
-	}
-	const { binary, bytes, content, size, truncated } = await readArtifactTextResponse(response);
+	const { binary, bytes, content, size, truncated } = media
+		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
+		: await readArtifactTextResponse(response);
 	// Only a complete text file can be edited: the save sends it back whole.
 	const editable = !binary && !truncated;
 	return {
@@ -187,32 +180,11 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		diffTruncated: false,
 		editable,
 		fileFingerprint: editable ? await artifactFingerprint(bytes) : "",
+		imageMediaType: media === "image" ? response.headers.get("content-type") ?? "image" : undefined,
+		mediaVersion: media ? response.headers.get("etag") ?? response.headers.get("last-modified") ?? undefined : undefined,
 		path,
 		sessionId,
 		size,
-		status: "unmodified",
-		workspaceVersion: "",
-	};
-}
-
-function artifactImageDetail(sessionId: string, path: string, response: Response): WorkspaceFileDetail {
-	const contentType = response.headers.get("content-type") ?? "";
-	const size = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-	return {
-		additions: 0,
-		binary: true,
-		content: "",
-		contentTruncated: false,
-		deleted: false,
-		deletions: 0,
-		diff: "",
-		diffTruncated: false,
-		editable: false,
-		fileFingerprint: "",
-		imageMediaType: contentType.startsWith("image/") ? contentType : "image",
-		path,
-		sessionId,
-		size: Number.isFinite(size) ? size : 0,
 		status: "unmodified",
 		workspaceVersion: "",
 	};

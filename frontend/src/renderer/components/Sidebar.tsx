@@ -124,11 +124,13 @@ import {
 	SidebarMenuSubItem,
 	useSidebar,
 } from "./ui/sidebar";
+import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -383,14 +385,6 @@ function useShowMoreCap<T extends { id: string }>(
 		setShowAllDismissed(!next);
 	};
 	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
-}
-
-/** Scratchpad's total section cap, or none in the collapsed icon rail. Projects
- *  take whatever height remains (flex-1 + min-h-0), so the two sections share the
- *  column by flex layout alone and can never sum past it. */
-function scratchpadSectionStyle(isCollapsed: boolean): CSSProperties | undefined {
-	if (isCollapsed) return undefined;
-	return { maxHeight: "calc(50cqh - var(--space-2))" };
 }
 
 function SidebarSectionScroller({
@@ -988,7 +982,7 @@ export function Sidebar({
 					<span
 						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-semibold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
-						Orchestrator.inc
+						<BuildInfoTooltip>Orchestrator.inc</BuildInfoTooltip>
 					</span>
 				</button>
 				<Tooltip>
@@ -1103,7 +1097,7 @@ export function Sidebar({
 				<SidebarGroup className="min-h-0 flex-1 p-0">
 					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
-						className="sidebar-sections-container flex min-h-0 flex-1 flex-col"
+						className="sidebar-sections-container grid min-h-0 flex-1 auto-rows-[minmax(0,auto)] content-start group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:flex-col"
 					>
 						{workspaceError ? (
 							<div className="sidebar-expanded-chrome px-2.5 py-3 group-data-[collapsible=icon]:hidden">
@@ -1295,19 +1289,22 @@ export function Sidebar({
 							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
 					</button>
-					<button
-						aria-label={t("shell.settings")}
-						className={FOOTER_NAV_BUTTON_CLASS}
-						onClick={() => selection.goGlobalSettings()}
-						tabIndex={isCollapsed ? -1 : 0}
-						type="button"
-					>
-						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-							<Settings aria-hidden="true" />
-							<span className="tracking-tight">{t("shell.settings")}</span>
-						</span>
-					</button>
+					<div className="flex w-full items-center gap-1">
+						<button
+							aria-label={t("shell.settings")}
+							className={cn(FOOTER_NAV_BUTTON_CLASS, "min-w-0 flex-1")}
+							onClick={() => selection.goGlobalSettings()}
+							tabIndex={isCollapsed ? -1 : 0}
+							type="button"
+						>
+							<NavRowHighlight />
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+								<Settings aria-hidden="true" />
+								<span className="tracking-tight">{t("shell.settings")}</span>
+							</span>
+						</button>
+						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
+					</div>
 				</div>
 				<div
 					aria-hidden={!isCollapsed || undefined}
@@ -2053,9 +2050,8 @@ function ScratchpadSection({
 
 	return (
 		<div
-			className="sidebar-expanded-chrome mb-2 flex min-h-0 shrink-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
+			className="sidebar-expanded-chrome mb-2 flex min-h-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
 			data-scratchpad-section=""
-			style={scratchpadSectionStyle(isCollapsed)}
 		>
 			<SectionDisclosure
 				label={workspace.name}

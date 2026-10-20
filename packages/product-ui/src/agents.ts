@@ -38,6 +38,7 @@ export const AGENT_OPTIONS = [
 	"openhands",
 	"command-code",
 	"docker-agent",
+	"memcode",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
@@ -86,6 +87,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	openhands: "OpenHands",
 	"command-code": "Command Code",
 	"docker-agent": "Docker Agent",
+	memcode: "memcode",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

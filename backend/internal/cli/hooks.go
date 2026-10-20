@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -228,12 +229,20 @@ func hookAgentSessionID(payload []byte) string {
 		SessionIDCamel      string `json:"sessionId"`
 		ConversationID      string `json:"conversation_id"`
 		ConversationIDCamel string `json:"conversationId"`
-		// Cline exposes the resumable task handle as top-level taskId.
+		// Current Cline CLI hooks distinguish the durable CLI session from the
+		// SDK's process-local task/conversation ID. --id resumes the root.
+		SessionContext struct {
+			RootSessionID string `json:"rootSessionId"`
+		} `json:"sessionContext"`
+		// Legacy hook producers expose only the task ID.
 		TaskIDCamel string `json:"taskId"`
 		TaskIDSnake string `json:"task_id"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	id := strings.TrimSpace(p.SessionID)
+	id := strings.TrimSpace(p.SessionContext.RootSessionID)
+	if id == "" {
+		id = strings.TrimSpace(p.SessionID)
+	}
 	if id == "" {
 		id = strings.TrimSpace(p.SessionIDCamel)
 	}
@@ -586,6 +595,25 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// without a piped payload can't block on EOF.
 		return nil
 	}
+	if agent == "memcode" && strings.HasPrefix(event, "context-chunk-") {
+		if err := memcode.EmitInstructionChunk(c.deps.Out, event); err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+		}
+		return nil
+	}
+	if agent == "memcode" && event == "session-start" {
+		reportAfterRestore, err := memcode.EmitStartWitness(c.deps.Out)
+		if err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+			return nil
+		}
+		if os.Getenv("AO_MEMCODE_INTERACTIVE_RESTORE") == "1" && !reportAfterRestore {
+			return nil
+		}
+	}
+	if agent == "memcode" && event == "session-end" {
+		return nil
+	}
 	var payload []byte
 	if hookReadsStdin(agent, event) {
 		var err error
@@ -608,6 +636,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	agentSessionID := ""
 	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
 		agentSessionID = hookAgentSessionID(payload)
+	}
+	if agent == "memcode" && event == "session-start" {
+		agentSessionID = os.Getenv("MEMCODE_SESSION_ID")
 	}
 	usage := hookUsageMetadata(agent, payload)
 	var subagentID string

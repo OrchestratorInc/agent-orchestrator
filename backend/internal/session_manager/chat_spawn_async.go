@@ -466,7 +466,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 			}
 			return RestoreResult{}, false, cause
 		}
-		resumed, err := m.resumeAgentRecordWithPolicy(ctx, "retry start", rec, false, false)
+		resumed, err := m.resumeAgentRecordWithPolicy(ctx, "retry start", rec, false)
 		if err != nil {
 			return fail(err)
 		}

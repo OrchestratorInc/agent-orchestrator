@@ -1,5 +1,6 @@
 import { StyleSheet, TextInput } from "react-native";
 import { useTheme } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { space, type } from "./tokens";
 
 export type SpawnPromptInputProps = {
@@ -22,9 +23,7 @@ export function SpawnPromptInput({ value, onChangeText }: SpawnPromptInputProps)
 			onChangeText={onChangeText}
 			placeholder="What should this worker do?"
 			placeholderTextColor={t.textTertiary}
-			selectionColor={t.accentBorder}
-			cursorColor={t.accent}
-			selectionHandleColor={t.accent}
+			{...textSelectionColors(t)}
 			multiline
 			numberOfLines={3}
 			textAlignVertical="top"

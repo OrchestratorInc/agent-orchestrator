@@ -609,10 +609,12 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		upstreamStream.once("response", (responseHeaders) => {
 			responded = true;
 			settle();
-			// At "end" a finished stream is still alive; a cut one is already
-			// destroyed, often with code 0 (a destroyed session or socket).
+			// A cut stream ends with its session destroyed, often with code 0.
+			// The stream's own destroyed flag can't tell: when a small answer's
+			// close lands in the same read as its headers (as through the
+			// tunnel), Node destroys the finished stream before "end".
 			relayResponse(res, Number(responseHeaders[":status"]), responseHeaders as IncomingHttpHeaders, upstreamStream, req.method, path, kind,
-				() => upstreamStream.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
+				() => session.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
 		});
 		upstreamStream.on("error", (error: Error) => {
 			if (!refused()) answerUpstreamFailure(res, error, req.method, path, kind);

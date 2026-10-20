@@ -305,6 +305,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/projects/standalone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create a project with no repository. Its sessions start in an empty, git-initialized folder, for a workspace template that brings its own code or work that needs none. It takes the same config as a repository project except additional repositories, and cannot open pull requests. Its repositoryUrl is a placeholder, https://scratch.ao.local/<id>. */
+        post: operations["createStandaloneProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions": {
         parameters: {
             query?: never;
@@ -769,7 +788,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -788,7 +810,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -807,7 +832,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file/diff": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -827,7 +855,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/diff": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -837,6 +868,26 @@ export interface paths {
         };
         /** @description Changed-file summary and line counts relative to the session compare base. */
         get: operations["getWorkspaceDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description The session's repository checkouts: the main one and, for a project with additional repositories, one per additional repository. A checkout's name is the value the workspace endpoints take as ?repository=. A single-repository session lists only the main checkout. */
+        get: operations["listWorkspaceRepositories"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1640,11 +1691,46 @@ export interface components {
             coder?: components["schemas"]["ProjectCoderConfig"];
             postCreate?: components["schemas"]["ProjectScriptCommands"];
             preRemove?: components["schemas"]["ProjectScriptCommands"];
+            repos?: components["schemas"]["ProjectAdditionalRepositories"];
+            agentStartsIn?: components["schemas"]["ProjectAgentStartsIn"];
+            workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
+            agentRules?: components["schemas"]["ProjectRules"];
+            orchestratorRules?: components["schemas"]["ProjectRules"];
+            /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
+            source?: string;
         } & {
             [key: string]: unknown;
         };
-        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. */
-        ProjectScriptCommands: string[];
+        /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
+        ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
+        ProjectRepository: {
+            /**
+             * Format: uri
+             * @description https://github.com/<owner>/<name>; stored canonicalized.
+             */
+            url: string;
+            /** @description Branch to clone; empty clones the repository's default branch. */
+            branch?: string;
+        };
+        /**
+         * @description Where the coding agent starts: repository (the default) is the main repository's checkout, with access to every other checkout; parent is the folder that holds every checkout.
+         * @enum {string}
+         */
+        ProjectAgentStartsIn: "repository" | "parent";
+        /** @description Where sessions work in a bring-your-own Coder workspace when AO runs as the workspace user, for example ~/work/{repo}; it overrides the Coder connection's working directory. Ignored otherwise. */
+        ProjectWorkingDirectory: string;
+        /** @description Standing instructions added to every session's system prompt (agentRules for workers, orchestratorRules for orchestrators). Only organization owners and admins may set them, like repos, agentStartsIn and workingDirectory. */
+        ProjectRules: string;
+        ProjectScriptStep: {
+            command: string;
+            /**
+             * Format: uri
+             * @description The project repository the command runs in (its URL, the main repository or one of repos); absent runs it in the main repository's checkout. Accepted on input only: the project stores every step as a plain command, a step in an additional repository as "(\ncd -- '../<folder>' || exit 1\n<command>\n)", so releases that predate per-repository steps keep and run it.
+             */
+            repository?: string;
+        };
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. Only organization owners and admins may set them. */
+        ProjectScriptCommands: (string | components["schemas"]["ProjectScriptStep"])[];
         /** @description Coder dev-kit settings inherited by every Coder session of the project. */
         ProjectCoderConfig: {
             /**
@@ -1781,11 +1867,34 @@ export interface components {
             };
             postCreate?: components["schemas"]["ProjectScriptCommands"];
             preRemove?: components["schemas"]["ProjectScriptCommands"];
+            repos?: components["schemas"]["ProjectAdditionalRepositories"];
+            agentStartsIn?: components["schemas"]["ProjectAgentStartsIn"];
+            workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
+            agentRules?: components["schemas"]["ProjectRules"];
+            orchestratorRules?: components["schemas"]["ProjectRules"];
         };
         ProjectSettingsInput: {
             displayName?: string;
             defaultBranch?: string;
             config?: components["schemas"]["ProjectSettingsConfigPatch"];
+        };
+        CreateStandaloneProjectInput: {
+            displayName: string;
+            config?: components["schemas"]["ProjectConfig"];
+        };
+        WorkspaceRepositoryList: {
+            repositories: components["schemas"]["WorkspaceRepository"][];
+        };
+        WorkspaceRepository: {
+            /** @description The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session. */
+            name: string;
+            /** @description GitHub owner/name of an additional repository. */
+            repository?: string;
+            /** @description Branch an additional repository was cloned from. */
+            branch?: string;
+            main?: boolean;
+            /** @description False for an additional repository that could not be cloned. */
+            present: boolean;
         };
         ProjectResponse: {
             project: components["schemas"]["Project"];
@@ -1801,6 +1910,8 @@ export interface components {
             defaultBranch: string;
             /** @description GitHub's integer repository ID encoded as a decimal string to preserve precision. */
             githubRepositoryId?: string;
+            /** @description True for a project with no repository; its repositoryUrl is a placeholder that is never cloned. */
+            standalone?: boolean;
             config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
@@ -2159,6 +2270,8 @@ export interface components {
             deniedCommands?: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
+            branch?: string;
         };
         ChatMessageInput: {
             text: string;
@@ -2996,6 +3109,8 @@ export interface components {
         OrgId: string;
         ProjectId: string;
         SessionId: string;
+        /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+        WorkspaceRepository: string;
         TurnId: string;
         WorkerRequestId: string;
         TerminalId: string;
@@ -3578,6 +3693,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateGitHubScratchProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createStandaloneProject: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStandaloneProjectInput"];
+            };
+        };
+        responses: {
+            /** @description Standalone project created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4357,6 +4504,8 @@ export interface operations {
     listWorkspaceFiles: {
         parameters: {
             query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path?: string;
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
@@ -4385,6 +4534,8 @@ export interface operations {
     readWorkspaceFile: {
         parameters: {
             query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path: string;
             };
             header?: never;
@@ -4410,7 +4561,10 @@ export interface operations {
     };
     writeWorkspaceFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -4439,6 +4593,8 @@ export interface operations {
     readWorkspaceDiffFile: {
         parameters: {
             query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path: string;
             };
             header?: never;
@@ -4465,7 +4621,10 @@ export interface operations {
     };
     getWorkspaceDiff: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -4485,6 +4644,30 @@ export interface operations {
                 };
             };
             501: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkspaceRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's repository checkouts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRepositoryList"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };

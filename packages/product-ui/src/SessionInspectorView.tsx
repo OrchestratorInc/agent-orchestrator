@@ -326,6 +326,8 @@ export type InspectorPullRequest = PRSummaryMetadata & {
 	state: InspectorPullRequestState;
 	stateLabel: string;
 	title?: string;
+	/** owner/name, shown before the number when a session's PRs span several repositories. */
+	repositoryLabel?: string;
 	reviewDetailsAction?: ReactNode;
 };
 
@@ -374,7 +376,7 @@ export function InspectorPullRequestCardView({
 					href={pr.href}
 				>
 					{pullRequestIcon ?? <GitPullRequestIcon className="size-icon-sm shrink-0" />}
-					<span>PR #{pr.number}</span>
+					<span className="truncate">{pr.repositoryLabel ? `${pr.repositoryLabel} ` : ""}PR #{pr.number}</span>
 					{externalIcon ?? <ArrowUpRightIcon className="size-icon-2xs shrink-0" />}
 				</ExternalLink>
 				<span
@@ -538,6 +540,8 @@ export type InspectorReviewGroup = {
 	};
 	meta: string;
 	number: number;
+	/** Unique per PR; a multi-repository session can repeat a number across repositories. Defaults to the number. */
+	key?: string;
 	title: string;
 	verdict?: InspectorVerdict;
 };
@@ -620,7 +624,7 @@ export function InspectorReviewsView({
 				{groups.map((group) => (
 					<ReviewDisclosure
 						defaultOpen={false}
-						key={group.number}
+						key={group.key ?? group.number}
 						meta={group.meta}
 						title={group.title}
 						verdict={group.verdict}

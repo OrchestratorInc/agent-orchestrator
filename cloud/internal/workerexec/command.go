@@ -31,6 +31,13 @@ type Command struct {
 	// SecretFileGuard is the PreToolUse hook command a Codex Chat turn
 	// registers and trusts in its app-server (see trustCodexSecretFileGuard).
 	SecretFileGuard string
+	// AdditionalDirectories are checkouts outside Dir that a Claude Chat
+	// session opens alongside it (ACP additionalDirectories), so Claude reads
+	// and loads their CLAUDE.md as it does with --add-dir in a terminal.
+	AdditionalDirectories []string
+	// WritableRoots are checkouts outside Dir that a Codex Chat turn's
+	// workspace-write sandbox must also let it write (additionalDirectories).
+	WritableRoots []string
 }
 
 type CommandBuilder interface {
@@ -55,38 +62,6 @@ type HarnessBuilder struct {
 	// ("<ao-worker> secret-file-guard"). With ProtectSecretFiles it is
 	// registered as a PreToolUse hook on Claude's and Codex's shell tools.
 	SecretFileGuard string
-}
-
-// extraReposPromptNote describes the additional repositories the worker checked
-// out beside the primary workspace, so the agent knows they exist and where to
-// find them. Paths mirror worker.ExtraRepoPath (siblings of the primary
-// checkout), so what the agent is told matches what is on disk.
-func extraReposPromptNote(workspace string, repos []worker.RepoRef) string {
-	if len(repos) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("## Additional repositories\n\n")
-	b.WriteString("This session was set up with extra repositories checked out alongside your primary repository. Your working directory is the primary repository; the others are sibling directories you can read and edit directly:\n\n")
-	wrote := false
-	for _, repo := range repos {
-		if strings.TrimSpace(repo.URL) == "" {
-			continue
-		}
-		abs := worker.ExtraRepoPath(workspace, repo.URL)
-		name := filepath.Base(abs)
-		branch := ""
-		if strings.TrimSpace(repo.Branch) != "" {
-			branch = fmt.Sprintf(" (branch %s)", repo.Branch)
-		}
-		fmt.Fprintf(&b, "- %s%s: %s (relative to your working directory: ../%s)\n", name, branch, abs, name)
-		wrote = true
-	}
-	if !wrote {
-		return ""
-	}
-	b.WriteString("\nMake changes, commit, and open pull requests per repository as appropriate. If one is missing it could not be cloned (for example it is outside this session's GitHub access); continue with the primary repository.")
-	return b.String()
 }
 
 // BuildInteractive prepares the provider's native TUI command. Unlike Build,
@@ -128,8 +103,10 @@ func (b HarnessBuilder) BuildInteractive(
 			ErrUnsupportedPolicy,
 		)
 	}
+	agentDir := agentDirectory(launch, workspace)
+	extraDirs := additionalDirectories(launch, workspace)
 	if launch.Harness == "cursor" {
-		if err := removeCursorACPStandingRule(workspace, launch.SessionID); err != nil {
+		if err := removeCursorACPStandingRule(agentDir, launch.SessionID); err != nil {
 			return Command{}, err
 		}
 	}
@@ -146,12 +123,15 @@ func (b HarnessBuilder) BuildInteractive(
 			// The shared checkout contains the worker's AO hooks. A separate
 			// CLAUDE_CONFIG_DIR alone does not exclude project/local settings.
 			providerArgs = []string{"--setting-sources", "user"}
+		} else {
+			providerArgs = claudeAddDirArgs(extraDirs)
 		}
 	case "codex":
 		if launch.Kind != "reviewer" {
 			providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
 		}
 		providerArgs = append(providerArgs, codexSecretFileGuardArgs(b.secretFileGuard())...)
+		providerArgs = append(providerArgs, codexWritableRootsArgs(extraDirs)...)
 		if launch.ReasoningEffort != "" {
 			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+strconv.Quote(launch.ReasoningEffort))
 		}
@@ -183,7 +163,7 @@ func (b HarnessBuilder) BuildInteractive(
 			Model:            launch.Model,
 			Effort:           launch.ReasoningEffort,
 			Metadata:         map[string]string{agentruntime.MetadataKeyAgentSessionID: identity},
-			WorkspacePath:    workspace,
+			WorkspacePath:    agentDir,
 			SystemPrompt:     systemPrompt,
 			SystemPromptFile: systemPromptFile,
 			ProviderArgs:     providerArgs,
@@ -199,7 +179,7 @@ func (b HarnessBuilder) BuildInteractive(
 			SessionID:        launch.SessionID,
 			Model:            launch.Model,
 			Effort:           launch.ReasoningEffort,
-			WorkspacePath:    workspace,
+			WorkspacePath:    agentDir,
 			Prompt:           launch.Prompt,
 			SystemPrompt:     systemPrompt,
 			SystemPromptFile: systemPromptFile,
@@ -218,7 +198,7 @@ func (b HarnessBuilder) BuildInteractive(
 	command := Command{
 		Path: argv[0],
 		Args: argv[1:],
-		Dir:  workspace,
+		Dir:  agentDir,
 		Env:  map[string]string{"AO_CLOUD_SOURCE_INTERFACE": "tui"},
 	}
 	maps.Copy(command.Env, b.Env)
@@ -229,7 +209,10 @@ func (b HarnessBuilder) BuildInteractive(
 		return Command{}, err
 	}
 	if launch.Harness == "claude-code" {
-		if err := b.prepareClaudeCloudExperience(&command, workspace, permission); err != nil {
+		if launch.Kind != "reviewer" {
+			setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+		}
+		if err := b.prepareClaudeCloudExperience(&command, agentDir, extraDirs, permission); err != nil {
 			if command.Cleanup != nil {
 				command.Cleanup()
 			}
@@ -237,7 +220,7 @@ func (b HarnessBuilder) BuildInteractive(
 		}
 	}
 	if launch.Harness == "cursor" && launch.Kind != "reviewer" {
-		if err := installCursorActivityHooks(hookHelperPath(b.DataDir), workspace); err != nil {
+		if err := installCursorActivityHooks(hookHelperPath(b.DataDir), agentDir); err != nil {
 			if command.Cleanup != nil {
 				command.Cleanup()
 			}
@@ -264,7 +247,7 @@ func (b HarnessBuilder) BuildInteractive(
 		// a workspace plugin. Install AO's activity plugin so opencode reports
 		// session-start/prompt/active/stop/permission events through
 		// `ao hooks opencode <event>`, the same bridge the other harnesses use.
-		if err := installOpenCodeActivityPlugin(workspace); err != nil {
+		if err := installOpenCodeActivityPlugin(agentDir); err != nil {
 			if command.Cleanup != nil {
 				command.Cleanup()
 			}
@@ -289,14 +272,18 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	if projectPrompt := strings.TrimSpace(launch.SystemPrompt); projectPrompt != "" {
 		systemPrompt += "\n\n" + strings.ReplaceAll(projectPrompt, worker.WorkspacePathPlaceholder, workspace)
 	}
-	// Multi-repo dev kit: tell a worker about the additional repositories checked
-	// out beside its primary repo, and where to find them, so it can edit them
-	// directly. This concrete sibling-path note is worker-only: an orchestrator
-	// codes nothing itself, so it gets multi-repo awareness from the shared
-	// project context (roleprompt) instead — enough to coordinate work across the
-	// repos without being pointed at sibling directories to edit.
-	if launch.Kind != "orchestrator" && launch.Kind != "reviewer" {
-		if note := extraReposPromptNote(workspace, launch.ExtraRepos); note != "" {
+	// A worker is told every repository's checkout and how to open a pull
+	// request on each. An orchestrator codes nothing itself and gets multi-repo
+	// awareness from the shared project context (roleprompt), so it is only
+	// told where it started when that is not the main checkout.
+	switch launch.Kind {
+	case "reviewer":
+	case "orchestrator":
+		if agentDirectory(launch, workspace) != workspace {
+			systemPrompt += "\n\n" + repositoriesPromptNote(launch, workspace)
+		}
+	default:
+		if note := repositoriesPromptNote(launch, workspace); note != "" {
 			systemPrompt += "\n\n" + note
 		}
 	}
@@ -376,10 +363,12 @@ func (b HarnessBuilder) Build(
 	if b.Launch.Harness != turn.Harness {
 		return Command{}, errors.New("turn harness does not match session role context")
 	}
+	agentDir := agentDirectory(b.Launch, workspace)
+	extraDirs := additionalDirectories(b.Launch, workspace)
 	command := Command{
 		SystemPrompt: b.systemPrompt(b.Launch, workspace),
 		Path:         b.binary(turn.Harness),
-		Dir:          workspace,
+		Dir:          agentDir,
 		Env:          map[string]string{},
 	}
 	maps.Copy(command.Env, b.Env)
@@ -392,12 +381,12 @@ func (b HarnessBuilder) Build(
 		}
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
 		setClaudeNonEssentialTrafficDisabled(&command)
+		command.AdditionalDirectories = extraDirs
+		setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
 		// A session can start in Chat before any terminal wrote the settings;
 		// the ACP adapter and the CLI both load them as user settings.
-		if b.ProtectSecretFiles {
-			if err := b.writeClaudeSecretFileProtection(configDir); err != nil {
-				return Command{}, fmt.Errorf("protect secret files in Claude settings: %w", err)
-			}
+		if err := b.writeClaudeChatSettings(configDir, extraDirs); err != nil {
+			return Command{}, err
 		}
 		if !b.claudeConversationAvailable(turn.AgentSessionID) {
 			turn.AgentSessionID = ""
@@ -408,7 +397,9 @@ func (b HarnessBuilder) Build(
 		if err == nil {
 			// Global options go before exec's own arguments and the prompt.
 			command.Args = slices.Insert(command.Args, 1, codexSecretFileGuardArgs(b.secretFileGuard())...)
+			command.Args = slices.Insert(command.Args, 1, codexWritableRootsArgs(extraDirs)...)
 			command.SecretFileGuard = b.secretFileGuard()
+			command.WritableRoots = extraDirs
 		}
 	case "cursor":
 		command.Args, err = cursorArgs(turn)
@@ -434,11 +425,11 @@ func (b HarnessBuilder) Build(
 		err = b.configureCredential(&command, turn.Harness, credential)
 	}
 	if err == nil && turn.Harness == "cursor" {
-		err = writeCursorACPStandingRule(workspace, b.Launch.SessionID, command.SystemPrompt)
+		err = writeCursorACPStandingRule(agentDir, b.Launch.SessionID, command.SystemPrompt)
 		if err == nil {
 			credentialCleanup := command.Cleanup
 			command.Cleanup = func() {
-				_ = removeCursorACPStandingRule(workspace, b.Launch.SessionID)
+				_ = removeCursorACPStandingRule(agentDir, b.Launch.SessionID)
 				if credentialCleanup != nil {
 					credentialCleanup()
 				}
@@ -497,7 +488,12 @@ func setClaudeNonEssentialTrafficDisabled(command *Command) {
 	command.Env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 }
 
-func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace string, permission agentruntime.PermissionPolicy) error {
+// prepareClaudeCloudExperience writes Claude Code's settings for a terminal
+// started in workspace (the agent's starting folder): its trust, permission
+// mode, secret-file protection, access to the extraDirs checkouts, and AO's
+// activity hooks in the starting folder's local settings, which Claude reads
+// from its working directory.
+func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace string, extraDirs []string, permission agentruntime.PermissionPolicy) error {
 	configDir, err := b.claudeConfigDir()
 	if err != nil {
 		return err
@@ -512,12 +508,14 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 			projects = map[string]any{}
 			root["projects"] = projects
 		}
-		project, _ := projects[workspace].(map[string]any)
-		if project == nil {
-			project = map[string]any{}
-			projects[workspace] = project
+		for _, dir := range append([]string{workspace}, extraDirs...) {
+			project, _ := projects[dir].(map[string]any)
+			if project == nil {
+				project = map[string]any{}
+				projects[dir] = project
+			}
+			project["hasTrustDialogAccepted"] = true
 		}
-		project["hasTrustDialogAccepted"] = true
 	}); err != nil {
 		return fmt.Errorf("prepare Claude onboarding: %w", err)
 	}
@@ -541,7 +539,8 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 			mode = "bypassPermissions"
 		}
 		permissions["defaultMode"] = mode
-		protectionErr = applySecretFileProtection(settings, b.ProtectSecretFiles)
+		applyClaudeAdditionalDirectories(settings, extraDirs)
+		protectionErr = applySecretFileProtection(settings, b.ProtectSecretFiles, extraDirs)
 		applySecretFileGuardHook(settings, b.secretFileGuard())
 	}); err != nil {
 		return fmt.Errorf("prepare Claude settings: %w", err)

@@ -77,6 +77,29 @@ type WorkspaceReviewResponse struct {
 	Summary          WorkspaceReviewSummary       `json:"summary"`
 	Ahead            *int                         `json:"ahead,omitempty"`
 	Behind           *int                         `json:"behind,omitempty"`
+	// Repositories lists the session's checkouts when it has more than the
+	// main one; any workspace request selects one with "repository" (the
+	// checkout's Name). Only the main checkout's summary carries it.
+	Repositories []WorkspaceRepository `json:"repositories,omitempty"`
+}
+
+// WorkspaceRepository is one of a session's repository checkouts.
+type WorkspaceRepository struct {
+	// Name is the checkout's folder name, the value a request's "repository"
+	// selects it with.
+	Name string `json:"name"`
+	// Repository is the GitHub owner/name of an additional repository.
+	Repository string `json:"repository,omitempty"`
+	// Branch is the branch an additional repository was cloned at.
+	Branch string `json:"branch,omitempty"`
+	Main   bool   `json:"main,omitempty"`
+	// Present is false for an additional repository that could not be cloned.
+	Present bool `json:"present"`
+}
+
+// WorkspaceRepositoriesResponse answers "workspace.repositories".
+type WorkspaceRepositoriesResponse struct {
+	Repositories []WorkspaceRepository `json:"repositories"`
 }
 
 type WorkspaceReviewFileRequest struct {

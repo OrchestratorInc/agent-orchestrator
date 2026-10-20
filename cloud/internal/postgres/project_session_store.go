@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
@@ -715,8 +716,9 @@ func createSessionTx(
 		}
 	}
 	var projectConfig json.RawMessage
-	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
-		orgID, input.ProjectID).Scan(&projectConfig); err != nil {
+	var defaultBranch string
+	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Session{}, ErrNotFound
 		}
@@ -743,6 +745,11 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, ErrInvalid
 	}
+	if input.Branch != "" {
+		if err := checkRequestedBranchTx(ctx, tx, orgID, input.ProjectID, input.Branch, defaultBranch, prefix, projectConfig); err != nil {
+			return domain.Session{}, err
+		}
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
@@ -751,7 +758,7 @@ func createSessionTx(
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
 			auto_review_enabled
 		)
-		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
+		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
 			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
 		RETURNING `+sessionInsertReturning,
@@ -771,6 +778,7 @@ func createSessionTx(
 		agentConfigJSON,
 		prefix,
 		autoReview,
+		input.Branch,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -1321,4 +1329,161 @@ func cursorID(cursor *domain.Cursor) any {
 		return nil
 	}
 	return cursor.ID
+}
+
+// BranchRefusedError says why a requested session branch was refused. It
+// matches ErrBranchInUse when a live session already works on the branch and
+// ErrInvalidBranch otherwise.
+type BranchRefusedError struct {
+	// Reason is a domain.SessionBranch* reason, or BranchReasonInUse.
+	Reason string
+	Branch string
+	// Repository is the additional repository whose base branch it is
+	// (domain.SessionBranchRepositoryBase).
+	Repository string
+	// SessionID and SessionName name the live session already on the branch
+	// (BranchReasonInUse).
+	SessionID, SessionName string
+}
+
+// BranchReasonInUse: a live session of the project already works on the
+// requested branch.
+const BranchReasonInUse = "in_use"
+
+func (e *BranchRefusedError) Error() string {
+	return "session branch " + e.Branch + " refused: " + e.Reason
+}
+
+func (e *BranchRefusedError) Is(target error) bool {
+	if e.Reason == BranchReasonInUse {
+		return target == ErrBranchInUse
+	}
+	return target == ErrInvalidBranch
+}
+
+// Message explains the refusal in words the orchestrator can act on.
+func (e *BranchRefusedError) Message() string {
+	switch e.Reason {
+	case domain.SessionBranchDefault:
+		return fmt.Sprintf("%q is the project's default branch, which a worker would push to directly. Choose another branch.", e.Branch)
+	case domain.SessionBranchPrefix:
+		return fmt.Sprintf("%q is the project's session prefix. Choose a branch under it, such as %s/<name>, or another name.", e.Branch, e.Branch)
+	case domain.SessionBranchRepositoryBase:
+		return fmt.Sprintf("%q is the base branch of the project's repository %s, which a worker would push to directly. Choose another branch.", e.Branch, e.Repository)
+	case BranchReasonInUse:
+		name := e.SessionName
+		if name == "" {
+			name = e.SessionID
+		}
+		return fmt.Sprintf("%q is already the branch of live session %s (%s). Have that session push its work, kill it, then retry.", e.Branch, name, e.SessionID)
+	default:
+		return fmt.Sprintf("%q is not a valid session branch: it must follow git's branch-name rules and must not read as another ref (refs/..., heads/..., origin/..., FETCH_HEAD).", e.Branch)
+	}
+}
+
+// checkRequestedBranchTx refuses a requested session branch that breaks the
+// branch rules (domain.SessionBranchProblem), is the base branch of one of the
+// project's additional repositories (its configured branch, or its GitHub
+// default branch where the organization's grants know it), or is already the
+// branch of a live session of the project.
+func checkRequestedBranchTx(
+	ctx context.Context, tx pgx.Tx, orgID, projectID, branch, defaultBranch, prefix string, projectConfig json.RawMessage,
+) error {
+	repos := domain.ProjectAdditionalRepos(projectConfig)
+	bases := make([]string, 0, len(repos))
+	baseRepository := map[string]string{}
+	fullNames := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		_, fullName, err := domain.CanonicalGitHubRepoURL(repo.URL)
+		if err != nil {
+			fullName = repo.URL
+		} else {
+			fullNames = append(fullNames, strings.ToLower(fullName))
+		}
+		if repo.Branch != "" {
+			bases = append(bases, repo.Branch)
+			baseRepository[strings.ToLower(repo.Branch)] = fullName
+		}
+	}
+	if len(fullNames) > 0 {
+		rows, err := tx.Query(ctx,
+			`SELECT DISTINCT repository.full_name, repository.default_branch
+			FROM ao_github_repository_grants grant_row
+			JOIN ao_github_repositories repository
+			  ON repository.github_repository_id = grant_row.github_repository_id
+			WHERE grant_row.org_id = $1
+			  AND grant_row.revoked_at IS NULL
+			  AND lower(repository.full_name) = ANY($2::text[])`,
+			orgID, fullNames,
+		)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var fullName, base string
+			if err := rows.Scan(&fullName, &base); err != nil {
+				rows.Close()
+				return err
+			}
+			if base = strings.TrimSpace(base); base != "" {
+				bases = append(bases, base)
+				if _, known := baseRepository[strings.ToLower(base)]; !known {
+					baseRepository[strings.ToLower(base)] = fullName
+				}
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	// The main repository's GitHub default branch is protected too: the
+	// project's default branch is editable and can differ from it.
+	var mainName, mainDefault string
+	switch err := tx.QueryRow(ctx,
+		`SELECT repository.full_name, repository.default_branch
+		FROM ao_projects project
+		JOIN ao_github_repositories repository
+		  ON repository.github_repository_id = project.github_repository_id
+		WHERE project.org_id = $1 AND project.id = $2`,
+		orgID, projectID,
+	).Scan(&mainName, &mainDefault); {
+	case err == nil:
+		if mainDefault = strings.TrimSpace(mainDefault); mainDefault != "" && !strings.EqualFold(mainDefault, strings.TrimSpace(defaultBranch)) {
+			bases = append(bases, mainDefault)
+			if _, known := baseRepository[strings.ToLower(mainDefault)]; !known {
+				baseRepository[strings.ToLower(mainDefault)] = mainName
+			}
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+	if reason := domain.SessionBranchProblem(branch, defaultBranch, prefix, bases); reason != "" {
+		return &BranchRefusedError{Reason: reason, Branch: branch, Repository: baseRepository[strings.ToLower(branch)]}
+	}
+	var sessionID, sessionName string
+	err := tx.QueryRow(ctx,
+		`SELECT id::text, display_name FROM ao_sessions s
+		WHERE s.org_id = $1 AND s.project_id = $2 AND s.is_terminated = false AND lower(s.branch) = lower($3)
+		  AND `+sessionHoldsBranchSQL("s")+`
+		ORDER BY s.created_at LIMIT 1`,
+		orgID, projectID, branch,
+	).Scan(&sessionID, &sessionName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return &BranchRefusedError{Reason: BranchReasonInUse, Branch: branch, SessionID: sessionID, SessionName: sessionName}
+}
+
+// sessionHoldsBranchSQL keeps a session (the given alias) out of the live
+// sessions holding a branch once it was killed: `ao kill` only marks its
+// sandboxes deleted, and is_terminated flips after the reconciler tears them
+// down, so the documented kill-then-spawn on that branch would otherwise be
+// refused until teardown finishes. A session with no sandbox yet is starting.
+func sessionHoldsBranchSQL(alias string) string {
+	return `(NOT EXISTS (SELECT 1 FROM ao_sandboxes sb WHERE sb.org_id = ` + alias + `.org_id AND sb.session_id = ` + alias + `.id)
+		OR EXISTS (SELECT 1 FROM ao_sandboxes sb WHERE sb.org_id = ` + alias + `.org_id AND sb.session_id = ` + alias + `.id AND sb.desired_state <> 'deleted'))`
 }

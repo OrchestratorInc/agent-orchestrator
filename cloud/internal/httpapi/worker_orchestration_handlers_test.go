@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -264,6 +265,92 @@ func TestCreateWorkerChildRequiresOrchestratorScope(t *testing.T) {
 	}
 	if store.created {
 		t.Fatal("CreateOrchestratorChild ran despite missing scope")
+	}
+}
+
+// An orchestrator can start a worker on a named branch (for example one an
+// earlier worker already pushed); the branch reaches the session create.
+func TestCreateWorkerChildPassesRequestedBranch(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"continue the work","branch":" ao/1a2b3c4d "}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Branch != "ao/1a2b3c4d" {
+		t.Fatalf("child branch = %q, want ao/1a2b3c4d", store.captured.Branch)
+	}
+}
+
+// The store refuses a branch it cannot use; the orchestrator gets a specific
+// error rather than a generic constraint violation.
+func TestCreateWorkerChildReportsInvalidBranch(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{
+		credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, createErr: postgres.ErrInvalidBranch,
+	}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"work","branch":"main"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "invalid_branch") {
+		t.Fatalf("status = %d, body = %s; want 422 invalid_branch", rec.Code, rec.Body.String())
+	}
+}
+
+// Each refusal says why: the reason reaches the orchestrator's error message,
+// and a branch a live session already works on is a 409 naming that session.
+func TestCreateWorkerChildExplainsARefusedBranch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		refused *postgres.BranchRefusedError
+		status  int
+		code    string
+		message string
+	}{
+		{"default branch", &postgres.BranchRefusedError{Reason: domain.SessionBranchDefault, Branch: "main"},
+			http.StatusUnprocessableEntity, "invalid_branch", "is the project's default branch"},
+		{"session prefix", &postgres.BranchRefusedError{Reason: domain.SessionBranchPrefix, Branch: "ao"},
+			http.StatusUnprocessableEntity, "invalid_branch", "is the project's session prefix"},
+		{"repository base", &postgres.BranchRefusedError{Reason: domain.SessionBranchRepositoryBase, Branch: "develop", Repository: "acme/julian"},
+			http.StatusUnprocessableEntity, "invalid_branch", "base branch of the project's repository acme/julian"},
+		{"invalid name", &postgres.BranchRefusedError{Reason: domain.SessionBranchInvalidName, Branch: "origin/main"},
+			http.StatusUnprocessableEntity, "invalid_branch", "must not read as another ref"},
+		{"in use", &postgres.BranchRefusedError{Reason: postgres.BranchReasonInUse, Branch: "ao/1a2b3c4d", SessionID: "s-1", SessionName: "fix login"},
+			http.StatusConflict, "branch_in_use", "live session fix login (s-1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, createErr: tc.refused}
+			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+			rec := httptest.NewRecorder()
+			body := `{"displayName":"resume","prompt":"work","branch":"` + tc.refused.Branch + `"}`
+			srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+			var envelope struct {
+				Code    string         `json:"code"`
+				Message string         `json:"message"`
+				Details map[string]any `json:"details"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != tc.status || envelope.Code != tc.code || !strings.Contains(envelope.Message, tc.message) ||
+				envelope.Details["reason"] != tc.refused.Reason {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if !errors.Is(&postgres.BranchRefusedError{Reason: postgres.BranchReasonInUse}, postgres.ErrBranchInUse) ||
+		!errors.Is(&postgres.BranchRefusedError{Reason: domain.SessionBranchDefault}, postgres.ErrInvalidBranch) {
+		t.Fatal("BranchRefusedError does not match its sentinel")
 	}
 }
 

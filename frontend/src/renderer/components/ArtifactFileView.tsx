@@ -20,7 +20,8 @@ function initialModeFor(path: string): FileViewMode {
  * live outside the git workspace and have no diff/status.
  *
  * One view, no display mode switch: a markdown artifact renders, any other
- * text file shows as code. A complete text file can be edited (saved through
+ * text file shows as code, and media streams through native image/player
+ * elements. A complete text file can be edited (saved through
  * the artifact write endpoint) unless `readOnly`. Text selected in the
  * rendered markdown can be sent to the worker.
  */

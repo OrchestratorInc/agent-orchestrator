@@ -11,10 +11,14 @@ import (
 )
 
 var (
-	ErrNotFound             = errors.New("not found")
-	ErrForbidden            = errors.New("forbidden")
-	ErrConflict             = errors.New("conflict")
-	ErrInvalid              = errors.New("invalid")
+	ErrNotFound      = errors.New("not found")
+	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalid       = errors.New("invalid")
+	ErrInvalidBranch = errors.New("invalid session branch")
+	// ErrBranchInUse refuses a requested session branch a live session of the
+	// project already works on (BranchRefusedError carries which one).
+	ErrBranchInUse          = errors.New("session branch in use")
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")

@@ -139,7 +139,7 @@ import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import {
 	activeTurn,
 	activityPlan,
@@ -365,6 +365,8 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
+	/** The handoff is an account move: the chat stays as it is, with no arrival chrome. */
+	accountMoving?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
 	/**
@@ -637,6 +639,7 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	accountMoving = false,
 	loadingQuietly,
 	agentResuming = false,
 	startingSteps,
@@ -1480,7 +1483,7 @@ function ChatWorkspaceContent({
 	// Arriving from the terminal reuses the startup composer: the shimmer plus a
 	// placeholder that follows the controller. Leaving for the terminal
 	// (newWorkDisabled) stays quiet, since that screen is about to go away.
-	const arrivingInChat = Boolean(controllerTransitioning) && !newWorkDisabled && startupState !== "provisioning";
+	const arrivingInChat = Boolean(controllerTransitioning) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
 	const arrivingPlaceholder = snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
@@ -1701,6 +1704,7 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
+					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -2020,11 +2024,24 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 	const plannedTurns = new Set(
 		snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id),
 	);
+	const pendingQuestionTurns = new Set(
+		snapshot.items
+			.filter((item) => item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending")
+			.map((item) => item.turnId),
+	);
 	return snapshot.items.filter((item) => {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "reasoning") return false;
+		// Claude emits both a tool call and an elicitation for the same question.
+		// The pending form already presents it above the composer.
+		if (
+			item.activityKind === "mcp_tool" &&
+			item.detail?.providerToolName === "AskUserQuestion" &&
+			(item.status === "pending" || item.status === "running") &&
+			item.turnId && pendingQuestionTurns.has(item.turnId)
+		) return false;
 		return true;
 	});
 }
@@ -4358,7 +4375,7 @@ const TurnGroup = memo(function TurnGroup({
 					) : null}
 				</div>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -4707,6 +4724,8 @@ type TimelineGroup = {
 	liveProviderFailure?: ConversationActivity;
 	/** The provider accepted this turn, so there is history it can be asked to drop. */
 	rollbackable?: boolean;
+	/** An account switch stopped this turn; its notice replaces the outcome. */
+	accountSwitched?: boolean;
 };
 
 type GroupPreview = { title: string; detail?: string };
@@ -4890,6 +4909,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 			);
 		if (turn.state === "running" || turn.state === "queued" || turn.state === "cancelled") continue;
 		group.rollbackable = Boolean(turn.providerTurnId);
+		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
 			state: turn.state,
 			durationMs: settledTurnDuration(turn),

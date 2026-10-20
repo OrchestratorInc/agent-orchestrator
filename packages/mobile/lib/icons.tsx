@@ -80,6 +80,7 @@ import Timer from "lucide-react-native/icons/timer";
 import Unplug from "lucide-react-native/icons/unplug";
 import Moon from "lucide-react-native/icons/moon";
 import Ellipsis from "lucide-react-native/icons/ellipsis";
+import Palette from "lucide-react-native/icons/palette";
 import Paperclip from "lucide-react-native/icons/paperclip";
 import Pin from "lucide-react-native/icons/pin";
 import PinOff from "lucide-react-native/icons/pin-off";
@@ -201,6 +202,7 @@ export const glyphs = {
 	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
 	"more-horizontal": Ellipsis,
+	"palette": Palette,
 	"paperclip": Paperclip,
 	"pin": Pin,
 	"pin-off": PinOff,

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Download, Info, Loader2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
@@ -394,10 +394,32 @@ function UpdateActions({
 	const version = useQuery({ queryKey: ["app-version"], queryFn: () => aoBridge.app.getVersion() });
 	const requestUpdateInstall = useRequestUpdateInstall();
 	const installed = parseNightlyVersion(version.data);
+	const downloadButtonRef = useRef<HTMLButtonElement | null>(null);
+	const restartButtonRef = useRef<HTMLButtonElement | null>(null);
+	const checkButtonRef = useRef<HTMLButtonElement | null>(null);
+	const statusLineRef = useRef<HTMLDivElement | null>(null);
+	const restoreActionFocusRef = useRef(false);
+	const setDownloadButtonRef = useCallback((node: HTMLButtonElement | null) => {
+		// Capture focus before React removes the download action from the DOM.
+		if (!node && downloadButtonRef.current && downloadButtonRef.current === document.activeElement) restoreActionFocusRef.current = true;
+		downloadButtonRef.current = node;
+	}, []);
+	useLayoutEffect(() => {
+		if (!restoreActionFocusRef.current) return;
+		restoreActionFocusRef.current = false;
+		if (document.activeElement !== document.body) return;
+		const nextAction = restartButtonRef.current ?? checkButtonRef.current;
+		// A fast failure can arrive inside the manual-check minimum busy window.
+		if (nextAction?.disabled) statusLineRef.current?.focus();
+		else nextAction?.focus();
+	});
 
 	const manualCheckPending = manualCheckRequestId !== null;
 	const checking = status.state === "checking" || manualCheckPending;
 	const downloading = status.state === "downloading" || status.state === "preparing";
+	const downloadLabel = downloading ? t("settings.updates.updating") : t("settings.updates.update");
+	const updateTargetLabel = status.version ? t("settings.updates.updateTo", { version: `v${status.version}` }) : t("settings.updates.updateToLatest");
+	const downloadAccessibleLabel = downloading ? `${downloadLabel} ${updateTargetLabel}` : updateTargetLabel;
 	// Only the user's OWN in-flight check blocks the button. A background check
 	// also reports "checking", and gating on that swallowed the first click
 	// whenever Settings was opened during one — every 15 minutes on nightly.
@@ -405,8 +427,8 @@ function UpdateActions({
 	// updater operations, so the manual check simply queues behind it.
 	const busy = manualCheckPending || downloading;
 	// The minimum-spinner window keeps "checking" on screen briefly after the
-	// updater has already answered. The button is the single visible in-progress
-	// indicator; the status row resumes with the updater's terminal result.
+	// updater has already answered. Only the Check button shows checking feedback;
+	// the status row resumes with the updater's terminal result.
 	const displayState: UpdateState = checking && !downloading && status.state !== "error" && status.state !== "downloaded" ? "checking" : status.state;
 	const showStatusState = displayState !== "checking";
 
@@ -481,12 +503,14 @@ function UpdateActions({
 						    positioned h-5 strip, so a two-line message overlapped the
 						    last-checked line and the cross-fade left it looking half-rendered. */}
 						<div
+							ref={statusLineRef}
 							id="update-status-line"
 							data-testid="update-status-line"
 							role="status"
 							aria-live="polite"
 							aria-atomic="true"
-							aria-busy={checking}
+							aria-busy={checking || downloading}
+							tabIndex={-1}
 							// Keep one line while the button owns the checking feedback, so
 							// the notices below do not jump up.
 							className="flex min-h-4 min-w-0 flex-col gap-1"
@@ -517,23 +541,30 @@ function UpdateActions({
 				    the primary label used to carry the full nightly stamp and grew
 				    across the version. The target build is named in the status line. */}
 				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-					{status.state === "available" && (
+					{/* Reflect every download, including automatic and channel-switch work. */}
+					{(status.state === "available" || downloading) && (
 						<Button
+							ref={setDownloadButtonRef}
 							type="button"
 							variant="primary"
 							size="sm"
-							aria-label={status.version ? t("settings.updates.updateTo", { version: `v${status.version}` }) : t("settings.updates.updateToLatest")}
-							onClick={() => void requestUpdateDownload()}
+							aria-label={downloadAccessibleLabel}
+							aria-describedby="update-status-line"
+							aria-disabled={downloading}
+							className="aria-disabled:cursor-wait aria-disabled:opacity-50"
+							onClick={() => {
+								if (!downloading) void requestUpdateDownload();
+							}}
 						>
 							<Download className="size-icon-sm" aria-hidden="true" />
-							{t("settings.updates.update")}
+							{downloadLabel}
 						</Button>
 					)}
 					{(!downloading && (status.state === "downloaded" || (status.staged && status.staged.ready !== false))) && (
 						// Opens the restart confirmation rather than installing outright:
 						// installing quits the app, which costs a turn on any chat session
 						// running a daemon-owned driver.
-						<Button type="button" variant="primary" size="sm" onClick={requestUpdateInstall}>
+						<Button ref={restartButtonRef} type="button" variant="primary" size="sm" onClick={requestUpdateInstall}>
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 							{t("settings.updates.restartInstall")}
 						</Button>
@@ -543,6 +574,7 @@ function UpdateActions({
 					    that will not install had a single dead Restart button and no
 					    other action on the page. */}
 					<Button
+						ref={checkButtonRef}
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}

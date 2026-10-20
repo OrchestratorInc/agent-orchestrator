@@ -156,6 +156,19 @@ type codexSession struct {
 	turnID         string
 	mu             sync.Mutex
 	providerTurnID string
+	// lastError is the final "error" notification for this thread, which
+	// explains a failed turn whose completion carries no error of its own.
+	lastError *codexTurnError
+}
+
+// reason is the turn's own error, or else the last final error Codex sent.
+func (s *codexSession) reason(turnErr *codexTurnError) *codexTurnError {
+	if turnErr != nil && strings.TrimSpace(turnErr.Message+turnErr.AdditionalDetails) != "" {
+		return turnErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastError
 }
 
 func (s *codexSession) Steer(ctx context.Context, turnID, text string) error {
@@ -187,28 +200,138 @@ func (s *codexSession) Steer(ctx context.Context, turnID, text string) error {
 
 // Codex may finish a turn without a completion notification reaching this
 // connection. Its durable thread state is authoritative for that exact turn.
-func readCodexTurnStatus(ctx context.Context, conn *codexRPC, threadID, turnID string) (string, error) {
+func readCodexTurnStatus(ctx context.Context, conn *codexRPC, threadID, turnID string) (string, *codexTurnError, error) {
 	var result struct {
 		Thread struct {
 			ID    string `json:"id"`
 			Turns []struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
+				ID     string          `json:"id"`
+				Status string          `json:"status"`
+				Error  *codexTurnError `json:"error"`
 			} `json:"turns"`
 		} `json:"thread"`
 	}
 	if err := conn.request(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &result); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if result.Thread.ID != threadID {
-		return "", errors.New("Codex returned a different thread")
+		return "", nil, errors.New("Codex returned a different thread")
 	}
 	for _, providerTurn := range result.Thread.Turns {
 		if providerTurn.ID == turnID {
-			return providerTurn.Status, nil
+			return providerTurn.Status, providerTurn.Error, nil
 		}
 	}
-	return "", nil
+	return "", nil, nil
+}
+
+// codexTurnError is the error Codex attaches to a failed turn, on
+// turn/completed, in thread/read, and in an "error" notification (the
+// app-server's TurnError). Message is Codex's own explanation.
+type codexTurnError struct {
+	Message           string          `json:"message"`
+	AdditionalDetails string          `json:"additionalDetails"`
+	CodexErrorInfo    json.RawMessage `json:"codexErrorInfo"`
+}
+
+// codexListedModels returns the models this Codex lists for its current
+// sign-in (model/list, hidden ones included), by id and by model name. ok is
+// false when the list is unavailable, so the requested model is used as is.
+func codexListedModels(ctx context.Context, conn *codexRPC) (map[string]bool, string, bool) {
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	listed := map[string]bool{}
+	defaultModel := ""
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		params := map[string]any{"includeHidden": true}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		var result struct {
+			Data []struct {
+				ID        string `json:"id"`
+				Model     string `json:"model"`
+				IsDefault bool   `json:"isDefault"`
+			} `json:"data"`
+			NextCursor *string `json:"nextCursor"`
+		}
+		if err := conn.request(listCtx, "model/list", params, &result); err != nil {
+			return nil, "", false
+		}
+		for _, model := range result.Data {
+			if model.IsDefault && defaultModel == "" {
+				defaultModel = strings.TrimSpace(model.ID)
+			}
+			if id := strings.TrimSpace(model.ID); id != "" {
+				listed[id] = true
+			}
+			if name := strings.TrimSpace(model.Model); name != "" {
+				listed[name] = true
+			}
+		}
+		if result.NextCursor == nil || *result.NextCursor == "" {
+			break
+		}
+		cursor = *result.NextCursor
+	}
+	return listed, defaultModel, len(listed) > 0
+}
+
+// codexTurnModel is the model a Chat turn runs on: the requested one when this
+// Codex lists it for its sign-in (or the list is unavailable), else Codex's
+// default model, with a notice naming the model that was dropped. The thread
+// gets the same model, so a thread created on the unlisted model (for example
+// by the terminal's --model) is moved off it on resume.
+func codexTurnModel(ctx context.Context, conn *codexRPC, requested string) (model, notice string) {
+	if requested == "" {
+		return "", ""
+	}
+	listed, defaultModel, ok := codexListedModels(ctx, conn)
+	if !ok || listed[requested] {
+		return requested, ""
+	}
+	return defaultModel, fmt.Sprintf("AO: %s is not available with the Codex sign-in this session uses, so this turn runs on Codex's default model. Pick a model from Codex's list to choose another.\n\n", requested)
+}
+
+// codexTurnErrorMaxLen bounds the provider text a failed turn shows.
+const codexTurnErrorMaxLen = 600
+
+// codexTurnFailure is the error a turn that ended as status reports: Codex's
+// own reason when it gave one, and what to do about a lapsed sign-in. Without
+// a reason it still says the turn failed, so the timeline is never blank.
+func codexTurnFailure(status string, turnErr *codexTurnError) error {
+	if turnErr == nil || strings.TrimSpace(turnErr.Message+turnErr.AdditionalDetails) == "" {
+		return fmt.Errorf("Codex turn ended with %s", status)
+	}
+	reason := strings.TrimSpace(turnErr.Message)
+	if details := strings.TrimSpace(turnErr.AdditionalDetails); details != "" && details != reason {
+		if reason == "" {
+			reason = details
+		} else {
+			reason += " (" + details + ")"
+		}
+	}
+	if len(reason) > codexTurnErrorMaxLen {
+		reason = strings.TrimSpace(reason[:codexTurnErrorMaxLen]) + "..."
+	}
+	message := fmt.Sprintf("Codex turn %s: %s", status, reason)
+	if codexSignInExpired(turnErr) {
+		message += ". Sign in to Codex again for Cloud. A ChatGPT login shared between this computer and the cloud stops working when either side uses it to refresh."
+	}
+	return errors.New(message)
+}
+
+// codexSignInExpired reports a failure Codex attributes to its sign-in: an
+// explicit unauthorized reason, or the refresh-token and 401 messages Codex
+// gives when a ChatGPT login was refreshed elsewhere.
+func codexSignInExpired(turnErr *codexTurnError) bool {
+	if strings.TrimSpace(string(turnErr.CodexErrorInfo)) == `"unauthorized"` {
+		return true
+	}
+	text := strings.ToLower(turnErr.Message + " " + turnErr.AdditionalDetails)
+	return strings.Contains(text, "refresh token") || strings.Contains(text, "401 unauthorized") ||
+		strings.Contains(text, "sign in again") || strings.Contains(text, "log out and sign in")
 }
 
 func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Command, publish func(Output) error, identity func(string) error) error {
@@ -263,8 +386,9 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	if command.SystemPrompt != "" {
 		threadParams["developerInstructions"] = command.SystemPrompt
 	}
-	if turn.Model != "" {
-		threadParams["model"] = turn.Model
+	model, modelNotice := codexTurnModel(openCtx, conn, turn.Model)
+	if model != "" {
+		threadParams["model"] = model
 	}
 	if turn.ReasoningEffort != "" {
 		threadParams["config"] = map[string]string{"model_reasoning_effort": turn.ReasoningEffort}
@@ -319,18 +443,32 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 					break
 				}
 			}
+		case "error":
+			// A final error (willRetry false) explains the failed turn that
+			// follows; keep it in case turn/completed carries none.
+			var event struct {
+				ThreadID  string         `json:"threadId"`
+				Error     codexTurnError `json:"error"`
+				WillRetry bool           `json:"willRetry"`
+			}
+			if json.Unmarshal(frame.Params, &event) == nil && event.ThreadID == threadID && !event.WillRetry {
+				session.mu.Lock()
+				session.lastError = &event.Error
+				session.mu.Unlock()
+			}
 		case "turn/completed":
 			var event struct {
 				ThreadID string `json:"threadId"`
 				Turn     struct {
-					ID     string `json:"id"`
-					Status string `json:"status"`
+					ID     string          `json:"id"`
+					Status string          `json:"status"`
+					Error  *codexTurnError `json:"error"`
 				} `json:"turn"`
 			}
 			if json.Unmarshal(frame.Params, &event) == nil && event.ThreadID == threadID {
 				var result error
 				if event.Turn.Status != "completed" {
-					result = fmt.Errorf("Codex turn ended with %s", event.Turn.Status)
+					result = codexTurnFailure(event.Turn.Status, session.reason(event.Turn.Error))
 				}
 				select {
 				case completed <- result:
@@ -344,10 +482,19 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	turnParams := map[string]any{
 		"threadId": threadID, "input": []map[string]any{{"type": "text", "text": turn.Prompt}},
 		"approvalPolicy": policy, "approvalsReviewer": reviewer,
-		"sandboxPolicy": codexTurnSandbox(sandbox),
+		"sandboxPolicy": codexTurnSandbox(sandbox, command.WritableRoots),
 	}
-	if turn.Model != "" {
-		turnParams["model"] = turn.Model
+	// The desktop's model list comes from the local Codex, which may sign in
+	// differently: a ChatGPT login cannot run every API model, and Codex fails
+	// such a turn with a 400. codexTurnModel moved an unlisted model to
+	// Codex's default; say so in the turn.
+	if modelNotice != "" {
+		if err := publish(Output{Stream: "stdout", Text: modelNotice, ItemID: "ao-model-notice-" + turn.ID}); err != nil {
+			return err
+		}
+	}
+	if model != "" {
+		turnParams["model"] = model
 	}
 	if turn.ReasoningEffort != "" {
 		turnParams["effort"] = turn.ReasoningEffort
@@ -386,7 +533,7 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 			return err
 		case <-completionPoll.C:
 			readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			status, readErr := readCodexTurnStatus(readCtx, conn, threadID, started.Turn.ID)
+			status, turnErr, readErr := readCodexTurnStatus(readCtx, conn, threadID, started.Turn.ID)
 			cancel()
 			if readErr != nil {
 				continue
@@ -395,7 +542,7 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 			case "completed":
 				return nil
 			case "failed", "interrupted":
-				return fmt.Errorf("Codex turn ended with %s", status)
+				return codexTurnFailure(status, session.reason(turnErr))
 			}
 		case <-ctx.Done():
 			return ctx.Err()
@@ -428,14 +575,21 @@ func codexApprovalSettings(turn worker.Turn) (policy, sandbox, reviewer string) 
 	}
 }
 
-func codexTurnSandbox(sandbox string) map[string]string {
+// codexTurnSandbox is a turn's sandbox policy. A workspace-write sandbox also
+// lets the turn write writableRoots, the session's checkouts outside its
+// working directory.
+func codexTurnSandbox(sandbox string, writableRoots []string) map[string]any {
 	switch sandbox {
 	case "read-only":
-		return map[string]string{"type": "readOnly"}
+		return map[string]any{"type": "readOnly"}
 	case "workspace-write":
-		return map[string]string{"type": "workspaceWrite"}
+		policy := map[string]any{"type": "workspaceWrite"}
+		if len(writableRoots) > 0 {
+			policy["writableRoots"] = writableRoots
+		}
+		return policy
 	default:
-		return map[string]string{"type": "dangerFullAccess"}
+		return map[string]any{"type": "dangerFullAccess"}
 	}
 }
 

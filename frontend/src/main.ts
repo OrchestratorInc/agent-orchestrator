@@ -156,8 +156,10 @@ import {
 	type BrowserViewHost,
 	type BrowserRuntimeState,
 } from "./main/browser-view-host";
+import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
+import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
@@ -171,8 +173,22 @@ import { createWindowComposition, type WindowComposition } from "./main/window-c
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
-import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
+import {
+	BROWSER_RUNTIME_DISCONNECTED,
+	connectBrowserRuntime,
+	type BrowserRuntimeLinkHandle,
+} from "./main/browser-runtime-link";
 import { checkRender, measureRender } from "./main/render-check";
+import {
+	connectBrowserStream,
+	type BrowserStreamControl,
+	type BrowserStreamLinkHandle,
+} from "./main/browser-stream-link";
+import type {
+	BrowserRemoteInput,
+	BrowserRemoteNavigation,
+	BrowserRemoteTabAction,
+} from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -326,6 +342,12 @@ let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
+const awakeDownloads = createAwakeDownloadBridge({
+ baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+ request: (url, init) => net.fetch(url, init),
+});
+app.once("will-quit", () => awakeDownloads.dispose());
+
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
@@ -359,6 +381,8 @@ const desktopQuit = createDesktopQuitController({
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
+let browserStreamLink: BrowserStreamLinkHandle | null = null;
+let browserStreamLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
@@ -616,11 +640,13 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		sideClaimedDaemonPID = undefined;
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
+		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
+		establishBrowserStreamLink();
 	}
 	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
 	if (nextStatus.state === "ready" && nextStatus.port && daemonIdentity && sideClaimedDaemonPID !== daemonIdentity) {
@@ -967,6 +993,7 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		onTabCloseFailure: createBrowserCloseDiagnostics(browserProfileStateDir(), app.getVersion()),
 		// Agent tabs: only a connected host's or a cloud session's own
 		// agent-browser viewer may report the remote page a Browser tab shows.
 		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
@@ -988,7 +1015,7 @@ async function createWindowInternal(): Promise<void> {
 			downloadsDirectory: app.getPath("downloads"),
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
 			shell,
-			notify: (state) => shellWebContents.send("browser:downloadsChanged", state),
+			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		clipboard: { writeImage: writeClipboardImage },
@@ -1027,7 +1054,10 @@ async function createWindowInternal(): Promise<void> {
 			}).catch((error) => console.error("browser profile error dialog failed:", error));
 		},
 	});
-	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
+	if (daemonStatus.state === "ready") {
+		establishBrowserRuntimeLink();
+		establishBrowserStreamLink();
+	}
 
 	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
@@ -1545,19 +1575,28 @@ function supervisorPipeFromRunFile(rfp: string | null): string {
 	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
-function disposeBrowserRuntimeLink(): void {
+function dropBrowserRuntimeLink(): void {
 	browserRuntimeLink?.dispose();
 	browserRuntimeLink = null;
 	browserRuntimeLinkIdentity = null;
 }
 
-function publishBrowserRuntimeState(connected: boolean): void {
-	getShellWebContents()?.send("browser:runtimeState", { connected } satisfies BrowserRuntimeState);
+function disposeBrowserRuntimeLink(): void {
+	const hadLink = browserRuntimeLink !== null;
+	dropBrowserRuntimeLink();
+	if (hadLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
+function publishBrowserRuntimeState(state: BrowserRuntimeState): void {
+	getShellWebContents()?.send("browser:runtimeState", state);
+}
+
+// A replacement link reports "connecting" itself, so dropping the old one first
+// does not flash a disconnect in the Browser panel.
 function reconnectBrowserRuntimeLink(): void {
-	disposeBrowserRuntimeLink();
+	dropBrowserRuntimeLink();
 	establishBrowserRuntimeLink();
+	if (!browserRuntimeLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
 function establishBrowserRuntimeLink(): void {
@@ -1588,7 +1627,7 @@ function establishBrowserRuntimeLink(): void {
 	if (browserRuntimeLink && browserRuntimeLinkIdentity && sameBrowserRuntimeIdentity(browserRuntimeLinkIdentity, identity)) {
 		return;
 	}
-	if (browserRuntimeLink) disposeBrowserRuntimeLink();
+	if (browserRuntimeLink) dropBrowserRuntimeLink();
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
@@ -1613,6 +1652,73 @@ function establishBrowserRuntimeLink(): void {
 		onStateChange: publishBrowserRuntimeState,
 	});
 	browserRuntimeLinkIdentity = identity;
+}
+
+function disposeBrowserStreamLink(): void {
+	browserStreamLink?.dispose();
+	browserStreamLink = null;
+	browserStreamLinkIdentity = null;
+}
+
+async function handleBrowserStreamControl(control: BrowserStreamControl): Promise<void> {
+	const host = browserViewHost;
+	if (!host) throw Object.assign(new Error("Browser target owner is unavailable"), { code: "BROWSER_TARGET_UNAVAILABLE" });
+	const sessionId = control.sessionId?.trim() ?? "";
+	if (!sessionId) throw Object.assign(new Error("sessionId is required"), { code: "INVALID_ARGUMENT" });
+	switch (control.type) {
+		case "start": {
+			const streamId = control.streamId ?? 0;
+			await host.startLiveStream(sessionId, streamId, {
+				frame: (frame) => browserStreamLink?.sendFrame({ streamId, ...frame }),
+				state: (state) => { browserStreamLink?.sendControl({ type: "state", streamId, sessionId, payload: state }); },
+				error: (code, message) => { browserStreamLink?.sendControl({ type: "error", streamId, sessionId, code, message }); },
+			});
+			return;
+		}
+		case "stop":
+			await host.stopLiveStream(sessionId, control.streamId ?? 0);
+			return;
+		case "input":
+			await host.handleRemoteInput(sessionId, control.payload as BrowserRemoteInput);
+			return;
+		case "navigate":
+			await host.handleRemoteNavigation(sessionId, control.payload as BrowserRemoteNavigation);
+			return;
+		case "tab":
+			await host.handleRemoteTab(sessionId, control.payload as BrowserRemoteTabAction);
+			return;
+		case "preview": {
+			const url = (control.payload as { url?: unknown } | undefined)?.url;
+			if (typeof url === "string") await host.openLivePreview(sessionId, url);
+			return;
+		}
+		default:
+			throw Object.assign(new Error(`Unsupported browser stream command: ${control.type}`), { code: "INVALID_ARGUMENT" });
+	}
+}
+
+function establishBrowserStreamLink(): void {
+	if (!browserViewHost) return;
+	const rfp = runFilePath();
+	if (!rfp) return;
+	let runInfo: ReturnType<typeof parseRunFile> = null;
+	try {
+		runInfo = parseRunFile(readFileSync(rfp, "utf8"));
+	} catch {
+		return;
+	}
+	const address = runInfo?.browserStreamAddress;
+	if (!address) return;
+	const identity = { pid: runInfo?.pid ?? 0, startedAtMs: runInfo?.startedAtMs ?? 0, address, token: browserRuntimeToken };
+	if (browserStreamLink && browserStreamLinkIdentity && sameBrowserRuntimeIdentity(browserStreamLinkIdentity, identity)) return;
+	disposeBrowserStreamLink();
+	browserStreamLink = connectBrowserStream(address, {
+		token: browserRuntimeToken,
+		onControl: handleBrowserStreamControl,
+		onDisconnect: () => browserViewHost?.stopAllLiveStreams(),
+		log: (message) => console.log(`AO: ${message}`),
+	});
+	browserStreamLinkIdentity = identity;
 }
 
 function establishSupervisorLink(): void {
@@ -1743,8 +1849,49 @@ function daemonLaunchEnv(): NodeJS.ProcessEnv {
 	return process.env;
 }
 
+// `npm run dev` builds resources/acp-runtime in predev, but a cache cleaner or a
+// plain `electron .` launch can leave it missing and every chat resume then fails
+// with "entrypoint ... no such file". Rebuild it here. The script is idempotent
+// and a no-op when the runtime is intact. Dev only: a packaged runtime is signed.
+async function repairDevAcpRuntime(): Promise<void> {
+	if (app.isPackaged || process.env.AO_ACP_RUNTIME_DIR) return;
+	const runtimeDir = path.join(app.getAppPath(), "resources", "acp-runtime");
+	const adapter = path.join(
+		runtimeDir,
+		"node_modules",
+		"@agentclientprotocol",
+		"claude-agent-acp",
+		"dist",
+		"index.js",
+	);
+	if (existsSync(adapter)) return;
+	const script = path.join(app.getAppPath(), "scripts", "build-acp-runtime.mjs");
+	if (!existsSync(script)) return;
+	console.warn(`[ao] ACP runtime missing at ${runtimeDir}; rebuilding`);
+	await new Promise<void>((resolve) => {
+		const child = spawn(process.execPath, [script], {
+			cwd: app.getAppPath(),
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+			stdio: "inherit",
+		});
+		child.once("error", (err) => {
+			console.error("[ao] ACP runtime rebuild failed to start:", err);
+			resolve();
+		});
+		child.once("exit", (code) => {
+			if (code !== 0) console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+			resolve();
+		});
+	});
+}
+
 async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	if (daemonProcess) {
+		return daemonStatus;
+	}
+
+	await repairDevAcpRuntime();
+	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
 	}
 
@@ -2413,7 +2560,7 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 
 ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
-	return { connected: browserRuntimeLink?.connected ?? false };
+	return browserRuntimeLink?.state ?? BROWSER_RUNTIME_DISCONNECTED;
 });
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {
@@ -3397,6 +3544,7 @@ app.on("before-quit", (event) => {
 	}
 	browserQuitRequested = true;
 	disposeBrowserRuntimeLink();
+	disposeBrowserStreamLink();
 	trayLifecycle.dispose();
 	trayController = null;
 	if (!browserCleanupComplete) {

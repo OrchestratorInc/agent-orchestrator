@@ -65,6 +65,7 @@ var workerCapabilities = []string{
 	"terminal.agent",
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
+	worker.CapabilityMultiRepo,
 }
 
 func main() {
@@ -176,14 +177,33 @@ func run(logger *slog.Logger) error {
 	var workingDirectoryErr error
 	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
 		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
+	adoptStandaloneFolder := false
 	switch {
 	case workingDirectory != "" && hasRepository:
 		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
 		workspace = reuse.Workspace
+	case workingDirectory != "" && worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL):
+		// A standalone project (no repository) on a workspace with a
+		// configured working directory works in that folder as the template
+		// left it, for example ~/work holding the repositories the template
+		// cloned itself.
+		if dir, err := worker.ExpandWorkingDirectory(workingDirectory, os.Getenv("HOME"), ""); err != nil {
+			logger.Warn("working directory: a standalone session cannot use the configured directory; using the default",
+				"working_directory", workingDirectory, "error", err)
+		} else {
+			workspace, adoptStandaloneFolder = dir, true
+			reuse.Workspace = dir
+			_ = os.Setenv("AO_WORKSPACE_DIR", dir)
+		}
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
 	}
+	// The session works in the user's own workspace (a reused template
+	// checkout or a configured working directory): an existing checkout of an
+	// additional repository there is the user's and is adopted, not rewritten.
+	userWorkspace := reuse.Reused || (workingDirectory != "" && hasRepository)
+	bootstrap.Launch.AgentStartsIn = pinAgentStartsIn(logger, dataDir, bootstrap.Launch, workspace)
 	scriptEnvironment := worker.SessionScriptEnvironment{
 		SessionID:     bootstrap.SessionID,
 		SessionKind:   bootstrap.Launch.Kind,
@@ -278,10 +298,8 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
 		b.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
-		b.Env["AO_PULL_REQUEST_HELP"] = "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
-			`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
-			`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
-			"to push the current branch and open a pull request against the project's configured default branch."
+		b.Env["AO_PULL_REQUEST_HELP"] = pullRequestHelp(bootstrap.Launch)
+		b.Env[worker.SessionRepositoriesEnv] = sessionRepositories(bootstrap.Launch, workspace)
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -313,7 +331,7 @@ func run(logger *slog.Logger) error {
 			return command, nil
 		}
 		var gitRefReporter func(context.Context) error
-		if bootstrap.Launch.RepositoryURL != "" {
+		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			gitRefReporter = func(ctx context.Context) error { return client.reportGitRefs(ctx, workspace) }
 		}
 		chatRunner = &workerexec.Supervisor{
@@ -347,7 +365,8 @@ func run(logger *slog.Logger) error {
 		compareBase = "origin/" + defaultBranch
 	}
 	transportSupervisor := workertransport.Supervisor{
-		Control: client, Workspace: workspace, DataDir: dataDir, Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
+		Control: client, Workspace: workspace, DataDir: dataDir,
+		Repositories: worker.SessionRepoCheckouts(workspace, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)[1:], Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
 		AgentCommandFactory: agentCommandFactory,
 		Started:             started, ChatRunner: chatRunner,
 		ChatWorkspaceReady: chatWorkspaceReady,
@@ -420,7 +439,7 @@ func run(logger *slog.Logger) error {
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
-		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch.DefaultBranch, logger)
+		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch, logger)
 	}()
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
@@ -483,7 +502,7 @@ func run(logger *slog.Logger) error {
 		for {
 			err := workingDirectoryErr
 			if err == nil {
-				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, &reuse, adoptStandaloneFolder, userWorkspace)
 			}
 			if err == nil {
 				break
@@ -519,7 +538,8 @@ func run(logger *slog.Logger) error {
 		// Restore a previously deleted session's state before the agent launches.
 		// A fresh session finds nothing captured and this returns quickly.
 		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
-		if bootstrap.Launch.RepositoryURL != "" {
+		// A standalone session has no repository on GitHub to report branches of.
+		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			if err := client.reportGitRefs(runCtx, workspace); err != nil {
 				logger.Warn("report restored branch heads", "error", err)
 			}
@@ -633,10 +653,12 @@ func prepareWorkspace(
 	client *client,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
-	reuse worker.ReuseDecision,
+	reuse *worker.ReuseDecision,
+	adoptExistingFolder bool,
+	userWorkspace bool,
 ) error {
 	if worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
-		if err := worker.PrepareScratchWorkspace(ctx, worker.ExecGitRunner{}, workspace); err != nil {
+		if err := worker.PrepareStandaloneWorkspace(ctx, worker.ExecGitRunner{}, workspace, adoptExistingFolder); err != nil {
 			return fmt.Errorf("prepare scratch workspace: %w", err)
 		}
 		logger.Info("initialized scratch workspace")
@@ -667,7 +689,9 @@ func prepareWorkspace(
 		if err := worker.ConfigureWorkerGit(
 			ctx, worker.ExecGitRunner{}, workspace, dataDir, publicURL,
 			bootstrap.SessionID, bootstrap.Launch.Branch,
-		); err != nil {
+		); errors.Is(err, worker.ErrSessionBranchFellBack) || errors.Is(err, worker.ErrSessionBranchStashed) {
+			logger.Warn("session branch checkout needed a fallback", "branch", bootstrap.Launch.Branch, "error", err)
+		} else if err != nil {
 			return fmt.Errorf("configure repository tooling: %w", err)
 		}
 		// Multi-repo dev kit: clone any additional repositories alongside the
@@ -677,7 +701,7 @@ func prepareWorkspace(
 		// repo. Extra repos reuse the session's checkout-grant token, so they work
 		// for repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
-		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
+		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, userWorkspace)
 	}
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
@@ -720,14 +744,16 @@ func resolveReusedWorkspace(
 // prepareReusedWorkspace refreshes an adopted checkout: it writes the session
 // git tooling, fetches with the session's checkout grant, moves a just-adopted
 // branch up to the fetched base, and clones any extra repositories beside it
-// exactly as for a fresh checkout.
+// exactly as for a fresh checkout. The move happens once: the decision is
+// cleared after it, so a startup retry (the session reopened after a later
+// step failed) never moves the user's branch again.
 func prepareReusedWorkspace(
 	ctx context.Context,
 	logger *slog.Logger,
 	client *client,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
-	reuse worker.ReuseDecision,
+	reuse *worker.ReuseDecision,
 ) error {
 	checkoutGrant, err := client.checkoutGrant(ctx)
 	if err != nil {
@@ -743,40 +769,92 @@ func prepareReusedWorkspace(
 		return fmt.Errorf("refresh the reused repository checkout: %w", err)
 	}
 	if reuse.AdoptedNow {
-		if err := worker.AdvanceAdoptedCheckout(ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch); err != nil {
-			logger.Warn("checkout reuse: could not fast-forward the session branch to the latest base", "error", err)
+		if err := worker.AdvanceAdoptedCheckout(
+			ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.Branch, bootstrap.Launch.DefaultBranch,
+			reuse.BranchCreated, reuse.AdoptedAt,
+		); err != nil {
+			logger.Warn("checkout reuse: could not move the session branch to the latest remote commits", "error", err)
+		}
+		reuse.AdoptedNow, reuse.BranchCreated, reuse.AdoptedAt = false, false, ""
+	}
+	// A branch the session was asked to continue must hold its pushed
+	// commits; the session's own generated branch may start fresh.
+	if !worker.GeneratedSessionBranch(bootstrap.SessionID, bootstrap.Launch.Branch) {
+		if err := worker.CheckoutContinuesRemoteBranch(ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.Branch); err != nil {
+			return err
 		}
 	}
-	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
+	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, true)
 	return nil
 }
 
-// cloneExtraRepos clones each additional dev-kit repository as a sibling of the
-// primary checkout, so the agent (whose working directory is the primary repo)
-// can reach it at ../<name>. It is best-effort: every failure is logged and
-// skipped so the session always starts on its primary repo. The launcher
-// (workerexec) computes the same paths via worker.ExtraRepoPath and lists them
-// in the agent's system prompt.
-func cloneExtraRepos(ctx context.Context, logger *slog.Logger, token string, repos []worker.RepoRef, workspace, dataDir string) {
-	if len(repos) == 0 {
+// cloneExtraRepos prepares each of the project's additional repositories as a
+// sibling of the main checkout, so the agent reaches it at ../<name>, on the
+// session branch (see worker.PrepareExtraRepo). It is best-effort: every
+// failure is logged and skipped so the session always starts on its main
+// repository. The launcher (workerexec) computes the same paths via
+// worker.SessionRepoCheckouts and lists them in the agent's system prompt.
+// sessionRepositories lists the session's GitHub repositories as lower-case
+// owner/name, comma-separated, for the agent CLI (worker.SessionRepositoriesEnv).
+func sessionRepositories(launch worker.LaunchContext, workspace string) string {
+	var names []string
+	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos) {
+		if checkout.FullName != "" {
+			names = append(names, checkout.FullName)
+		}
+	}
+	return strings.Join(names, ",")
+}
+
+func cloneExtraRepos(
+	ctx context.Context,
+	logger *slog.Logger,
+	token string,
+	bootstrap worker.BootstrapResponse,
+	workspace, dataDir string,
+	userWorkspace bool,
+) {
+	launch := bootstrap.Launch
+	if len(launch.ExtraRepos) == 0 {
 		return
 	}
-	parent := filepath.Dir(workspace)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		logger.Warn("multi-repo: cannot create extra-repos directory", "error", err)
-		return
+	for _, repo := range worker.SkippedExtraRepos(workspace, launch.RepositoryURL, launch.ExtraRepos) {
+		logger.Warn("multi-repo: additional repository skipped; its folder name is reserved or already used by another checkout",
+			"repo", repo.URL, "folder", worker.ExtraRepoDirName(repo.URL))
 	}
-	for _, repo := range repos {
-		dest := worker.ExtraRepoPath(workspace, repo.URL)
-		// Clone via worker.CloneExtraRepo, which uses the primary checkout's
-		// askpass mechanism: the token stays in the command's environment and
-		// never enters the URL, argv, or the repo's .git/config, and the repo is
-		// wired to the session credential helper for the agent's own git ops.
-		if err := worker.CloneExtraRepo(ctx, worker.ExecGitRunner{}, parent, dest, repo.URL, repo.Branch, token, dataDir); err != nil {
-			logger.Warn("multi-repo: extra repo clone failed (non-fatal)", "repo", repo.URL, "error", err)
+	adoptedAny := false
+	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+		// A clone uses the main checkout's askpass mechanism: the token stays in
+		// the command's environment and never enters the URL, argv, or the
+		// repo's .git/config. In the user's own workspace an existing checkout
+		// is adopted without writing AO's git configuration into it.
+		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
+		adopted, err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, worker.ExtraRepoOptions{
+			SessionID: bootstrap.SessionID, SessionBranch: launch.Branch,
+			Token: token, DataDir: dataDir, Adopt: userWorkspace,
+		})
+		if errors.Is(err, worker.ErrSessionBranchIsBase) {
+			// The repository is ready at its base branch; the session works
+			// there without a branch of its own and never pushes to it.
+			logger.Warn("multi-repo: the session branch is this repository's base branch; it stays checked out at its base and AO will not push to it",
+				"repo", checkout.URL, "branch", launch.Branch, "error", err)
+			adoptedAny = adoptedAny || adopted
 			continue
 		}
-		logger.Info("multi-repo: cloned extra repo", "repo", repo.URL, "path", dest)
+		if err != nil {
+			logger.Warn("multi-repo: additional repository is unavailable (non-fatal)", "repo", checkout.URL, "error", err)
+			continue
+		}
+		adoptedAny = adoptedAny || adopted
+		logger.Info("multi-repo: additional repository ready", "repo", checkout.URL, "path", checkout.Path, "adopted", adopted)
+	}
+	if adoptedAny {
+		// An adopted checkout carries none of AO's git configuration; scope the
+		// session credential helper and identity to the worker's process tree,
+		// as a reused main checkout does.
+		for key, value := range worker.ReusedCheckoutGitEnvironment(dataDir) {
+			_ = os.Setenv(key, value)
+		}
 	}
 }
 
@@ -814,18 +892,16 @@ func startInteractiveAgent(
 		return fmt.Errorf("build interactive coding-agent command: %w", err)
 	}
 	runtimeEnv := map[string]string{
-		"AO_CLOUD_WORKER_API_URL":    client.baseURL,
-		"AO_CLOUD_WORKER_TOKEN_FILE": client.tokenFile,
-		"AO_SESSION_ID":              bootstrap.SessionID,
-		"AO_PROJECT_ID":              bootstrap.Launch.ProjectID,
-		"AO_SESSION_KIND":            bootstrap.Launch.Kind,
-		"AO_CHECKPOINT_SOCKET":       checkpointSocketPath,
-		"AO_PULL_REQUEST_SOCKET":     pullRequestSocketPath,
-		"AO_PULL_REQUEST_HELP": "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
-			`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
-			`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
-			"to push the current branch and open a pull request against the repository's default branch.",
-		"AO_REVIEW_SOCKET": reviewSocketPath,
+		"AO_CLOUD_WORKER_API_URL":     client.baseURL,
+		"AO_CLOUD_WORKER_TOKEN_FILE":  client.tokenFile,
+		"AO_SESSION_ID":               bootstrap.SessionID,
+		"AO_PROJECT_ID":               bootstrap.Launch.ProjectID,
+		"AO_SESSION_KIND":             bootstrap.Launch.Kind,
+		"AO_CHECKPOINT_SOCKET":        checkpointSocketPath,
+		"AO_PULL_REQUEST_SOCKET":      pullRequestSocketPath,
+		"AO_PULL_REQUEST_HELP":        pullRequestHelp(bootstrap.Launch),
+		worker.SessionRepositoriesEnv: sessionRepositories(bootstrap.Launch, workspace),
+		"AO_REVIEW_SOCKET":            reviewSocketPath,
 		"AO_REVIEW_HELP": "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
 			`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +

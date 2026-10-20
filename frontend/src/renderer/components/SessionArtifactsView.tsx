@@ -12,6 +12,7 @@ import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { formatTimeTerse } from "../lib/format-time";
+import { fileMediaKind } from "../lib/file-media";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -153,10 +154,12 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 							<DropdownMenuSeparator />
 						</>
 					) : null}
-					<DropdownMenuItem onSelect={() => void copy()}>
-						<Copy aria-hidden="true" />
-						{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
-					</DropdownMenuItem>
+					{!fileMediaKind(artifact.path) ? (
+						<DropdownMenuItem onSelect={() => void copy()}>
+							<Copy aria-hidden="true" />
+							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
+						</DropdownMenuItem>
+					) : null}
 					{/* Cloud sessions keep their artifacts behind the cloud control plane. */}
 					{session.cloud ? null : (
 						<>

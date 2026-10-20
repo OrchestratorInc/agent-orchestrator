@@ -1038,22 +1038,23 @@ func (s *Store) ProjectCleanupCommands(ctx context.Context, orgID, sessionID str
 	var commands []string
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var config []byte
+		var repositoryURL string
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project.config
+			`SELECT project.config, project.repository_url
 			FROM ao_sessions session
 			JOIN ao_projects project ON project.id = session.project_id AND project.org_id = session.org_id
 			WHERE session.id = $1 AND session.org_id = $2`,
 			sessionID,
 			orgID,
-		).Scan(&config)
+		).Scan(&config, &repositoryURL)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("load project cleanup commands: %w", err)
 		}
-		_, commands = domain.ProjectScripts(config)
+		_, commands = domain.ProjectScripts(config, repositoryURL)
 		return nil
 	})
 	if err != nil {

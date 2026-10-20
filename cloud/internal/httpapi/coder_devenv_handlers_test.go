@@ -454,6 +454,40 @@ func TestResolveCoderPlacementCarriesDevEnvironment(t *testing.T) {
 	}
 }
 
+// A project's working directory wins over the connection's, and only applies
+// when AO runs as the workspace user.
+func TestResolveCoderPlacementPrefersTheProjectWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, workerUser, project, connection, want string
+	}{
+		{"project wins", domain.CoderWorkerUserWorkspace, "~/work/{repo}", "~/code/{repo}", "~/work/{repo}"},
+		{"connection kept", domain.CoderWorkerUserWorkspace, "", "~/code/{repo}", "~/code/{repo}"},
+		{"needs the workspace user", "", "~/work/{repo}", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connectionConfig, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+				BaseURL: "https://coder.acme.example", Owner: "dev", WorkerUser: tc.workerUser, WorkingDirectory: tc.connection,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projectConfig := `{}`
+			if tc.project != "" {
+				projectConfig = `{"workingDirectory":"` + tc.project + `"}`
+			}
+			placement, err := resolveCoderPlacement(json.RawMessage(projectConfig),
+				[]domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: connectionConfig}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if placement.override == nil || placement.override.WorkingDirectory != tc.want {
+				t.Fatalf("override = %+v, want working directory %q", placement.override, tc.want)
+			}
+		})
+	}
+}
+
 // A client that sends only the base URL and a new token (an older desktop)
 // keeps the connection's stored settings instead of resetting them.
 func TestPutOrgCoderConfigKeepsStoredSettingsTheRequestOmits(t *testing.T) {

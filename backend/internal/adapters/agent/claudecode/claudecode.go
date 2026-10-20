@@ -240,6 +240,10 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if cfg.WorkspacePath == "" {
 		return nil
 	}
+	// An account launch reads its own folder's config, not ~/.claude.json.
+	if dir := strings.TrimSpace(cfg.Env[claudeConfigDirEnv]); dir != "" {
+		return ensureWorkspaceTrusted(filepath.Join(dir, ".claude.json"), cfg.WorkspacePath)
+	}
 	cfgPath, err := claudeConfigPath()
 	if err != nil {
 		return err
@@ -450,10 +454,16 @@ func resolveNativeWindowsClaude(path, goos string) string {
 
 func windowsNativeClaudeCandidatesForShim(shim string) []string {
 	dir := filepath.Dir(shim)
-	return []string{
+	candidates := []string{
 		filepath.Join(dir, "claude.exe"),
 		filepath.Join(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
 	}
+	// AO's managed launcher lives apart from the npm prefix it starts; the
+	// native executable is in the current managed release.
+	if current, ok := binaryutil.ManagedCurrentDir(shim, "claude-code"); ok {
+		candidates = append(candidates, filepath.Join(current, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"))
+	}
+	return candidates
 }
 
 func (p *Plugin) claudeBinary(ctx context.Context) (string, error) {
@@ -574,3 +584,18 @@ func ensureWorkspaceTrustedForOS(configPath, workspacePath, goos string) error {
 	}
 	return nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

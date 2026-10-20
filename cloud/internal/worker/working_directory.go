@@ -34,6 +34,13 @@ const WorkspacePathPlaceholder = "{{AO_WORKSPACE_DIR}}"
 // path it always showed, never the raw placeholder.
 const CapabilityWorkspacePathPlaceholder = "workspace.path-placeholder"
 
+// CapabilityMultiRepo, in a worker's bootstrap capabilities, means it checks
+// out a project's additional repositories on the session branch, honours
+// LaunchContext.AgentStartsIn and opens pull requests in any project
+// repository through the pull request socket's "repository" field. The control
+// plane only describes those to the agent for a worker that advertises it.
+const CapabilityMultiRepo = "workspace.multi-repo"
+
 // CapabilitiesHeader carries a worker's capabilities, comma separated, on its
 // requests (the reconnect GET has no body to report them in).
 const CapabilitiesHeader = "AO-Worker-Capabilities"
@@ -167,9 +174,12 @@ func ResolveWorkingDirectory(
 	if err != nil || want == "" || NormalizeRemoteURL(strings.TrimSpace(origin)) != want {
 		return ReuseDecision{}, fmt.Errorf("%w: %s is a checkout of a different repository", ErrWorkingDirectoryUnusable, dir)
 	}
-	stash, err := adoptExistingCheckout(ctx, runner, dir, sessionID, branch, defaultBranch)
+	stash, created, err := adoptExistingCheckout(ctx, runner, dir, sessionID, branch, defaultBranch)
 	if err != nil {
 		return ReuseDecision{}, fmt.Errorf("%w: %s: %v", ErrWorkingDirectoryUnusable, dir, err)
 	}
-	return record("adopted", ReuseDecision{Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash})
+	return record("adopted", ReuseDecision{
+		Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash, BranchCreated: created,
+		AdoptedAt: adoptedCommit(ctx, runner, dir, branch, created),
+	})
 }

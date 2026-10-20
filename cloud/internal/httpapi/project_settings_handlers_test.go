@@ -101,3 +101,47 @@ func TestProjectSettingsScriptsRequireAnAdmin(t *testing.T) {
 		})
 	}
 }
+
+// Instructions, repositories, the agent's start folder and the working
+// directory act in every member's later sessions like Setup and Cleanup, so
+// they are admin settings too.
+func TestProjectSettingsAgentAndRepositorySettingsRequireAnAdmin(t *testing.T) {
+	for _, body := range []string{
+		`{"config":{"agentRules":"Read AGENTS.md first."}}`,
+		`{"config":{"orchestratorRules":""}}`,
+		`{"config":{"repos":[]}}`,
+		`{"config":{"agentStartsIn":"parent"}}`,
+		`{"config":{"workingDirectory":"~/work/{repo}"}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			store := &projectScriptsAdminStore{adminErr: postgres.ErrForbidden}
+			s := New(Options{Store: store})
+			router := chi.NewRouter()
+			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", s.updateProjectSettings)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/orgs/00000000-0000-0000-0000-000000000001/projects/00000000-0000-0000-0000-000000000002/settings", strings.NewReader(body)))
+			if response.Code != http.StatusForbidden || store.calls != 0 || store.adminChecks != 1 {
+				t.Fatalf("status=%d calls=%d admin checks=%d body=%s", response.Code, store.calls, store.adminChecks, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestConfigSetsAdminProjectSettings(t *testing.T) {
+	for config, want := range map[string]bool{
+		``:                                       false,
+		`{"autoReview":true,"worker":{}}`:        false,
+		`{"coder":{"templateId":"t"}}`:           false,
+		`{"coder":{"extraRepos":[]}}`:            false,
+		`{"coder":{"extraRepos":[{"url":"x"}]}}`: true,
+		`{"postCreate":[]}`:                      true,
+		`{"agentRules":"x"}`:                     true,
+		`{"repos":[{"url":"x"}]}`:                true,
+		`{"agentStartsIn":"repository"}`:         true,
+		`{"workingDirectory":""}`:                true,
+	} {
+		if got := configSetsAdminProjectSettings(json.RawMessage(config)); got != want {
+			t.Errorf("%s = %v, want %v", config, got, want)
+		}
+	}
+}

@@ -67,11 +67,11 @@ export function ElicitationDock({
 	);
 }
 
-/** The dock's one-line header: what is being asked, and where you are in it. */
+/** The full question stays visible above its answers, alongside the step count. */
 function DockHeader({ id, title, pager }: { id?: string; title: string; pager?: string }) {
 	return (
-		<div className="flex min-h-8 items-center gap-2 px-3 py-2">
-			<p id={id} className="min-w-0 flex-1 text-xs font-medium leading-relaxed text-foreground line-clamp-2" title={title}>
+		<div className="flex min-h-8 items-start gap-2 px-3 py-2">
+			<p id={id} className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-foreground">
 				{title}
 			</p>
 			{pager ? (
@@ -185,10 +185,15 @@ function FormRequest({
 	const hasNextQuestion = questionGroups !== undefined && activeQuestion < questionGroups.length - 1;
 	const headerId = useId();
 
-	// A Claude question carries its own prompt, so the header asks it and the
-	// field below drops the legend that would otherwise repeat it verbatim.
-	const askedQuestion = questionGroups ? propertyLabel(visibleProperties[0]) : undefined;
-	const title = askedQuestion ?? activity.detail?.message ?? schema?.title ?? activity.summary;
+	// Claude puts a single prompt in message and each prompt of a multi-question
+	// form in its field description. The field title is only a short topic label.
+	const question = questionGroups ? visibleProperties[0] : undefined;
+	const prompt = question?.[1].description;
+	const title = question
+		? (typeof prompt === "string" && prompt.trim() ? prompt : undefined) ??
+			(questionGroups?.length === 1 ? activity.detail?.message : undefined) ??
+			propertyLabel(question)
+		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
 			? `${activeQuestion + 1} of ${questionGroups.length}`

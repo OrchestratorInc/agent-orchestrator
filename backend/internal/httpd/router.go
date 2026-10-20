@@ -82,6 +82,8 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)
 	mountMobile(r, deps.Mobile)
+	mountBrowserLive(r, deps.BrowserLive)
+	mountAwake(r, &controllers.AwakeController{Svc: deps.Awake})
 	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
 	api.Register(r)
 
@@ -224,6 +226,7 @@ func mountMobile(r chi.Router, c *controllers.MobileController) {
 	r.Post("/api/v1/mobile/secure-pairing", c.SecurePairing)
 	r.Post("/api/v1/mobile/keep-awake", c.KeepAwake)
 	r.Post("/api/v1/remote-host/account-token", c.IssueAccountToken)
+	r.Post("/api/v1/mobile/browser-control", c.BrowserRemoteAccess)
 }
 
 // mountMobileDevices registers the desktop-only mobile device roster. These sit
@@ -425,4 +428,22 @@ func daemonProbePayload(status string, cfg config.Config) map[string]any {
 		payload["appImagePath"] = appImage
 	}
 	return payload
+}
+
+// Wake policy can alter host power and remains desktop/loopback-only.
+func mountAwake(r chi.Router, c *controllers.AwakeController) {
+	r.Get("/api/v1/awake", c.Status)
+	r.Get("/api/v1/awake/observations", c.Observe)
+	r.Post("/api/v1/awake/sessions", c.Start)
+	r.Post("/api/v1/awake/sessions/{awakeId}/end", c.End)
+	r.Post("/api/v1/awake/sessions/{awakeId}/extend", c.Extend)
+	r.Put("/api/v1/awake/settings", c.Settings)
+	r.Put("/api/v1/awake/rules", c.Rules)
+	r.Post("/api/v1/awake/low-power/authorize", c.AuthorizeLowPower)
+	r.Post("/api/v1/awake/low-power/revoke", c.RevokeLowPower)
+	r.Post("/api/v1/awake/stop", c.Stop)
+	r.Post("/api/v1/awake/resume", c.Resume)
+	r.Post("/api/v1/awake/recover", c.Recover)
+	r.Delete("/api/v1/awake/history", c.ClearHistory)
+	r.Post("/api/v1/awake/downloads", c.Downloads)
 }

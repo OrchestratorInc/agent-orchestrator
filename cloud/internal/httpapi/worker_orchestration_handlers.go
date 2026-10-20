@@ -73,6 +73,7 @@ type createWorkerChildRequest struct {
 	Mode                        string   `json:"mode,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
+	Branch                      string   `json:"branch,omitempty"`
 }
 
 func (s *Server) listWorkerChildren(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +160,7 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
+	request.Branch = strings.TrimSpace(request.Branch)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
@@ -276,6 +278,7 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		domain.CreateSession{
 			Kind: "worker", Harness: request.Harness, DisplayName: request.DisplayName,
 			Prompt: request.Prompt, Mode: request.Mode, DeniedCommands: request.DeniedCommands,
+			Branch:   request.Branch,
 			Provider: plan.Provider, SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile: plan.ResourceProfile, BootstrapContext: plan.BootstrapContext,
 			Release: s.release,

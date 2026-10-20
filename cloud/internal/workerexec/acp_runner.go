@@ -119,11 +119,18 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			"type": "preset", "preset": "claude_code", "append": command.SystemPrompt,
 		}}
 	}
+	// Claude opens the sibling checkouts as additional directories, so it
+	// loads their CLAUDE.md as a terminal's --add-dir does. An agent that does
+	// not advertise the capability keeps the settings' directory access only.
+	var additionalDirectories []string
+	if turn.Harness == "claude-code" && initialized.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil {
+		additionalDirectories = command.AdditionalDirectories
+	}
 	var sessionID acp.SessionId
 	var configOptions []acp.SessionConfigOption
 	var modes *acp.SessionModeState
 	if turn.AgentSessionID != "" {
-		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
+		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
 		if loadErr != nil {
 			var requestErr *acp.RequestError
 			// The CLI builder's missing-transcript check only changes CLI args;
@@ -138,7 +145,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		}
 	}
 	if sessionID == "" {
-		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}})
+		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}})
 		if createErr != nil {
 			return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(stderr.String()))
 		}

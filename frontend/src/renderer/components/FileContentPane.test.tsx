@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -53,6 +53,66 @@ describe("FileContentPane", () => {
 		subscribeMock.mockClear();
 		highlightReadyMock.mockReturnValue(true);
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it.each(["recording.mp4", "voice.mp3"])("streams a current workspace media file %s in the Files view", async (path) => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path, status: "added", additions: 0, deletions: 0, size: 100_000_000, binary: true, deleted: false, content: "", contentTruncated: true, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
+		const media = await screen.findByLabelText(path);
+		expect(media).toHaveAttribute("src", expect.stringContaining(`/api/v1/sessions/sess-1/preview/files/${path}?raw=true`));
+		expect(media).toHaveAttribute("controls");
+		expect(getMock.mock.calls.some(([route]) => route.endsWith("/revision"))).toBe(false);
+	});
+
+	it.each(["recording.mp4", "voice.wav"])("preserves playback on an unchanged refetch and reloads a same-size replacement of %s", async (path) => {
+		const detail = { sessionId: "sess-1", path, status: "unmodified", additions: 0, deletions: 0, size: 1000, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false, fileFingerprint: "media-before" };
+		getMock.mockResolvedValue({ data: detail });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
+		const player = await screen.findByLabelText<HTMLMediaElement>(path);
+		const src = player.getAttribute("src");
+		player.currentTime = 12;
+		const client = subscribeMock.mock.calls[0]![1];
+		// A focus refetch gets a new load timestamp even when its file is unchanged.
+		const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+		onTestFinished(() => now.mockRestore());
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(screen.getByLabelText(path)).toBe(player);
+		expect(player).toHaveAttribute("src", src);
+		expect(player.currentTime).toBe(12);
+
+		getMock.mockResolvedValue({ data: { ...detail, fileFingerprint: "media-after" } });
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		await waitFor(() => expect(screen.getByLabelText(path)).not.toBe(player));
+		const replacement = screen.getByLabelText<HTMLMediaElement>(path);
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(replacement).not.toHaveAttribute("src", src);
+		expect(replacement.currentTime).toBe(0);
+	});
+
+	it("previews a workspace SVG while keeping its source editable", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "diagram.svg", status: "unmodified", additions: 0, deletions: 0, size: 6, binary: false, deleted: false, content: "<svg/>", contentTruncated: false, diff: "", diffTruncated: false, editable: true, fileFingerprint: "svg-1" } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="rendered" path="diagram.svg" sessionId="sess-1" split={false} />);
+		expect(await screen.findByRole("img", { name: "diagram.svg" })).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
+		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
+		expect(screen.getByRole("textbox", { name: "Edit diagram.svg" })).toHaveValue("<svg/>");
+	});
+
+	it("refreshes a workspace image after a same-size replacement", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "logo.png", status: "unmodified", additions: 0, deletions: 0, size: 100, binary: true, imageMediaType: "image/png", deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false, fileFingerprint: "same-metadata" } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="logo.png" sessionId="sess-1" split={false} />);
+		const image = await screen.findByRole("img", { name: "logo.png" });
+		const previousSrc = image.getAttribute("src");
+		const client = subscribeMock.mock.calls[0]![1] as QueryClient;
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		await waitFor(() => expect(screen.getByRole("img", { name: "logo.png" })).not.toHaveAttribute("src", previousSrc));
+	});
+
+	it.each([{ commitSha: "abc" }, { scope: "staged" as const }, { scope: "committed" as const }])("does not substitute live media for a historical view %j", async (options) => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "clip.mp4", status: "modified", additions: 0, deletions: 0, size: 100, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="clip.mp4" sessionId="sess-1" split={false} {...options} />);
+		await waitFor(() => expect(document.querySelector("code")).toBeInTheDocument());
+		expect(screen.queryByLabelText("clip.mp4")).not.toBeInTheDocument();
 	});
 
 	it("shows readable contents while the syntax grammar is still loading and watches a standalone file", async () => {

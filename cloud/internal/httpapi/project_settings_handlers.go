@@ -54,6 +54,9 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminForProjectScripts(w, r, orgID, patch.Config) {
 		return
 	}
+	if !s.validatePatchedProjectRepos(w, r, orgID, projectID, patch.Config) {
+		return
+	}
 	if parameters, patched := patchedCoderParameters(patch.Config); patched && len(parameters) > 0 {
 		// Template parameters belong to the template chosen at project creation
 		// and are checked (best effort) against what that template declares.
@@ -78,7 +81,10 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	project, err := store.UpdateProjectSettings(r.Context(), principalFrom(r), orgID, projectID, patch)
 	if errors.Is(err, postgres.ErrInvalid) {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		// The store wraps the reason as "invalid: <reason>"; show the reason
+		// alone, as the create endpoints do.
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error",
+			strings.TrimPrefix(err.Error(), postgres.ErrInvalid.Error()+": "))
 		return
 	}
 	if err != nil {
@@ -107,18 +113,21 @@ func patchedCoderParameters(config json.RawMessage) (map[string]string, bool) {
 }
 
 // requireAdminForProjectScripts lets only organization owners and admins set
-// a project's Setup or Cleanup commands (or clear them). They run in every
-// later session of the project, including other members' sessions with those
-// members' own credentials, so they are an admin setting like the Coder
-// connection. It reports whether the request may continue and writes the
-// error when not.
+// (or clear) the project settings that act in every later session of the
+// project, including other members' sessions with those members' own
+// credentials: the Setup and Cleanup commands, the agent and orchestrator
+// rules (instructions every agent follows), the repositories every session
+// checks out and may push to, where the agent starts, and the working
+// directory of a bring-your-own Coder workspace. They are admin settings like
+// the Coder connection. It reports whether the request may continue and writes
+// the error when not.
 func (s *Server) requireAdminForProjectScripts(w http.ResponseWriter, r *http.Request, orgID string, config json.RawMessage) bool {
-	if !configSetsProjectScripts(config) {
+	if !configSetsAdminProjectSettings(config) {
 		return true
 	}
 	store, ok := s.store.(orgAdminStore)
 	if !ok {
-		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Project scripts are unavailable.")
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Project settings are unavailable.")
 		return false
 	}
 	if err := store.RequireOrgAdmin(r.Context(), principalFrom(r), orgID); err != nil {
@@ -128,9 +137,18 @@ func (s *Server) requireAdminForProjectScripts(w http.ResponseWriter, r *http.Re
 	return true
 }
 
-// configSetsProjectScripts reports whether a project config (or settings
-// patch) carries the postCreate or preRemove key.
-func configSetsProjectScripts(config json.RawMessage) bool {
+// adminProjectSettingsKeys are the project config keys only an organization
+// owner or admin may set (see requireAdminForProjectScripts).
+var adminProjectSettingsKeys = []string{
+	"postCreate", "preRemove",
+	"agentRules", "orchestratorRules",
+	"repos", "agentStartsIn", "workingDirectory",
+}
+
+// configSetsAdminProjectSettings reports whether a project config (or
+// settings patch) carries one of adminProjectSettingsKeys, or a non-empty
+// legacy coder dev kit "extraRepos" list (which a create moves to "repos").
+func configSetsAdminProjectSettings(config json.RawMessage) bool {
 	if len(config) == 0 {
 		return false
 	}
@@ -138,7 +156,13 @@ func configSetsProjectScripts(config json.RawMessage) bool {
 	if json.Unmarshal(config, &keys) != nil {
 		return false
 	}
-	_, setup := keys["postCreate"]
-	_, cleanup := keys["preRemove"]
-	return setup || cleanup
+	for _, key := range adminProjectSettingsKeys {
+		if _, ok := keys[key]; ok {
+			return true
+		}
+	}
+	if coder, ok := domain.DecodeProjectCoderConfig(config); ok && len(coder.ExtraRepos) > 0 {
+		return true
+	}
+	return false
 }

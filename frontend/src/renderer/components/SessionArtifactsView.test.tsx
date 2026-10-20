@@ -145,6 +145,8 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /chart\.png/ }));
 		await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Version history" })).not.toBeInTheDocument());
+		await userEvent.click(screen.getByRole("button", { name: /chart\.png/ }));
+		expect(screen.queryByRole("menuitem", { name: "Copy contents" })).not.toBeInTheDocument();
 	});
 
 	it("shows the open artifact full screen, keeping the same viewer, until Escape", async () => {

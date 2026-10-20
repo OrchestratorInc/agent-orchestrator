@@ -2110,8 +2110,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDockerAgent := !strings.Contains(schema, "'docker-agent'")
 	needsFX := !strings.Contains(schema, "'fx'")
 	needsOpenCodeV2 := !strings.Contains(schema, "'opencode-v2'")
+	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMemcode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2235,6 +2236,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsDockerAgent {
 		repairs = append(repairs, replacement{"'fake'))", "'docker-agent', 'fake'))"})
 	}
+	if needsMemcode {
+		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2283,6 +2287,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
+	}
+	if !strings.Contains(schema, "'memcode'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
 	}
 	if !strings.Contains(schema, "'docker-agent'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Docker Agent")

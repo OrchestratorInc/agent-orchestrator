@@ -11,6 +11,7 @@ import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { fontScaleCap, iconSize, space, type } from "../tokens";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
@@ -105,6 +106,8 @@ export function ChatComposer({
 	onShowRequest,
 	onDismissRequest,
 	onRestoreRequest,
+	openingTurnId,
+	startingAgentName,
 }: {
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
@@ -154,6 +157,10 @@ export function ChatComposer({
 	onShowRequest(sequence: number): void;
 	onDismissRequest(): void;
 	onRestoreRequest(): void;
+	/** A starting session's brief, which the timeline shows as sent. */
+	openingTurnId?: string;
+	/** Set while the session starts, for the placeholder. */
+	startingAgentName?: string;
 }) {
 	const t = useTheme();
 	const router = useRouter();
@@ -241,7 +248,7 @@ export function ChatComposer({
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
 	const active = Boolean(activeTurn(snapshot));
-	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot), [snapshot]);
+	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
 	// Absent below 70%: a permanent token gauge is chrome nobody reads.
 	const contextMeter = contextMeterModel(snapshot.usage, Boolean(quotaActive));
@@ -587,8 +594,9 @@ export function ChatComposer({
 							const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
 							setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
 						}}
-						placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
+						placeholder={stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder}
 						placeholderTextColor={t.textFaint}
+						{...textSelectionColors(t)}
 						style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 						multiline
 						maxLength={40_000}

@@ -112,6 +112,7 @@ For code entry points:
 - Do not treat failed/unknown runtime probes as proof a session is dead.
 - Do not force-delete dirty registered worktrees.
 - Do not modify already-merged SQLite migrations. Add a new migration instead.
+- Create new SQLite migrations with `npm run migration:create -- <snake_case_name>` (UTC `YYYYMMDDHHMMSSsss` IDs); append the generated ID and filename to `shippedMigrations` in `migrate_burned_versions_test.go`.
 - Do not hand-edit `backend/internal/storage/sqlite/gen/*`; change `backend/internal/storage/sqlite/queries/*` or migrations and run `npm run sqlc`.
 - SQLite change events come from DB triggers into `change_log`; do not add parallel manual CDC emission from store methods unless the architecture changes explicitly.
 - Keep generated OpenAPI/API DTO drift in mind: controller response shapes live in `backend/internal/httpd/controllers/dto.go` and tests may assert CLI/HTTP wire compatibility.

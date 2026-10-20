@@ -2261,7 +2261,7 @@ func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
 	}
 }
 
-func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
+func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script>`), 0o644); err != nil {
@@ -2271,7 +2271,7 @@ func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
 		t.Fatalf("write css: %v", err)
 	}
 	s := svc.sessions["ao-1"]
-	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace}
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: "index.html"}
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -2310,6 +2310,89 @@ func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_PreviewHonorsSelectionInsteadOfRepositoryIndex(t *testing.T) {
+	for _, selected := range []string{"", "dist/app.html", "missing.html", "http://localhost:5173/app", "https://example.com/demo"} {
+		t.Run(selected, func(t *testing.T) {
+			svc := newFakeSessionService()
+			workspace := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(workspace, "dist"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range []string{"index.html", "dist/app.html"} {
+				if err := os.WriteFile(filepath.Join(workspace, file), []byte(file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := svc.sessions["ao-1"]
+			s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: selected}
+			svc.sessions["ao-1"] = s
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview", "")
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			var result controllers.SessionPreviewResponse
+			mustJSON(t, body, &result)
+			switch selected {
+			case "dist/app.html":
+				if result.Entry != selected || !strings.HasSuffix(result.PreviewURL, "/dist/app.html") {
+					t.Fatalf("preview=%+v", result)
+				}
+			case "", "missing.html":
+				if result.Entry != "" || result.PreviewURL != "" {
+					t.Fatalf("unselected preview=%+v", result)
+				}
+			default:
+				if result.Entry != "" || result.PreviewURL != selected {
+					t.Fatalf("URL preview=%+v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_PreviewArtifactOriginUsesArtifactFiles(t *testing.T) {
+	svc := newFakeSessionService()
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	for root, text := range map[string]string{workspace: "workspace", artifacts: "artifact"} {
+		for _, file := range []string{"index.html", "style.css", "test page (1).html", "__ao_artifacts__/index.html"} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, file)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, file), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	selected, err := previewutil.ArtifactFileURL("http://127.0.0.1:3002", "ao-1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: artifacts, PreviewURL: selected}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview", "")
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	var result controllers.SessionPreviewResponse
+	mustJSON(t, body, &result)
+	if result.Source != "artifact" || result.Entry != "index.html" {
+		t.Fatalf("preview=%+v", result)
+	}
+	for _, file := range []string{"index.html", "style.css", "test%20page%20%281%29.html"} {
+		body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview/artifacts/"+file, "")
+		if status != http.StatusOK || string(body) != "artifact" {
+			t.Fatalf("%s: status=%d body=%s", file, status, body)
+		}
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview/artifacts/../outside.html", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("traversal: status=%d body=%s", status, body)
+	}
+}
+
 func TestSessionsAPI_PreviewRejectsSessionIDTooLongForHostname(t *testing.T) {
 	svc := newFakeSessionService()
 	id := domain.SessionID(strings.Repeat("x", 143))
@@ -2317,7 +2400,7 @@ func TestSessionsAPI_PreviewRejectsSessionIDTooLongForHostname(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte("preview"), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
-	svc.sessions[id] = domain.Session{SessionRecord: domain.SessionRecord{ID: id, Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}}
+	svc.sessions[id] = domain.Session{SessionRecord: domain.SessionRecord{ID: id, Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: "index.html"}}}
 	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/"+string(id)+"/preview", "")
@@ -2780,6 +2863,76 @@ func TestSessionsAPI_PreviewOriginErrorContract(t *testing.T) {
 	svc.sessions["ao-1"] = s
 	body, status, _ := doPreviewOriginRequest(t, srv, validURL, "/")
 	assertErrorCode(t, body, status, http.StatusNotFound, "NO_PREVIEW_ENTRY")
+}
+
+func TestSessionsAPI_ArtifactMediaETagTracksRapidReplacements(t *testing.T) {
+	for _, name := range []string{"image.png", "video.webm", "audio.mp3"} {
+		t.Run(name, func(t *testing.T) {
+			srv, root := artifactFileServer(t, map[string]string{name: "first clip"})
+			file := filepath.Join(root, name)
+			modified := time.Date(2026, time.October, 17, 12, 0, 0, 100_000_000, time.UTC)
+			write := func(content string, stamp time.Time) {
+				t.Helper()
+				if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(file, stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			get := func(headers map[string]string) (*http.Response, string) {
+				t.Helper()
+				req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/files/"+name+"?source=artifact&raw=true", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Origin", "http://localhost:5173")
+				for key, value := range headers {
+					req.Header.Set(key, value)
+				}
+				resp, err := srv.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return resp, string(body)
+			}
+
+			write("first clip", modified)
+			first, body := get(nil)
+			etag, lastModified := first.Header.Get("ETag"), first.Header.Get("Last-Modified")
+			if first.StatusCode != http.StatusOK || body != "first clip" || etag == "" || lastModified == "" {
+				t.Fatalf("initial response: status=%d body=%q headers=%v", first.StatusCode, body, first.Header)
+			}
+			if first.Header.Get("Access-Control-Allow-Origin") != "http://localhost:5173" || first.Header.Get("Access-Control-Expose-Headers") != "ETag" {
+				t.Fatalf("ETag must be readable by the renderer: headers=%v", first.Header)
+			}
+			if first.Header.Get("Cache-Control") != "private, no-cache" {
+				t.Fatalf("metadata refreshes must revalidate: headers=%v", first.Header)
+			}
+			if unchanged, body := get(map[string]string{"If-None-Match": etag}); unchanged.StatusCode != http.StatusNotModified || body != "" || unchanged.Header.Get("ETag") != etag {
+				t.Fatalf("unchanged response: status=%d body=%q headers=%v", unchanged.StatusCode, body, unchanged.Header)
+			}
+			for _, replacement := range []string{"other clip", "a longer replacement clip"} {
+				// First change only subsecond mtime, then only size, within one HTTP second.
+				write(replacement, modified.Add(time.Millisecond))
+				fresh, body := get(map[string]string{"If-None-Match": etag, "If-Modified-Since": lastModified})
+				freshETag := fresh.Header.Get("ETag")
+				if fresh.StatusCode != http.StatusOK || body != replacement || freshETag == "" || freshETag == etag || fresh.Header.Get("Last-Modified") != lastModified {
+					t.Fatalf("same-second replacement: status=%d body=%q oldTag=%q headers=%v", fresh.StatusCode, body, etag, fresh.Header)
+				}
+				etag = freshETag
+			}
+			ranged, body := get(map[string]string{"Range": "bytes=2-5", "If-Range": etag})
+			if ranged.StatusCode != http.StatusPartialContent || body != "long" || ranged.Header.Get("ETag") != etag {
+				t.Fatalf("media range: status=%d body=%q headers=%v", ranged.StatusCode, body, ranged.Header)
+			}
+		})
+	}
 }
 
 func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {

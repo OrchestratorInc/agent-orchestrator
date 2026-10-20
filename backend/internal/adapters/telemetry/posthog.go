@@ -210,6 +210,27 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.session.waiting_input_entered": {
 		"state": {},
 	},
+	"ao.harness.update": {
+		"harness":       {},
+		"level":         {},
+		"live_sessions": {},
+		"result":        {},
+	},
+	"ao.harness.update_idle_wait": {
+		"harness":  {},
+		"sessions": {},
+		"wait_ms":  {},
+	},
+	"ao.harness.version_switch": {
+		"harness":    {},
+		"latency_ms": {},
+		"mode":       {},
+		"result":     {},
+	},
+	"ao.harness.stale_sessions": {
+		"harness":  {},
+		"sessions": {},
+	},
 	"ao.session.waiting_input_exited": {
 		"dwell_ms":  {},
 		"exited_to": {},

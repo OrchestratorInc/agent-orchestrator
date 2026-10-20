@@ -431,6 +431,13 @@ func resolveCoderPlacement(
 		WorkingDirectory:          cfg.WorkingDirectory,
 		ProtectSecretFiles:        cfg.ProtectsSecretFiles(),
 	}
+	// A project's own working directory (for example ~/work/{repo}) wins over
+	// the connection's, since where repositories live can differ per project.
+	// Like the connection's, it only applies when AO runs as the workspace user.
+	if directory := domain.ProjectWorkingDirectory(projectConfig); directory != "" &&
+		cfg.WorkerUser == domain.CoderWorkerUserWorkspace {
+		placement.override.WorkingDirectory = directory
+	}
 	return placement, nil
 }
 

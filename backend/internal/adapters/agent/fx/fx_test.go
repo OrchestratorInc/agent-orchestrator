@@ -162,7 +162,7 @@ func TestGetRestoreCommandUsesNativeSessionIDAndOverrides(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"env", "FX_MODEL=openai/gpt-5", "FX_PERMISSION_MODE=full-access", "fx", "resume", "native-fx-session"}
+	want := []string{"env", "FX_MODEL=openai/gpt-5", "FX_PERMISSION_MODE=full-access", "fx", "--resume", "native-fx-session"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("command = %#v, want %#v", got, want)
 	}
@@ -238,7 +238,7 @@ func TestRestorePreservesCatalogProviderSelection(t *testing.T) {
 		Config:  ports.AgentConfig{Model: "fx:codex:openai/shared"},
 		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-session"}},
 	})
-	want := []string{"env", "FX_PROVIDER=codex", "FX_MODEL=openai/shared", "fx", "resume", "native-session"}
+	want := []string{"env", "FX_PROVIDER=codex", "FX_MODEL=openai/shared", "fx", "--resume", "native-session"}
 	if err != nil || !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("restore = %v, %v, %v; want %v", got, ok, err, want)
 	}

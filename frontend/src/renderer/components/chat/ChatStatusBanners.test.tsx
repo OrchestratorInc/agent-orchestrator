@@ -1,7 +1,12 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+
+const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
+vi.mock("../../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { versionRefresh: versionRefreshSetting.enabled }, isLoading: false, error: undefined }),
+}));
 
 // Each of these answers a question the timeline structurally cannot, so the tests are
 // about what is said and when it is withheld — a banner for an ordinary state is noise
@@ -183,5 +188,32 @@ describe("McpServerBanner", () => {
 		expect(container).toBeEmptyDOMElement();
 		rerender(<McpServerBanner sessionId="mcp-healthy" servers={broken} />);
 		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
+});
+
+describe("VersionSwitchBanner", () => {
+	afterEach(() => { versionRefreshSetting.enabled = true; });
+
+	it("says nothing for a session on the installed release", () => {
+		const { container } = render(<VersionSwitchBanner />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("tells the user the session moves to the new release when idle", () => {
+		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Switching to v2.1.300…");
+	});
+
+	it("stays quiet when moving sessions is turned off", () => {
+		versionRefreshSetting.enabled = false;
+		const { container } = render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("explains a failed switch and that queued messages were kept", () => {
+		versionRefreshSetting.enabled = false;
+		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z", switchFailedAt: "2026-10-15T00:10:00Z" }} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't switch to v2.1.300");
+		expect(screen.getByRole("alert")).toHaveTextContent("queued messages are kept");
 	});
 });

@@ -77,7 +77,7 @@ beforeEach(() => {
 			return { agent, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
 		};
 		const coder = patch.config?.coder ? { ...(project.config.coder as object | undefined), ...patch.config.coder } : project.config.coder;
-		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } };
+		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } as CloudCpProject["config"] };
 		if (project.config.coder === undefined) delete project.config.coder;
 		for (const role of ["worker", "orchestrator"] as const) if (project.config[role] === undefined) delete project.config[role];
 		return { project };

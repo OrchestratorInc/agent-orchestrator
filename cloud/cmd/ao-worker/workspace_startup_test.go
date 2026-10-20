@@ -109,6 +109,11 @@ func TestCheckoutFailuresHaveTheirOwnStartupErrors(t *testing.T) {
 		!strings.Contains(checkout.Detail, "403") || strings.Contains(checkout.Detail, "abcdefghijklmnop") {
 		t.Fatalf("checkout failure = %+v", checkout)
 	}
+	branch := checkoutStartupFailure(fmt.Errorf("configure: %w: feature/x exists on the repository but could not be checked out from origin/feature/x: README.md would be overwritten", worker.ErrSessionBranchSwitch))
+	if branch.Status != worker.WorkspaceStartupFailed || !strings.Contains(branch.Message, "session's branch") ||
+		!strings.Contains(branch.Detail, "feature/x") || !strings.Contains(branch.Detail, "README.md") {
+		t.Fatalf("session branch failure = %+v", branch)
+	}
 }
 
 // A workspace that is ready is reported so a failure from an earlier attempt
