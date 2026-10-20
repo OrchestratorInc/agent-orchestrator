@@ -4,6 +4,7 @@ import { aoBridge } from "../../lib/bridge";
 import { newChatDraftScope, readChatSessionDraft } from "../../lib/chat-drafts";
 import { collectReportProblemDiagnostics, reportProblemDestinationUrl } from "../../lib/report-problem";
 import { useShell } from "../../lib/shell-context";
+import { captureRendererEvent } from "../../lib/telemetry";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { Button } from "../ui/button";
@@ -19,6 +20,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 	const [githubUrl, setGithubUrl] = useState("https://github.com/OrchestratorInc/agent-orchestrator/issues/new");
 	useEffect(() => {
 		if (!active) return;
+		void captureRendererEvent("ao.renderer.support_opened");
 		let cancelled = false;
 		void collectReportProblemDiagnostics().then((diagnostics) => {
 			if (!cancelled) setGithubUrl(reportProblemDestinationUrl(diagnostics));
@@ -26,11 +28,14 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 		return () => { cancelled = true; };
 	}, [active]);
 	const report = async () => {
+		const destination = daemonStatus.state === "ready" ? "agent" : "terminal";
+		let outcome: "succeeded" | "failed" = "failed";
 		setOpening(true);
 		setError(null);
 		try {
 			if (daemonStatus.state !== "ready") {
 				const result = await aoBridge.triage.launch();
+				outcome = result.ok ? "succeeded" : "failed";
 				if (!result.ok) setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : ""));
 				return;
 			}
@@ -43,9 +48,13 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 			ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, {
 				initialPrompt: result.prompt, displayName: t("report.action"),
 			});
+			outcome = "succeeded";
 		} catch {
 			setError(t("report.failed"));
-		} finally { setOpening(false); }
+		} finally {
+			setOpening(false);
+			void captureRendererEvent("ao.renderer.support_submitted", { destination, outcome });
+		}
 	};
 	return (
 		<div className="flex flex-col items-start gap-3">
@@ -56,14 +65,19 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 			{error ? <p role="alert" className="text-sm text-error">{error}</p> : null}
 			<div className="flex flex-wrap gap-4 text-sm">
 				{([
-					["report.github", githubUrl],
-					["report.discord", "https://discord.gg/WjKNa7EbB8"],
-					["report.email", "mailto:prasad@untrivial.ai?cc=prateek@untrivial.ai"],
-				] as const).map(([label, href]) => (
+					["report.github", githubUrl, "github"],
+					["report.discord", "https://discord.gg/WjKNa7EbB8", "discord"],
+					["report.email", "mailto:prasad@untrivial.ai?cc=prateek@untrivial.ai", "email"],
+				] as const).map(([label, href, destination]) => (
 					<a key={label} href={href} className="text-muted-foreground underline-offset-2 hover:underline"
 						onClick={(event) => {
 							event.preventDefault();
-							void aoBridge.app.openExternal(href).catch(() => setError(t("report.linkFailed")));
+							void aoBridge.app.openExternal(href).then(() => {
+								void captureRendererEvent("ao.renderer.support_submitted", { destination, outcome: "succeeded" });
+							}).catch(() => {
+								setError(t("report.linkFailed"));
+								void captureRendererEvent("ao.renderer.support_submitted", { destination, outcome: "failed" });
+							});
 						}}>{t(label)}</a>
 				))}
 			</div>
