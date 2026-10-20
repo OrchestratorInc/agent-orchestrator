@@ -518,10 +518,12 @@ type AgentAfterStartPromptBuilder interface {
 	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
-// AgentAfterStartPromptEncoder encodes the first turn for native terminal
-// input. AO retains the unencoded prompt for semantic acceptance checks.
-type AgentAfterStartPromptEncoder interface {
-	EncodeAfterStartPrompt(prompt string) (string, error)
+// AgentTerminalMessageEncoder encodes semantic messages for native terminal
+// input. AO calls it once at the guarded write boundary for nonempty TUI
+// messages, retaining the unencoded body for metadata and acceptance checks.
+// The encoder must reject unsafe input without returning its contents in errors.
+type AgentTerminalMessageEncoder interface {
+	EncodeTerminalMessage(message string) (string, error)
 }
 
 // AgentAfterStartCommand selects native TUI state before AO delivers the first

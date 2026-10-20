@@ -12,7 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestFirstTurnEncodingPreservesOneCompleteNativePaste(t *testing.T) {
+func TestTerminalMessageEncodingPreservesOneCompleteNativePaste(t *testing.T) {
 	p := New()
 	for name, prompt := range map[string]string{
 		"single line":      "Reply FIRST_OK.",
@@ -22,12 +22,18 @@ func TestFirstTurnEncodingPreservesOneCompleteNativePaste(t *testing.T) {
 		"empty":            "",
 	} {
 		t.Run(name, func(t *testing.T) {
-			encoded, err := p.EncodeAfterStartPrompt(prompt)
+			encoded, err := p.EncodeTerminalMessage(prompt)
 			if err != nil {
 				t.Fatal(err)
 			}
+			if prompt == "" {
+				if encoded != "" {
+					t.Fatal("Enter-only input must remain empty without paste framing")
+				}
+				return
+			}
 			if !strings.HasPrefix(encoded, "\x1b[200~") || !strings.HasSuffix(encoded, "\x1b[201~") {
-				t.Fatal("first turn must use one complete native bracketed paste")
+				t.Fatal("terminal message must use one complete native bracketed paste")
 			}
 			body := strings.TrimSuffix(strings.TrimPrefix(encoded, "\x1b[200~"), "\x1b[201~")
 			if body != prompt || strings.Count(encoded, "\x1b") != 2 {
@@ -40,7 +46,7 @@ func TestFirstTurnEncodingPreservesOneCompleteNativePaste(t *testing.T) {
 	}
 }
 
-func TestFirstTurnEncodingRejectsEmbeddedTerminalControlsWithoutContent(t *testing.T) {
+func TestTerminalMessageEncodingRejectsEmbeddedTerminalControlsWithoutContent(t *testing.T) {
 	const privateText = "PRIVATE_PAYLOAD_6553"
 	for name, control := range map[string]string{
 		"paste terminator": "\x1b[201~",
@@ -50,9 +56,9 @@ func TestFirstTurnEncodingRejectsEmbeddedTerminalControlsWithoutContent(t *testi
 		"bare escape":      "\x1b",
 	} {
 		t.Run(name, func(t *testing.T) {
-			encoded, err := New().EncodeAfterStartPrompt(privateText + control + "\nDo not submit.")
+			encoded, err := New().EncodeTerminalMessage(privateText + control + "\nDo not submit.")
 			if err == nil || encoded != "" {
-				t.Fatal("unsafe first turn must fail before terminal delivery")
+				t.Fatal("unsafe terminal message must fail before terminal delivery")
 			}
 			if strings.Contains(err.Error(), privateText) || strings.ContainsRune(err.Error(), '\x1b') {
 				t.Fatal("encoding error leaked prompt contents or terminal controls")

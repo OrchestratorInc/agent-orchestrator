@@ -12008,7 +12008,7 @@ type encodedAfterStartAgent struct {
 	confirmedPrompt string
 }
 
-func (a *encodedAfterStartAgent) EncodeAfterStartPrompt(prompt string) (string, error) {
+func (a *encodedAfterStartAgent) EncodeTerminalMessage(prompt string) (string, error) {
 	return "\x1b[200~" + prompt + "\x1b[201~", a.encodeErr
 }
 

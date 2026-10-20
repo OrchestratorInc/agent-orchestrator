@@ -42,8 +42,10 @@ seconds.
 Freebuff has no system-prompt input. AO sends its standing instructions with
 the task as one first turn, under `## AO Standing Instructions` and
 `## AO Task` headings. A restored conversation keeps them in its history.
-The turn uses Freebuff's native bracketed paste handler to preserve multiline
-text. Large turns appear as a native pasted-text attachment.
+AO terminal messages, including follow-ups and lifecycle notifications, use
+Freebuff's native bracketed paste handler to preserve multiline text. Large
+messages appear as a native pasted-text attachment. Terminal escape sequences
+in message text are rejected before writing to the terminal.
 AO confirms that Freebuff saved the complete user turn before reporting a
 successful spawn. A visible draft alone does not establish delivery; bounded
 Enter retries require a matching draft in the current native composer.

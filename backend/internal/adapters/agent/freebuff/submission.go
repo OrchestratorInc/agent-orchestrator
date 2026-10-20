@@ -15,15 +15,18 @@ import (
 )
 
 var _ ports.AgentAfterStartSubmitConfirmer = (*Plugin)(nil)
-var _ ports.AgentAfterStartPromptEncoder = (*Plugin)(nil)
+var _ ports.AgentTerminalMessageEncoder = (*Plugin)(nil)
 
-// EncodeAfterStartPrompt uses Freebuff's native paste handler rather than its
+// EncodeTerminalMessage uses Freebuff's native paste handler rather than its
 // per-key multiline editor, whose newline handler can overwrite batched text.
-func (*Plugin) EncodeAfterStartPrompt(prompt string) (string, error) {
-	if strings.ContainsRune(prompt, '\x1b') {
-		return "", errors.New("freebuff: first prompt cannot contain terminal escape sequences")
+func (*Plugin) EncodeTerminalMessage(message string) (string, error) {
+	if message == "" {
+		return "", nil
 	}
-	return "\x1b[200~" + prompt + "\x1b[201~", nil
+	if strings.ContainsRune(message, '\x1b') {
+		return "", errors.New("freebuff: terminal message cannot contain terminal escape sequences")
+	}
+	return "\x1b[200~" + message + "\x1b[201~", nil
 }
 
 // PrimesAfterStartSubmit is false because bracketed paste does not depend on
