@@ -2,7 +2,7 @@
 title: Hermes Agent
 ---
 
-AO runs the official Nous Research Hermes Agent classic interactive CLI on macOS, Linux and Windows. Install it from **Settings → Harnesses**: AO runs Hermes's official installer (`install.sh` on macOS and Linux, `install.ps1` on Windows) pinned to the v0.21.6 release AO is qualified against, and skips the installer's interactive setup. AO accepts Hermes v0.21.6 through v0.22.x at `~/.local/bin/hermes`, `~/.hermes/hermes-agent/.hermes/bin/hermes`, `/usr/local/bin/hermes`, `/usr/bin/hermes`, or `%LOCALAPPDATA%\hermes\bin\hermes.exe`. AO checks these locations directly rather than executing a `hermes` found earlier on `PATH`, and never installs a global plugin or edits your native profile.
+AO runs the official Nous Research Hermes Agent classic interactive CLI on macOS, Linux and Windows. Install it from **Settings → Harnesses**: on macOS and Linux AO prefers Homebrew's `hermes-agent` release bottle, and otherwise runs Hermes's official installer (`install.sh`, or `install.ps1` on Windows), which clones the GitHub repository, with its interactive setup skipped. Both install the latest release; updates use `brew upgrade` or native `hermes update`. AO accepts Hermes v0.21.6 and later at `/opt/homebrew/bin/hermes`, `/usr/local/bin/hermes`, `~/.local/bin/hermes`, `~/.hermes/hermes-agent/.hermes/bin/hermes`, `/usr/bin/hermes`, or `%LOCALAPPDATA%\hermes\bin\hermes.exe`. AO checks these locations directly rather than executing a `hermes` found earlier on `PATH`, and never installs a global plugin or edits your native profile.
 
 Use **Set up Hermes Agent** to run native `hermes model` in AO's terminal: choose a provider, then paste an API key or finish its OAuth flow. AO reports Hermes as configured when `<HERMES_HOME>/.env` holds an API key or `auth.json` holds an OAuth credential; presence is not verified authorization. `HERMES_HOME` defaults to `~/.hermes`, or `%LOCALAPPDATA%\hermes` on Windows.
 
@@ -12,4 +12,4 @@ Standing instructions append through the native ephemeral system prompt, preserv
 
 Each fresh launch starts a native conversation under a private AO title (`--continue <title> --create-if-missing`). Restore resumes that title without creating one, and Hermes follows it forward through context compression; a conversation renamed or deleted in Hermes fails restore instead of silently starting over. Native `/new` starts a separate conversation, and restore returns to the AO-titled one. Sticky and named profiles, managed configuration, and environment-expanded native instruction configuration are refused. Native Ctrl+C cancels a turn; AO Kill terminates the supervised runtime. Settlement can lag native idle by the normal 30-second observer interval.
 
-Chat, cross-interface handoff, reviewer mode, agent switching and in-place updates are unavailable.
+Chat, cross-interface handoff, reviewer mode and agent switching are unavailable.

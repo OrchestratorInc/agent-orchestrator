@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,9 +51,8 @@ const (
 )
 
 var (
-	// v0.21.6 through v0.22.x share the classic CLI chrome and session flags AO
-	// drives. Source installs append a date, channel, or commit after a space.
-	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v0\.(?:21\.(?:[6-9]|[1-9][0-9]+)|22\.[0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
+	// Source and Homebrew installs append a date, channel, or commit after a space.
+	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
 	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 )
@@ -70,7 +70,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	timedOut := false
 	// Probe only the official installers' locations. A PATH-first --version probe
 	// would execute an unrelated earlier binary during passive agent discovery.
-	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/usr/local/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
+	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
 		{".local", "bin", "hermes"},
 		{".hermes", "hermes-agent", ".hermes", "bin", "hermes"},
 		{".hermes", "hermes-agent", ".venv", "bin", "hermes"},
@@ -93,12 +93,35 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 			return false
 		}
 		firstLine, _, _ := strings.Cut(string(b), "\n")
-		return err == nil && nativeVersionLine.MatchString(strings.TrimSuffix(firstLine, "\r"))
+		return err == nil && supportedNativeVersion(strings.TrimSuffix(firstLine, "\r"))
 	}})
 	if err != nil && timedOut {
 		return "", fmt.Errorf("hermes: native identity check timed out: %w", err)
 	}
 	return path, err
+}
+
+// minNativeVersion is the first release with the --continue <title>
+// --create-if-missing session flags and classic CLI chrome AO drives.
+var minNativeVersion = [3]int{0, 21, 6}
+
+// supportedNativeVersion accepts a Hermes --version first line at or above
+// minNativeVersion.
+func supportedNativeVersion(line string) bool {
+	m := nativeVersionLine.FindStringSubmatch(line)
+	if m == nil {
+		return false
+	}
+	for i, min := range minNativeVersion {
+		part, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return false
+		}
+		if part != min {
+			return part > min
+		}
+	}
+	return true
 }
 
 // GetConfigSpec implements the scoped native adapter contract.

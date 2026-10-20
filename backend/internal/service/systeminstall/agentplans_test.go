@@ -334,16 +334,16 @@ func TestGooseWindowsUsesPowerShellInstallerCommand(t *testing.T) {
 	}
 }
 
-func TestHermesUsesPinnedOfficialInstallerOnEveryOS(t *testing.T) {
+func TestHermesPrefersHomebrewAndFallsBackToOfficialInstaller(t *testing.T) {
 	for _, tc := range []struct {
 		goos, shell, url string
 		args             []string
 	}{
-		{"darwin", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--commit", hermesQualifiedCommit, "--non-interactive"}},
-		{"linux", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--commit", hermesQualifiedCommit, "--non-interactive"}},
-		{"windows", "powershell.exe", "https://hermes-agent.nousresearch.com/install.ps1", []string{"-Commit", hermesQualifiedCommit, "-NonInteractive"}},
+		{"darwin", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"linux", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"windows", "powershell.exe", "https://hermes-agent.nousresearch.com/install.ps1", []string{"-NonInteractive"}},
 	} {
-		t.Run(tc.goos, func(t *testing.T) {
+		t.Run(tc.goos+" without Homebrew", func(t *testing.T) {
 			plan := newTestService(tc.goos, tc.shell).planAgent(TargetHermes)
 			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
 				t.Fatalf("Hermes plan = %+v, want available official installer", plan)
@@ -355,6 +355,13 @@ func TestHermesUsesPinnedOfficialInstallerOnEveryOS(t *testing.T) {
 				t.Fatalf("display omits installer arguments: %q", displayCommand(plan))
 			}
 		})
+	}
+	// The official installer clones GitHub, so Homebrew's release bottle wins.
+	s := newTestService("darwin", "brew", "bash")
+	s.installCapabilities = installCapabilitiesStub{homebrewPrefix: "/opt/homebrew", writable: true}
+	plan := s.planAgent(TargetHermes)
+	if plan.Unsupported || plan.Method != "homebrew" || plan.Package != "hermes-agent" {
+		t.Fatalf("Hermes plan with Homebrew = %+v, want homebrew hermes-agent", plan)
 	}
 }
 

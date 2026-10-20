@@ -592,9 +592,14 @@ func operationPlanFor(plans map[string]Plan, method string) Plan {
 	return Plan{Method: method, Unsupported: true, Reason: "This installation method is no longer detected."}
 }
 
+// lastResortInstallers are official installers that clone a source repository
+// rather than fetch a release artifact, so an available package manager is
+// recommended ahead of them.
+var lastResortInstallers = map[Target]bool{TargetHermes: true}
+
 func recommendedPlanIndex(plans []Plan) int {
 	for index, plan := range plans {
-		if plan.Method == "official-installer" && !plan.Unsupported {
+		if plan.Method == "official-installer" && !plan.Unsupported && !lastResortInstallers[plan.Target] {
 			return index
 		}
 	}
