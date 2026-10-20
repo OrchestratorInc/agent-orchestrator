@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
@@ -10,15 +10,15 @@ const h = vi.hoisted(() => ({ daemonState: "ready", navigate: vi.fn() }));
 vi.mock("../../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: h.daemonState } }) }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => h.navigate }));
 vi.mock("../NewTaskDialog", () => ({
-	NewTaskDialog: ({ open, projectId, initialPrompt, displayName }: { open: boolean; projectId?: string; initialPrompt?: string; displayName?: string }) => open
-		? <div role="dialog" data-project={projectId} data-name={displayName}><textarea aria-label="Prompt" defaultValue={initialPrompt} /></div> : null,
+	NewTaskDialog: ({ open, projectId, initialPrompt, displayName, onContentChange }: { open: boolean; projectId?: string; initialPrompt?: string; displayName?: string; onContentChange?: (dirty: boolean) => void }) => open
+		? <div role="dialog" data-project={projectId} data-name={displayName}><textarea aria-label="Prompt" defaultValue={initialPrompt} onChange={(event) => onContentChange?.(!!event.target.value.trim())} /></div> : null,
 }));
 function renderReport(active = true) {
 	render(<QueryClientProvider client={new QueryClient()}><ReportProblemContent active={active} /><GlobalNewTaskDialog /></QueryClientProvider>);
 }
 beforeEach(() => {
 	h.daemonState = "ready";
-	useUiStore.setState({ newTaskRequest: null, settingsModal: { scope: "global", section: "help" } });
+	useUiStore.setState({ newTaskRequest: null, newTaskDialogHasContent: false, settingsModal: { scope: "global", section: "help" } });
 });
 afterEach(() => vi.restoreAllMocks());
 describe("Report a problem", () => {
@@ -33,19 +33,36 @@ describe("Report a problem", () => {
 		expect(screen.getByLabelText("Prompt")).toHaveValue("Read /home/me/.ao/triage/context.md");
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
+	it.each(["", "keep this draft"])("handles an existing composer containing %s", async (draft) => {
+ const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "triage prompt", dir: "/triage" });
+ renderReport();
+ act(() => useUiStore.getState().requestNewTask("project"));
+ await screen.findByRole("dialog");
+ fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: draft } });
+ fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+ if (draft) {
+  expect(await screen.findByRole("alert")).toHaveTextContent("Close the open New agent dialog first.");
+  expect(screen.getByLabelText("Prompt")).toHaveValue(draft);
+  expect(useUiStore.getState().settingsModal).not.toBeNull();
+  expect(prepare).not.toHaveBeenCalled();
+ } else {
+  await waitFor(() => expect(screen.getByLabelText("Prompt")).toHaveValue("triage prompt"));
+  expect(useUiStore.getState().settingsModal).toBeNull();
+ }
+ });
 	it("uses Auto terminal fallback when the daemon is down", async () => {
 		h.daemonState = "stopped";
-		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "No terminal was found." });
+		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "report.terminalFailed" });
 		const prepare = vi.spyOn(aoBridge.triage, "prepare");
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("No terminal was found.");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open a terminal. Try again.");
 		expect(launch).toHaveBeenCalledWith(); expect(prepare).not.toHaveBeenCalled();
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 	it("shows preparation failures and keeps settings open", async () => {
-		vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: false, error: "Could not prepare the report." });
+		vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: false, error: "report.prepareFailed" });
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not prepare the report.");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not prepare the report. Try again.");
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 	});
@@ -55,7 +72,7 @@ describe("Report a problem", () => {
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		expect(screen.getByRole("button", { name: "Opening..." })).toBeDisabled();
 		reject(new Error("IPC unavailable"));
-		expect(await screen.findByRole("alert")).toHaveTextContent("IPC unavailable");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not start the report. Try again.");
 		expect(screen.getByRole("button", { name: "Report a problem" })).toBeEnabled();
 	});
 	it("shows one action and enabled secondary links", () => {

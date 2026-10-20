@@ -7,7 +7,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
+import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
@@ -57,7 +57,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// One draft per host, so switching project keeps what was typed.
 	const hostKey = hostId ?? "local";
 	const draftId = `new-chat:${hostKey}`;
-	const draftScope = useMemo(() => ({ sessionId: draftId, incarnation: draftId }), [draftId]);
+	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();

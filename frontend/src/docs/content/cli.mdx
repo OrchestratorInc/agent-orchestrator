@@ -264,3 +264,11 @@ Lets your other devices use this machine through its authenticated remote listen
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
 
 All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.
+
+## Report a problem
+
+Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+or Codex to help draft a report, even with the daemon down. Files go under
+`$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`. After the agent exits,
+review the text and answer `[y/N]` before posting. Use `--no-launch` to prepare
+files only, or `--agent claude|codex` to choose an installed agent.
