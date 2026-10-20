@@ -212,6 +212,18 @@ func TestUnsupportedTurnSettingsAreRejected(t *testing.T) {
 	}
 }
 
+func TestSessionOptionsLeaveDefaultModelToNativeConfig(t *testing.T) {
+	for _, model := range []string{"", "default", " default "} {
+		if options := sessionOptions(ports.ChatTurnSettings{Model: model}); options != nil {
+			t.Fatalf("%q sent options %+v", model, options)
+		}
+	}
+	want := []acpdriver.SessionOption{{ID: "model", Value: "model:main"}}
+	if got := sessionOptions(ports.ChatTurnSettings{Model: "model:main"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %+v, want %+v", got, want)
+	}
+}
+
 func clearProviderKeys(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"} {
@@ -225,9 +237,12 @@ func TestConfigureWritesDefaultConfigFromProviderKey(t *testing.T) {
 	clearProviderKeys(t)
 	t.Setenv(dockeragent.ConfigEnv, "")
 	cfg := acpdriver.LaunchConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: t.TempDir(), Env: map[string]string{"GEMINI_API_KEY": "secret-value-123"}}
-	args, _, err := configure(context.Background(), cfg)
+	args, env, err := configure(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if env["GOOGLE_API_KEY"] != "secret-value-123" {
+		t.Fatalf("GEMINI_API_KEY not passed on as GOOGLE_API_KEY: %v", env)
 	}
 	var config string
 	for i, arg := range args {

@@ -59,6 +59,12 @@ var AllHarnesses = []AgentHarness{
 	HarnessCommandCode, HarnessDockerAgent,
 }
 
+// ChatOnly reports whether h has no terminal interface, so every session on it
+// runs in Chat.
+func (h AgentHarness) ChatOnly() bool {
+	return h == HarnessUnreal || h == HarnessDockerAgent
+}
+
 // IsKnown reports whether h is one of the supported harnesses.
 func (h AgentHarness) IsKnown() bool {
 	for _, k := range AllHarnesses {

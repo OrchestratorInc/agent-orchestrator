@@ -2044,7 +2044,7 @@ func TestDockerAgentDefaultsToChatAndNeverFallsBackToTerminal(t *testing.T) {
 			mgr.defaults = fixedSessionModeDefaults(domain.SessionModeTUI)
 			rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent, RequestedMode: requested})
 			if requested == domain.SessionModeTUI {
-				if !errors.Is(err, ports.ErrChatUnsupported) {
+				if !errors.Is(err, ErrTerminalUnsupported) || errors.Is(err, ports.ErrChatUnsupported) {
 					t.Fatalf("TUI error=%v", err)
 				}
 				if len(st.sessions) != 0 {
@@ -2068,15 +2068,23 @@ func TestDockerAgentDefaultsToChatAndNeverFallsBackToTerminal(t *testing.T) {
 	}
 }
 
-func TestDockerAgentRejectsEffortBeforeSessionAllocation(t *testing.T) {
+func TestDockerAgentRejectsOnlyExplicitEffortBeforeSessionAllocation(t *testing.T) {
 	for _, override := range []bool{false, true} {
 		mgr, st, runtime := newChatManager(&recordingLauncher{})
-		_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
 			ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent,
 			AgentConfig: ports.AgentConfig{Effort: "high"}, EffortOverride: override,
 		})
+		if !override {
+			// Inherited or unflagged effort clears silently, like every other
+			// harness without an effort setting.
+			if err != nil || rec.Metadata.Effort != "" {
+				t.Fatalf("inherited effort: rec=%+v err=%v", rec, err)
+			}
+			continue
+		}
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
-			t.Fatalf("override=%v error=%v", override, err)
+			t.Fatalf("override error=%v", err)
 		}
 		if len(st.sessions) != 0 || runtime.created != 0 {
 			t.Fatal("unsupported effort allocated session or terminal runtime")

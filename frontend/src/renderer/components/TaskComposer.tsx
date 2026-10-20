@@ -80,6 +80,13 @@ const CHAT_PREFLIGHT_CODES = new Set([
 	"CHAT_AUTH_REQUIRED",
 ]);
 
+// Harnesses without a terminal interface; mirrors the backend's ChatOnly.
+const CHAT_ONLY_AGENTS = new Set(["unreal-agent", "docker-agent"]);
+
+function isChatOnlyAgent(agent: string | null | undefined): boolean {
+	return Boolean(agent && CHAT_ONLY_AGENTS.has(agent));
+}
+
 const READINESS_RECONCILE_CODES = new Set(["AGENT_BINARY_NOT_FOUND", "AGENT_AUTH_REQUIRED", "CHAT_AUTH_REQUIRED"]);
 
 function cancelTaskPreparation(token: string, hostId?: string): void {
@@ -703,7 +710,7 @@ export function TaskComposer({
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && selectedAgent !== "docker-agent" && interfaceMode !== "tui" &&
+					: !isChatOnlyAgent(selectedAgent) && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -811,9 +818,9 @@ export function TaskComposer({
 				modelWarning,
 				onFallbackAction: (brief) =>
 					void (fallbackAction === "bypass-permissions"
-						? submitTask(brief, (selectedAgent === "unreal-agent" || selectedAgent === "docker-agent") ? "chat" : undefined, "bypass-permissions")
+						? submitTask(brief, isChatOnlyAgent(selectedAgent) ? "chat" : undefined, "bypass-permissions")
 						: submitTask(brief, "tui")),
-				onSubmit: (brief) => void submitTask(brief, (selectedAgent === "unreal-agent" || selectedAgent === "docker-agent") ? "chat" : requiresTuiFallback ? "tui" : undefined),
+				onSubmit: (brief) => void submitTask(brief, isChatOnlyAgent(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}

@@ -279,6 +279,13 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
 	}
+	if qualified, ok := qualifiedVersions[target]; ok {
+		// Chat admission refuses every other release, so the qualified one is
+		// the only version worth reporting, whatever the registry's latest.
+		if pinned, ok := scheme.parse(qualified); ok {
+			parsedLatest = pinned
+		}
+	}
 	comparison, versionsComparable := scheme.compare(current, parsedLatest)
 	if !versionsComparable {
 		advisory.Reason = UpdateReasonChannelUnconfirmed
@@ -288,12 +295,6 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, nil
 	}
 	advisory.LatestVersion = parsedLatest.display
-	if qualified, ok := qualifiedVersions[target]; ok && current.display == qualified && comparison < 0 {
-		// Newer releases are refused at launch until qualified, so updating
-		// would break the harness. Report the qualified release as current.
-		advisory.LatestVersion = current.display
-		comparison = 0
-	}
 	switch {
 	case comparison < 0:
 		advisory.Status = UpdateStatusBehindLatest
@@ -309,7 +310,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 }
 
 // qualifiedVersions pins harnesses whose integration admits only one native
-// release; AO does not offer updates past it.
+// release; advisories compare against it instead of the registry's latest.
 var qualifiedVersions = map[Target]string{
 	TargetDockerAgent: "1.150.0",
 }

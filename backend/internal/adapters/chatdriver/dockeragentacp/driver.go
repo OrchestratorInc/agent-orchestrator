@@ -59,18 +59,18 @@ func preflight(ctx context.Context) error {
 }
 
 func validateEnvironment(ctx context.Context, env map[string]string) error {
-	_, err := nativeConfig(ctx, env)
+	_, _, err := nativeConfig(ctx, env)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 	return nil
 }
 
-// nativeConfig returns the user's selected config, or "" when AO's generated
-// default applies; the default needs a provider key it can use.
-func nativeConfig(ctx context.Context, env map[string]string) (string, error) {
+// nativeConfig returns the user's selected config, or "" and AO's rendered
+// default when none is selected; the default needs a provider key it can use.
+func nativeConfig(ctx context.Context, env map[string]string) (string, []byte, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	config := os.Getenv(dockeragent.ConfigEnv)
 	if value, ok := env[dockeragent.ConfigEnv]; ok {
@@ -78,29 +78,30 @@ func nativeConfig(ctx context.Context, env map[string]string) (string, error) {
 	}
 	config = strings.TrimSpace(config)
 	if config == "" {
-		if _, err := dockeragent.DefaultConfig(env); err != nil {
-			return "", err
+		defaultConfig, err := dockeragent.DefaultConfig(env)
+		if err != nil {
+			return "", nil, err
 		}
-		return "", nil
+		return "", defaultConfig, nil
 	}
 	if !filepath.IsAbs(config) {
-		return "", fmt.Errorf("%s must name an absolute existing Docker Agent YAML config", dockeragent.ConfigEnv)
+		return "", nil, fmt.Errorf("%s must name an absolute existing Docker Agent YAML config", dockeragent.ConfigEnv)
 	}
 	info, err := os.Stat(config)
 	if err != nil {
-		return "", fmt.Errorf("docker agent configuration: %w", err)
+		return "", nil, fmt.Errorf("docker agent configuration: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("docker agent configuration must be a regular file")
+		return "", nil, fmt.Errorf("docker agent configuration must be a regular file")
 	}
-	return config, nil
+	return config, nil, nil
 }
 
 func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	if err := preflight(ctx); err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
-	config, err := nativeConfig(ctx, cfg.Env)
+	config, defaultConfig, err := nativeConfig(ctx, cfg.Env)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
@@ -115,10 +116,6 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		return nil, nil, err
 	}
 	if config == "" {
-		defaultConfig, err := dockeragent.DefaultConfig(cfg.Env)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
-		}
 		config = filepath.Join(dir, "agent.yaml")
 		if err := os.WriteFile(config, defaultConfig, 0o600); err != nil {
 			return nil, nil, err
@@ -152,7 +149,9 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	}
 	hook := "cat -- " + shellQuote(contextPath)
 	args := []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", cfg.WorkspacePath, "--hook-session-start", hook}
-	return args, map[string]string{"TELEMETRY_ENABLED": "false"}, nil
+	env := dockeragent.ProviderEnv(cfg.Env)
+	env["TELEMETRY_ENABLED"] = "false"
+	return args, env, nil
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
@@ -169,7 +168,9 @@ func sessionMode(mode ports.PermissionMode) string {
 }
 
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
-	if model := strings.TrimSpace(settings.Model); model != "" {
+	// "default" is the catalog placeholder, not a configured model name, so
+	// the config's own default model applies.
+	if model := strings.TrimSpace(settings.Model); model != "" && model != "default" {
 		return []acpdriver.SessionOption{{ID: "model", Value: model}}
 	}
 	return nil
