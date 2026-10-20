@@ -393,6 +393,10 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	}
 	_ = json.Unmarshal(payload, &p)
 	observedPrompt := firstHookValue(p.Prompt, p.UserPrompt, p.UserPromptCamel)
+	coordinationPrompt := observedPrompt
+	if agent == domain.HarnessClaudeCode {
+		coordinationPrompt = normalizeClaudePastedPrompt(observedPrompt)
+	}
 	var userPrompt, assistant, turnID string
 	origin := domain.ConversationCheckpointOriginUnknown
 	// Conversation checkpoints are trusted only at the main-turn boundaries that
@@ -430,14 +434,14 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	// AO's own handoff request and continuation kickoff are coordination turns,
 	// not the latest real user instruction. They remain in provider history but
 	// must not overwrite deterministic user intent.
-	if isAOCoordinationMessage(observedPrompt) {
+	if isAOCoordinationMessage(coordinationPrompt) {
 		userPrompt = ""
 		assistant = ""
 		if event == "user-prompt-submit" || event == "stop" {
 			origin = domain.ConversationCheckpointOriginCoordination
 		}
 	}
-	coordinationID, _ := domain.CoordinationDeliveryID(observedPrompt)
+	coordinationID, _ := domain.CoordinationDeliveryID(coordinationPrompt)
 	return hookConversationSnapshot{
 		ProviderTurnID:        turnID,
 		LatestUserPrompt:      capHookText(userPrompt, maxHookInteractionLen),
@@ -446,6 +450,54 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 		CoordinationID:        coordinationID,
 		TranscriptPath:        capHookText(firstHookValue(p.TranscriptPath, p.TranscriptPathCamel), maxHookTranscriptPath),
 	}
+}
+
+var claudePastedContentPrefix = regexp.MustCompile(`^<pasted_content id="([A-Za-z0-9_-]+)">`)
+var claudePastedContentClosingSuffix = regexp.MustCompile(`</pasted_content id="([A-Za-z0-9_-]+)">$`)
+
+// normalizeClaudePastedPrompt removes only Claude's leading paste wrapper.
+// A report envelope can continue after the pasted segment, so keep that suffix.
+// Human text before the wrapper or inside it still precedes the report envelope.
+func normalizeClaudePastedPrompt(prompt string) string {
+	match := claudePastedContentPrefix.FindStringSubmatch(prompt)
+	if match == nil {
+		return prompt
+	}
+	content := strings.TrimPrefix(prompt, match[0])
+	before, after, ok := strings.Cut(content, `</pasted_content id="`+match[1]+`">`)
+	if !ok {
+		before, after, ok = strings.Cut(content, "</pasted_content>")
+	}
+	if !ok {
+		return prompt
+	}
+	return before + after
+}
+
+func reportDeliveryHasOnlyPastedClosers(value string) bool {
+	const reportClose = "</ao-report-delivery>"
+	closeAt := strings.Index(value, reportClose)
+	if closeAt < 0 {
+		return false
+	}
+	prefix := value[:closeAt]
+	suffix := strings.TrimSpace(value[closeAt+len(reportClose):])
+	closedIDs := make(map[string]int)
+	for suffix != "" {
+		match := claudePastedContentClosingSuffix.FindStringSubmatch(suffix)
+		if match == nil {
+			return false
+		}
+		id := match[1]
+		opening := `<pasted_content id="` + id + `">`
+		closing := `</pasted_content id="` + id + `">`
+		if strings.Count(prefix, opening) <= strings.Count(prefix, closing)+closedIDs[id] {
+			return false
+		}
+		closedIDs[id]++
+		suffix = strings.TrimSpace(strings.TrimSuffix(suffix, match[0]))
+	}
+	return true
 }
 
 func firstHookValue(values ...string) string {
@@ -459,8 +511,14 @@ func firstHookValue(values ...string) string {
 
 func isAOCoordinationMessage(value string) bool {
 	value = strings.TrimSpace(value)
-	_, reportDelivery := domain.CoordinationDeliveryID(value)
-	return reportDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
+	if _, reportDelivery := domain.ReportDeliveryID(value); reportDelivery {
+		// A report envelope may share a prompt with a human instruction. Keep
+		// the delivery ID for acknowledgement, but only classify the whole
+		// prompt as coordination when only Claude paste closers follow it.
+		return reportDeliveryHasOnlyPastedClosers(value)
+	}
+	_, sessionDelivery := domain.CoordinationDeliveryID(value)
+	return sessionDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
 		strings.HasPrefix(value, "AO transferred the previous agent's context in hidden system instructions.")
 }
 
