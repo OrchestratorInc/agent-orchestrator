@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AgentAvatar } from "./AgentAvatar";
+import freebuffLogo from "../assets/agents/freebuff.png";
 import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
@@ -17,6 +18,10 @@ describe("AgentAvatar", () => {
 	it("renders the bundled Memcode mark", () => {
 		render(<AgentAvatar provider="memcode" />);
 		expect(screen.getByRole("img", { name: "memcode" })).toHaveAttribute("src", memcodeLogo);
+	});
+	it("renders the bundled Freebuff mark", () => {
+		render(<AgentAvatar provider="freebuff" />);
+		expect(screen.getByRole("img", { name: "freebuff" })).toHaveAttribute("src", freebuffLogo);
 	});
 	it("renders the official fx light and dark marks under one accessible name", () => {
 		render(<AgentAvatar provider="fx" />);

@@ -344,3 +344,23 @@ func TestMemcodeAdapterIsSelectable(t *testing.T) {
 		t.Fatal("missing TUI agent")
 	}
 }
+
+func TestFreebuffAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("freebuff")
+	if !ok || !domain.HarnessFreebuff.IsKnown() {
+		t.Fatal("Freebuff is not selectable")
+	}
+	if adapter.Manifest().Name != "Freebuff" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
+	if _, ok := adapter.(ports.AgentAuthChecker); !ok {
+		t.Fatal("missing auth status probe")
+	}
+}
