@@ -16235,6 +16235,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - freebuff
           - fake
           type: string
         approvalMode:
@@ -16936,6 +16937,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - freebuff
           - cloudflared
           type: string
         updatedAt:
@@ -20285,6 +20287,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - freebuff
           type: string
         issueId:
           type: string

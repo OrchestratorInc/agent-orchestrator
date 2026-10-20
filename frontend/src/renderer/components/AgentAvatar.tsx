@@ -50,6 +50,7 @@ import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
+import freebuffLogo from "../assets/agents/freebuff.png";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
@@ -94,6 +95,7 @@ const LOGOS: AgentLogoSources = {
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
 	memcode: memcodeLogo,
+	freebuff: freebuffLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
 	kiro: kiroLogo,
