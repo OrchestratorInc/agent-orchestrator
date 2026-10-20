@@ -91,18 +91,55 @@ func TestBeginStartupSeedsCanonicalModelAndNormalizesNull(t *testing.T) {
 	}
 }
 
-func TestBeginStartupPreservesNewerMigrationStamp(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"freebuffModelDefaultMigration":"future-native-migration"}`), 0600); err != nil {
-		t.Fatal(err)
+func TestBeginStartupMarksExplicitPickWithExactNativeMigrationStamp(t *testing.T) {
+	// Native 0.2.30/0.2.32 compare this stamp by equality, not presence or
+	// chronology. Any other saved stamp migrates the previous DeepSeek default.
+	const nativeStamp = "glm-5.3-flash-2026-09-05"
+	for name, input := range map[string]string{
+		"missing":           `{}`,
+		"current":           `{"freebuffModelDefaultMigration":"glm-5.3-flash-2026-09-05"}`,
+		"old string":        `{"freebuffModelDefaultMigration":"prior-default-migration"}`,
+		"noncurrent string": `{"freebuffModelDefaultMigration":"unknown-migration"}`,
+		"future string":     `{"freebuffModelDefaultMigration":"future-native-migration"}`,
+		"blank":             `{"freebuffModelDefaultMigration":"   "}`,
+		"invalid type":      `{"freebuffModelDefaultMigration":42}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(input), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			release, err := New().BeginStartup(context.Background(), startupConfig("session", dir, "deepseek/deepseek-v4-flash"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			settings := readStartupSettings(t, dir)
+			if settings["freebuffModel"] != "deepseek/deepseek-v4-flash" || settings["freebuffModelDefaultMigration"] != nativeStamp {
+				t.Fatalf("explicit pick remains subject to native default migration: %v", settings)
+			}
+		})
 	}
-	release, err := New().BeginStartup(context.Background(), startupConfig("session", dir, "deepseek/deepseek-v4-flash"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	if got := readStartupSettings(t, dir)["freebuffModelDefaultMigration"]; got != "future-native-migration" {
-		t.Fatalf("migration stamp=%v", got)
+}
+
+func TestBeginStartupWithoutModelPreservesSettingsBytes(t *testing.T) {
+	for _, input := range []string{"null", "{\n  \"freebuffModel\": \"deepseek/deepseek-v4-flash\",\n  \"freebuffModelDefaultMigration\": \"future-native-migration\"\n}\n"} {
+		t.Run(input, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "settings.json")
+			if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			release, err := New().BeginStartup(context.Background(), startupConfig("session", dir, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != input {
+				t.Fatalf("launch without an explicit model changed settings: %q err=%v", got, err)
+			}
+		})
 	}
 }
 
