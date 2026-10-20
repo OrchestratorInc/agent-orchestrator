@@ -2931,6 +2931,10 @@ describe("Sidebar", () => {
 		// Static: attention styling without the pulse, and no card-level click target.
 		expect(card).not.toHaveClass("animate-attention-card-pulse");
 		expect(card).not.toHaveClass("cursor-pointer");
+		// One elevated surface with no outline, even for a session that needs input.
+		expect(card.className).toMatch(/bg-popover|var\(--popover\)/);
+		expect(card).not.toHaveClass("border", "border-status-needs-you");
+		expect(card.querySelector(".border-t")).toBeNull();
 		// The first preview fades in; it never zooms, and closing is instant.
 		const content = card.closest('[data-slot="hover-card-content"]');
 		expect(content).not.toBeNull();

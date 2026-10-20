@@ -342,15 +342,17 @@ export function SessionCardView({
 			onClick={interactive ? onOpen : undefined}
 			role={interactive || still ? undefined : "listitem"}
 			className={cn(
-				"group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
-				badge.cardClassName ?? "border-border bg-surface",
+				still
+					? // A hover preview: one elevated surface, no outline, no motion.
+						"relative w-full rounded-lg bg-popover text-left"
+					: "group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
+				!still && (badge.cardClassName ?? "border-border bg-surface"),
 				interactive &&
 					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
-					cn(
-						"border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]",
-						!still && "animate-attention-card-pulse",
-					),
+					(still
+						? "bg-[color-mix(in_srgb,var(--color-status-needs-you)_10%,var(--popover))]"
+						: "animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]"),
 			)}
 			data-testid="board-session-card"
 			data-session-id={session.id}
@@ -362,13 +364,13 @@ export function SessionCardView({
 					type="button"
 				/>
 			) : null}
-			<div className="px-3.5 pb-2.5 pt-2.5">
+			<div className={still ? "px-3 pb-1.5 pt-2.5" : "px-3.5 pb-2.5 pt-2.5"}>
 				{tag ? (
 					<div className="mb-1.5 flex min-w-0" data-testid="board-session-tag">
 						{tag}
 					</div>
 				) : null}
-				<div className="flex min-w-0 items-center gap-2.5">
+				<div className={cn("flex min-w-0 items-center", still ? "gap-2" : "gap-2.5")}>
 					{renderAvatar(session.provider)}
 					<div
 						className="min-w-0 flex-1 line-clamp-2 overflow-hidden text-balance text-sm-md font-semibold leading-tight tracking-tight text-foreground"
@@ -384,7 +386,7 @@ export function SessionCardView({
 					) : null}
 				</div>
 				{showBranch && (
-					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
+					<div className={cn("flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground", still ? "mt-1" : "mt-1.5")}>
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
 						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
 						{branchAction}
@@ -392,7 +394,7 @@ export function SessionCardView({
 				)}
 			</div>
 			{prs.length > 0 && (
-				<div className="flex min-w-0 flex-col gap-1.5 px-3.5 pb-1">
+				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
 					{prs.length > 0 && (
 						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
 							{groupBoardPullRequests(prs).flatMap((group) => {
@@ -415,7 +417,12 @@ export function SessionCardView({
 				</div>
 			)}
 			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
-			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
+			<div
+				className={cn(
+					"grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2",
+					still ? "px-3 pb-2.5 pt-1" : "border-t border-border px-3.5 py-2.5",
+				)}
+			>
 				<div className="flex min-w-0 flex-1">
 					<span
 						className={cn(

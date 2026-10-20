@@ -2687,7 +2687,7 @@ const SessionRow = memo(function SessionRow({
 			<HoverCardContent
 				align="start"
 				animation={preview.animation}
-				className="pointer-events-none w-[19rem] border-0 bg-transparent p-0"
+				className="pointer-events-none w-[17rem] border-0 bg-transparent p-0"
 				collisionPadding={8}
 				side="right"
 				sideOffset={12}
