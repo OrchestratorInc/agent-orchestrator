@@ -19,6 +19,24 @@ function chat(text: string, source: { remoteHost?: boolean; sessionLinkSourceKin
 }
 
 describe("chat path menus", () => {
+	it.each(["inline", "link"])("keeps the displayed %s path for native actions when the catalog matches only its basename", async (kind) => {
+		const action = vi.spyOn(aoBridge.editorHandoff, "pathAction").mockResolvedValue(undefined);
+		const openFile = chat(kind === "inline" ? "`dist/a file.ts:12`" : "[source](dist/a%20file.ts#L12)");
+		const trigger = kind === "inline" ? screen.getByRole("button") : screen.getByRole("link", { name: "source" });
+		await userEvent.click(trigger);
+		expect(openFile).toHaveBeenCalledExactlyOnceWith("src/a file.ts", 12);
+		for (const [label, expected] of [
+			["Copy path", { action: "copy" }],
+			["Reveal in Finder", { action: "reveal" }],
+			["Open with Cursor", { action: "open", editorId: "cursor" }],
+		] as const) {
+			fireEvent.contextMenu(trigger);
+			await userEvent.click(await screen.findByRole("menuitem", { name: label }));
+			expect(action).toHaveBeenLastCalledWith({ sessionId: "session-1", path: "dist/a file.ts", ...expected });
+		}
+		expect(openFile).toHaveBeenCalledTimes(1);
+	});
+
 	it.each([false, true])("confirms copying only after clipboard success (remote: %s)", async (remoteHost) => {
 		let complete!: () => void;
 		const pending = new Promise<void>((resolve) => { complete = resolve; });

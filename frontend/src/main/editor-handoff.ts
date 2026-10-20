@@ -535,11 +535,23 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 				throw new Error("That path is not valid.");
 			}
 			const workspace = await deps.resolveWorkspace(input.sessionId.trim());
-			const expanded = reference === "~" ? deps.homeDir : reference.startsWith("~/") ? api.join(deps.homeDir, reference.slice(2)) : reference;
+			const expanded = reference === "~" ? deps.homeDir : reference.startsWith("~/") ? deps.homeDir + reference.slice(1) : reference;
 			const absolute = api.isAbsolute(expanded);
-			const target = api.resolve(workspace, expanded);
-			if (!absolute && target !== workspace && !isInside(api, workspace, target)) throw new Error("That path is outside the session workspace.");
+			// Resolve only the root/drive here. Joining or resolving the whole path
+			// would collapse parent components before the filesystem follows symlinks.
+			const root = api.parse(expanded).root;
+			const anchor = absolute ? api.resolve(workspace, root) : workspace;
+			const tail = absolute ? expanded.slice(root.length) : expanded;
+			const unnormalized = `${anchor}${anchor.endsWith(api.sep) ? "" : api.sep}${tail}`;
+			const target = deps.platform === "win32" ? unnormalized.replace(/\//g, "\\") : unnormalized;
 			if (input.action === "copy") {
+				// Copy is textual and supports missing files; retain their original components.
+				if (!absolute) {
+					const realTarget = await deps.realPath(target).catch(() => undefined);
+					const root = realTarget ? await deps.realPath(workspace) : workspace;
+					const candidate = realTarget ?? api.resolve(target);
+					if (candidate !== root && !isInside(api, root, candidate)) throw new Error("That path is outside the session workspace.");
+				}
 				if (!deps.copyText) throw new Error("Copying is not available.");
 				await deps.copyText(target);
 				return;

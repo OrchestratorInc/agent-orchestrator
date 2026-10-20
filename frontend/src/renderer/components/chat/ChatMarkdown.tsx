@@ -338,7 +338,7 @@ function MarkdownLink({ href, children, className, menuPath }: { href?: string; 
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
-			menuPath={menuPath ?? (!filePath && href && isPotentialWorkspaceFileLink(href) ? normalizeWorkspaceFileReference(href) : undefined)}
+			menuPath={menuPath ?? (href && (filePath || isPotentialWorkspaceFileLink(href)) ? normalizeWorkspaceFileReference(href) : undefined)}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
@@ -497,7 +497,7 @@ function InlineCode({ children }: { children?: ReactNode }) {
 		else onFileOpen(target, line);
 	};
 	return (
-		<ChatPathMenu path={workspaceFileOpenTarget(text ?? "", filePath)} onFileOpen={openFile}>
+		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<button
 				type="button"
 				onClick={openFile}

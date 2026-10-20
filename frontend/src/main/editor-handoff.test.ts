@@ -1,5 +1,7 @@
 // @vitest-environment node
 import path from "node:path";
+import os from "node:os";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createEditorHandoff, type EditorHandoffDeps } from "./editor-handoff";
 
@@ -689,11 +691,63 @@ describe("editor handoff (win32 fallback discovery)", () => {
 });
 
 describe("chat path actions", () => {
+	it.skipIf(process.platform === "win32")("resolves symlinks before parent components for absolute and relative native paths", async () => {
+		const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-path-actions-")));
+		const workspace = path.join(root, "workspace");
+		const outside = path.join(root, "outside");
+		try {
+			await mkdir(workspace);
+			await mkdir(path.join(outside, "dir"), { recursive: true });
+			await writeFile(path.join(workspace, "file.ts"), "workspace");
+			await writeFile(path.join(outside, "file.ts"), "outside");
+			await symlink(path.join(outside, "dir"), path.join(workspace, "link"));
+			await mkdir(path.join(workspace, "nested", "deeper"), { recursive: true });
+			await symlink(path.join(workspace, "nested", "deeper"), path.join(workspace, "deep-link"));
+			for (const action of ["reveal", "open"] as const) {
+				for (const reference of [`${workspace}/link/../file.ts`, "~/link/../file.ts"]) {
+					const input = deps({ homeDir: workspace, resolveWorkspace: async () => workspace, realPath: realpath });
+					await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action, editorId: "vscode" });
+					if (action === "reveal") expect(input.revealPath).toHaveBeenCalledExactlyOnceWith(path.join(outside, "file.ts"));
+					else expect(input.launch).toHaveBeenCalledExactlyOnceWith("/bin/code", ["--new-window", path.join(outside, "file.ts")], outside);
+				}
+				const input = deps({ resolveWorkspace: async () => workspace, realPath: realpath });
+				await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "link/../file.ts", action, editorId: "vscode" })).rejects.toThrow("outside");
+				expect(input.revealPath).not.toHaveBeenCalled();
+				expect(input.launch).not.toHaveBeenCalled();
+				// Lexically this escapes, but following the link first stays inside.
+				const inside = deps({ resolveWorkspace: async () => workspace, realPath: realpath });
+				await createEditorHandoff(inside).pathAction({ sessionId: "ao-1", path: "deep-link/../../file.ts", action, editorId: "vscode" });
+				if (action === "reveal") expect(inside.revealPath).toHaveBeenCalledExactlyOnceWith(path.join(workspace, "file.ts"));
+				else expect(inside.launch).toHaveBeenCalledExactlyOnceWith("/bin/code", ["--new-window", path.join(workspace, "file.ts")], workspace);
+			}
+			const input = deps({ homeDir: workspace, resolveWorkspace: async () => workspace, realPath: realpath, copyText: vi.fn() });
+			const handoff = createEditorHandoff(input);
+			await expect(handoff.pathAction({ sessionId: "ao-1", path: "link/../file.ts", action: "copy" })).rejects.toThrow("outside");
+			expect(input.copyText).not.toHaveBeenCalled();
+			await handoff.pathAction({ sessionId: "ao-1", path: "~/link/../file.ts", action: "copy" });
+			expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/link/../file.ts`);
+			await handoff.pathAction({ sessionId: "ao-1", path: "deep-link/../../file.ts", action: "copy" });
+			expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/deep-link/../../file.ts`);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		["src/link/../file.ts", "C:\\worktrees\\ao-1\\src\\link\\..\\file.ts"],
+		["D:/src/link/../file.ts", "D:\\src\\link\\..\\file.ts"],
+		["/src/link/../file.ts", "C:\\src\\link\\..\\file.ts"],
+	])("preserves Windows components and root semantics when copying %s", async (reference, expected) => {
+		const input = winDeps({ resolveWorkspace: async () => "C:\\worktrees\\ao-1", copyText: vi.fn() });
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action: "copy" });
+		expect(input.copyText).toHaveBeenCalledExactlyOnceWith(expected);
+	});
+
 	it("copies an absolute workspace path without requiring the file to exist", async () => {
 		const input = deps({ copyText: vi.fn(), realPath: vi.fn().mockRejectedValue(new Error("missing")) });
 		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/new file.ts", action: "copy" });
 		expect(input.copyText).toHaveBeenCalledExactlyOnceWith("/worktrees/ao-1/src/new file.ts");
-		expect(input.realPath).not.toHaveBeenCalled();
+		expect(input.realPath).toHaveBeenCalledWith("/worktrees/ao-1/src/new file.ts");
 	});
 
 	it.each(["/other-project/src/a.ts", "~/notes/a.ts"])("reveals the actual absolute path %s without matching its tail", async (reference) => {
