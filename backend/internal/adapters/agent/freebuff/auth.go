@@ -15,10 +15,12 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus reports whether Freebuff has a signed-in account. `freebuff
+// AuthStatus reports whether Freebuff has local sign-in evidence. `freebuff
 // login` writes the "default" profile of credentials.json in Freebuff's config
 // directory, holding either the token itself or a pointer to the OS keychain;
-// CODEBUFF_API_KEY is Freebuff's environment fallback.
+// CODEBUFF_API_KEY is Freebuff's environment fallback. None of these is checked
+// against Freebuff's servers, so their presence reports configured, never
+// authorized: a revoked token or orphaned keychain pointer looks the same.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -35,12 +37,12 @@ func localAuthStatus(ctx context.Context, dir string) (ports.AgentAuthStatus, er
 		if err != nil {
 			return ports.AgentAuthStatusUnknown, err
 		}
-		if status == ports.AgentAuthStatusAuthorized {
+		if status.HasCredential() {
 			return status, nil
 		}
 	}
 	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "CODEBUFF_API_KEY") != "" {
-		return ports.AgentAuthStatusAuthorized, nil
+		return ports.AgentAuthStatusConfigured, nil
 	}
 	return ports.AgentAuthStatusUnauthorized, nil
 }
@@ -62,7 +64,7 @@ func credentialsAuthStatus(ctx context.Context, path string) (ports.AgentAuthSta
 	evidence.Email = profile.Email
 	evidence.Name = strings.TrimSpace(profile.Name)
 	ports.RecordAuthEvidence(ctx, evidence)
-	return ports.AgentAuthStatusAuthorized, nil
+	return ports.AgentAuthStatusConfigured, nil
 }
 
 type credentialsProfile struct {

@@ -12181,3 +12181,101 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
 	}
 }
+
+type confirmingAfterStartAgent struct {
+	afterStartAgent
+	ready *[]string
+}
+
+func (confirmingAfterStartAgent) PrimesAfterStartSubmit() bool { return true }
+
+func (confirmingAfterStartAgent) AfterStartSubmitState(output, _ string) ports.AfterStartSubmitState {
+	switch output {
+	case "DRAFT":
+		return ports.AfterStartDraftPending
+	case "SUBMITTED":
+		return ports.AfterStartSubmitted
+	default:
+		return ports.AfterStartSubmitUnknown
+	}
+}
+
+func (a confirmingAfterStartAgent) AgentStartupReady(sessionID string) {
+	*a.ready = append(*a.ready, sessionID)
+}
+
+func shortenAfterStartSubmitTimings(t *testing.T) {
+	t.Helper()
+	timeout, poll, settle := afterStartSubmitTimeout, afterStartSubmitPoll, afterStartDraftSettle
+	afterStartSubmitTimeout, afterStartSubmitPoll, afterStartDraftSettle = 2*time.Second, time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() {
+		afterStartSubmitTimeout, afterStartSubmitPoll, afterStartDraftSettle = timeout, poll, settle
+	})
+}
+
+func TestSpawn_AfterStartSubmitConfirmerResubmitsStuckDraft(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "DRAFT"}
+	msg := &fakeMessenger{}
+	msg.onSend = func(_ domain.SessionID, sent string) {
+		// The first Enter after the typed turn submits the stuck draft.
+		if len(msg.msgs) == 3 && sent == "" {
+			rt.viewport = "SUBMITTED"
+		}
+	}
+	var ready []string
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}, ready: &ready}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 3 || msg.msgs[0] != "" || msg.msgs[1] != "fix the button" || msg.msgs[2] != "" {
+		t.Fatalf("delivered = %#v, want priming Enter, the turn, one re-submit", msg.msgs)
+	}
+	if len(ready) != 1 || ready[0] != "mer-1" {
+		t.Fatalf("startup-ready notifications = %#v, want mer-1 once", ready)
+	}
+}
+
+func TestSpawn_AfterStartSubmitConfirmerFailsWhenDraftNeverSubmits(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "DRAFT"}
+	msg := &fakeMessenger{}
+	var ready []string
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}, ready: &ready}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err == nil {
+		t.Fatal("spawn reported success while the first turn stayed unsent")
+	}
+	if got := len(msg.msgs); got != 2+afterStartSubmitMaxRetries {
+		t.Fatalf("delivered %d messages (%#v), want priming Enter, the turn and %d bounded re-submits", got, msg.msgs, afterStartSubmitMaxRetries)
+	}
+}
+
+func TestSpawn_AfterStartSubmitConfirmerNeverEntersIntoUnknownScreen(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	afterStartSubmitTimeout = 50 * time.Millisecond
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "a native dialog"}
+	msg := &fakeMessenger{}
+	var ready []string
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}, ready: &ready}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("delivered = %#v, want only priming Enter and the turn", msg.msgs)
+	}
+}
