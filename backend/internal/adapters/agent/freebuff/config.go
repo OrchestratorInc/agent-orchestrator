@@ -171,9 +171,9 @@ func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 		settings = map[string]any{}
 	}
 	settings["freebuffModel"] = model
-	if stamp, ok := settings["freebuffModelDefaultMigration"].(string); !ok || strings.TrimSpace(stamp) == "" {
-		settings["freebuffModelDefaultMigration"] = defaultModelMigration
-	}
+	// Native compares exact identity, so any other stamp would still migrate
+	// this explicit pick when it is the previous default.
+	settings["freebuffModelDefaultMigration"] = defaultModelMigration
 	delete(settings, "freebuffModelKey")
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
