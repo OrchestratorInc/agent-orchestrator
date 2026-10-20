@@ -2300,10 +2300,11 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "freebuff-task" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GLM 5.3 Flash");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GLM 5.3 Flash"));
 
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body.model).toBe("z-ai/glm-5.3-flash");
 		expect(h.post.mock.calls[0][1].body.effort).not.toBe("xhigh");
 	});
 
