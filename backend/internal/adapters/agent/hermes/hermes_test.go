@@ -568,9 +568,12 @@ func TestProviderFromStatusReadsActiveProvider(t *testing.T) {
 		want                   ports.AgentAuthStatus
 	}{
 		{"configured provider", "  Model:        (not set)\n  Provider:     OpenAI API\n  Providers:    OpenAI API, Anthropic\n", "OpenAI API", ports.AgentAuthStatusConfigured},
-		{"no provider", "  Model:        (not set)\n  Provider:     (not set)\n", "", ports.AgentAuthStatusUnauthorized},
-		// Hermes falls back to the requested "auto" when credential resolution fails.
-		{"auto fallback", "  Provider:     Auto\n", "", ports.AgentAuthStatusUnknown},
+		{"auto with connected providers", "  Provider:     Auto\n  Providers:    Anthropic, GitHub Copilot\n", "Anthropic, GitHub Copilot", ports.AgentAuthStatusConfigured},
+		// The Provider row falls back to the requested provider without credentials.
+		{"explicit label without credentials", "  Provider:     OpenAI API\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnauthorized},
+		{"auto without credentials", "  Provider:     Auto\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnauthorized},
+		{"selected provider not connected", "  Provider:     defunct-provider\n  Providers:    Anthropic\n", "", ports.AgentAuthStatusUnknown},
+		{"label only", "  Provider:     Auto\n", "", ports.AgentAuthStatusUnknown},
 		{"unrecognized output", "Hermes Agent Status\n", "", ports.AgentAuthStatusUnknown},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -594,6 +597,8 @@ func TestCredentialStoreIdentityReadsNativeStores(t *testing.T) {
 		{"no credentials", "", "", false, ""},
 		{"empty env key", ".env", "OPENROUTER_API_KEY=\n# ANTHROPIC_API_KEY=sk\n", false, ""},
 		{"env api key", ".env", "export OPENROUTER_API_KEY=\"sk-or\"\n", true, domain.AgentAccountMethodAPIKey},
+		{"bot token is not a model credential", ".env", "TELEGRAM_BOT_TOKEN=123:abcdefghijklmnopqrstuvw\nTAVILY_API_KEY=t\n", false, ""},
+		{"quoted key", ".env", "'ANTHROPIC_API_KEY'=sk-ant\n", true, domain.AgentAccountMethodAPIKey},
 		{"oauth store", "auth.json", `{"providers":{"nous":{"access_token":"x"}}}`, true, domain.AgentAccountMethodAccount},
 		{"empty oauth store", "auth.json", `{"providers":{}}`, false, ""},
 	} {
@@ -629,14 +634,32 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if env["HERMES_LANGUAGE"] != "en" {
 		t.Fatalf("HERMES_LANGUAGE = %q, want en", env["HERMES_LANGUAGE"])
 	}
+	hooks := func() error {
+		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
+	}
 	for _, key := range []string{"HERMES_EPHEMERAL_SYSTEM_PROMPT", "HERMES_LANGUAGE"} {
-		if err := os.WriteFile(filepath.Join(home, ".env"), []byte("OPENROUTER_API_KEY=x\nexport "+key+"=native\n"), 0o600); err != nil {
-			t.Fatal(err)
+		// Every assignment form python-dotenv accepts must be caught.
+		for _, form := range []string{
+			"OPENROUTER_API_KEY=x\nexport " + key + "=native\n",
+			"'" + key + "'=native\n",
+			"export\t" + key + "=native\n",
+			"\xef\xbb\xbf" + key + "=native\n",
+			key + " = 'multi\nline'\n",
+		} {
+			if err := os.WriteFile(filepath.Join(home, ".env"), []byte(form), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := hooks(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("%q in .env accepted: %v", form, err)
+			}
 		}
-		err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
-		if err == nil || !strings.Contains(err.Error(), key) {
-			t.Fatalf("%s in .env accepted: %v", key, err)
-		}
+	}
+	// A key named inside another quoted value is not an assignment.
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("NOTES='first line\nHERMES_LANGUAGE=just documentation\nlast line'\n# HERMES_LANGUAGE=de\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := hooks(); err != nil {
+		t.Fatalf("harmless multiline value rejected: %v", err)
 	}
 }
 
@@ -645,13 +668,81 @@ func TestResolveHomeExpandsLikeHermes(t *testing.T) {
 		t.Skip("POSIX home expansion")
 	}
 	home := t.TempDir()
-	got, err := resolveHome(map[string]string{"HOME": home, "HERMES_HOME": "~/.hermes-custom"})
+	got, err := ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "~/.hermes-custom"})
 	if err != nil || got != filepath.Join(home, ".hermes-custom") {
-		t.Fatalf("resolveHome(~) = %q, %v", got, err)
+		t.Fatalf("ResolveHome(~) = %q, %v", got, err)
 	}
-	got, err = resolveHome(map[string]string{"HOME": home, "HERMES_HOME": "$HOME/h-${SUFFIX}", "SUFFIX": "x"})
+	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "$HOME/h-${SUFFIX}", "SUFFIX": "x"})
 	if err != nil || got != filepath.Join(home, "h-x") {
-		t.Fatalf("resolveHome($VAR) = %q, %v", got, err)
+		t.Fatalf("ResolveHome($VAR) = %q, %v", got, err)
+	}
+	// Variables expand before ~, as os.path.expanduser(os.path.expandvars(...)).
+	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_PARENT": "~", "HERMES_HOME": "$HERMES_PARENT/custom"})
+	if err != nil || got != filepath.Join(home, "custom") {
+		t.Fatalf("ResolveHome(var then ~) = %q, %v", got, err)
+	}
+	// An undefined variable stays literal, so AO never picks another directory.
+	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "/srv/$AO_REVIEW_UNDEFINED/custom"})
+	if err != nil || got != "/srv/$AO_REVIEW_UNDEFINED/custom" {
+		t.Fatalf("ResolveHome(undefined) = %q, %v", got, err)
+	}
+}
+
+func TestExpandWindowsVarsMatchesNtpath(t *testing.T) {
+	lookup := func(name string) string { return map[string]string{"APPDATA": `C:\A`, "X": "x"}[name] }
+	for in, want := range map[string]string{
+		`%APPDATA%\hermes`: `C:\A\hermes`,
+		`$X\${X}`:          `x\x`,
+		`$X-`:              `$X-`, // ntpath names may contain '-', so this is undefined X-
+		`%MISSING%\h`:      `%MISSING%\h`,
+		`'%APPDATA%'\h`:    `'%APPDATA%'\h`,
+		`100%%`:            "100%",
+	} {
+		if got := expandWindowsVars(in, lookup); got != want {
+			t.Fatalf("expandWindowsVars(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCompactBusyChromeWitnessesSubmission(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	idle := rule + "\n❯ "
+	busy := rule + "\n\x1b[3m☤ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel\x1b[m"
+	if !New().TerminalMessageObserved("task", idle, busy) {
+		t.Fatal("compact busy frame did not witness the submission")
+	}
+}
+
+func TestConfirmedIdentityFollowsInstallRevision(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	gitDir := filepath.Join(home, "hermes-agent", ".git", "refs", "heads")
+	if err := os.MkdirAll(gitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(home, "hermes-agent", ".git", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(gitDir, "main"), "1111111111111111111111111111111111111111\n")
+	launcher := filepath.Join(home, "hermes")
+	write(launcher, "#!/bin/sh\n")
+	rememberIdentity(launcher)
+	if !identityConfirmed(launcher) {
+		t.Fatal("fresh confirmation not reused")
+	}
+	// A source update moves the checkout without touching the launcher.
+	write(filepath.Join(gitDir, "main"), "2222222222222222222222222222222222222222\n")
+	if identityConfirmed(launcher) {
+		t.Fatal("confirmation survived an installation revision change")
+	}
+	rememberIdentity(launcher)
+	forgetIdentity(launcher)
+	if identityConfirmed(launcher) {
+		t.Fatal("a rejected probe left the launcher confirmed")
 	}
 }
 
@@ -664,6 +755,10 @@ func TestCompactComposerBelow64ColumnsIsIdle(t *testing.T) {
 		{"compact idle", "transcript\n" + rule + "\n☤ ❯ ", domain.ActivityIdle},
 		{"compact draft", "transcript\n" + rule + "\n☤ ❯ typed draft", domain.ActivityBlocked},
 		{"compact busy", "transcript\n" + rule + "\n☤ ❯ msg=interrupt · Ctrl+C cancel", domain.ActivityActive},
+		// Native compact chrome draws only the state icon, without ❯.
+		{"compact busy icon", "transcript\n" + rule + "\n\x1b[3m☤ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel\x1b[m", domain.ActivityActive},
+		{"compact approval icon", "transcript\n" + rule + "\n⚠ ", domain.ActivityBlocked},
+		{"compact question icon", "transcript\n" + rule + "\n? ", domain.ActivityBlocked},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got, ok := New().DetectTerminalActivity(tt.screen); !ok || got != tt.want {

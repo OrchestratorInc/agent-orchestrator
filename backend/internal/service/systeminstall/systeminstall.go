@@ -1402,7 +1402,7 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	if baseline != nil {
 		// Only updates carry a baseline. Mark the sessions it left behind
 		// before reporting success, while launches still wait on this update.
-		if installed, ok := baseline.scheme.find(result.Output); ok {
+		if installed, ok := baseline.scheme.find(installedVersionText(job.Target, result.ResolvedPath, result.Output)); ok {
 			s.noteHarnessUpdated(job.Target, installed.display)
 		}
 	}

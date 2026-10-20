@@ -1,12 +1,11 @@
 package hermes
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,8 +19,15 @@ var (
 	_ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 )
 
-// hermesCredentialEnv are the provider keys Hermes reads from its environment.
-var hermesCredentialEnv = []string{"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "HF_TOKEN"}
+// hermesCredentialEnv are the inference-provider keys Hermes reads (its
+// cli-config.yaml.example provider list). Tool and messaging tokens, such as
+// TELEGRAM_BOT_TOKEN or a web-search key, are not model credentials.
+var hermesCredentialEnv = []string{
+	"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+	"ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "XAI_API_KEY",
+	"DEEPSEEK_API_KEY", "HF_TOKEN", "NVIDIA_API_KEY", "XIAOMI_API_KEY", "ARCEEAI_API_KEY", "OLLAMA_API_KEY",
+	"DEEPINFRA_API_KEY", "KILOCODE_API_KEY", "AI_GATEWAY_API_KEY", "GITHUB_TOKEN",
+}
 
 // AuthStatus implements the scoped native adapter contract.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
@@ -63,24 +69,45 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return ports.AgentAuthStatusConfigured, identity, steps, nil
 }
 
-// providerFromStatus reads the active provider from `hermes status`, whose
-// summary prints a "Provider:" row. A missing row leaves the verdict unknown.
+// providerFromStatus reads `hermes status`. Its "Provider:" row is a display
+// label that falls back to the requested provider even without credentials,
+// so only the "Providers:" row of connected credentials is evidence. A
+// concrete selected provider absent from that row stays unresolved, since the
+// two rows may label it differently; the credential stores then decide.
 func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
+	selected, connected, sawConnected := "", []string(nil), false
 	for _, line := range strings.Split(output, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok || strings.TrimSpace(key) != "Provider" {
+		if !ok {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		switch strings.ToLower(value) {
-		case "", "(not set)", "none", "(none)", "not configured":
-			return "", ports.AgentAuthStatusUnauthorized
-		case "auto":
-			// Hermes prints the requested provider when resolving credentials
-			// fails, so "Auto" is no evidence either way.
-			return "", ports.AgentAuthStatusUnknown
+		switch strings.TrimSpace(key) {
+		case "Provider":
+			selected = value
+		case "Providers":
+			sawConnected = true
+			if lower := strings.ToLower(value); value == "" || strings.HasPrefix(lower, "none") || lower == "(none)" {
+				continue
+			}
+			for _, name := range strings.Split(value, ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					connected = append(connected, name)
+				}
+			}
 		}
-		return value, ports.AgentAuthStatusConfigured
+	}
+	if !sawConnected {
+		return "", ports.AgentAuthStatusUnknown
+	}
+	if len(connected) == 0 {
+		return "", ports.AgentAuthStatusUnauthorized
+	}
+	switch lower := strings.ToLower(selected); {
+	case lower == "" || lower == "auto" || lower == "(not set)":
+		return strings.Join(connected, ", "), ports.AgentAuthStatusConfigured
+	case slices.ContainsFunc(connected, func(name string) bool { return strings.EqualFold(name, selected) }):
+		return selected, ports.AgentAuthStatusConfigured
 	}
 	return "", ports.AgentAuthStatusUnknown
 }
@@ -91,7 +118,7 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, hermesCredentialEnv...); name != "" {
 		return domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), true
 	}
-	home, err := resolveHome(nil)
+	home, err := ResolveHome(nil)
 	if err != nil {
 		return domain.AgentAccountIdentity{}, false
 	}
@@ -105,18 +132,8 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 }
 
 func envFileHasCredential(path string) bool {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(b))
-	for scanner.Scan() {
-		key, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(scanner.Text()), "export "), "=")
-		key = strings.TrimSpace(key)
-		if !ok || strings.HasPrefix(key, "#") || strings.Trim(strings.TrimSpace(value), `"'`) == "" {
-			continue
-		}
-		if strings.HasSuffix(key, "_API_KEY") || strings.HasSuffix(key, "_TOKEN") {
+	for _, binding := range dotenvBindings(path) {
+		if binding.value != "" && slices.Contains(hermesCredentialEnv, binding.key) {
 			return true
 		}
 	}

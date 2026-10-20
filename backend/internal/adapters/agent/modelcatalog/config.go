@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -150,31 +150,13 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	return paths
 }
 
-// hermesConfigHome mirrors Hermes's HERMES_HOME default: ~/.hermes on macOS
-// and Linux, %LOCALAPPDATA%\hermes on Windows.
-func hermesConfigHome(home string, env map[string]string) string {
-	if root := envValue(env, "HERMES_HOME"); root != "" {
-		// Hermes expands a leading ~, then $VAR / ${VAR}.
-		if root == "~" {
-			root = home
-		} else if strings.HasPrefix(root, "~/") && home != "" {
-			root = filepath.Join(home, root[2:])
-		}
-		return os.Expand(root, func(key string) string { return envValue(env, key) })
-	}
-	if runtime.GOOS == "windows" {
-		if local := envValue(env, "LOCALAPPDATA"); local != "" {
-			return filepath.Join(local, "hermes")
-		}
-		if home != "" {
-			return filepath.Join(home, "AppData", "Local", "hermes")
-		}
+// hermesConfigHome resolves HERMES_HOME exactly as the adapter and Hermes do.
+func hermesConfigHome(_ string, env map[string]string) string {
+	root, err := hermes.ResolveHome(env)
+	if err != nil {
 		return ""
 	}
-	if home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".hermes")
+	return root
 }
 
 // hermesReasoningLevels are the native --reasoning values Hermes accepts.

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
@@ -88,6 +89,8 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 			}
 			reason = why
 		}
+		// A fresh rejection outranks an earlier confirmation of this launcher.
+		forgetIdentity(path)
 		unconfirmed = append(unconfirmed, path+": "+reason)
 		return false
 	}
@@ -127,7 +130,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 // customHomeCandidates are the launchers the official installers publish when
 // HERMES_HOME is not the platform default.
 func customHomeCandidates() []string {
-	home, err := resolveHome(nil)
+	home, err := ResolveHome(nil)
 	if err != nil {
 		return nil
 	}
@@ -143,15 +146,27 @@ func customHomeCandidates() []string {
 	return []string{filepath.Join(home, "hermes-agent", ".hermes", "bin", "hermes")}
 }
 
-// confirmedIdentities remembers launchers whose --version banner passed, keyed
-// by path and the resolved file's identity, so spawn and restore reuse the
-// background readiness probe instead of waiting on another Python start.
+// confirmedIdentities remembers launchers whose --version banner passed, so a
+// spawn or restore right after readiness's launch check reuses that probe
+// instead of waiting on another Python start. A launcher can forward to code
+// that changes without touching the launcher file, so an entry is also keyed
+// on the installation's revision and expires after confirmedIdentityTTL.
 var confirmedIdentities sync.Map
 
+// confirmedIdentityTTL is long enough to span AO's launch readiness check and
+// the spawn that follows it, and short enough that later launches re-probe.
+const confirmedIdentityTTL = time.Minute
+
 type binaryIdentity struct {
-	target  string
-	size    int64
-	modTime time.Time
+	target   string
+	size     int64
+	modTime  time.Time
+	revision string
+}
+
+type confirmedIdentity struct {
+	binaryIdentity
+	at time.Time
 }
 
 func currentIdentity(path string) (binaryIdentity, bool) {
@@ -163,7 +178,54 @@ func currentIdentity(path string) (binaryIdentity, bool) {
 	if err != nil {
 		return binaryIdentity{}, false
 	}
-	return binaryIdentity{target: target, size: st.Size(), modTime: st.ModTime()}, true
+	return binaryIdentity{target: target, size: st.Size(), modTime: st.ModTime(), revision: installRevision()}, true
+}
+
+// installRevision names the commit of the official source installation under
+// HERMES_HOME, which the published launchers forward to. Homebrew installs are
+// already distinguished by their versioned Cellar target.
+func installRevision() string {
+	home, err := ResolveHome(nil)
+	if err != nil {
+		return ""
+	}
+	return gitHead(filepath.Join(home, "hermes-agent"))
+}
+
+// gitHead reads a checkout's HEAD commit without running git: a detached SHA,
+// or the branch ref from its loose file or packed-refs.
+func gitHead(checkout string) string {
+	gitDir := filepath.Join(checkout, ".git")
+	if b, err := os.ReadFile(gitDir); err == nil {
+		if dir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:"); ok {
+			gitDir = strings.TrimSpace(dir)
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(checkout, gitDir)
+			}
+		}
+	}
+	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return ""
+	}
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref:")
+	if !ok {
+		return strings.TrimSpace(string(head))
+	}
+	ref = strings.TrimSpace(ref)
+	if b, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
+		return strings.TrimSpace(string(b))
+	}
+	packed, err := os.ReadFile(filepath.Join(gitDir, "packed-refs"))
+	if err != nil {
+		return ref
+	}
+	for _, line := range strings.Split(string(packed), "\n") {
+		if sha, name, ok := strings.Cut(strings.TrimSpace(line), " "); ok && name == ref {
+			return sha
+		}
+	}
+	return ref
 }
 
 func identityConfirmed(path string) bool {
@@ -172,15 +234,17 @@ func identityConfirmed(path string) bool {
 		return false
 	}
 	remembered, found := confirmedIdentities.Load(path)
-	identity, ok := remembered.(binaryIdentity)
-	return found && ok && identity == current
+	entry, ok := remembered.(confirmedIdentity)
+	return found && ok && entry.binaryIdentity == current && time.Since(entry.at) < confirmedIdentityTTL
 }
 
 func rememberIdentity(path string) {
 	if current, ok := currentIdentity(path); ok {
-		confirmedIdentities.Store(path, current)
+		confirmedIdentities.Store(path, confirmedIdentity{binaryIdentity: current, at: time.Now()})
 	}
 }
+
+func forgetIdentity(path string) { confirmedIdentities.Delete(path) }
 
 // probeNativeVersion runs `hermes --version` and checks its banner. It reports
 // why a probe that ran was rejected, and whether it hit its own deadline.
@@ -345,9 +409,9 @@ func sessionTitle(data, id string) (string, error) {
 	return "", fmt.Errorf("hermes: empty native session title")
 }
 
-// resolveHome mirrors Hermes's own HERMES_HOME default: ~/.hermes on macOS and
+// ResolveHome mirrors Hermes's own HERMES_HOME default: ~/.hermes on macOS and
 // Linux, %LOCALAPPDATA%\hermes on Windows. The launch env wins over the daemon's.
-func resolveHome(env map[string]string) (string, error) {
+func ResolveHome(env map[string]string) (string, error) {
 	lookup := func(key string) string {
 		if value, ok := env[key]; ok {
 			return value
@@ -382,21 +446,153 @@ func resolveHome(env map[string]string) (string, error) {
 	return filepath.Join(home, ".hermes"), nil
 }
 
-// expandNativePath applies Hermes's HERMES_HOME expansion (a leading ~, then
-// $VAR / ${VAR}) against the child environment, so AO reads and records the
-// same directory Hermes writes its state to.
+// expandNativePath applies Hermes's HERMES_HOME expansion,
+// os.path.expanduser(os.path.expandvars(value)), against the child
+// environment, so AO reads and records the directory Hermes writes to.
+// Undefined variables stay literal, as in Python.
 func expandNativePath(value string, lookup func(string) string) (string, error) {
-	if value == "~" || strings.HasPrefix(value, "~/") || strings.HasPrefix(value, `~\`) {
-		home := strings.TrimSpace(lookup("HOME"))
-		if home == "" {
-			var err error
-			if home, err = os.UserHomeDir(); err != nil {
-				return "", err
-			}
-		}
-		value = home + value[1:]
+	if runtime.GOOS == "windows" {
+		return expandWindowsUser(expandWindowsVars(value, lookup), lookup)
 	}
-	return os.Expand(value, lookup), nil
+	return expandPOSIXUser(expandPOSIXVars(value, lookup), lookup)
+}
+
+var posixVarReference = regexp.MustCompile(`\$(\w+|\{[^}]*\})`)
+
+// expandPOSIXVars mirrors posixpath.expandvars: $NAME and ${NAME}, with
+// unknown names left unchanged.
+func expandPOSIXVars(value string, lookup func(string) string) string {
+	return posixVarReference.ReplaceAllStringFunc(value, func(ref string) string {
+		name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(ref, "$"), "{"), "}")
+		if v, ok := lookupEnv(name, lookup); ok {
+			return v
+		}
+		return ref
+	})
+}
+
+// expandPOSIXUser mirrors posixpath.expanduser for the current user's ~.
+func expandPOSIXUser(value string, lookup func(string) string) (string, error) {
+	if value != "~" && !strings.HasPrefix(value, "~/") {
+		return value, nil
+	}
+	home := strings.TrimSpace(lookup("HOME"))
+	if home == "" {
+		var err error
+		if home, err = os.UserHomeDir(); err != nil {
+			return "", err
+		}
+	}
+	return strings.TrimSuffix(home, "/") + value[1:], nil
+}
+
+// expandWindowsVars mirrors ntpath.expandvars: %NAME%, $NAME and ${NAME},
+// '%%' and '$$' escapes, and single-quoted literal runs; unknown names stay.
+func expandWindowsVars(value string, lookup func(string) string) string {
+	var b strings.Builder
+	for i := 0; i < len(value); {
+		switch c := value[i]; c {
+		case '\'':
+			end := strings.IndexByte(value[i+1:], '\'')
+			if end < 0 {
+				b.WriteString(value[i:])
+				return b.String()
+			}
+			b.WriteString(value[i : i+end+2])
+			i += end + 2
+		case '%':
+			if strings.HasPrefix(value[i:], "%%") {
+				b.WriteByte('%')
+				i += 2
+				continue
+			}
+			end := strings.IndexByte(value[i+1:], '%')
+			if end < 0 {
+				b.WriteString(value[i:])
+				return b.String()
+			}
+			name := value[i+1 : i+1+end]
+			if v, ok := lookupEnv(name, lookup); ok {
+				b.WriteString(v)
+			} else {
+				b.WriteString(value[i : i+end+2])
+			}
+			i += end + 2
+		case '$':
+			switch {
+			case strings.HasPrefix(value[i:], "$$"):
+				b.WriteByte('$')
+				i += 2
+			case strings.HasPrefix(value[i:], "${"):
+				end := strings.IndexByte(value[i+2:], '}')
+				if end < 0 {
+					b.WriteString(value[i:])
+					return b.String()
+				}
+				name := value[i+2 : i+2+end]
+				if v, ok := lookupEnv(name, lookup); ok {
+					b.WriteString(v)
+				} else {
+					b.WriteString(value[i : i+end+3])
+				}
+				i += end + 3
+			default:
+				j := i + 1
+				for j < len(value) && (value[j] == '_' || value[j] == '-' || unicode.IsLetter(rune(value[j])) || unicode.IsDigit(rune(value[j]))) {
+					j++
+				}
+				if v, ok := lookupEnv(value[i+1:j], lookup); ok && j > i+1 {
+					b.WriteString(v)
+				} else {
+					b.WriteString(value[i:j])
+				}
+				i = j
+			}
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
+// expandWindowsUser mirrors ntpath.expanduser for the current user's ~:
+// USERPROFILE, then HOMEDRIVE+HOMEPATH. HOME is not consulted.
+func expandWindowsUser(value string, lookup func(string) string) (string, error) {
+	if value != "~" && !strings.HasPrefix(value, "~/") && !strings.HasPrefix(value, `~\`) {
+		return value, nil
+	}
+	home := strings.TrimSpace(lookup("USERPROFILE"))
+	if home == "" {
+		if path := lookup("HOMEPATH"); path != "" {
+			home = lookup("HOMEDRIVE") + path
+		}
+	}
+	if home == "" {
+		var err error
+		if home, err = os.UserHomeDir(); err != nil {
+			return "", err
+		}
+	}
+	return home + value[1:], nil
+}
+
+// lookupEnv reports whether name is defined in the child environment.
+// Windows variable names are case-insensitive.
+func lookupEnv(name string, lookup func(string) string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	if v := lookup(name); v != "" {
+		return v, true
+	}
+	if runtime.GOOS == "windows" {
+		if v := lookup(strings.ToUpper(name)); v != "" {
+			return v, true
+		}
+	}
+	_, ok := os.LookupEnv(name)
+	return "", ok
 }
 
 // GetAgentHooks only supplies process-local additive native configuration. The
@@ -408,7 +604,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if cfg.Env == nil {
 		return fmt.Errorf("hermes: launch environment required")
 	}
-	home, err := resolveHome(cfg.Env)
+	home, err := ResolveHome(cfg.Env)
 	if err != nil {
 		return err
 	}
@@ -428,8 +624,8 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	// Hermes loads <HERMES_HOME>/.env with override before reading these, so a
 	// value there would silently replace AO's instructions or chrome language.
-	for _, key := range dotenvKeys(filepath.Join(home, ".env")) {
-		switch key {
+	for _, binding := range dotenvBindings(filepath.Join(home, ".env")) {
+		switch key := binding.key; key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
 			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, filepath.Join(home, ".env"))
 		case "HERMES_LANGUAGE":
@@ -495,22 +691,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
-}
-
-// dotenvKeys lists the variable names a dotenv file assigns, never values.
-func dotenvKeys(path string) []string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var keys []string
-	for _, line := range strings.Split(string(b), "\n") {
-		key, _, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
-		if key = strings.TrimSpace(key); ok && key != "" && !strings.HasPrefix(key, "#") {
-			keys = append(keys, key)
-		}
-	}
-	return keys
 }
 
 func nativeOverlay(config map[string]any) string {
@@ -680,6 +860,23 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		}
 		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
 			break
+		}
+	}
+	// Below 64 columns Hermes hides the bottom input rule and draws only the
+	// state icon, without ❯ (`☤ ` busy; `⚠ `, `? `, `✎ ` and the credential icons
+	// for decisions). Read that row only as the last line directly under the top
+	// rule, where the compact composer sits.
+	if last >= 1 {
+		row, upper := strings.TrimSpace(lines[last]), strings.TrimSpace(lines[last-1])
+		if len([]rune(upper)) >= 16 && strings.Trim(upper, "─") == "" && !strings.HasPrefix(row, nativeNamedPrompt) {
+			if strings.HasPrefix(row, "☤ ") || row == "☤" {
+				return domain.ActivityActive, true
+			}
+			for _, icon := range []string{"⚠", "?", "✎", "🔐", "🔑", "⚙"} {
+				if row == icon || strings.HasPrefix(row, icon+" ") {
+					return domain.ActivityBlocked, true
+				}
+			}
 		}
 	}
 	if last >= 0 {

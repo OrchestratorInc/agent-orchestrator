@@ -315,3 +315,19 @@ func TestUpdateOutcomeReadsHermesReleaseFromItsBanner(t *testing.T) {
 		t.Fatalf("Hermes update not verified: %s", failure)
 	}
 }
+
+func TestHermesUpdateMarksSessionsFromItsBanner(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	observer := &updateObserverStub{}
+	s.SetHarnessUpdateObserver(observer)
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/nonexistent/hermes", Output: "Hermes Agent v0.22.2 (2026.10.14)\nPython: 3.14.8\nOpenAI SDK: 2.24.0\n"}, nil
+	})
+	job := &Job{Target: TargetHermes, Status: StatusVerifying}
+	s.jobs[TargetHermes] = job
+	baseline := &installedBaseline{target: TargetHermes, version: "0.21.6", latest: "0.22.2"}
+	s.runAgentVerification(t.Context(), job, baseline, "")
+	if job.Status != StatusSucceeded || len(observer.marked) != 1 {
+		t.Fatalf("status=%s marked=%v", job.Status, observer.marked)
+	}
+}
