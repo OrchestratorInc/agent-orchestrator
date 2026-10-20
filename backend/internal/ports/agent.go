@@ -518,6 +518,12 @@ type AgentAfterStartPromptBuilder interface {
 	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
+// AgentAfterStartPromptEncoder encodes the first turn for native terminal
+// input. AO retains the unencoded prompt for semantic acceptance checks.
+type AgentAfterStartPromptEncoder interface {
+	EncodeAfterStartPrompt(prompt string) (string, error)
+}
+
 // AgentAfterStartCommand selects native TUI state before AO delivers the first
 // task. Confirmation must come from the current terminal output, so an ignored
 // command cannot silently launch a task with the wrong model.
@@ -526,38 +532,25 @@ type AgentAfterStartCommand interface {
 	AfterStartCommandApplied(cfg LaunchConfig, output string) bool
 }
 
-// AfterStartSubmitState is an adapter's reading of whether the first turn AO
-// typed after startup has left the native composer.
+// AfterStartSubmitState reports whether a first turn typed after startup has
+// been durably accepted by the native agent or remains in its current input.
 type AfterStartSubmitState string
 
 const (
-	// AfterStartSubmitted means the composer no longer holds the turn: the
-	// agent is working on it, or the composer is empty again.
+	// AfterStartSubmitted requires native acceptance evidence for this turn.
 	AfterStartSubmitted AfterStartSubmitState = "submitted"
-	// AfterStartDraftPending means the typed turn is visibly still sitting in
-	// the composer, so an Enter-only re-submit can only submit that draft.
+	// AfterStartDraftPending proves the typed turn remains in the current
+	// composer, where a bounded Enter-only retry can submit that draft.
 	AfterStartDraftPending AfterStartSubmitState = "draft"
-	// AfterStartSubmitUnknown means the screen proves neither, for example a
-	// native dialog is open. AO never re-submits in this state.
+	// AfterStartSubmitUnknown proves neither. AO never retries Enter here.
 	AfterStartSubmitUnknown AfterStartSubmitState = "unknown"
 )
 
-// AgentAfterStartSubmitConfirmer is an optional capability for after-start TUI
-// adapters whose composer can keep a typed first turn as an unsent draft. AO
-// reads the rendered terminal after typing the turn and re-sends Enter, a
-// bounded number of times, only while the adapter reports the draft pending.
+// AgentAfterStartSubmitConfirmer confirms native acceptance of an after-start
+// turn. A readiness-only screen cannot establish that the first turn arrived.
 type AgentAfterStartSubmitConfirmer interface {
-	// PrimesAfterStartSubmit asks AO to send a lone Enter into the empty,
-	// ready composer before typing the first turn.
 	PrimesAfterStartSubmit() bool
-	AfterStartSubmitState(output, prompt string) AfterStartSubmitState
-}
-
-// AgentStartupReadyObserver is told when AO has observed a launched TUI ready
-// for input, so an adapter can release launch-scoped native state it had to
-// hold until the process read it.
-type AgentStartupReadyObserver interface {
-	AgentStartupReady(sessionID string)
+	AfterStartSubmitState(context.Context, LaunchConfig, string, string) (AfterStartSubmitState, error)
 }
 
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
@@ -822,6 +815,8 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
+	// Env is the effective native launch environment, including project overrides.
+	Env             map[string]string
 	Config          AgentConfig
 	DataDir         string
 	Kind            domain.SessionKind

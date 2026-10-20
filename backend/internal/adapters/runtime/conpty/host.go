@@ -511,8 +511,11 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
-			if n, err := h.cfg.PTY.Write(payload); err != nil {
+			if n, err := h.cfg.PTY.Write(payload); err != nil || n != len(payload) {
 				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
+				// A following ordered status request must not acknowledge input
+				// that the PTY rejected or only partially accepted.
+				_ = conn.Close()
 			}
 		}
 

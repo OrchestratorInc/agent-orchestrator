@@ -1,6 +1,7 @@
 package freebuff
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -17,14 +19,19 @@ import (
 // chat history directory. It must be absolute.
 const configDirEnv = "FREEBUFF_CONFIG_DIR"
 
-// configDir mirrors Freebuff's getConfigDir: FREEBUFF_CONFIG_DIR when set to an
-// absolute path, otherwise ~/.config/manicode. A session's launch env wins over
-// the daemon's environment.
+// configDir mirrors Freebuff's getConfigDir. A present session override wins
+// even when empty (which clears a daemon override). An invalid relative
+// override cannot identify a native config directory.
 func configDir(env map[string]string) string {
-	for _, value := range []string{env[configDirEnv], os.Getenv(configDirEnv)} {
-		if value = strings.TrimSpace(value); value != "" && filepath.IsAbs(value) {
-			return value
+	value, present := env[configDirEnv]
+	if !present {
+		value = os.Getenv(configDirEnv)
+	}
+	if value = strings.TrimSpace(value); value != "" {
+		if !filepath.IsAbs(value) {
+			return ""
 		}
+		return value
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -33,99 +40,159 @@ func configDir(env map[string]string) string {
 	return filepath.Join(home, ".config", "manicode")
 }
 
-// defaultModelMigrationID is the stamp of Freebuff's one-time move of a saved
-// pick off its previous default (FREEBUFF_DEFAULT_MODEL_MIGRATION_ID in
-// Freebuff 0.2.30). An unstamped file holding the previous default,
-// deepseek/deepseek-v4-flash, is rewritten to the new default on startup.
-const defaultModelMigrationID = "glm-5.3-flash-2026-09-05"
+type startupGate struct {
+	available chan struct{}
+	owner     *startupOwner
+}
 
-// applyModelSelection saves the AO model choice where Freebuff's /model picker
-// keeps it. Freebuff validates the file on load and drops unknown models or
-// efforts, so a stale choice degrades to its default model rather than failing.
-// The saved catalog-row key is cleared because it would otherwise outrank the
-// model id when Freebuff's server catalog is reachable, and an unstamped file
-// gets the migration stamp so the explicit choice is not migrated away.
+type startupOwner struct {
+	sessionID string
+	model     string
+	effort    string
+	startedAt time.Time
+}
+
+// BeginStartup serializes the complete seed/read/native-picker transaction,
+// not merely the atomic settings write. The native picker then pins the choice
+// in this process before another AO launch can seed a different preference.
+func (p *Plugin) BeginStartup(ctx context.Context, cfg ports.LaunchConfig) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.SessionID) == "" {
+		return nil, errors.New("freebuff: native startup requires an AO session id")
+	}
+	model, effort := strings.TrimSpace(cfg.Config.Model), strings.TrimSpace(cfg.Config.Effort)
+	if model != "" || effort != "" {
+		info, ok := startupModel(model)
+		if !ok || (effort != "" && !containsString(info.Efforts, effort)) {
+			return nil, errors.New("freebuff: unsupported native model or reasoning effort")
+		}
+	}
+	dir := configDir(cfg.Env)
+	if dir == "" {
+		return nil, errors.New("freebuff: FREEBUFF_CONFIG_DIR must be an absolute path")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("freebuff: prepare config directory: %w", err)
+	}
+	key := startupConfigKey(dir)
+	p.startupMu.Lock()
+	if p.startupGates == nil {
+		p.startupGates = map[string]*startupGate{}
+	}
+	gate := p.startupGates[key]
+	if gate == nil {
+		gate = &startupGate{available: make(chan struct{}, 1)}
+		gate.available <- struct{}{}
+		p.startupGates[key] = gate
+	}
+	p.startupMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-gate.available:
+	}
+	if err := ctx.Err(); err != nil {
+		gate.available <- struct{}{}
+		return nil, err
+	}
+	startedAt := time.Now()
+	if err := applyModelSelection(dir, cfg.Config); err != nil {
+		gate.available <- struct{}{}
+		return nil, err
+	}
+	owner := &startupOwner{sessionID: cfg.SessionID, model: model, effort: effort, startedAt: startedAt}
+	p.startupMu.Lock()
+	gate.owner = owner
+	p.startupMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.startupMu.Lock()
+			gate.owner = nil
+			p.startupMu.Unlock()
+			gate.available <- struct{}{}
+		})
+	}, nil
+}
+
+func startupConfigKey(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(dir)
+}
+
+func (p *Plugin) ownsStartup(cfg ports.LaunchConfig) bool {
+	_, ok := p.startupOwnerFor(cfg)
+	return ok
+}
+
+func (p *Plugin) startupOwnerFor(cfg ports.LaunchConfig) (startupOwner, bool) {
+	key := startupConfigKey(configDir(cfg.Env))
+	p.startupMu.Lock()
+	defer p.startupMu.Unlock()
+	gate := p.startupGates[key]
+	if gate == nil || gate.owner == nil || gate.owner.sessionID != cfg.SessionID ||
+		gate.owner.model != strings.TrimSpace(cfg.Config.Model) || gate.owner.effort != strings.TrimSpace(cfg.Config.Effort) {
+		return startupOwner{}, false
+	}
+	return *gate.owner, true
+}
+
+// This is Freebuff's current one-time default migration stamp. Mark an AO
+// canonical pick explicit, so the native default migration cannot replace an
+// explicitly requested DeepSeek model with MiMo before the picker opens.
+const defaultModelMigration = "glm-5.3-flash-2026-09-05"
+
 func applyModelSelection(dir string, cfg ports.AgentConfig) error {
 	model := strings.TrimSpace(cfg.Model)
-	effort := strings.TrimSpace(cfg.Effort)
 	if model == "" {
 		return nil
 	}
-	if dir == "" {
-		return errors.New("freebuff: cannot locate the Freebuff config directory to apply the model")
-	}
 	path := filepath.Join(dir, "settings.json")
-	settings := map[string]any{"mode": "DEFAULT", "adsEnabled": true}
+	settings := map[string]any{}
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
 		if strings.TrimSpace(string(data)) != "" {
-			var parsed any
-			if err := json.Unmarshal(data, &parsed); err != nil {
-				return fmt.Errorf("freebuff: read %s: %w", path, err)
-			}
-			// Freebuff loads null, an array or a scalar as empty settings.
-			if object, ok := parsed.(map[string]any); ok {
-				settings = object
+			if err := json.Unmarshal(data, &settings); err != nil {
+				return fmt.Errorf("freebuff: read settings: %w", err)
 			}
 		}
 	case errors.Is(err, os.ErrNotExist):
+		settings["mode"] = "DEFAULT"
+		settings["adsEnabled"] = true
 	default:
-		return fmt.Errorf("freebuff: read %s: %w", path, err)
+		return fmt.Errorf("freebuff: read settings: %w", err)
+	}
+	if settings == nil {
+		settings = map[string]any{}
 	}
 	settings["freebuffModel"] = model
+	if stamp, ok := settings["freebuffModelDefaultMigration"].(string); !ok || strings.TrimSpace(stamp) == "" {
+		settings["freebuffModelDefaultMigration"] = defaultModelMigration
+	}
 	delete(settings, "freebuffModelKey")
-	if stamp, _ := settings["freebuffModelDefaultMigration"].(string); stamp == "" {
-		settings["freebuffModelDefaultMigration"] = defaultModelMigrationID
-	}
-	// An empty effort means the model's own default, so a level saved by an
-	// earlier pick for this model is dropped rather than silently reused.
-	efforts, _ := settings["freebuffReasoningEfforts"].(map[string]any)
-	if efforts == nil {
-		efforts = map[string]any{}
-	}
-	if effort != "" {
-		efforts[model] = effort
-	} else {
-		delete(efforts, model)
-	}
-	if len(efforts) > 0 {
-		settings["freebuffReasoningEfforts"] = efforts
-	} else {
-		delete(settings, "freebuffReasoningEfforts")
-	}
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("freebuff: encode settings: %w", err)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("freebuff: create config directory: %w", err)
+	file, err := os.CreateTemp(dir, ".ao-freebuff-settings-*.json")
+	if err != nil {
+		return fmt.Errorf("freebuff: prepare settings: %w", err)
 	}
-	if err := writeFileAtomic(dir, path, out); err != nil {
+	defer func() { _ = os.Remove(file.Name()) }()
+	if _, err := file.Write(out); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("freebuff: write settings: %w", err)
 	}
-	return nil
-}
-
-// writeFileAtomic replaces path through a sibling temp file, so a Freebuff
-// process starting concurrently never reads a half-written settings file.
-func writeFileAtomic(dir, path string, data []byte) error {
-	tmp, err := os.CreateTemp(dir, ".settings-*.json")
-	if err != nil {
-		return err
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("freebuff: close settings: %w", err)
 	}
-	if _, writeErr := tmp.Write(data); writeErr != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return writeErr
-	}
-	if closeErr := tmp.Close(); closeErr != nil {
-		_ = os.Remove(tmp.Name())
-		return closeErr
-	}
-	if renameErr := os.Rename(tmp.Name(), path); renameErr != nil {
-		_ = os.Remove(tmp.Name())
-		return renameErr
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("freebuff: replace settings: %w", err)
 	}
 	return nil
 }

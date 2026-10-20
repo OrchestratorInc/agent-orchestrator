@@ -626,10 +626,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				cliSignedIn = await refreshCliLogin(workflow.agentId);
 				return cliSignedIn === signingIn;
 			}
-			// MiMo can confirm a stored provider key locally without validating it upstream.
+			// MiMo and Freebuff report locally stored credentials as configured;
+			// closing their completed login terminal does not imply upstream validation.
 			return !signingIn
 				? candidate?.agent?.authStatus === "unauthorized"
-				: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
+				: candidate?.agent?.authStatus === "authorized" || ((workflow.agentId === "mimo-code" || workflow.agentId === "freebuff") && candidate?.agent?.authStatus === "configured");
 		};
 		let result = await checkAuth(workflow.agentId, { fresh: true });
 		let done = await completed(result);

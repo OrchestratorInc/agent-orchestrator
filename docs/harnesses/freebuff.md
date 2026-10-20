@@ -21,11 +21,10 @@ Settings → Harnesses → Freebuff → **Log in** runs `freebuff login` in an A
 terminal. It prints a login URL (and opens the browser), then waits until the
 account is linked.
 
-AO reports Freebuff as **configured** (credentials present, not verified)
-when the `default` profile in `credentials.json` holds a token or a keychain
-pointer, or when `CODEBUFF_API_KEY` is set. AO never claims a verified sign-in:
-it does not call Freebuff's servers, so a revoked token looks the same.
-Without any of these the harness page shows **Log in**. Credentials live in Freebuff's config directory:
+AO reports credentials as **configured**, without claiming provider verification,
+when the `default` profile in
+`credentials.json` holds a token or a keychain pointer, or when
+`CODEBUFF_API_KEY` is set. Credentials live in Freebuff's config directory:
 `$FREEBUFF_CONFIG_DIR` when set (it must be absolute), otherwise
 `~/.config/manicode`. Freebuff has no logout subcommand; use `/logout` inside a
 Freebuff session.
@@ -38,20 +37,16 @@ freebuff --cwd <worktree>
 
 Freebuff has no prompt argument, so AO types the first turn once the composer
 shows `Enter a coding task`. A model queue can delay that, so AO waits up to 60
-seconds. AO first sends a lone Enter into the empty composer: Freebuff ignores
-an empty submit, and on Linux it otherwise treats a bare line feed as Enter
-until it has seen a Return key, which would split a multi-line turn.
-
-After typing the turn, AO reads the screen until the turn leaves the composer.
-Freebuff can keep a large typed turn as an unsent draft when Enter arrives
-before its input settles. If the draft is still visible in the composer, AO
-presses Enter again, up to three times. If the draft never submits, the launch
-fails rather than reporting a session that never started its task. AO never
-presses Enter on a screen that doesn't show the draft, such as a dialog.
+seconds.
 
 Freebuff has no system-prompt input. AO sends its standing instructions with
 the task as one first turn, under `## AO Standing Instructions` and
 `## AO Task` headings. A restored conversation keeps them in its history.
+The turn uses Freebuff's native bracketed paste handler to preserve multiline
+text. Large turns appear as a native pasted-text attachment.
+AO confirms that Freebuff saved the complete user turn before reporting a
+successful spawn. A visible draft alone does not establish delivery; bounded
+Enter retries require a matching draft in the current native composer.
 
 Freebuff has no approval prompts, so every AO permission mode launches the same
 command.
@@ -64,39 +59,26 @@ Fast, GPT-6 Luna, MiMo 2.6 Pro, Solar Mini 4, Solar Pro 4, Gemini 3.8 Flash,
 Muse Spark 1.3, Gemini 4 Argon and GPT-6.1 Sol. Each row offers only its own
 reasoning ladder.
 
-Freebuff has no `--model` flag. Before launch, AO writes the choice to
-`settings.json` in the config directory that session's Freebuff uses (the
-project's `FREEBUFF_CONFIG_DIR` when set). It uses the same `freebuffModel` and
-`freebuffReasoningEfforts` keys the `/model` and `/reasoning` pickers save:
-
-- `freebuffModelKey` is cleared so the explicit choice wins.
-- An empty effort drops any saved level for that model, so the model's default
-  applies.
-- A file without Freebuff's default-model migration stamp gets it. Otherwise
-  Freebuff's one-time migration would rewrite an explicit DeepSeek V4.1 Flash
-  pick to its new default on startup.
-
-Freebuff reads `settings.json` once at startup, so a launch holds its selection
-until AO sees that TUI's composer, for at most 45 seconds. A concurrent launch
-that wants a different model waits; one that wants the same model shares it.
-Freebuff's own picker remembers the last selection the same way, so the choice
-also becomes the default for plain `freebuff` runs.
-
-Reasoning effort is validated against the chosen model's ladder. An explicit
-level the model doesn't offer is rejected. An inherited role or project level
-clears silently for models without levels.
+Freebuff has no `--model` flag. AO serializes startup for sessions sharing a
+Freebuff config directory, seeds the requested model, and lets Freebuff resolve
+its current catalog row. It then selects that row and the requested effort
+through the native picker and confirms the resulting footer before sending the
+task. The lock spans preparation through first-turn acceptance, so concurrent AO
+launches cannot replace each other's startup preferences. Native credentials and
+chat history keep their original paths. Project `FREEBUFF_CONFIG_DIR` overrides
+apply to fresh launches and exact-chat restore.
 
 Paid-plan and region-limited models stay locked in Freebuff, as they are in its
-picker. Freebuff drops unknown models or efforts when it loads settings and
-falls back to its default model.
+picker. An unavailable selection or unrecognized native screen fails startup
+instead of reporting that a different model was selected.
 
 ## Activity
 
-Freebuff has no hooks. AO reads the bottom of the terminal:
-
-- **active:** `Add to the current task` in the composer, or `thinking...`,
-  `working...` or `■ Esc` in the status bar;
-- **idle:** `Enter a coding task` in the composer.
+Freebuff has no hooks. AO recognizes its complete current composer and native
+model/chat footer. An anchored running status with its stop control reports
+**active**; the native task placeholder reports **idle**. Transcript quotations,
+draft text and partial screens do not establish activity. Styled cursor evidence
+is required before AO treats the composer as empty.
 
 AO's process supervisor detects when the TUI exits.
 
@@ -104,10 +86,8 @@ AO's process supervisor detects when the TUI exits.
 
 Freebuff stores each conversation under
 `<config>/projects/<worktree-name>/chats/<chat-id>/`, and records the project
-root in `run-state.json`. AO records which config directory each session's
-Freebuff used, under `<AO data>/freebuff/sessions/`, and searches that
-directory on restore. On restore AO picks the newest chat whose project root is
-the session worktree, or the chat id it already recorded, and runs:
+root in `run-state.json`. On restore AO picks the newest chat whose project
+root is the session worktree, or the chat id it already recorded, and runs:
 
 ```bash
 freebuff --cwd <worktree> --continue <chat-id>
