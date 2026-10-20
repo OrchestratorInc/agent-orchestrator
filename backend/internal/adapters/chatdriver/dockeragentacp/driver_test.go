@@ -187,11 +187,14 @@ func TestConfigureFailsClosed(t *testing.T) {
 	}
 }
 
-func TestInitializePinsNativeDistribution(t *testing.T) {
-	for _, version := range []string{"v1.149.0", "v1.150.0", "v1.151.0"} {
+func TestInitializeAdmitsQualifiedAndNewerReleases(t *testing.T) {
+	for version, admitted := range map[string]bool{
+		"v1.149.9": false, "v0.999.0": false, "": false, "latest": false,
+		"v1.150.0": true, "v1.151.0": true, "v1.200.3": true, "v2.0.0": true, "v1.152.0-rc.1": true,
+	} {
 		err := validateInitialize(acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "docker agent", Version: version}, AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true}})
-		if (err == nil) != (version == "v1.150.0") {
-			t.Fatalf("%s: %v", version, err)
+		if (err == nil) != admitted {
+			t.Fatalf("%q: %v", version, err)
 		}
 	}
 	if validateInitialize(acpsdk.InitializeResponse{}) == nil {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -36,16 +37,39 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
+// minimumVersion is the first release qualified with this binding. Newer
+// releases are admitted so AO can install whatever Docker publishes.
+var minimumVersion = [3]int{1, 150, 0}
+
 func validateInitialize(init acpsdk.InitializeResponse) error {
-	// Admission is deliberately pinned to the released distribution qualified by
-	// this binding; later versions need native lifecycle qualification first.
-	if init.AgentInfo == nil || init.AgentInfo.Name != "docker agent" || init.AgentInfo.Version != "v1.150.0" {
-		return fmt.Errorf("docker agent native ACP requires tested v1.150.0")
+	if init.AgentInfo == nil || init.AgentInfo.Name != "docker agent" || !atLeastMinimum(init.AgentInfo.Version) {
+		return fmt.Errorf("docker agent native ACP requires v1.150.0 or newer")
 	}
 	if !init.AgentCapabilities.LoadSession {
 		return fmt.Errorf("docker agent must support session/load")
 	}
 	return nil
+}
+
+// atLeastMinimum reports whether a "vMAJOR.MINOR.PATCH" version (prerelease
+// or build suffix ignored) is minimumVersion or newer.
+func atLeastMinimum(version string) bool {
+	core, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(version), "v"), "-")
+	core, _, _ = strings.Cut(core, "+")
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return false
+		}
+		if n != minimumVersion[i] {
+			return n > minimumVersion[i]
+		}
+	}
+	return true
 }
 
 func preflight(ctx context.Context) error {

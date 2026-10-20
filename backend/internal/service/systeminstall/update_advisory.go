@@ -279,13 +279,6 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Reason = UpdateReasonVersionUnparseable
 		return advisory, nil
 	}
-	if qualified, ok := qualifiedVersions[target]; ok {
-		// Chat admission refuses every other release, so the qualified one is
-		// the only version worth reporting, whatever the registry's latest.
-		if pinned, ok := scheme.parse(qualified); ok {
-			parsedLatest = pinned
-		}
-	}
 	comparison, versionsComparable := scheme.compare(current, parsedLatest)
 	if !versionsComparable {
 		advisory.Reason = UpdateReasonChannelUnconfirmed
@@ -307,12 +300,6 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Reason = ""
 	}
 	return advisory, nil
-}
-
-// qualifiedVersions pins harnesses whose integration admits only one native
-// release; advisories compare against it instead of the registry's latest.
-var qualifiedVersions = map[Target]string{
-	TargetDockerAgent: "1.150.0",
 }
 
 // vendorMaintainable reports whether the harness can update the binary

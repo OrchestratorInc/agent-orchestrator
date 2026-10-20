@@ -1,6 +1,6 @@
 # Docker Agent (native ACP Chat)
 
-AO supports the user-installed standalone `docker-agent` **v1.150.0** on Unix through its native stdio ACP server. Docker Desktop is optional. Other versions are refused until qualified. Install the official binary from [Docker's release](https://github.com/docker/docker-agent/releases/tag/v1.150.0); AO does not offer `brew install docker-agent` because the formula tracks the latest release.
+AO supports the standalone `docker-agent` **v1.150.0 or newer** on Unix through its native stdio ACP server. Docker Desktop is optional. On macOS and Linux, Settings → Harness → Docker Agent → Install uses `brew install docker-agent`, which installs the latest release, and updates follow it; otherwise install the latest official binary from [Docker's releases](https://github.com/docker/docker-agent/releases). Versions older than v1.150.0 are refused; v1.150.0 is the release this binding was qualified against.
 
 With a provider key in AO's environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY`), AO generates a private per-session Docker Agent config using Docker Agent's suggested models for the available providers, with filesystem and shell tools. To use your own configuration instead, set `AO_DOCKER_AGENT_CONFIG` to an **absolute existing native YAML config path**; AO never rewrites it. Authentication shows `configured` when either is present; a live provider turn remains authoritative.
 

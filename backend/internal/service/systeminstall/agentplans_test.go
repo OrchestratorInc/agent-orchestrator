@@ -217,6 +217,7 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
 		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
+		{"docker agent brew", "darwin", TargetDockerAgent, []string{"brew"}, "homebrew", "brew install docker-agent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -225,19 +226,6 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 				t.Fatalf("plan = %+v, want method %q command %q", plan, tt.wantMethod, tt.wantCommand)
 			}
 		})
-	}
-}
-
-func TestDockerAgentHomebrewInstallIsRefused(t *testing.T) {
-	s := newTestService("darwin", "brew")
-	planner, err := s.newRequestPlanner(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationUpdate} {
-		if _, err := planner.resolveAgentMethod(TargetDockerAgent, "homebrew", operation); err == nil {
-			t.Fatalf("%s: Homebrew must not install an unqualified Docker Agent release", operation)
-		}
 	}
 }
 

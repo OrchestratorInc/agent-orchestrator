@@ -201,35 +201,23 @@ func TestNPMInstallerHarnessUpdatesThroughVendorCommand(t *testing.T) {
 	}
 }
 
-// Docker Agent Chat admits only its qualified release, so advisories compare
-// against it rather than the registry's newer formula.
-func TestUpdateAdvisoryComparesDockerAgentWithQualifiedRelease(t *testing.T) {
-	tests := []struct {
-		installed  string
-		wantStatus UpdateStatus
-	}{
-		{"1.149.0", UpdateStatusBehindLatest},
-		{"1.150.0", UpdateStatusCurrent},
-		{"1.151.0", UpdateStatusAheadOfLatest},
+// Docker Agent installs track the latest release, so a newer formula is
+// offered as an update.
+func TestUpdateAdvisoryOffersLatestDockerAgentRelease(t *testing.T) {
+	binary := writeFileAt(t, filepath.Join(t.TempDir(), "homebrew", "Cellar", "docker-agent", "1.150.0", "bin", "docker-agent"), "")
+	s := newTestService("darwin", "brew")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: binary, Output: "docker-agent version v1.150.0"}, nil
+	})
+	s.ownsInstallation = func(_ context.Context, _ string, method, pkg string, cask bool) (bool, error) {
+		return method == "homebrew" && pkg == "docker-agent" && !cask, nil
 	}
-	for _, tt := range tests {
-		t.Run(tt.installed, func(t *testing.T) {
-			binary := writeFileAt(t, filepath.Join(t.TempDir(), "homebrew", "Cellar", "docker-agent", tt.installed, "bin", "docker-agent"), "")
-			s := newTestService("darwin", "brew")
-			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
-				return VerifyResult{ResolvedPath: binary, Output: "docker-agent version v" + tt.installed}, nil
-			})
-			s.ownsInstallation = func(_ context.Context, _ string, method, pkg string, cask bool) (bool, error) {
-				return method == "homebrew" && pkg == "docker-agent" && !cask, nil
-			}
-			s.managedVersion = fixedManagedVersion("1.152.0", nil)
-			advisory, err := s.UpdateAdvisory(context.Background(), TargetDockerAgent, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if advisory.Status != tt.wantStatus || advisory.LatestVersion != "1.150.0" {
-				t.Fatalf("advisory = %+v, want %s against 1.150.0", advisory, tt.wantStatus)
-			}
-		})
+	s.managedVersion = fixedManagedVersion("1.152.0", nil)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetDockerAgent, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.Status != UpdateStatusBehindLatest || advisory.LatestVersion != "1.152.0" {
+		t.Fatalf("advisory = %+v", advisory)
 	}
 }

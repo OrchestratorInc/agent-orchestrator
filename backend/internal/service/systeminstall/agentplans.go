@@ -267,17 +267,11 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
 	case TargetDockerAgent:
-		// Chat admission pins the native ACP version, and Homebrew's formula
-		// tracks the latest release, so AO installs nothing itself. The brew plan
-		// stays listed, unsupported, so advisories still recognize brew installs.
-		manual := manualPlan(target, "Install the official standalone Docker Agent v1.150.0 binary. Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])
+		// Docker publishes the standalone CLI as a Homebrew formula; AO installs
+		// and updates to its latest release (Chat admits v1.150.0 or newer).
+		manual := manualPlan(target, "Install the latest official standalone Docker Agent binary (v1.150.0 or newer). Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])
 		if s.goos == "darwin" || s.goos == "linux" {
-			brew := s.planBrew(target, "docker-agent")
-			if !brew.Unsupported {
-				brew.Unsupported = true
-				brew.Reason = "Homebrew's docker-agent formula installs the latest release, but AO Chat requires v1.150.0. Install the official v1.150.0 binary instead."
-			}
-			plans = []Plan{manual, brew}
+			plans = []Plan{s.planBrew(target, "docker-agent"), manual}
 		} else {
 			plans = []Plan{manual}
 		}
