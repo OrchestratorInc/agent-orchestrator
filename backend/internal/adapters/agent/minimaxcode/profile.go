@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -689,23 +688,18 @@ func unquoteShellWord(word string) (string, bool) {
 
 func writeHookConfig(plugin, node, launch string) error {
 	// MiniMax expands its own plugin-root variable before invoking the command.
-	// Its cached command pins the generation without repurposing TMPDIR. Encode
-	// the absolute path so spaces and shell metacharacters remain a single arg.
-	interpreter := "node"
-	switch {
-	case node == "node":
-	case runtime.GOOS == "windows":
-		// Windows paths cannot contain double quotes; cmd and POSIX shells
-		// both read a double-quoted path as one word.
-		interpreter = `"` + node + `"`
-	default:
-		interpreter = "'" + strings.ReplaceAll(node, "'", `'\''`) + "'"
+	// Its cached command pins the generation without repurposing TMPDIR.
+	argument := base64.RawURLEncoding.EncodeToString([]byte(launch))
+	handler := map[string]any{"type": "command", "command": `node "${CLAUDE_PLUGIN_ROOT}/hook.cjs" ` + argument, "timeout": 10}
+	if node != "node" {
+		// A pinned runtime path is spawned directly with argv: no shell, so no
+		// quoting that differs between sh, Git Bash and PowerShell.
+		handler = map[string]any{"type": "command", "command": node, "args": []string{"${CLAUDE_PLUGIN_ROOT}/hook.cjs", argument}, "timeout": 10}
 	}
-	command := interpreter + ` "${CLAUDE_PLUGIN_ROOT}/hook.cjs" ` + base64.RawURLEncoding.EncodeToString([]byte(launch))
 
 	hooks := map[string]any{}
 	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop"} {
-		hooks[ev] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 10}}}}
+		hooks[ev] = []any{map[string]any{"hooks": []any{handler}}}
 	}
 	body, err := json.Marshal(map[string]any{"hooks": hooks})
 	if err != nil {

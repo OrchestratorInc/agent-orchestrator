@@ -2,6 +2,7 @@ package minimaxcode
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -330,18 +331,19 @@ func TestOfficialLauncherNodePinsHookRuntime(t *testing.T) {
 	var config struct {
 		Hooks map[string][]struct {
 			Hooks []struct {
-				Command string `json:"command"`
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(body, &config); err != nil {
 		t.Fatal(err)
 	}
-	command := config.Hooks["UserPromptSubmit"][0].Hooks[0].Command
-	// The shell must hand the quoted runtime path through as one argument.
-	out, err := exec.Command("/bin/sh", "-c", `set -- `+strings.Replace(command, ` "${CLAUDE_PLUGIN_ROOT}`, ` "/plugin`, 1)+`; printf %s "$1"`).Output()
-	if err != nil || string(out) != node {
-		t.Fatalf("hook command %q runs %q, %v; want %q", command, out, err, node)
+	// The pinned runtime is spawned as argv, so no shell has to parse its path.
+	handler := config.Hooks["UserPromptSubmit"][0].Hooks[0]
+	launch := base64.RawURLEncoding.EncodeToString([]byte("/launch"))
+	if handler.Command != node || len(handler.Args) != 2 || handler.Args[0] != "${CLAUDE_PLUGIN_ROOT}/hook.cjs" || handler.Args[1] != launch {
+		t.Fatalf("hook handler = %+v; want command %q with hook and launch args", handler, node)
 	}
 	writeRefreshFixture(t, filepath.Join(root, "current"), "../escape\n")
 	if got := officialLauncherNode(binary); got != "" {
