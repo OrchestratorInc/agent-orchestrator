@@ -11,10 +11,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -98,7 +100,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		}
 		// Preserve the profile's supported custom defaults and executable resources.
 		// Native history/cache are deliberately per-AO-session and are not imported.
-		for _, dir := range []string{"auth", "agents", "skills", "plugins", "memory", "harnesses", "subagents", "integrations", "AGENTS.md", "tui/keybindings.json"} {
+		for _, dir := range []string{"auth", "agents", "skills", "plugins", "memory", "harnesses", "subagents", "integrations", "AGENTS.md", "permission.json", nativeRegionPreference, "tui/keybindings.json"} {
 			if err := copyProfileTree(ctx, filepath.Join(source, dir), filepath.Join(target, dir)); err != nil {
 				return err
 			}
@@ -204,6 +206,11 @@ func readPrivateConfig(path string) ([]byte, error) {
 // Provider history and AO context files are never replaced. Validate and stage
 // first so malformed, missing or symlinked auth cannot destroy a saved snapshot.
 // A failed config write restores the old auth; failed rollback retains its backup.
+// nativeRegionPreference records the account namespace (Global or China)
+// MiniMax uses when auth state exists for both; without it the native
+// resolver can pick the other namespace.
+const nativeRegionPreference = "preferences/mcode-region.json"
+
 func refreshProfileCredentials(ctx context.Context, target, source string) error {
 	config, err := readPrivateConfig(filepath.Join(source, "config.yaml"))
 	if err != nil {
@@ -212,6 +219,10 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 	var parsed map[string]any
 	if err := yaml.Unmarshal(config, &parsed); err != nil {
 		return errors.New("MiniMax provider config is not valid YAML")
+	}
+	// Like auth, a preference absent from the source leaves any private one intact.
+	if err := copyProfileTree(ctx, filepath.Join(source, filepath.FromSlash(nativeRegionPreference)), filepath.Join(target, filepath.FromSlash(nativeRegionPreference))); err != nil {
+		return err
 	}
 	staging, err := os.MkdirTemp(target, ".ao-auth-refresh-")
 	if err != nil {
@@ -478,7 +489,7 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := hookutil.AtomicWriteFile(filepath.Join(launch, "standing.txt"), instructions, 0o600); err != nil {
 		return err
 	}
-	if err := writeHookConfig(filepath.Join(profile, "plugins", "ao-activity"), launch); err != nil {
+	if err := writeHookConfig(filepath.Join(profile, "plugins", "ao-activity"), hookNode(ctx), launch); err != nil {
 		return err
 	}
 	// Publish the complete current generation before pruning. A cached hook
@@ -518,11 +529,67 @@ func requireStandingTransport(profile string) error {
 	return nil
 }
 
-func writeHookConfig(plugin, launch string) error {
+// hookNode returns the hook interpreter. MiniMax's official installer runs
+// a private Node runtime by absolute path without putting it on PATH, so
+// hooks name that runtime; other installs rely on PATH's node.
+var hookNode = func(ctx context.Context) string {
+	binary, err := binaryutil.ResolveBinary(ctx, binarySpec)
+	if err != nil {
+		return "node"
+	}
+	if node := officialLauncherNode(binary); node != "" {
+		return node
+	}
+	return "node"
+}
+
+var releasePattern = regexp.MustCompile(`^[0-9A-Za-z._-]+$`)
+
+// officialLauncherNode reads the Node runtime pinned by the official
+// installer's layout: <root>/bin/mcode execs <root>/releases/<current>/
+// .mcode-launcher, which assigns node='<absolute path>'. It returns "" for any
+// other install.
+func officialLauncherNode(binary string) string {
+	resolved, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		return ""
+	}
+	root := filepath.Dir(filepath.Dir(resolved))
+	current, err := os.ReadFile(filepath.Join(root, "current"))
+	if err != nil {
+		return ""
+	}
+	release := strings.TrimSpace(string(current))
+	if !releasePattern.MatchString(release) || release == "." || release == ".." {
+		return ""
+	}
+	launcher, err := os.ReadFile(filepath.Join(root, "releases", release, ".mcode-launcher"))
+	if err != nil || len(launcher) > 64<<10 {
+		return ""
+	}
+	for _, line := range strings.Split(string(launcher), "\n") {
+		value, ok := strings.CutPrefix(strings.TrimSpace(line), "node=")
+		if !ok {
+			continue
+		}
+		node := strings.Trim(value, `'"`)
+		if info, err := os.Stat(node); err == nil && filepath.IsAbs(node) && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return node
+		}
+		return ""
+	}
+	return ""
+}
+
+func writeHookConfig(plugin, node, launch string) error {
 	// MiniMax expands its own plugin-root variable before invoking the command.
 	// Its cached command pins the generation without repurposing TMPDIR. Encode
 	// the absolute path so spaces and shell metacharacters remain a single arg.
-	command := `node "${CLAUDE_PLUGIN_ROOT}/hook.cjs" ` + base64.RawURLEncoding.EncodeToString([]byte(launch))
+	interpreter := "node"
+	if node != "node" {
+		interpreter = "'" + strings.ReplaceAll(node, "'", `'\''`) + "'"
+	}
+	command := interpreter + ` "${CLAUDE_PLUGIN_ROOT}/hook.cjs" ` + base64.RawURLEncoding.EncodeToString([]byte(launch))
 
 	hooks := map[string]any{}
 	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop"} {

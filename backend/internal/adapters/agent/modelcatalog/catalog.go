@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,11 @@ type commandSpec struct {
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
 	signIn *signInCheck
+	// interruptOnCancel is set for CLIs that hold a profile lock while listing
+	// models. A killed run orphans the lock and blocks every later command, so
+	// cancellation interrupts first; where that cannot be delivered (Windows),
+	// discovery is skipped.
+	interruptOnCancel bool
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -131,7 +137,7 @@ var commandSpecs = map[string]commandSpec{
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
-	"minimax-code": {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels},
+	"minimax-code": {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -460,9 +466,15 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 			return base, err
 		}
 	}
+	if spec.interruptOnCancel && runtime.GOOS == "windows" {
+		return base, nil
+	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
+	if spec.interruptOnCancel {
+		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)

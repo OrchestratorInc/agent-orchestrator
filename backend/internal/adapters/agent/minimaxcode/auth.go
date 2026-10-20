@@ -25,13 +25,7 @@ const probeStopGrace = 3 * time.Second
 
 var runAuthProbe = func(ctx context.Context, binary string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, "provider", "list", "--json")
-	cmd.Cancel = func() error {
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
-			return cmd.Process.Kill()
-		}
-		return nil
-	}
-	cmd.WaitDelay = probeStopGrace
+	aoprocess.InterruptOnCancel(cmd, probeStopGrace)
 	return cmd.Output()
 }
 

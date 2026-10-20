@@ -59,7 +59,7 @@ func (p *Plugin) PrepareChatProfile(ctx context.Context, dataDir, sessionID stri
 	if err != nil {
 		return "", err
 	}
-	for _, resource := range []string{"auth", "agents", "skills", "plugins", "memory", "harnesses", "subagents", "integrations", "AGENTS.md", "permission.json"} {
+	for _, resource := range []string{"auth", "agents", "skills", "plugins", "memory", "harnesses", "subagents", "integrations", "AGENTS.md", "permission.json", nativeRegionPreference} {
 		if err := copyProfileTree(ctx, filepath.Join(source, resource), filepath.Join(staging, resource)); err != nil {
 			return "", err
 		}

@@ -2,8 +2,11 @@ package minimaxcode
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -224,5 +227,119 @@ func TestRuntimeLaunchPrunesOldSnapshotsAfterPublication(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(launches, "current", "routing.json")); err != nil {
 		t.Fatalf("current routing snapshot was pruned: %v", err)
+	}
+}
+
+// MiniMax honors explicit deny/ask rules even under bypassPermissions, so the
+// private profile must keep the source's global policy.
+func TestTUIProfileKeepsGlobalPermissionPolicy(t *testing.T) {
+	source, data := t.TempDir(), t.TempDir()
+	writeRefreshFixture(t, filepath.Join(source, "permission.json"), `{"deny":["bash"]}`)
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		DataDir: data, SessionID: "policy-1", Env: map[string]string{"MINIMAX_DATA_DIR": source},
+		Config: ports.AgentConfig{Permissions: ports.PermissionModeBypassPermissions},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := profilePath(data, "policy-1")
+	if got, err := os.ReadFile(filepath.Join(profile, "permission.json")); err != nil || string(got) != `{"deny":["bash"]}` {
+		t.Fatalf("private profile dropped the global policy: %q, %v", got, err)
+	}
+}
+
+// With auth state for both Global and China accounts, the saved region is what
+// keeps MiniMax on the signed-in namespace.
+func TestProfilesKeepAndRefreshNativeRegion(t *testing.T) {
+	for _, mode := range []string{"tui", "chat"} {
+		t.Run(mode, func(t *testing.T) {
+			source, data := t.TempDir(), t.TempDir()
+			writeRefreshFixture(t, filepath.Join(source, "auth", "prod", "en", "mcode-public", "auth-state.json"), `{"status":"authenticated"}`)
+			writeRefreshFixture(t, filepath.Join(source, "auth", "prod", "cn", "mcode-public", "auth-state.json"), `{"status":"expired"}`)
+			region := filepath.Join(source, "preferences", "mcode-region.json")
+			writeRefreshFixture(t, region, `{"prod":"en"}`)
+			plugin := New()
+			env := map[string]string{"MINIMAX_DATA_DIR": source}
+			var profile string
+			prepare := func() {
+				t.Helper()
+				if mode == "chat" {
+					path, err := plugin.PrepareChatProfile(context.Background(), data, "region-1", env)
+					if err != nil {
+						t.Fatal(err)
+					}
+					profile = path
+					return
+				}
+				profile, _ = profilePath(data, "region-1")
+				if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: data, SessionID: "region-1", Env: env}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertRegion := func(want string) {
+				t.Helper()
+				got, err := os.ReadFile(filepath.Join(profile, "preferences", "mcode-region.json"))
+				if err != nil || string(got) != want {
+					t.Fatalf("private region = %q, %v; want %q", got, err, want)
+				}
+			}
+			prepare()
+			assertRegion(`{"prod":"en"}`)
+			writeRefreshFixture(t, region, `{"prod":"cn"}`)
+			prepare()
+			assertRegion(`{"prod":"cn"}`)
+		})
+	}
+}
+
+// The official installer's launcher runs a private Node by absolute path, so
+// hooks must name that runtime rather than rely on PATH.
+func TestOfficialLauncherNodePinsHookRuntime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the official launcher layout is a POSIX shell script")
+	}
+	root := filepath.Join(t.TempDir(), "minimax code's install")
+	node := filepath.Join(root, "runtime", "node")
+	writeRefreshFixture(t, node, "")
+	if err := os.Chmod(node, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "bin", "mcode")
+	writeRefreshFixture(t, binary, "#!/bin/sh\n")
+	writeRefreshFixture(t, filepath.Join(root, "current"), "0.6.12\n")
+	launcher := filepath.Join(root, "releases", "0.6.12", ".mcode-launcher")
+	writeRefreshFixture(t, launcher, "#!/bin/sh\nset -eu\nnode='"+node+"'\nexec \"$node\" cli.js \"$@\"\n")
+	if got := officialLauncherNode(binary); got != node {
+		t.Fatalf("launcher node = %q, want %q", got, node)
+	}
+	plugin := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(plugin, "hooks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeHookConfig(plugin, node, "/launch"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(plugin, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(body, &config); err != nil {
+		t.Fatal(err)
+	}
+	command := config.Hooks["UserPromptSubmit"][0].Hooks[0].Command
+	// The shell must hand the quoted runtime path through as one argument.
+	out, err := exec.Command("/bin/sh", "-c", `set -- `+strings.Replace(command, ` "${CLAUDE_PLUGIN_ROOT}`, ` "/plugin`, 1)+`; printf %s "$1"`).Output()
+	if err != nil || string(out) != node {
+		t.Fatalf("hook command %q runs %q, %v; want %q", command, out, err, node)
+	}
+	writeRefreshFixture(t, filepath.Join(root, "current"), "../escape\n")
+	if got := officialLauncherNode(binary); got != "" {
+		t.Fatalf("accepted an invalid release pointer: %q", got)
 	}
 }

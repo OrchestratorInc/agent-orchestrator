@@ -22,6 +22,9 @@ func hookLaunchArgument(profile, generation string) string {
 
 func TestRuntimeLaunchPinsHookCommandWithoutChangingTempPaths(t *testing.T) {
 	t.Setenv("MINIMAX_DATA_DIR", t.TempDir())
+	previousNode := hookNode
+	t.Cleanup(func() { hookNode = previousNode })
+	hookNode = func(context.Context) string { return "node" }
 	cfg := ports.WorkspaceHookConfig{
 		DataDir:   filepath.Join(t.TempDir(), "AO data & (private)"),
 		SessionID: "acme.dev-2", WorkspacePath: t.TempDir(),
