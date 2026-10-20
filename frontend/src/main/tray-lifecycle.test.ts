@@ -42,6 +42,42 @@ describe("isTrayEnabled", () => {
 	it.each(["win32", "linux"] as const)("is disabled on %s", (platform) => {
 		expect(isTrayEnabled(platform)).toBe(false);
 	});
+
+	it("is disabled on macOS when AO_NO_TRAY=1", () => {
+		vi.stubEnv("AO_NO_TRAY", "1");
+		try {
+			expect(isTrayEnabled("darwin")).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("is disabled on macOS when AO_NO_TRAY=true", () => {
+		vi.stubEnv("AO_NO_TRAY", "true");
+		try {
+			expect(isTrayEnabled("darwin")).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("ignores other AO_NO_TRAY values and keeps the tray", () => {
+		vi.stubEnv("AO_NO_TRAY", "0");
+		try {
+			expect(isTrayEnabled("darwin")).toBe(true);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("keeps the tray when AO_NO_TRAY is unset", () => {
+		vi.stubEnv("AO_NO_TRAY", undefined);
+		try {
+			expect(isTrayEnabled("darwin")).toBe(true);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
 });
 
 describe("createTrayLifecycle openSession", () => {

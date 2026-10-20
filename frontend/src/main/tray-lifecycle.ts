@@ -3,7 +3,9 @@ import type { TrayController } from "./tray";
 import { TRAY_OPEN_SESSION_CHANNEL, type TrayAttentionState, type TrayOpenSessionTarget } from "../shared/tray";
 
 export function isTrayEnabled(platform: NodeJS.Platform): boolean {
-	return platform === "darwin";
+	if (platform !== "darwin") return false;
+	const noTray = process.env.AO_NO_TRAY;
+	return noTray !== "1" && noTray !== "true";
 }
 
 export type TrayLifecycleDeps = {
