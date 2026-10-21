@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -64,9 +63,6 @@ type fakeStore struct {
 	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
-	activeSwitches      map[domain.SessionID]domain.AgentSwitch
-	activeSwitchGetErr  error
-	activeSwitchListErr error
 	pr                  map[domain.SessionID]domain.PRFacts
 	prFacts             map[domain.SessionID][]domain.PRFacts
 	prs                 map[domain.SessionID][]domain.PullRequest
@@ -80,15 +76,21 @@ type fakeStore struct {
 	comments            map[string][]domain.PullRequestComment
 	commentsErr         error
 	reviewRuns          map[domain.SessionID][]domain.CurrentHeadReviewRun
+	interrupted         map[domain.SessionID]bool
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+
+	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
+	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
+	getCleanupFactsCalls  int
+	listCleanupFactsCalls int
+	cleanupFactsRequested []domain.SessionID
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		sessions:       map[domain.SessionID]domain.SessionRecord{},
-		activeSwitches: map[domain.SessionID]domain.AgentSwitch{},
 		pr:             map[domain.SessionID]domain.PRFacts{},
 		prFacts:        map[domain.SessionID][]domain.PRFacts{},
 		prs:            map[domain.SessionID][]domain.PullRequest{},
@@ -128,6 +130,35 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 	if st.listReviewRunsCalls != 1 {
 		t.Fatalf("ListCurrentHeadReviewRuns calls = %d, want 1 batched call", st.listReviewRunsCalls)
+	}
+}
+
+func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.interrupted = map[domain.SessionID]bool{"mer-1": true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	for _, sess := range list {
+		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
+			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
+		}
+	}
+	sess, err := svc.Get(context.Background(), "mer-1")
+	if err != nil || sess.DisplayStatus != "Interrupted" {
+		t.Fatalf("get displayStatus = %q, %v; want Interrupted", sess.DisplayStatus, err)
 	}
 }
 
@@ -173,25 +204,6 @@ func TestGetRecordReadsOnlyTheStoredRow(t *testing.T) {
 			t.Fatalf("GetRecord(%s) error = %v, want SESSION_NOT_FOUND", id, err)
 		}
 	}
-}
-
-func (f *fakeStore) GetActiveAgentSwitch(_ context.Context, id domain.SessionID) (domain.AgentSwitch, bool, error) {
-	if f.activeSwitchGetErr != nil {
-		return domain.AgentSwitch{}, false, f.activeSwitchGetErr
-	}
-	sw, ok := f.activeSwitches[id]
-	return sw, ok, nil
-}
-
-func (f *fakeStore) ListActiveAgentSwitches(context.Context) ([]domain.AgentSwitch, error) {
-	if f.activeSwitchListErr != nil {
-		return nil, f.activeSwitchListErr
-	}
-	out := make([]domain.AgentSwitch, 0, len(f.activeSwitches))
-	for _, sw := range f.activeSwitches {
-		out = append(out, sw)
-	}
-	return out, nil
 }
 
 func newWorkspaceRepo(t testing.TB) string {
@@ -484,6 +496,16 @@ func (f *fakeStore) ListCurrentHeadReviewRunsForSessions(_ context.Context, ids 
 	return out, nil
 }
 
+func (f *fakeStore) ListInterruptedSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
+	out := make(map[domain.SessionID]bool, len(ids))
+	for _, id := range ids {
+		if f.interrupted[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) ListChecks(_ context.Context, prURL string) ([]domain.PullRequestCheck, error) {
 	return append([]domain.PullRequestCheck(nil), f.checks[prURL]...), nil
 }
@@ -537,43 +559,6 @@ func TestSessionListAppliesActivityBeforePRFacts(t *testing.T) {
 				t.Fatalf("got %+v, want status %q", list, tt.want)
 			}
 		})
-	}
-}
-
-func TestSessionListProjectsActiveAgentSwitch(t *testing.T) {
-	st := newFakeStore()
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Activity: domain.Activity{State: domain.ActivityExited}}
-	st.sessions["other-1"] = domain.SessionRecord{ID: "other-1", ProjectID: "other", Activity: domain.Activity{State: domain.ActivityIdle}}
-	st.activeSwitches["mer-1"] = domain.AgentSwitch{
-		ID: "switch-1", SessionID: "mer-1", FromHarness: domain.HarnessClaudeCode,
-		TargetHarness: domain.HarnessCodex, State: domain.AgentSwitchPreparingHandoff,
-	}
-	st.activeSwitches["other-1"] = domain.AgentSwitch{ID: "switch-other", SessionID: "other-1", State: domain.AgentSwitchPreparingHandoff}
-
-	list, err := (&Service{store: st}).List(context.Background(), ListFilter{ProjectID: "mer"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != 1 || list[0].ActiveAgentSwitch == nil || list[0].ActiveAgentSwitch.ID != "switch-1" {
-		t.Fatalf("list active switch projection = %+v", list)
-	}
-	if list[0].Status != domain.StatusExited {
-		t.Fatalf("session status = %q, want durable activity-derived exited", list[0].Status)
-	}
-	got, err := (&Service{store: st}).Get(context.Background(), "mer-1")
-	if err != nil || got.ActiveAgentSwitch == nil || got.ActiveAgentSwitch.ID != "switch-1" {
-		t.Fatalf("get active switch projection = %+v, err=%v", got.ActiveAgentSwitch, err)
-	}
-
-	st.activeSwitchListErr = errors.New("active switch read failed")
-	if _, err := (&Service{store: st}).List(context.Background(), ListFilter{ProjectID: "mer"}); err == nil || !strings.Contains(err.Error(), "active switch") {
-		t.Fatalf("active switch list error = %v", err)
-	}
-
-	st.activeSwitchListErr = nil
-	st.activeSwitchGetErr = errors.New("active switch read failed")
-	if _, err := (&Service{store: st}).Get(context.Background(), "mer-1"); err == nil || !strings.Contains(err.Error(), "active switch") {
-		t.Fatalf("active switch get error = %v", err)
 	}
 }
 
@@ -2585,6 +2570,8 @@ type fakeCommander struct {
 	sendFunc         func(domain.SessionID, string) error
 	cleanupErr       error
 	spawnErr         error
+	spawnWaitsForCtx bool
+	spawnHook        func(context.Context)
 	spawnRecord      domain.SessionRecord
 	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls       int
@@ -2612,6 +2599,13 @@ type backgroundTaskCall struct {
 
 func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
 	f.spawnCtx = ctx
+	if f.spawnHook != nil {
+		f.spawnHook(ctx)
+	}
+	if f.spawnWaitsForCtx {
+		<-ctx.Done()
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ctx.Err())
+	}
 	if f.spawnErr != nil {
 		return domain.SessionRecord{}, 0, 0, f.spawnErr
 	}
@@ -2632,19 +2626,6 @@ func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord
 }
 func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
 	return nil
-}
-func (*fakeCommander) SwitchAgent(context.Context, domain.SessionID, sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
-}
-
-func (*fakeCommander) RecoverAgentSwitch(context.Context, domain.SessionID, domain.AgentSwitchID) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
-}
-func (*fakeCommander) ListAgentSwitches(context.Context, domain.SessionID) ([]domain.AgentSwitch, error) {
-	return nil, nil
-}
-func (*fakeCommander) SubmitAgentHandoff(context.Context, domain.SessionID, domain.AgentSwitchID, domain.AgentGenerationID, json.RawMessage) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
 }
 func (f *fakeCommander) RestoreWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error) {
 	if f.restoreErr != nil {
@@ -2924,6 +2905,55 @@ func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T)
 	}
 	if fc.spawnCtx == nil || !errors.Is(fc.spawnCtx.Err(), context.Canceled) {
 		t.Fatal("replacement spawn must receive the cancelled request context")
+	}
+}
+
+// A clean replacement runs the retired orchestrator's Cleanup before the
+// spawn extends the request's budget; the request used to die at its base
+// budget while the Cleanup ran.
+func TestSpawnOrchestratorCleanBudgetCoversTheRetiredOrchestratorsCleanup(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{PreRemove: []string{"make clean"}}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{
+		retireFunc: func(context.Context, domain.SessionID) error {
+			time.Sleep(80 * time.Millisecond)
+			return nil
+		},
+		spawnHook: func(ctx context.Context) { spawnErr = ctx.Err() },
+	}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("replacement spawn context Err() = %v, want live after the retirement's Cleanup", spawnErr)
+	}
+}
+
+// The spawn's own extension, from its own start, is not capped by the
+// orchestrator start's earlier one.
+func TestSpawnOrchestratorLeavesTheSpawnsOwnBudgetExtensionUncapped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{spawnHook: func(ctx context.Context) {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 300*time.Millisecond)
+		defer cancel()
+		time.Sleep(100 * time.Millisecond)
+		spawnErr = ctx.Err()
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("spawn context Err() = %v, want live within the spawn's own extension", spawnErr)
 	}
 }
 
@@ -3633,6 +3663,22 @@ func TestSpawnEmitsTypedErrorCodeOnFailure(t *testing.T) {
 	}
 }
 
+// A spawn whose request budget runs out before it extends it (its project's
+// Setup steps) timed out; it is not a cancellation by the client.
+func TestSpawnReportsTimeoutWhenTheBaseRequestBudgetRunsOut(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{spawnWaitsForCtx: true}, Store: st, Clock: func() time.Time { return time.Unix(1700000000, 0).UTC() }})
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 20*time.Millisecond)
+	defer release()
+
+	_, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var e *apierr.Error
+	if !errors.As(err, &e) || e.Code != "SPAWN_TIMEOUT" {
+		t.Fatalf("Spawn error = %v, want SPAWN_TIMEOUT", err)
+	}
+}
+
 // TestSpawnOrchestratorUnknownProjectReturns404 is the orchestrator-side guard
 // for Bug 1: same pre-validation, same typed envelope.
 func TestSpawnOrchestratorUnknownProjectReturns404(t *testing.T) {
@@ -3680,19 +3726,6 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
 		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
-		{"target agent unauthorized", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrTargetAgentUnauthorized), apierr.KindInvalid, "TARGET_AGENT_UNAUTHORIZED"},
-		{"worker session required", fmt.Errorf("switch agent mer-orchestrator: %w", sessionmanager.ErrUnsupportedSwitchKind), apierr.KindInvalid, "WORKER_SESSION_REQUIRED"},
-		{"unsupported switch harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrUnsupportedSwitchHarness), apierr.KindInvalid, "UNSUPPORTED_SWITCH_HARNESS"},
-		{"already using harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrAlreadyUsingHarness), apierr.KindConflict, "ALREADY_USING_HARNESS"},
-		{"switch not found", fmt.Errorf("get switch: %w", sessionmanager.ErrSwitchNotFound), apierr.KindNotFound, "AGENT_SWITCH_NOT_FOUND"},
-		{"stale handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrStaleHandoff), apierr.KindConflict, "STALE_AGENT_HANDOFF"},
-		{"invalid handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrInvalidAgentHandoff), apierr.KindInvalid, "INVALID_AGENT_HANDOFF"},
-		{"switch delivery unconfirmed", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchDeliveryUnconfirmed), apierr.KindConflict, "AGENT_SWITCH_DELIVERY_UNCONFIRMED"},
-		{"manager switch in progress", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
-		{"manager switch shutting down", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchShuttingDown), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
-		{"manager switch unavailable", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchUnavailable), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
-		{"switch in progress", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
-		{"switch idempotency conflict", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchIdempotencyConflict), apierr.KindConflict, "AGENT_SWITCH_IDEMPOTENCY_CONFLICT"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
 		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
 			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),
@@ -3869,43 +3902,6 @@ func TestToSpawnAPIErrorIsIdempotentForMappedErrors(t *testing.T) {
 	}
 	if firstErr.Code != "RUNTIME_CREATE_FAILED" || secondErr.Code != "RUNTIME_CREATE_FAILED" {
 		t.Fatalf("codes = %q / %q, want RUNTIME_CREATE_FAILED", firstErr.Code, secondErr.Code)
-	}
-}
-
-func TestToAPIErrorSwitchDeliveryUnconfirmedMessage(t *testing.T) {
-	err := fmt.Errorf("switch agent mer-1: confirm continuation: %w", sessionmanager.ErrSwitchDeliveryUnconfirmed)
-	mapped := toAPIError(err)
-
-	var apiError *apierr.Error
-	if !errors.As(mapped, &apiError) {
-		t.Fatalf("mapped = %v, want *apierr.Error", mapped)
-	}
-	if apiError.Kind != apierr.KindConflict {
-		t.Fatalf("kind = %v, want %v", apiError.Kind, apierr.KindConflict)
-	}
-	if apiError.Code != "AGENT_SWITCH_DELIVERY_UNCONFIRMED" {
-		t.Fatalf("code = %q, want AGENT_SWITCH_DELIVERY_UNCONFIRMED", apiError.Code)
-	}
-	const wantMessage = "The target agent started, but AO could not confirm that it accepted the continuation"
-	if apiError.Message != wantMessage {
-		t.Fatalf("message = %q, want %q", apiError.Message, wantMessage)
-	}
-}
-
-func TestToAPIErrorPreservesReportingOwnerAcrossMapping(t *testing.T) {
-	raw := ownership.Own(
-		fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchInProgress),
-		ownership.OwnerAgentSwitchSaga,
-	)
-
-	mapped := toAPIError(raw)
-
-	if got := ownership.OwnerOf(mapped); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf(mapped) = %q, want %q", got, ownership.OwnerAgentSwitchSaga)
-	}
-	var apiError *apierr.Error
-	if !errors.As(mapped, &apiError) || apiError.Code != "AGENT_SWITCH_IN_PROGRESS" {
-		t.Fatalf("mapped = %v, want AGENT_SWITCH_IN_PROGRESS", mapped)
 	}
 }
 
@@ -5648,7 +5644,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5706,7 +5702,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5842,9 +5838,23 @@ func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
 }
 
 func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.getCleanupFactsCalls++
 	rec, ok := f.cleanupFacts[id]
 	return rec, ok, nil
 }
+
+func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	f.listCleanupFactsCalls++
+	f.cleanupFactsRequested = append(f.cleanupFactsRequested, ids...)
+	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
+	for _, id := range ids {
+		if rec, ok := f.cleanupFacts[id]; ok {
+			out[id] = rec
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err

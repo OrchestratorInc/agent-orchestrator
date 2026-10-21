@@ -31,14 +31,17 @@ type WorkspaceDiffScope string
 
 // Supported workspace comparison scopes.
 const (
-	WorkspaceDiffCombined  WorkspaceDiffScope = "combined"
-	WorkspaceDiffCommitted WorkspaceDiffScope = "committed"
-	WorkspaceDiffStaged    WorkspaceDiffScope = "staged"
-	WorkspaceDiffUnstaged  WorkspaceDiffScope = "unstaged"
-	WorkspaceDiffUntracked WorkspaceDiffScope = "untracked"
+	WorkspaceDiffCombined    WorkspaceDiffScope = "combined"
+	WorkspaceDiffUncommitted WorkspaceDiffScope = "uncommitted"
+	WorkspaceDiffCommitted   WorkspaceDiffScope = "committed"
+	WorkspaceDiffStaged      WorkspaceDiffScope = "staged"
+	WorkspaceDiffUnstaged    WorkspaceDiffScope = "unstaged"
+	WorkspaceDiffUntracked   WorkspaceDiffScope = "untracked"
 )
 
-// WorkspaceDiffInput requests a bounded set of patches from one comparison scope.
+// WorkspaceDiffInput requests a bounded set of patches from one comparison
+// scope. A branch or pull request View, CommitSHAs, or the legacy single
+// CommitSHA select commits instead, and require the committed scope.
 type WorkspaceDiffInput struct {
 	Scope            WorkspaceDiffScope
 	Paths            []string
@@ -46,6 +49,8 @@ type WorkspaceDiffInput struct {
 	IgnoreWhitespace bool
 	WorkspaceVersion string
 	CommitSHA        string
+	View             WorkspaceView
+	CommitSHAs       []string
 }
 
 // WorkspaceDiffDeferred identifies a file intentionally omitted from a patch group.
@@ -116,10 +121,10 @@ func normalizeWorkspaceDiffScope(scope WorkspaceDiffScope) (WorkspaceDiffScope, 
 		return WorkspaceDiffCombined, nil
 	}
 	switch scope {
-	case WorkspaceDiffCombined, WorkspaceDiffCommitted, WorkspaceDiffStaged, WorkspaceDiffUnstaged, WorkspaceDiffUntracked:
+	case WorkspaceDiffCombined, WorkspaceDiffUncommitted, WorkspaceDiffCommitted, WorkspaceDiffStaged, WorkspaceDiffUnstaged, WorkspaceDiffUntracked:
 		return scope, nil
 	default:
-		return "", apierr.Invalid("INVALID_WORKSPACE_DIFF_SCOPE", "scope must be combined, committed, staged, unstaged, or untracked", nil)
+		return "", apierr.Invalid("INVALID_WORKSPACE_DIFF_SCOPE", "scope must be combined, uncommitted, committed, staged, unstaged, or untracked", nil)
 	}
 }
 
@@ -132,7 +137,7 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 		files.Files[i].Editable = workspaceFileEditable(files.Files[i].Size, files.Files[i].Binary, files.Files[i].Status == WorkspaceFileDeleted)
 		files.Files[i].FileFingerprint = summaryFingerprint(files.Files[i])
 	}
-	sections := []*[]WorkspaceFileSummary{&files.Sections.Staged, &files.Sections.Unstaged, &files.Sections.Untracked, &files.Sections.Committed}
+	sections := []*[]WorkspaceFileSummary{&files.Sections.Uncommitted, &files.Sections.Staged, &files.Sections.Unstaged, &files.Sections.Untracked, &files.Sections.Committed}
 	for _, section := range sections {
 		for i := range *section {
 			(*section)[i].Editable = workspaceFileEditable((*section)[i].Size, (*section)[i].Binary, (*section)[i].Status == WorkspaceFileDeleted)
@@ -168,7 +173,7 @@ func finalizeWorkspaceManifest(manifest WorkspaceManifest) WorkspaceManifest {
 		manifest.Files[i].Editable = workspaceFileEditable(manifest.Files[i].Size, manifest.Files[i].Binary, manifest.Files[i].Status == WorkspaceFileDeleted)
 		manifest.Files[i].FileFingerprint = summaryFingerprint(manifest.Files[i])
 	}
-	sections := []*[]WorkspaceFileSummary{&manifest.Sections.Staged, &manifest.Sections.Unstaged, &manifest.Sections.Untracked, &manifest.Sections.Committed}
+	sections := []*[]WorkspaceFileSummary{&manifest.Sections.Uncommitted, &manifest.Sections.Staged, &manifest.Sections.Unstaged, &manifest.Sections.Untracked, &manifest.Sections.Committed}
 	for _, section := range sections {
 		for i := range *section {
 			(*section)[i].Editable = workspaceFileEditable((*section)[i].Size, (*section)[i].Binary, (*section)[i].Status == WorkspaceFileDeleted)
@@ -213,7 +218,6 @@ type workspaceDiffTargetGroup struct {
 	root    string
 	prefix  string
 	base    string
-	commit  string
 	targets []workspaceFileTarget
 }
 
@@ -235,27 +239,22 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 	if input.ContextLines < 0 || input.ContextLines > 20 {
 		return WorkspaceDiffs{}, apierr.Invalid("INVALID_WORKSPACE_DIFF_CONTEXT", "contextLines must be between 0 and 20", nil)
 	}
+	if !input.View.checkedOut() || strings.TrimSpace(input.CommitSHA) != "" || len(input.CommitSHAs) > 0 {
+		shas, err := selectionCommitSHAs(input.CommitSHA, input.CommitSHAs)
+		if err != nil {
+			return WorkspaceDiffs{}, err
+		}
+		if scope != WorkspaceDiffCommitted {
+			return WorkspaceDiffs{}, commitScopeRequired()
+		}
+		return s.getSelectionDiffs(ctx, id, input, shas)
+	}
 	current, err := s.workspaceDiffManifest(ctx, id, input.WorkspaceVersion)
 	if err != nil {
 		return WorkspaceDiffs{}, err
 	}
 	if input.WorkspaceVersion != "" && input.WorkspaceVersion != current.WorkspaceVersion {
 		return WorkspaceDiffs{}, apierr.Conflict("WORKSPACE_SNAPSHOT_STALE", "Workspace changed while the diff was loading", map[string]any{"workspaceVersion": current.WorkspaceVersion})
-	}
-	commitSHA := strings.TrimSpace(input.CommitSHA)
-	if commitSHA != "" {
-		if scope != WorkspaceDiffCommitted {
-			return WorkspaceDiffs{}, apierr.Invalid("WORKSPACE_COMMIT_SCOPE_REQUIRED", "commitSha requires the committed scope", nil)
-		}
-		history, err := s.ListWorkspaceFiles(ctx, id)
-		if err != nil {
-			return WorkspaceDiffs{}, err
-		}
-		commit, err := workspaceCommit(history, commitSHA)
-		if err != nil {
-			return WorkspaceDiffs{}, err
-		}
-		commitSHA = commit.SHA
 	}
 
 	groupsByKey := map[string]*workspaceDiffTargetGroup{}
@@ -276,7 +275,7 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 		key := target.root + "\x00" + target.prefix + "\x00" + target.compare.gitBase()
 		group := groupsByKey[key]
 		if group == nil {
-			group = &workspaceDiffTargetGroup{root: target.root, prefix: target.prefix, base: target.compare.gitBase(), commit: commitSHA}
+			group = &workspaceDiffTargetGroup{root: target.root, prefix: target.prefix, base: target.compare.gitBase()}
 			groupsByKey[key] = group
 		}
 		group.targets = append(group.targets, target)
@@ -317,14 +316,14 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 		return group, nil
 	}
 
-	// git diff never reports an untracked file, so the combined (base..worktree)
-	// scope has to synthesize its added-file patch the same way GetWorkspaceFile
-	// already does. Without this the path returns a successful but patchless
-	// group and the review pane has no diff to render for it.
+	// git diff never reports an untracked file, so the scopes that end at the
+	// worktree have to synthesize its added-file patch the same way
+	// GetWorkspaceFile already does. Without this the path returns a successful
+	// but patchless group and the review pane has no diff to render for it.
 	var untrackedPatch strings.Builder
 	tracked := make([]workspaceFileTarget, 0, len(targetGroup.targets))
 	for _, target := range targetGroup.targets {
-		if !untrackedCombinedTarget(target, scope) {
+		if !untrackedWorkingTarget(target, scope) {
 			tracked = append(tracked, target)
 			continue
 		}
@@ -345,12 +344,10 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	case WorkspaceDiffStaged:
 		args = append(args, "--cached")
 	case WorkspaceDiffUnstaged:
+	case WorkspaceDiffUncommitted:
+		args = append(args, headRevOrEmptyTree(ctx, targetGroup.root))
 	case WorkspaceDiffCommitted:
-		if targetGroup.commit != "" {
-			args = append(args, targetGroup.commit+"^", targetGroup.commit)
-		} else {
-			args = append(args, targetGroup.base, "HEAD")
-		}
+		args = append(args, targetGroup.base, "HEAD")
 	default:
 		args = append(args, targetGroup.base)
 	}
@@ -379,12 +376,13 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	return group, nil
 }
 
-// untrackedCombinedTarget reports whether target is a working-tree file git's
-// diff machinery cannot see for this scope. Only the combined scope compares
-// base..worktree, where an untracked file is a genuine addition; the staged,
-// unstaged, and committed scopes have no untracked side by definition.
-func untrackedCombinedTarget(target workspaceFileTarget, scope WorkspaceDiffScope) bool {
-	if scope != WorkspaceDiffCombined {
+// untrackedWorkingTarget reports whether target is a working-tree file git's
+// diff machinery cannot see for this scope. The combined, uncommitted, and
+// unstaged scopes end at the worktree, where an untracked file is a genuine
+// addition (git status lists it beside unstaged changes); the staged and
+// committed scopes have no untracked side by definition.
+func untrackedWorkingTarget(target workspaceFileTarget, scope WorkspaceDiffScope) bool {
+	if scope != WorkspaceDiffCombined && scope != WorkspaceDiffUncommitted && scope != WorkspaceDiffUnstaged {
 		return false
 	}
 	_, ok := target.changes.untracked[target.rel]
@@ -418,16 +416,6 @@ func appendSyntheticAddedPatch(group *WorkspaceDiffGroup, patch *strings.Builder
 // GetWorkspaceFileRevision returns a comparison side for diff expansion and
 // complete-file viewing. Missing sides are represented explicitly.
 func (s *Service) GetWorkspaceFileRevision(ctx context.Context, id domain.SessionID, rawPath string, scope WorkspaceDiffScope, side WorkspaceFileBlobSide, workspaceVersion, expectedRevision string) (WorkspaceFileRevision, error) {
-	return s.getWorkspaceFileRevision(ctx, id, rawPath, scope, side, workspaceVersion, expectedRevision, "")
-}
-
-// GetWorkspaceFileRevisionAtCommit returns one immutable side of a selected
-// commit. The SHA must belong to the session's current compare range.
-func (s *Service) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, rawPath string, side WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (WorkspaceFileRevision, error) {
-	return s.getWorkspaceFileRevision(ctx, id, rawPath, WorkspaceDiffCommitted, side, workspaceVersion, expectedRevision, commitSHA)
-}
-
-func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.SessionID, rawPath string, scope WorkspaceDiffScope, side WorkspaceFileBlobSide, workspaceVersion, expectedRevision, rawCommitSHA string) (WorkspaceFileRevision, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
 	resolvedScope, err := normalizeWorkspaceDiffScope(scope)
@@ -439,7 +427,7 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	}
 	// Unversioned live text reads are independent of Git comparison metadata.
 	// Snapshot-fenced and historical reads retain the complete validation path.
-	fastWorktree := side == WorkspaceBlobAfter && strings.TrimSpace(rawCommitSHA) == "" && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
+	fastWorktree := side == WorkspaceBlobAfter && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUncommitted || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
 	target, err := s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, !fastWorktree)
 	if err != nil {
 		return WorkspaceFileRevision{}, err
@@ -454,18 +442,6 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	if workspaceVersion != "" && workspaceVersion != current.WorkspaceVersion {
 		return WorkspaceFileRevision{}, apierr.Conflict("WORKSPACE_SNAPSHOT_STALE", "Workspace changed while the file revision was loading", map[string]any{"workspaceVersion": current.WorkspaceVersion})
 	}
-	commitSHA := strings.TrimSpace(rawCommitSHA)
-	if commitSHA != "" {
-		history, err := s.ListWorkspaceFiles(ctx, id)
-		if err != nil {
-			return WorkspaceFileRevision{}, err
-		}
-		commit, err := workspaceCommit(history, commitSHA)
-		if err != nil {
-			return WorkspaceFileRevision{}, err
-		}
-		commitSHA = commit.SHA
-	}
 	result := WorkspaceFileRevision{SessionID: id, Path: joinWorkspaceRelative(target.prefix, target.rel), Side: side, WorkspaceVersion: current.WorkspaceVersion, Encoding: "utf-8"}
 	var data []byte
 	var size int64
@@ -473,11 +449,17 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	if fastWorktree {
 		data, size, exists, truncated, err = readWorktreeRevision(target.root, target.rel)
 	} else {
-		data, size, exists, truncated, err = workspaceRevisionBytes(ctx, target, resolvedScope, side, commitSHA)
+		data, size, exists, truncated, err = workspaceRevisionBytes(ctx, target, resolvedScope, side)
 	}
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
+	return completeWorkspaceFileRevision(result, data, size, exists, truncated, expectedRevision)
+}
+
+// completeWorkspaceFileRevision fills result from one read side, fenced by
+// expectedRevision.
+func completeWorkspaceFileRevision(result WorkspaceFileRevision, data []byte, size int64, exists, truncated bool, expectedRevision string) (WorkspaceFileRevision, error) {
 	result.Size = size
 	result.Exists = exists
 	result.Truncated = truncated
@@ -496,14 +478,14 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	return result, nil
 }
 
-func workspaceRevisionBytes(ctx context.Context, target workspaceFileTarget, scope WorkspaceDiffScope, side WorkspaceFileBlobSide, commitSHA string) ([]byte, int64, bool, bool, error) {
+func workspaceRevisionBytes(ctx context.Context, target workspaceFileTarget, scope WorkspaceDiffScope, side WorkspaceFileBlobSide) ([]byte, int64, bool, bool, error) {
 	if target.scratch {
 		if side == WorkspaceBlobBefore {
 			return nil, 0, false, false, nil
 		}
 		return readWorktreeRevision(target.root, target.rel)
 	}
-	status, previous, err := scopedWorkspaceFileStatus(ctx, target, scope, commitSHA)
+	status, previous, err := scopedWorkspaceFileStatus(ctx, target, scope)
 	if err != nil {
 		return nil, 0, false, false, err
 	}
@@ -532,19 +514,17 @@ func workspaceRevisionBytes(ctx context.Context, target workspaceFileTarget, sco
 		} else {
 			return readWorktreeRevision(target.root, target.rel)
 		}
+	case WorkspaceDiffUncommitted:
+		if side == WorkspaceBlobBefore {
+			spec = "HEAD:" + beforePath
+		} else {
+			return readWorktreeRevision(target.root, target.rel)
+		}
 	case WorkspaceDiffCommitted:
 		if side == WorkspaceBlobBefore {
-			if commitSHA != "" {
-				spec = commitSHA + "^:" + beforePath
-			} else {
-				spec = target.compare.gitBase() + ":" + beforePath
-			}
+			spec = target.compare.gitBase() + ":" + beforePath
 		} else {
-			if commitSHA != "" {
-				spec = commitSHA + ":" + target.rel
-			} else {
-				spec = "HEAD:" + target.rel
-			}
+			spec = "HEAD:" + target.rel
 		}
 	case WorkspaceDiffUntracked:
 		if side == WorkspaceBlobBefore {
@@ -561,7 +541,7 @@ func workspaceRevisionBytes(ctx context.Context, target workspaceFileTarget, sco
 	return readGitRevision(ctx, target.root, spec)
 }
 
-func scopedWorkspaceFileStatus(ctx context.Context, target workspaceFileTarget, scope WorkspaceDiffScope, commitSHA string) (WorkspaceFileStatus, string, error) {
+func scopedWorkspaceFileStatus(ctx context.Context, target workspaceFileTarget, scope WorkspaceDiffScope) (WorkspaceFileStatus, string, error) {
 	if scope == WorkspaceDiffCombined {
 		status := target.changes.statuses[target.rel]
 		if status == "" {
@@ -575,18 +555,19 @@ func scopedWorkspaceFileStatus(ctx context.Context, target workspaceFileTarget, 
 		}
 		return WorkspaceFileUnmodified, "", nil
 	}
+	if untrackedWorkingTarget(target, scope) {
+		return WorkspaceFileAdded, "", nil
+	}
 	var args []string
 	switch scope {
 	case WorkspaceDiffStaged:
 		args = []string{"--cached"}
 	case WorkspaceDiffUnstaged:
 		args = nil
+	case WorkspaceDiffUncommitted:
+		args = []string{headRevOrEmptyTree(ctx, target.root)}
 	case WorkspaceDiffCommitted:
-		if commitSHA != "" {
-			args = []string{commitSHA + "^", commitSHA}
-		} else {
-			args = []string{target.compare.gitBase(), "HEAD"}
-		}
+		args = []string{target.compare.gitBase(), "HEAD"}
 	}
 	statuses, previous, err := workspaceDiffNameStatus(ctx, target.root, args...)
 	if err != nil {

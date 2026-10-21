@@ -7,6 +7,7 @@ import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
@@ -17,7 +18,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -56,6 +57,34 @@ function SessionInterfaceRow() {
 				disabled={isLoading || saving || !chatAvailable}
 			/>
 		</SettingsRow>
+	);
+}
+
+/**
+ * After a harness update, idle open sessions restart on the new release
+ * instead of running the old one until they happen to restart. Daemon-owned:
+ * the daemon does the moving.
+ */
+function VersionRefreshRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateVersionRefresh();
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow className="rounded-none" label={t("settings.versionRefresh.label")} description={t("settings.versionRefresh.description")}>
+				<Switch
+					aria-label={t("settings.versionRefresh.label")}
+					checked={settings?.versionRefresh ?? false}
+					disabled={isLoading || saving || !settings}
+					onCheckedChange={update}
+				/>
+			</SettingsRow>
+			{error ? (
+				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
+					{error}
+				</p>
+			) : null}
+		</div>
 	);
 }
 
@@ -212,6 +241,7 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<VersionRefreshRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch
@@ -239,6 +269,7 @@ export function GeneralSettingsSection({
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
+				<AnalyticsRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -256,6 +287,43 @@ export function GeneralSettingsSection({
 				{developerMode && <SideChatsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * PostHog usage analytics opt-out. Independent of the error-event row above: it
+ * switches off the renderer, the daemon and a paired phone together.
+ */
+function AnalyticsRow() {
+	const { t } = useTranslation();
+	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
+	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const loadError = useAnalyticsOptOutStore((state) => state.loadError);
+	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
+	const load = useAnalyticsOptOutStore((state) => state.load);
+	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.analytics.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.analytics.loadFailed" : saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.analytics.label")}
+				checked={!optedOut}
+				disabled={saving || !loaded}
+				onCheckedChange={(share) => {
+					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
 	);
 }
 

@@ -17,7 +17,7 @@ ao
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
 ├── session                       ls, get, kill, restore, rename, cleanup, claim-pr,
-│                                 exit-agent, resume-agent, switch-agent, agent-switch
+│                                 exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
 ├── report                        Report worker progress or artifacts
@@ -146,8 +146,6 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
-| `ao session switch-agent <id> <target-harness>` | Switch a compatible session to another harness. |
-| `ao session agent-switch ls <session-id>` | Inspect agent-switch attempts. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
 

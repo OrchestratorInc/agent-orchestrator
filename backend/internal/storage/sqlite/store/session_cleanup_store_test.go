@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -57,6 +58,59 @@ func TestSessionCleanupFactsRoundTrip(t *testing.T) {
 		t.Fatalf("re-get facts: ok=%v err=%v", ok, err)
 	}
 	requireCleanupEqual(t, got, want)
+}
+
+// The session list reads cleanup facts for all of its archived sessions at once.
+// For every requested id the batch must return what the single-session read
+// returns, and leave out sessions that have no facts row.
+func TestListSessionCleanupFactsForSessionsMatchesSingleReads(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "cfb")
+	now := time.Now().UTC().Truncate(time.Second)
+
+	full := terminalSession(t, s, "cfb", 2)
+	upsertFacts(t, s, domain.SessionCleanupRecord{
+		SessionID: full.ID, SessionGeneration: 2, RuntimeReleasedAt: now,
+		WorkspaceDisposition: domain.DispositionPreservedDirty, AttemptCount: 3,
+		LastAttemptAt: now, NextAttemptAt: now.Add(time.Minute), FailureCode: "workspace_dirty",
+	})
+	stale := terminalSession(t, s, "cfb", 3)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: stale.ID, SessionGeneration: 1, WorkspaceDisposition: domain.DispositionRemoved})
+	noFacts := terminalSession(t, s, "cfb", 0)
+	unrequested := terminalSession(t, s, "cfb", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: unrequested.ID, WorkspaceDisposition: domain.DispositionRemoved})
+
+	// More ids than SQLite's default bound-parameter limit: the ids travel as one
+	// JSON value, so the size of the list is not limited by it.
+	ids := []domain.SessionID{full.ID, stale.ID, noFacts.ID}
+	for i := 0; i < 2000; i++ {
+		ids = append(ids, domain.SessionID(fmt.Sprintf("cfb-missing-%d", i)))
+	}
+	got, err := s.ListSessionCleanupFactsForSessions(ctx, ids)
+	if err != nil {
+		t.Fatalf("list cleanup facts: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("batch returned %d rows (%v), want the 2 sessions that have facts", len(got), got)
+	}
+	for _, id := range []domain.SessionID{full.ID, stale.ID} {
+		want, ok, err := s.GetSessionCleanupFacts(ctx, id)
+		if err != nil || !ok {
+			t.Fatalf("single read of %s: ok=%v err=%v", id, ok, err)
+		}
+		requireCleanupEqual(t, got[id], want)
+	}
+	for _, id := range []domain.SessionID{noFacts.ID, unrequested.ID} {
+		if _, ok := got[id]; ok {
+			t.Fatalf("batch returned facts for %s, want none", id)
+		}
+	}
+
+	empty, err := s.ListSessionCleanupFactsForSessions(ctx, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty request = %v, err=%v, want an empty result", empty, err)
+	}
 }
 
 // TestSessionCleanupFactsCDCEmitsSessionUpdated pins the facts-table CDC

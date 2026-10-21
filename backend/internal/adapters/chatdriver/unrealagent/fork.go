@@ -29,7 +29,7 @@ var _ ports.ChatForkDeleter = (*conversation)(nil)
 
 // ForkIntoHost starts an independent provider at the selected request boundary.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories, cfg.MCPServers); err != nil {
+	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories); err != nil {
 		return nil, err
 	}
 	if err := d.validateLaunchAuth(ctx, cfg.Env); err != nil {

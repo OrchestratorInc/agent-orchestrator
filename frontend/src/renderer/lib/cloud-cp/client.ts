@@ -880,7 +880,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		listChatEvents: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-events`, {
-				query: { after: query?.after, limit: query?.limit },
+				query: { after: query?.after, limit: query?.limit, types: query?.types?.length ? query.types.join(",") : undefined },
 				signal: o?.signal,
 			}),
 		subscribeSessionEvents,

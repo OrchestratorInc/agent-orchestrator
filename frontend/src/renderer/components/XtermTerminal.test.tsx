@@ -2379,6 +2379,17 @@ describe("XtermTerminal", () => {
 		expect(sendInputs[index]).not.toHaveBeenCalled();
 	});
 
+	it("does not forward colour replies xterm makes while parsing a replayed scrollback", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(handle) => { terminal = handle; handle.onUserInput(onInput); }} />);
+		// The replay is still being parsed: its write has not called back yet.
+		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
+		terminal!.write(new TextEncoder().encode("old output\x1b]11;?\x07"), undefined, "replay");
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b]11;rgb:f5f5/f5f5/f4f4\x07"));
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
 	it("does not forward an unsolicited cursor-position-shaped input", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
@@ -2713,17 +2724,15 @@ describe("XtermTerminal", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("requires Ctrl for a session link while an application captures mouse input", () => {
+	it("opens a session link on a plain click while an application captures mouse input", () => {
 		const onSessionLinkOpen = vi.fn();
 		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 		const handler = (state.lastTerminal!.options.linkHandler as {
 			activate: (event: MouseEvent, uri: string) => void;
 		}).activate;
-		handler({ ctrlKey: false } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
-		handler({ ctrlKey: true } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).toHaveBeenCalledTimes(1);
+		handler({ ctrlKey: false, metaKey: false } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
 	it("routes malformed AO OSC links to in-app feedback without external dispatch", () => {

@@ -94,6 +94,56 @@ func TestInstalledAgentHarnessMapsManagedHarnessInstalls(t *testing.T) {
 	}
 }
 
+type cachedBinaryAgent struct {
+	ports.Agent
+	invalidated int
+}
+
+func (a *cachedBinaryAgent) InvalidateBinaryResolution() { a.invalidated++ }
+
+type cachedBinaryAgents map[domain.AgentHarness]ports.Agent
+
+func (a cachedBinaryAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
+	agent, ok := a[harness]
+	return agent, ok
+}
+
+type installationInvalidations struct {
+	wiringReadinessProvider
+	harnesses []string
+}
+
+func (p *installationInvalidations) InvalidateAgentInstallation(harness string) {
+	p.harnesses = append(p.harnesses, harness)
+}
+
+// Launches, Chat drivers and model discovery each hold their own plugins: an
+// install that clears only the agent service's cache leaves them on the old binary.
+func TestInvalidateHarnessBinaryClearsEveryCache(t *testing.T) {
+	launch := &cachedBinaryAgent{}
+	models := &cachedBinaryAgent{}
+	readiness := &installationInvalidations{}
+
+	invalidateHarnessBinary(readiness, "pi",
+		resolverBinaryCache{agents: cachedBinaryAgents{"pi": launch}},
+		pluginBinaryCache{harness: domain.HarnessCodex, plugin: models},
+	)
+	if launch.invalidated != 1 {
+		t.Fatalf("launch adapter invalidations = %d, want 1", launch.invalidated)
+	}
+	if models.invalidated != 0 {
+		t.Fatalf("another harness's plugin was invalidated %d times", models.invalidated)
+	}
+	if len(readiness.harnesses) != 1 || readiness.harnesses[0] != "pi" {
+		t.Fatalf("service invalidations = %v, want [pi]", readiness.harnesses)
+	}
+
+	invalidateHarnessBinary(readiness, "codex", pluginBinaryCache{harness: domain.HarnessCodex, plugin: models})
+	if models.invalidated != 1 {
+		t.Fatalf("model discovery plugin invalidations = %d, want 1", models.invalidated)
+	}
+}
+
 // TestWiring_WriteFlowsToBroadcaster exercises the real boot path end to end:
 // a lifecycle write -> sqlite -> DB trigger -> change_log -> CDC poller ->
 // broadcaster, through the same cdc.Source implementation the daemon uses.
@@ -904,57 +954,6 @@ type fakeSessionLifecycle struct {
 	restoreErr                error
 }
 
-type recordingAgentSwitchDaemonFaultStore struct {
-	inputs []ports.AgentSwitchDaemonFault
-}
-
-func (s *recordingAgentSwitchDaemonFaultStore) EnqueueAgentSwitchDaemonFault(_ context.Context, input ports.AgentSwitchDaemonFault) (ports.AgentSwitchMutationResult, error) {
-	s.inputs = append(s.inputs, input)
-	return ports.AgentSwitchMutationResult{Enrollment: domain.AgentSwitchEnrollmentEnrolled}, nil
-}
-
-type fixedAgentSwitchReportingPolicy struct {
-	authorization domain.AgentSwitchReportingAuthorization
-}
-
-func (p fixedAgentSwitchReportingPolicy) Authorization() domain.AgentSwitchReportingAuthorization {
-	return p.authorization
-}
-
-func TestEnqueueAgentSwitchWorkerShutdownTimeoutCreatesOneDaemonAggregate(t *testing.T) {
-	store := &recordingAgentSwitchDaemonFaultStore{}
-	authorization := domain.AgentSwitchReportingAuthorization{
-		Enabled: true, ConsentGeneration: "consent-generation", DestinationFingerprint: "destination-fingerprint",
-	}
-	at := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
-	if err := enqueueAgentSwitchWorkerShutdownTimeout(context.Background(), store, fixedAgentSwitchReportingPolicy{authorization}, "daemon-run-1", at); err != nil {
-		t.Fatalf("enqueue shutdown timeout: %v", err)
-	}
-	if len(store.inputs) != 1 {
-		t.Fatalf("daemon fault inputs = %d, want 1", len(store.inputs))
-	}
-	got := store.inputs[0]
-	if got.DaemonRunID != "daemon-run-1" || got.Authorization != authorization {
-		t.Fatalf("daemon fault scope = %+v", got)
-	}
-	if got.Fault.ReportKind != domain.AgentSwitchReportDaemonLifecycleFailure ||
-		got.Fault.FailurePoint != domain.AgentSwitchFailureShutdownWorkerTimeout ||
-		got.Fault.FaultCode != domain.AgentSwitchFaultShutdownWorkersTimedOut ||
-		got.Fault.Execution != domain.AgentSwitchExecutionDaemonShutdown ||
-		got.Fault.CallOutcome != domain.AgentSwitchCallTimedOut {
-		t.Fatalf("daemon fault = %+v", got.Fault)
-	}
-}
-
-func TestAgentSwitchWorkerWaitCancellationIsNotReportable(t *testing.T) {
-	if agentSwitchWorkerWaitTimedOut(context.Canceled) {
-		t.Fatal("ordinary shutdown cancellation was classified as a timeout")
-	}
-	if !agentSwitchWorkerWaitTimedOut(context.DeadlineExceeded) {
-		t.Fatal("worker deadline was not classified as a timeout")
-	}
-}
-
 func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *ports.SpawnAttachment) error {
 	return nil
 }
@@ -983,6 +982,31 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 }
 
 func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration) error {
+	return nil
+}
+func (*fakeSessionLifecycle) RefreshStaleTerminals(context.Context, time.Duration) error {
+	return nil
+}
+func (*fakeSessionLifecycle) BusyHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionWait, error) {
+	return nil, nil
+}
+func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionID, error) {
+	return nil, nil
+}
+func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
+	return nil
+}
+func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
+func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}
+func (*fakeSessionLifecycle) RetryVersionMoves(context.Context) error                            { return nil }
+func (*fakeSessionLifecycle) ObserveChatVersionSwitch(domain.SessionID, string, string)          {}
+func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
+	return nil
+}
+func (*fakeSessionLifecycle) CountStaleBinarySessions(context.Context) (map[domain.AgentHarness]int64, error) {
+	return nil, nil
+}
 
 func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	f.restoreAllCalled = true

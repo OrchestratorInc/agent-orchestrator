@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -123,6 +124,11 @@ type CoderConfig struct {
 	// Coder may pick; empty allows any. The default TemplateID is always
 	// allowed. Bring-your-own connections are not limited.
 	AllowedTemplateIDs []string
+	// WorkerWorkingFolder stamps the project's working folder as the checkout
+	// of a session whose worker runs as the dedicated ao-worker user
+	// (config.Config.CoderWorkerWorkingFolder). Off, such sessions keep the
+	// durable root's repository folder; a stamped folder is honored either way.
+	WorkerWorkingFolder bool
 }
 
 // TemplateAllowed reports whether a session on this deployment's Coder may use
@@ -152,6 +158,22 @@ type CoderSessionProfile struct {
 	DurableRoot string            `json:"durableRoot"`
 	// WorkspaceNamePrefix replaces the default "ao" workspace name prefix.
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// WorkspaceName is the Coder workspace name AO chose when the session was
+	// created (see domain.CoderWorkspaceName and StampCoderWorkspaceName). It
+	// is fixed for the session's lifetime: create, lookup, identity checks and
+	// the workspace link all use it. Empty on rows written before the field
+	// existed, whose workspaces keep the name computed from the prefix and
+	// session id.
+	WorkspaceName string `json:"workspaceName,omitempty"`
+	// WorkspaceNameRetry is the one name a create retries with when Coder
+	// reports WorkspaceName as taken by another workspace
+	// (domain.CoderWorkspaceNames). Using it moves it to WorkspaceName and
+	// clears it, so a session retries at most once.
+	WorkspaceNameRetry string `json:"workspaceNameRetry,omitempty"`
+	// WorkspaceNameIssuedAt is when WorkspaceName was chosen. A workspace that
+	// already carried the name well before then belongs to another session (an
+	// id collision) and is never adopted. Nil on older rows.
+	WorkspaceNameIssuedAt *time.Time `json:"workspaceNameIssuedAt,omitempty"`
 	// RequireMountedDurableRoot is nil on rows written before the field
 	// existed; RequiresMountedDurableRoot supplies the historical default.
 	RequireMountedDurableRoot *bool `json:"requireMountedDurableRoot,omitempty"`
@@ -179,6 +201,26 @@ type CoderSessionProfile struct {
 	// files. Nil on rows written before the field existed, which keeps the
 	// historical behavior (no protection).
 	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
+	// CheckoutDirectory, with the dedicated ao-worker user, is where AO checks
+	// the session's main repository out instead of <durable root>/repository:
+	// the project's working folder with {repo} resolved when the session was
+	// created (domain.CoderCheckoutDirectory), for example ~/work/alice, where
+	// "~" is the workspace login user's home. Empty (every session created
+	// before the field existed, and projects without a working folder) keeps
+	// the durable root checkout. Never set with the workspace worker user,
+	// whose working directory is WorkingDirectory.
+	CheckoutDirectory string `json:"checkoutDirectory,omitempty"`
+	// CheckoutSiblings are the folder names of the project's additional
+	// repositories, prepared beside CheckoutDirectory.
+	CheckoutSiblings []string `json:"checkoutSiblings,omitempty"`
+	// CheckoutDirectoryUnusable, with the dedicated ao-worker user and no
+	// CheckoutDirectory, is why the project's working folder could not be the
+	// session's checkout when the session was created
+	// (domain.CoderCheckoutDirectoryUnusableMessage): the session stops with
+	// a working_directory_unusable startup error instead of starting in the
+	// durable root checkout. A release that predates the field ignores it and
+	// keeps the durable root checkout.
+	CheckoutDirectoryUnusable string `json:"checkoutDirectoryUnusable,omitempty"`
 }
 
 // ProtectsSecretFiles reports whether the session's coding agent must not
@@ -219,14 +261,24 @@ type CoderSessionOptions struct {
 	TemplateID    string
 	Size          string
 	StartupScript string
-	// WorkspaceNamePrefix names the session's workspace <prefix>-<id> instead
-	// of the default ao-<id>. It applies with or without a picked template.
+	// WorkspaceNamePrefix starts the session's workspace name instead of the
+	// default "ao" (see domain.CoderWorkspaceName). It applies with or without
+	// a picked template.
 	WorkspaceNamePrefix string
 	// Parameters are the project's values for the picked template's rich
 	// parameters. Like Size and StartupScript they apply only with a picked
 	// template; they override the connection's parameters and are overridden
 	// by Size and StartupScript.
 	Parameters map[string]string
+	// CheckoutDirectory and CheckoutSiblings are the project's working-folder
+	// checkout (see CoderSessionProfile.CheckoutDirectory). They apply with or
+	// without a picked template, and are dropped when the session's worker
+	// runs as the workspace user.
+	CheckoutDirectory string
+	CheckoutSiblings  []string
+	// CheckoutDirectoryUnusable is why the project's working folder could not
+	// be resolved to a checkout (see CoderSessionProfile.CheckoutDirectoryUnusable).
+	CheckoutDirectoryUnusable string
 }
 
 // CoderDeploymentOverride redirects a session's Coder provisioning to a specific
@@ -262,7 +314,7 @@ type CoderDeploymentOverride struct {
 	ProtectSecretFiles bool
 	// DefaultWorkspaceNamePrefix names the session's workspace when the
 	// project sets no prefix of its own, so a bring-your-own Coder shows
-	// <project>-<id> rather than ao-<hash>. Must pass
+	// <project>-w-<word>-<id> rather than ao-w-<word>-<id>. Must pass
 	// domain.ValidateCoderWorkspaceNamePrefix; see
 	// domain.CoderWorkspaceNamePrefixFor.
 	DefaultWorkspaceNamePrefix string
@@ -391,6 +443,19 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	if err := domain.ValidateCoderWorkspaceNamePrefix(profile.WorkspaceNamePrefix); err != nil {
 		return CoderSessionProfile{}, err
 	}
+	profile.WorkspaceName = strings.TrimSpace(profile.WorkspaceName)
+	profile.WorkspaceNameRetry = strings.TrimSpace(profile.WorkspaceNameRetry)
+	if profile.WorkspaceName == "" {
+		profile.WorkspaceNameRetry = ""
+	}
+	for _, name := range []string{profile.WorkspaceName, profile.WorkspaceNameRetry} {
+		if name == "" {
+			continue
+		}
+		if err := domain.ValidateCoderWorkspaceName(name); err != nil {
+			return CoderSessionProfile{}, err
+		}
+	}
 	if profile.StartupTimeoutSeconds < 0 {
 		return CoderSessionProfile{}, errors.New("Coder session startup timeout must not be negative")
 	}
@@ -408,12 +473,118 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	if !profile.RunsAsWorkspaceUser() {
 		profile.ReuseExistingCheckout = false
 		profile.WorkingDirectory = ""
+	} else {
+		profile.CheckoutDirectory = ""
+		profile.CheckoutSiblings = nil
+		profile.CheckoutDirectoryUnusable = ""
 	}
+	profile.CheckoutDirectoryUnusable = strings.TrimSpace(profile.CheckoutDirectoryUnusable)
 	profile.WorkingDirectory = strings.TrimSpace(profile.WorkingDirectory)
 	if err := domain.ValidateCoderWorkingDirectory(profile.WorkingDirectory); err != nil {
 		return CoderSessionProfile{}, err
 	}
+	profile.CheckoutDirectory = strings.TrimSpace(profile.CheckoutDirectory)
+	if profile.CheckoutDirectory == "" {
+		profile.CheckoutSiblings = nil
+	} else if err := domain.ValidateCoderCheckoutDirectory(profile.CheckoutDirectory); err != nil {
+		return CoderSessionProfile{}, fmt.Errorf("Coder session checkout directory: %w", err)
+	}
+	if len(profile.CheckoutSiblings) > domain.MaxCoderCheckoutSiblings {
+		return CoderSessionProfile{}, errors.New("Coder session has too many checkout siblings")
+	}
+	for _, name := range profile.CheckoutSiblings {
+		if !domain.ValidCoderCheckoutSibling(name) {
+			return CoderSessionProfile{}, fmt.Errorf("Coder session checkout sibling %q is invalid", name)
+		}
+	}
 	return profile, nil
+}
+
+// StampCoderWorkspaceName records, on a Coder session's resource profile, the
+// workspace name AO will create for it and the one retry name for a name
+// conflict (domain.CoderWorkspaceNames from the profile's prefix, the session
+// kind, its display name at creation and its id), and when they were chosen. It runs once, when the sandbox row is
+// written, because the session id is only known then. A profile without a
+// Coder section, or one that already names its workspace, is returned
+// unchanged. Every other field keeps its value exactly.
+func StampCoderWorkspaceName(raw json.RawMessage, kind, displayName, sessionID string, issuedAt time.Time) (json.RawMessage, error) {
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, fmt.Errorf("decode Coder session resource profile: %w", err)
+	}
+	section, ok := resource["coder"]
+	if !ok || string(section) == "null" {
+		return raw, nil
+	}
+	var coder map[string]json.RawMessage
+	if err := json.Unmarshal(section, &coder); err != nil {
+		return nil, fmt.Errorf("decode Coder session profile: %w", err)
+	}
+	var existing, prefix string
+	if value, ok := coder["workspaceName"]; ok {
+		if err := json.Unmarshal(value, &existing); err != nil {
+			return nil, fmt.Errorf("decode Coder workspace name: %w", err)
+		}
+	}
+	if strings.TrimSpace(existing) != "" {
+		return raw, nil
+	}
+	if value, ok := coder["workspaceNamePrefix"]; ok {
+		if err := json.Unmarshal(value, &prefix); err != nil {
+			return nil, fmt.Errorf("decode Coder workspace name prefix: %w", err)
+		}
+	}
+	primary, retry := domain.CoderWorkspaceNames(prefix, kind, displayName, sessionID)
+	for key, value := range map[string]any{
+		"workspaceName": primary, "workspaceNameRetry": retry, "workspaceNameIssuedAt": issuedAt.UTC(),
+	} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		coder[key] = encoded
+	}
+	var err error
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return nil, err
+	}
+	return json.Marshal(resource)
+}
+
+// UseCoderWorkspaceRetryName returns the resource profile with its retry
+// workspace name made the workspace name and the retry cleared, along with
+// both names. ok is false when the profile has no retry name left.
+func UseCoderWorkspaceRetryName(raw json.RawMessage) (updated json.RawMessage, from, to string, ok bool, err error) {
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, "", "", false, fmt.Errorf("decode Coder session resource profile: %w", err)
+	}
+	var coder map[string]json.RawMessage
+	if section, present := resource["coder"]; !present || json.Unmarshal(section, &coder) != nil || coder == nil {
+		return nil, "", "", false, errors.New("Coder session resource profile is required")
+	}
+	for key, target := range map[string]*string{"workspaceName": &from, "workspaceNameRetry": &to} {
+		if value, present := coder[key]; present {
+			if err := json.Unmarshal(value, target); err != nil {
+				return nil, "", "", false, fmt.Errorf("decode Coder %s: %w", key, err)
+			}
+		}
+	}
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || to == from {
+		return nil, "", "", false, nil
+	}
+	if coder["workspaceName"], err = json.Marshal(to); err != nil {
+		return nil, "", "", false, err
+	}
+	delete(coder, "workspaceNameRetry")
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return nil, "", "", false, err
+	}
+	if updated, err = json.Marshal(resource); err != nil {
+		return nil, "", "", false, err
+	}
+	return updated, from, to, true, nil
 }
 
 func normalizedCoderBaseURL(value string) (string, error) {
@@ -728,6 +899,11 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if override != nil {
 			addCoderDevEnvironment(coderProfile, override)
 		}
+		if d.Coder.WorkerWorkingFolder {
+			if err := addCoderCheckoutDirectory(coderProfile, coder, override); err != nil {
+				return Plan{}, err
+			}
+		}
 		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{
 			"owner":       strings.TrimSpace(coderCfg.Owner),
@@ -779,6 +955,44 @@ func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeployme
 	if directory := strings.TrimSpace(override.WorkingDirectory); directory != "" {
 		coderProfile["workingDirectory"] = directory
 	}
+}
+
+// addCoderCheckoutDirectory stamps the project's working-folder checkout onto
+// a session whose worker runs as the dedicated ao-worker user (the deployment
+// Coder, or a bring-your-own connection's default), so the path is decided
+// once, when the session is created. The workspace worker user works in its
+// WorkingDirectory instead, and a session without one keeps the durable root
+// checkout and its historical profile shape.
+func addCoderCheckoutDirectory(coderProfile map[string]any, coder *CoderSessionOptions, override *CoderDeploymentOverride) error {
+	if coder == nil {
+		return nil
+	}
+	if override != nil && strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		return nil
+	}
+	if strings.TrimSpace(coder.CheckoutDirectory) == "" {
+		if unusable := strings.TrimSpace(coder.CheckoutDirectoryUnusable); unusable != "" {
+			coderProfile["checkoutDirectoryUnusable"] = unusable
+		}
+		return nil
+	}
+	directory := strings.TrimSpace(coder.CheckoutDirectory)
+	if err := domain.ValidateCoderCheckoutDirectory(directory); err != nil {
+		return err
+	}
+	if len(coder.CheckoutSiblings) > domain.MaxCoderCheckoutSiblings {
+		return errors.New("too many additional repository folders for the working folder")
+	}
+	for _, name := range coder.CheckoutSiblings {
+		if !domain.ValidCoderCheckoutSibling(name) {
+			return fmt.Errorf("additional repository folder %q is invalid", name)
+		}
+	}
+	coderProfile["checkoutDirectory"] = directory
+	if len(coder.CheckoutSiblings) > 0 {
+		coderProfile["checkoutSiblings"] = slices.Clone(coder.CheckoutSiblings)
+	}
+	return nil
 }
 
 func normalizeProvider(provider string) string {

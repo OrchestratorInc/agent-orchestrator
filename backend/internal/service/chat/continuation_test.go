@@ -98,6 +98,19 @@ func TestStoppedContinuationContextDoesNotResurrectOlderStop(t *testing.T) {
 	}
 }
 
+func TestStoppedContinuationContextProviderStartedTurn(t *testing.T) {
+	rows := continuationRows()
+	rows.Turns[1].State = domain.TurnStateCompleted
+	rows.Turns = append(rows.Turns, domain.ConversationTurn{ID: "goal", State: domain.TurnStateInterrupted, ProviderTurnID: "p-goal"})
+	rows.Messages = append(rows.Messages,
+		domain.ConversationMessage{ID: "goal-answer", TurnID: "goal", Sequence: 5, Role: domain.MessageRoleAssistant, Text: "GOAL_PROGRESS"},
+	)
+	reminder := stoppedContinuationContext(rows)
+	if !strings.Contains(reminder, "TASK_DONE") || !strings.Contains(reminder, "GOAL_PROGRESS") || strings.Contains(reminder, "unrelated") {
+		t.Fatalf("provider-started turn should continue the latest real request: %s", reminder)
+	}
+}
+
 func TestStoppedContinuationContextBeforeOutput(t *testing.T) {
 	rows := continuationRows()
 	rows.Messages = rows.Messages[:3]

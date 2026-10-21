@@ -36,7 +36,7 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"copilot", "--allow-all", "--interactive", "-fix this"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all", "--interactive", "-fix this"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -57,7 +57,7 @@ func TestGetLaunchCommandUsesSessionCustomAgentForSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"copilot", "--allow-all", "--agent=ao-mer-1", "--interactive", "-fix this"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all", "--agent=ao-mer-1", "--interactive", "-fix this"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -236,7 +236,7 @@ func TestGetLaunchCommandAppendsModelFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot", "--model", "claude-sonnet-4.5"}
+	want := []string{"copilot", "--no-auto-update", "--model", "claude-sonnet-4.5"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -277,7 +277,7 @@ func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v (model override must not be forwarded on restore)", cmd, want)
 	}
@@ -398,6 +398,70 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 	}
 }
 
+// VS Code's Copilot Chat extension installs a `copilot` launcher that only
+// forwards to a CLI found elsewhere on PATH, and asks to install one otherwise.
+func writeVSCodeCopilotLauncher(t *testing.T, home string) string {
+	t.Helper()
+	dir := filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli")
+	launcher := writeExecutable(t, filepath.Join(dir, "copilot"))
+	if err := os.WriteFile(filepath.Join(dir, vsCodeCopilotLauncherScript), []byte("// launcher\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return launcher
+}
+
+func TestResolveCopilotBinaryIgnoresVSCodeLauncher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix launcher shape")
+	}
+	oldUnixPaths := copilotUnixPaths
+	copilotUnixPaths = nil
+	t.Cleanup(func() { copilotUnixPaths = oldUnixPaths })
+
+	setup := func(t *testing.T) (home, launcher string) {
+		home = t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("VOLTA_HOME", filepath.Join(home, ".volta"))
+		t.Setenv("FNM_DIR", "")
+		return home, writeVSCodeCopilotLauncher(t, home)
+	}
+
+	t.Run("launcher alone is not an install", func(t *testing.T) {
+		_, launcher := setup(t)
+		for _, path := range []string{t.TempDir(), filepath.Dir(launcher)} {
+			t.Setenv("PATH", path)
+			if got, err := ResolveCopilotBinary(context.Background()); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+				t.Fatalf("PATH=%s: ResolveCopilotBinary = %q, %v; want ErrAgentBinaryNotFound", path, got, err)
+			}
+		}
+	})
+
+	t.Run("the CLI behind the launcher on PATH is used", func(t *testing.T) {
+		_, launcher := setup(t)
+		want := writeExecutable(t, filepath.Join(t.TempDir(), "copilot"))
+		t.Setenv("PATH", filepath.Dir(launcher)+string(os.PathListSeparator)+filepath.Dir(want))
+		got, err := ResolveCopilotBinary(context.Background())
+		if err != nil || got != want {
+			t.Fatalf("ResolveCopilotBinary = %q, %v; want %q", got, err, want)
+		}
+	})
+
+	t.Run("a link to the launcher is still the launcher", func(t *testing.T) {
+		home, launcher := setup(t)
+		link := filepath.Join(home, ".local", "bin", "copilot")
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(launcher, link); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		if got, err := ResolveCopilotBinary(context.Background()); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+			t.Fatalf("ResolveCopilotBinary = %q, %v; want ErrAgentBinaryNotFound", got, err)
+		}
+	})
+}
+
 func writeExecutable(t *testing.T, path string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -506,7 +570,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--allow-all-tools", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all-tools", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -532,7 +596,7 @@ func TestGetRestoreCommandSelectsSessionCustomAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--agent=ao-mer-1", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--agent=ao-mer-1", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -1051,4 +1115,43 @@ func countCopilotHookCommand(entries []copilotHookEntry, command string) int {
 		}
 	}
 	return count
+}
+
+func TestManagedCopilotLaunchAndResumeDisableVendorAutoUpdate(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	launch, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "original-native-id"},
+	}})
+	if err != nil || !ok {
+		t.Fatalf("native resume unavailable: ok=%v error=%v", ok, err)
+	}
+	for name, argv := range map[string][]string{"launch": launch, "resume": resume} {
+		if !contains(argv, "--no-auto-update") {
+			t.Errorf("%s can replace its release outside AO: %q", name, argv)
+		}
+	}
+}
+
+func TestOnlyASwitchTargetTrustsTheWorkspaceForCopilot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	workspace := t.TempDir()
+	config := filepath.Join(home, "config.json")
+	// A new task leaves folder trust to the user.
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "s-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a spawn wrote the user's Copilot config: %v", err)
+	}
+	New().PrepareSwitchTarget(context.Background(), workspace)
+	data, err := os.ReadFile(config)
+	resolved, _ := filepath.EvalSymlinks(workspace)
+	if err != nil || !strings.Contains(string(data), resolved) {
+		t.Fatalf("config.json = %q (%v), want %s trusted", data, err, resolved)
+	}
 }

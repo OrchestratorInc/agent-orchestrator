@@ -116,6 +116,7 @@ func TestConfirmInstalledOwnerTrustsAOInstallWhenBinaryCannotRun(t *testing.T) {
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/Users/test/.npm/bin/codex"}, errors.New("exec format error")
 	})
+	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) { return method == "npm", nil }
 	s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: {Status: UpdateStatusBehindLatest, LatestVersion: "1.3.0"}}
 	baseline, err := s.confirmInstalledOwner(context.Background(), TargetCodex, Plan{Method: "npm", Package: "@openai/codex"})
 	if err != nil {
@@ -288,5 +289,21 @@ func TestRefusedReinstallKeepsTheLastJobRecord(t *testing.T) {
 	}
 	if _, ok, _ := store.GetAgentInstallJob(context.Background(), string(TargetCursor)); ok {
 		t.Fatal("the refusal was persisted")
+	}
+}
+
+func TestConfirmInstalledOwnerRefusesABrokenCopyAnotherMethodInstalled(t *testing.T) {
+	s := newTestService("darwin", "uv", "pipx")
+	// AO last updated Vibe through uv; the copy sessions now resolve is a
+	// broken pipx install the user added since.
+	s.jobs[TargetVibe] = &Job{Target: TargetVibe, Status: StatusSucceeded, Method: "uv"}
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.local/pipx/venvs/mistral-vibe/bin/vibe"}, errors.New("exec format error")
+	})
+	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) {
+		return method == "pipx", nil
+	}
+	if _, err := s.confirmInstalledOwner(context.Background(), TargetVibe, Plan{Target: TargetVibe, Method: "uv", Package: "mistral-vibe"}); !errors.Is(err, ErrInstallOwner) {
+		t.Fatalf("err = %v, want ErrInstallOwner for a copy uv does not own", err)
 	}
 }

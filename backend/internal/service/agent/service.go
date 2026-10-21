@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -384,6 +385,54 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
 }
 
+// rediscoverDriftedProjectCatalogs rediscovers project catalogs whose models
+// differ from a device-global catalog whose models just changed. A provider
+// connected inside the harness need not change the discovery fingerprint, so
+// project pickers would otherwise keep the old list until the next day.
+func (s *Service) rediscoverDriftedProjectCatalogs(agentID string, global []ports.AgentModelInfo) {
+	if s.cache == nil || s.projects == nil {
+		return
+	}
+	want := modelIDSet(global)
+	go func() {
+		records, err := s.cache.ListAgentModelCatalogsByAgent(s.ctx, agentID)
+		if err != nil {
+			return
+		}
+		for _, record := range records {
+			if s.ctx.Err() != nil {
+				return
+			}
+			if record.ProjectID == "" || record.ProjectID == "@browse:all" {
+				continue
+			}
+			if _, ok := credentialTypeFromScope(record.ProjectID); ok {
+				continue
+			}
+			// A missing project's scope falls back to the global one, and an
+			// archived project has no picker to refresh.
+			project, ok, err := s.projects.GetProject(s.ctx, record.ProjectID)
+			if err != nil || !ok || !project.ArchivedAt.IsZero() {
+				continue
+			}
+			var catalog ports.AgentModelCatalog
+			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil || maps.Equal(modelIDSet(catalog.Models), want) {
+				continue
+			}
+			s.requeueCatalog(record.ProjectID, catalog)
+			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
+		}
+	}()
+}
+
+func modelIDSet(models []ports.AgentModelInfo) map[string]struct{} {
+	ids := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		ids[model.ID] = struct{}{}
+	}
+	return ids
+}
+
 // catalogInputCheckTTL is how long a matching input check stands for a cached
 // catalog. Logins and logouts invalidate catalogs directly, so this only bounds
 // how long an out-of-band credential change goes unnoticed.
@@ -583,21 +632,27 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 			}
 			var catalog ports.AgentModelCatalog
 			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) == nil {
-				catalog.RefreshRecommended = true
-				catalog.RefreshState = "queued"
-				catalog.RefreshError = ""
-				// The warning described the inputs being invalidated (for
-				// example a rejected login). Clear it so clients stop showing
-				// it while the new discovery runs; a repeat failure restores it.
-				catalog.Warning = ""
-				catalog.WarningCode = ""
-				catalog.LastSuccessAt = nil
-				catalog.RetryAt = nil
-				_ = s.saveCatalog(s.ctx, record.ProjectID, catalog, time.Now().UTC().UnixNano(), 0)
+				s.requeueCatalog(record.ProjectID, catalog)
 			}
 			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
 		}
 	}()
+}
+
+// requeueCatalog marks a cached scope due and drops its retry backoff, so the
+// next revalidation runs discovery. The last successful choices remain visible.
+func (s *Service) requeueCatalog(projectID string, catalog ports.AgentModelCatalog) {
+	catalog.RefreshRecommended = true
+	catalog.RefreshState = "queued"
+	catalog.RefreshError = ""
+	// The warning described the inputs being invalidated (for example a
+	// rejected login). Clear it so clients stop showing it while the new
+	// discovery runs; a repeat failure restores it.
+	catalog.Warning = ""
+	catalog.WarningCode = ""
+	catalog.LastSuccessAt = nil
+	catalog.RetryAt = nil
+	_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
 }
 
 // InvalidateProjectModelCatalogs marks every cached agent catalog for a changed
@@ -623,14 +678,7 @@ func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
 			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil {
 				continue
 			}
-			catalog.RefreshRecommended = true
-			catalog.RefreshState = "queued"
-			catalog.RefreshError = ""
-			catalog.Warning = ""
-			catalog.WarningCode = ""
-			catalog.LastSuccessAt = nil
-			catalog.RetryAt = nil
-			_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
+			s.requeueCatalog(projectID, catalog)
 			_, _ = s.revalidateModels(s.ctx, record.AgentID, projectID)
 		}
 	}()
@@ -856,6 +904,9 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	discovered.RefreshRecommended = false
 	if err := s.saveCatalog(persistCtx, projectID, discovered, generation, 0); err != nil {
 		discovered.Warning = appendCacheWarning(discovered.Warning)
+	}
+	if projectID == "" && hasCached && !maps.Equal(modelIDSet(cached.Catalog.Models), modelIDSet(discovered.Models)) {
+		s.rediscoverDriftedProjectCatalogs(agentID, discovered.Models)
 	}
 	return discovered, nil
 }

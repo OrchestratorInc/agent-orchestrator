@@ -750,6 +750,20 @@ describe("CreateProjectFlow droppedPath", () => {
 		expect(await screen.findByLabelText("Clone URL")).toHaveValue("");
 	});
 
+	it("steps the clone dialog aside while Settings is open and keeps its details", async () => {
+		const user = userEvent.setup();
+		onTestFinished(() => useUiStore.setState({ settingsModal: null }));
+		renderChooseFlow();
+		await openSource(user, "Clone a repo");
+		fireEvent.change(await screen.findByLabelText("Clone URL"), { target: { value: "https://example.com/kept.git" } });
+
+		act(() => useUiStore.getState().openGlobalSettings("harness"));
+		await waitFor(() => expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument());
+
+		act(() => useUiStore.getState().closeSettings());
+		expect(await screen.findByLabelText("Clone URL")).toHaveValue("https://example.com/kept.git");
+	});
+
 	it("goes from clone agent setup directly to page loading without a progress modal", async () => {
 		const user = userEvent.setup();
 		let finishCreate!: () => void;
@@ -2629,7 +2643,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
 		expect(prefix).toHaveAttribute("placeholder", "app");
-		expect(screen.getByText("Coder workspaces are named <prefix>-<id>. Leave empty to use the project name.")).toBeInTheDocument();
+		expect(screen.getByText("Coder workspaces are named <prefix>-o-<id> / <prefix>-w-<word>-<id>. Leave empty to use the project name.")).toBeInTheDocument();
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 
 		for (const invalid of ["Team", "team-", "te--am", "1team"]) {
@@ -2813,12 +2827,10 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.getByText("Additional repositories")).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Add a repository" }));
-		await user.click(screen.getByRole("combobox", { name: "Additional repository 1" }));
 		// The main repository is not offered again.
 		expect(screen.queryByRole("option", { name: /acme\/alice/ })).not.toBeInTheDocument();
 		await user.click(await screen.findByRole("option", { name: /acme\/11x/ }));
 		await user.click(screen.getByRole("button", { name: "Add a repository" }));
-		await user.click(screen.getByRole("combobox", { name: "Additional repository 2" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/voice-calling-ai/ }));
 		// Each additional repository shows the folder it checks out into beside the main one.
 		expect(screen.getByText("../11x")).toBeInTheDocument();
@@ -2855,7 +2867,6 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/alice/ }));
 		await user.click(screen.getByRole("button", { name: "Add a repository" }));
-		await user.click(screen.getByRole("combobox", { name: "Additional repository 1" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/11x/ }));
 		await user.click(screen.getByRole("button", { name: "Make main" }));
 		await user.click(await screen.findByRole("button", { name: "Create" }));

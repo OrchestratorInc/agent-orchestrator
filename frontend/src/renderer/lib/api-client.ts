@@ -124,9 +124,6 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",
-	"/api/v1/sessions/{sessionId}/agent-switches",
-	"/api/v1/sessions/{sessionId}/agent-switches/{switchId}/handoff",
-	"/api/v1/sessions/{sessionId}/agent-switches/{switchId}/recover",
 	"/api/v1/sessions/{sessionId}/exit-agent",
 	"/api/v1/sessions/{sessionId}/interface-transition",
 	"/api/v1/sessions/{sessionId}/kill",
@@ -135,10 +132,10 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions/{sessionId}/preview",
 	"/api/v1/sessions/{sessionId}/preview/files/*",
 	"/api/v1/sessions/{sessionId}/preview/server",
+	"/api/v1/sessions/{sessionId}/provider-switch",
 	"/api/v1/sessions/{sessionId}/renders/{renderId}/artifact",
 	"/api/v1/sessions/{sessionId}/resume-agent",
 	"/api/v1/sessions/{sessionId}/restore",
-	"/api/v1/sessions/{sessionId}/switch-agent",
 	"/api/v1/sessions/{sessionId}/reviews",
 	"/api/v1/sessions/{sessionId}/reviews/cancel",
 	"/api/v1/sessions/{sessionId}/reviews/comments/resolve",
@@ -217,7 +214,6 @@ export function normalizeApiOperation(method: string, pathname: string): string 
 }
 
 type ApiErrorCategory = "daemon_unavailable" | "network_error" | "http_4xx" | "http_5xx";
-type ReportingOwner = NonNullable<components["schemas"]["APIError"]["reporting_owner"]>;
 
 // One event per (operation, category, status) per window: a daemon outage
 // makes every polling query fail at once and on every retry — the failure
@@ -231,13 +227,8 @@ function reportApiError(
 	status?: number,
 	code?: string,
 	requestId?: string,
-	reportingOwner?: ReportingOwner,
 ): void {
-	// Treat an omitted owner as HTTP-owned for dedupe purposes. Saga-owned
-	// responses need their own bucket so suppressing one cannot hide a later
-	// generic HTTP failure from Sentry.
-	const ownerBucket = reportingOwner === "agent_switch_saga" ? "agent_switch_saga" : "http";
-	const key = `${operation}|${category}|${status ?? ""}|${ownerBucket}`;
+	const key = `${operation}|${category}|${status ?? ""}`;
 	const now = Date.now();
 	const last = lastApiErrorAt.get(key);
 	if (last !== undefined && now - last < API_ERROR_DEDUPE_MS) return;
@@ -247,21 +238,14 @@ function reportApiError(
 		error_category: category,
 		status,
 	});
-	// Mirror into Sentry (no-op unless a DSN is configured). The daemon `code`
-	// is what drives the fine-grained severity/owner classification; `requestId`
-	// (when present) is tagged so a client event pivots to the daemon's own
-	// capture of the same request, which carries the matching request_id.
-	if (reportingOwner !== "agent_switch_saga") {
-		captureApiErrorToSentry(operation, category, status, code, requestId);
-	}
+	captureApiErrorToSentry(operation, category, status, code, requestId);
 }
 
 async function runtimeFetch(input: Request): Promise<Response> {
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
-	const visibilityOwned = operation === "GET /api/v1/projects" || operation === "GET /api/v1/sessions" || operation === "GET /api/v1/sessions/:id/agent-switches";
 	const baseUrl = runtimeApiBaseUrl;
 	if (baseUrl === null) {
-		if (!visibilityOwned) reportApiError(operation, "daemon_unavailable", 503);
+		reportApiError(operation, "daemon_unavailable", 503);
 		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
 			status: 503,
 			headers: { "Content-Type": "application/json" },
@@ -306,7 +290,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	} catch (error) {
 		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
-			if (!visibilityOwned) reportApiError(operation, "network_error");
+			reportApiError(operation, "network_error");
 		}
 		throw error;
 	}
@@ -315,24 +299,19 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		// caller still gets an unconsumed body) to drive classification.
 		let code: string | undefined;
 		let requestId: string | undefined;
-		let reportingOwner: ReportingOwner | undefined;
 		try {
 			const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
 			if (typeof body?.code === "string" && body.code !== "") code = body.code;
 			if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
-			if (body?.reporting_owner === "http" || body?.reporting_owner === "agent_switch_saga") {
-				reportingOwner = body.reporting_owner;
-			}
 		} catch {
 			// Non-JSON or empty body: fall back to status-only classification.
 		}
-		if (!visibilityOwned) reportApiError(
+		reportApiError(
 			operation,
 			response.status >= 500 ? "http_5xx" : "http_4xx",
 			response.status,
 			code,
 			requestId,
-			reportingOwner,
 		);
 	}
 	return response;

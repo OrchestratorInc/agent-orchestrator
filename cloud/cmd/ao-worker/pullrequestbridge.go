@@ -33,7 +33,7 @@ func runPullRequestBridge(
 	ctx context.Context,
 	socketPath string,
 	apiClient *client,
-	workspace string,
+	workspace, dataDir string,
 	launch worker.LaunchContext,
 	logger *slog.Logger,
 ) error {
@@ -48,7 +48,7 @@ func runPullRequestBridge(
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pull-request", func(w http.ResponseWriter, r *http.Request) {
-		handlePullRequestBridgeRequest(w, r, apiClient, workspace, launch, logger)
+		handlePullRequestBridgeRequest(w, r, apiClient, workspace, dataDir, launch, logger)
 	})
 	server := &http.Server{Handler: mux}
 	errCh := make(chan error, 1)
@@ -72,7 +72,7 @@ func handlePullRequestBridgeRequest(
 	w http.ResponseWriter,
 	r *http.Request,
 	apiClient pullRequestBridgeClient,
-	workspace string,
+	workspace, dataDir string,
 	launch worker.LaunchContext,
 	logger *slog.Logger,
 ) {
@@ -88,8 +88,10 @@ func handlePullRequestBridgeRequest(
 		writeBridgeError(w, http.StatusBadRequest, "branch and title are required")
 		return
 	}
+	// Only a checkout AO uses: never push from the Coder template's own clone
+	// of a refused folder (worker.UsedSessionRepoCheckouts).
 	checkout, err := worker.ResolveRepoCheckout(
-		worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos), input.Repository)
+		worker.UsedSessionRepoCheckouts(workspace, dataDir, launch.RepositoryURL, launch.ExtraRepos), input.Repository)
 	if err != nil {
 		writeBridgeError(w, http.StatusBadRequest, "repository must be one of this session's repositories (owner/name or folder name)")
 		return

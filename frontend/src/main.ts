@@ -43,9 +43,8 @@ import {
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
 import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
-import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
-import { AgentSwitchVisibilityController } from "./main/agent-switch-observability";
+import { TelemetryIdentityController } from "./main/telemetry-identity";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
@@ -156,6 +155,7 @@ import {
 	type BrowserViewHost,
 	type BrowserRuntimeState,
 } from "./main/browser-view-host";
+import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
@@ -178,6 +178,16 @@ import {
 	type BrowserRuntimeLinkHandle,
 } from "./main/browser-runtime-link";
 import { checkRender, measureRender } from "./main/render-check";
+import {
+	connectBrowserStream,
+	type BrowserStreamControl,
+	type BrowserStreamLinkHandle,
+} from "./main/browser-stream-link";
+import type {
+	BrowserRemoteInput,
+	BrowserRemoteNavigation,
+	BrowserRemoteTabAction,
+} from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -195,7 +205,6 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
-import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -223,6 +232,12 @@ const APP_DISPLAY_NAME = "Orchestrator.inc";
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
 // panel never impersonate the installed app (#3642).
 app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
+
+// An unsigned dev Electron is a new app to macOS whenever its binary changes, so Chromium's
+// keychain-held cookie key prompted on start. Dev runs use the stand-in key; packaged keep the keychain.
+if (!app.isPackaged && process.platform === "darwin") {
+	app.commandLine.appendSwitch("use-mock-keychain");
+}
 
 // Windows shows native toasts only when the app declares an AppUserModelID that
 // matches its installer shortcut (the NSIS maker's appId). Without it,
@@ -272,7 +287,17 @@ app.setPath(
 const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
-let agentSwitchVisibilityController: AgentSwitchVisibilityController | null = null;
+// PostHog identity: the user-facing analytics opt-out (marker file shared with the
+// daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
+const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
+const telemetryIdentity = new TelemetryIdentityController(
+	desktopDataDir,
+	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
+	(url, init) => net.fetch(url, init),
+	(optedOut) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
+	},
+);
 const trustedShellWebContents = new Map<number, WebContents>();
 const pendingRendererQueuePurges = new Map<string, {
 	senderId: number;
@@ -370,6 +395,8 @@ const desktopQuit = createDesktopQuitController({
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
+let browserStreamLink: BrowserStreamLinkHandle | null = null;
+let browserStreamLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
@@ -627,11 +654,15 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		sideClaimedDaemonPID = undefined;
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
+		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") void telemetryIdentity.flush();
+	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
+		establishBrowserStreamLink();
 	}
 	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
 	if (nextStatus.state === "ready" && nextStatus.port && daemonIdentity && sideClaimedDaemonPID !== daemonIdentity) {
@@ -826,10 +857,8 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
-	agentSwitchVisibilityController?.registerWindow(shellWebContents.id);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
-		agentSwitchVisibilityController?.destroyWindow(shellWebContents.id);
 	});
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
@@ -978,6 +1007,7 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		onTabCloseFailure: createBrowserCloseDiagnostics(browserProfileStateDir(), app.getVersion()),
 		// Agent tabs: only a connected host's or a cloud session's own
 		// agent-browser viewer may report the remote page a Browser tab shows.
 		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
@@ -1038,7 +1068,10 @@ async function createWindowInternal(): Promise<void> {
 			}).catch((error) => console.error("browser profile error dialog failed:", error));
 		},
 	});
-	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
+	if (daemonStatus.state === "ready") {
+		establishBrowserRuntimeLink();
+		establishBrowserStreamLink();
+	}
 
 	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
@@ -1464,6 +1497,11 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
 		...(bundledTmuxBinary ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" } : {}),
+		// The packaged macOS app ships cloudflared, so turning on remote access
+		// never waits for an install. An explicit AO_CLOUDFLARED_PATH still wins.
+		...(app.isPackaged && process.platform === "darwin"
+			? { AO_CLOUDFLARED_PATH: process.env.AO_CLOUDFLARED_PATH ?? path.join(process.resourcesPath, "cloudflared", "cloudflared") }
+			: {}),
 	};
 	// In dev mode, inject isolation defaults so the dev daemon never collides with
 	// the installed app. User-set env vars take priority (checked first).
@@ -1633,6 +1671,73 @@ function establishBrowserRuntimeLink(): void {
 		onStateChange: publishBrowserRuntimeState,
 	});
 	browserRuntimeLinkIdentity = identity;
+}
+
+function disposeBrowserStreamLink(): void {
+	browserStreamLink?.dispose();
+	browserStreamLink = null;
+	browserStreamLinkIdentity = null;
+}
+
+async function handleBrowserStreamControl(control: BrowserStreamControl): Promise<void> {
+	const host = browserViewHost;
+	if (!host) throw Object.assign(new Error("Browser target owner is unavailable"), { code: "BROWSER_TARGET_UNAVAILABLE" });
+	const sessionId = control.sessionId?.trim() ?? "";
+	if (!sessionId) throw Object.assign(new Error("sessionId is required"), { code: "INVALID_ARGUMENT" });
+	switch (control.type) {
+		case "start": {
+			const streamId = control.streamId ?? 0;
+			await host.startLiveStream(sessionId, streamId, {
+				frame: (frame) => browserStreamLink?.sendFrame({ streamId, ...frame }),
+				state: (state) => { browserStreamLink?.sendControl({ type: "state", streamId, sessionId, payload: state }); },
+				error: (code, message) => { browserStreamLink?.sendControl({ type: "error", streamId, sessionId, code, message }); },
+			});
+			return;
+		}
+		case "stop":
+			await host.stopLiveStream(sessionId, control.streamId ?? 0);
+			return;
+		case "input":
+			await host.handleRemoteInput(sessionId, control.payload as BrowserRemoteInput);
+			return;
+		case "navigate":
+			await host.handleRemoteNavigation(sessionId, control.payload as BrowserRemoteNavigation);
+			return;
+		case "tab":
+			await host.handleRemoteTab(sessionId, control.payload as BrowserRemoteTabAction);
+			return;
+		case "preview": {
+			const url = (control.payload as { url?: unknown } | undefined)?.url;
+			if (typeof url === "string") await host.openLivePreview(sessionId, url);
+			return;
+		}
+		default:
+			throw Object.assign(new Error(`Unsupported browser stream command: ${control.type}`), { code: "INVALID_ARGUMENT" });
+	}
+}
+
+function establishBrowserStreamLink(): void {
+	if (!browserViewHost) return;
+	const rfp = runFilePath();
+	if (!rfp) return;
+	let runInfo: ReturnType<typeof parseRunFile> = null;
+	try {
+		runInfo = parseRunFile(readFileSync(rfp, "utf8"));
+	} catch {
+		return;
+	}
+	const address = runInfo?.browserStreamAddress;
+	if (!address) return;
+	const identity = { pid: runInfo?.pid ?? 0, startedAtMs: runInfo?.startedAtMs ?? 0, address, token: browserRuntimeToken };
+	if (browserStreamLink && browserStreamLinkIdentity && sameBrowserRuntimeIdentity(browserStreamLinkIdentity, identity)) return;
+	disposeBrowserStreamLink();
+	browserStreamLink = connectBrowserStream(address, {
+		token: browserRuntimeToken,
+		onControl: handleBrowserStreamControl,
+		onDisconnect: () => browserViewHost?.stopAllLiveStreams(),
+		log: (message) => console.log(`AO: ${message}`),
+	});
+	browserStreamLinkIdentity = identity;
 }
 
 function establishSupervisorLink(): void {
@@ -2592,8 +2697,22 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 });
 ipcMain.handle("telemetry:getBootstrap", () => {
 	if (!telemetryPolicyController) return null;
+	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
+	if (telemetryIdentity.isOptedOut()) return null;
 	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
 });
+ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
+ipcMain.handle("telemetry:setAnalyticsOptOut", (event, optedOut: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
+	return telemetryIdentity.setOptedOut(optedOut);
+});
+ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || (userId !== null && typeof userId !== "string")) throw new Error("invalid cloud user request");
+	return telemetryIdentity.setCloudUser(userId);
+});
+ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getPolicy", () => telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView());
 ipcMain.handle("telemetry:setEventsEnabled", (_event, input: { eventsEnabled?: unknown; expectedGeneration?: unknown }) => {
 	if (!telemetryPolicyController || typeof input?.eventsEnabled !== "boolean" || typeof input.expectedGeneration !== "string") throw new Error("invalid telemetry policy request");
@@ -2614,12 +2733,6 @@ ipcMain.handle("telemetry:capture", (_event, request: RendererTelemetryCapture) 
 	if (!telemetryPolicyController || !sanitized) return false;
 	return telemetryPolicyController.capture(sanitized);
 });
-ipcMain.on(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, (event, request: unknown) => {
-	const trustedSender = trustedShellWebContents.get(event.sender.id);
-	if (trustedSender !== event.sender || trustedSender.isDestroyed()) return;
-	agentSwitchVisibilityController?.signal(event.sender.id, request);
-});
-
 function failClosedTelemetryPolicyView(): TelemetryPolicyView {
 	return { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" };
 }
@@ -3256,20 +3369,11 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
-	const visibilityKillSwitched = (process.env.AO_TELEMETRY_DISABLED_EVENTS ?? "").split(",").some((name) => name.trim() === "ao.agent_switch.visibility_failure");
-	// The approved release gate is intentionally closed. Tests inject the
-	// dedicated no-cache sender; the shipping composition creates no visibility
-	// network transport until that gate is separately approved.
-	agentSwitchVisibilityController = new AgentSwitchVisibilityController({ send: async () => undefined, killSwitched: visibilityKillSwitched, diagnostic: (code) => console.warn("agent switch visibility diagnostic:", code) });
-	for (const shellContents of trustedShellWebContents.values()) agentSwitchVisibilityController.registerWindow(shellContents.id);
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
-	const daemonPolicy = new DaemonTelemetryPolicyClient(() => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null, (url, init) => net.fetch(url, init));
 	const policyController = new DesktopTelemetryController({
 		authority,
-		daemon: daemonPolicy,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
 		transportFactory: () => initMainSentry(app.getVersion(), app.getPath("userData")),
-		visibility: agentSwitchVisibilityController,
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
@@ -3458,6 +3562,7 @@ app.on("before-quit", (event) => {
 	}
 	browserQuitRequested = true;
 	disposeBrowserRuntimeLink();
+	disposeBrowserStreamLink();
 	trayLifecycle.dispose();
 	trayController = null;
 	if (!browserCleanupComplete) {
