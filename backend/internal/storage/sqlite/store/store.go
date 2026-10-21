@@ -86,8 +86,8 @@ func NewStore(writeDB, readDB *sql.DB) *Store {
 	return &Store{
 		writeDB: writeDB,
 		readDB:  readDB,
-		qw:      gen.New(writeDB),
-		qr:      gen.New(readDB),
+		qw:      gen.New(utcTimes{writeDB}),
+		qr:      gen.New(utcTimes{readDB}),
 		writeMu: newContextMutex(),
 	}
 }
@@ -121,7 +121,7 @@ func (s *Store) inTxDB(ctx context.Context, what string, fn func(*gen.Queries, g
 		return fmt.Errorf("begin %s: %w", what, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := fn(s.qw.WithTx(tx), tx); err != nil {
+	if err := fn(s.txQueries(tx), utcTimes{tx}); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
 	return tx.Commit()
