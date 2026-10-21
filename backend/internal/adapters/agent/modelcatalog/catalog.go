@@ -894,6 +894,11 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		// no config discovery source to declare.
 		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
+	if agentID == "minimax-code" {
+		// The native command reports the profile's configured models, so the
+		// profile config is a discovery input even though AO does not parse it.
+		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
+	}
 	if config := configDiscoveryFingerprint(agentID, workingDir, env); config != "" {
 		return "config=" + config
 	}

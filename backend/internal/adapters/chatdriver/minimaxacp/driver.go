@@ -1,8 +1,7 @@
 // Package minimaxacp binds MiniMax Code 0.6.5+'s native ACP server to the shared
-// AO Chat transport and renderer. It remains unregistered until native Chat
-// conformance is qualified independently of the TUI integration.
+// AO Chat transport and renderer; the chat registry ships it.
 // Cancellation is settled through its native delegation-stop receipt before
-// AO admits a subsequent prompt; production registration is a separate gate.
+// AO admits a subsequent prompt.
 package minimaxacp
 
 import (
@@ -35,8 +34,7 @@ type Plugin interface {
 	ValidateChatHistory(context.Context, ports.ChatResumeConfig) error
 }
 
-// New constructs a candidate binding. Production registration is a separate
-// release gate; constructing a driver alone does not establish native support.
+// New constructs the MiniMax Code Chat driver.
 func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 	return &driver{ChatDriver: nativeacp.New(plugin, nativeacp.Config{
 		Harness:                      domain.HarnessMiniMaxCode,

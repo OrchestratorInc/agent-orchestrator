@@ -411,3 +411,39 @@ func TestRejectedRefreshKeepsRegionPreference(t *testing.T) {
 		t.Fatalf("previous auth lost: %v", err)
 	}
 }
+
+// A lock held while AO snapshots the source has no owner in the copy; native
+// OAuth would wait for it to go stale, so lock directories are not copied.
+func TestSnapshotSkipsNativeLockDirectories(t *testing.T) {
+	source, target := t.TempDir(), t.TempDir()
+	namespace := filepath.Join("prod", "en", "mcode-public")
+	writeRefreshFixture(t, filepath.Join(source, "auth", namespace, "auth-state.json"), `{"status":"authenticated"}`)
+	if err := os.MkdirAll(filepath.Join(source, "auth", namespace, "auth.lock.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyProfileTree(context.Background(), filepath.Join(source, "auth"), filepath.Join(target, "auth")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "auth", namespace, "auth-state.json")); err != nil {
+		t.Fatalf("auth state not copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "auth", namespace, "auth.lock.lock")); !os.IsNotExist(err) {
+		t.Fatalf("copied a native lock directory: %v", err)
+	}
+}
+
+// install.ps1 escapes a literal percent in the runtime path as %%.
+func TestOfficialWindowsLauncherNodeDecodesPercent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "100% minimax")
+	node := filepath.Join(root, "runtime", "node.exe")
+	writeRefreshFixture(t, node, "")
+	binary := filepath.Join(root, "mcode.cmd")
+	writeRefreshFixture(t, binary, "@ECHO off\r\n")
+	writeRefreshFixture(t, filepath.Join(root, "current"), "0.6.12\r\n")
+	launcher := filepath.Join(root, "releases", "0.6.12", ".mcode-launcher.cmd")
+	escaped := strings.ReplaceAll(node, "%", "%%")
+	writeRefreshFixture(t, launcher, "@ECHO off\r\n\""+escaped+"\" \"%~dp0node_modules\\@minimax-ai\\code\\cli.js\" %*\r\n")
+	if got := officialLauncherNode(binary); got != node {
+		t.Fatalf("launcher node = %q, want %q", got, node)
+	}
+}

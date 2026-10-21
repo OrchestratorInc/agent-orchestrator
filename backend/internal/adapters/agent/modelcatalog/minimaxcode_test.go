@@ -2,6 +2,8 @@ package modelcatalog
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -27,5 +29,27 @@ func TestMiniMaxDiscoveryUnavailableWithoutInterrupt(t *testing.T) {
 	got, err := discoverCommandCatalog(context.Background(), "minimax-code", "/nonexistent/mcode", t.TempDir(), nil, true)
 	if err == nil {
 		t.Fatalf("discovery succeeded with %d models; want unavailable error", len(got.Models))
+	}
+}
+
+// Editing the MiniMax profile's configured models must invalidate the cached
+// catalog, since `mcode provider list` reports them from config.yaml.
+func TestMiniMaxFingerprintTracksProfileConfig(t *testing.T) {
+	profile := t.TempDir()
+	env := map[string]string{"MINIMAX_DATA_DIR": profile}
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(profile, "config.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("defaultModel: custom_provider:ao-a/model-a\n")
+	before := CatalogFingerprint(context.Background(), "minimax-code", "", t.TempDir(), env)
+	if again := CatalogFingerprint(context.Background(), "minimax-code", "", t.TempDir(), env); again != before {
+		t.Fatalf("unchanged config changed the fingerprint: %s != %s", again, before)
+	}
+	write("defaultModel: custom_provider:ao-b/model-b\n")
+	if after := CatalogFingerprint(context.Background(), "minimax-code", "", t.TempDir(), env); after == before {
+		t.Fatal("editing the MiniMax profile config left the catalog fingerprint unchanged")
 	}
 }

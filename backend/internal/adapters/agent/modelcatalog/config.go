@@ -118,6 +118,12 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 				paths = append(paths, filepath.Join(root, name))
 			}
 		}
+	case "minimax-code":
+		// `mcode provider list` reads the profile's providers and models from
+		// config.yaml, and the region preference picks the account namespace.
+		if root := miniMaxProfileDir(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "preferences", "mcode-region.json"))
+		}
 	case "vibe":
 		if root := strings.TrimSpace(env["VIBE_HOME"]); root != "" {
 			paths = append(paths, filepath.Join(root, "config.toml"))
@@ -170,6 +176,20 @@ func deepseekProfileDir(home string, env map[string]string) string {
 		root = filepath.Join(home, ".dsh")
 	}
 	return filepath.Join(root, "profiles", "acp")
+}
+
+// miniMaxProfileDir resolves the profile MiniMax Code reads, in the CLI's
+// own precedence order.
+func miniMaxProfileDir(home string, env map[string]string) string {
+	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
+		if root := envValue(env, key); root != "" {
+			return root
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".minimax")
 }
 
 func readModelConfig(path string) ([]byte, error) {

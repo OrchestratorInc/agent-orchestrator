@@ -384,6 +384,12 @@ func (s *profileSnapshot) copyTree(ctx context.Context, source, target string, d
 			return s.copyLink(ctx, path, dst, depth)
 		}
 		if entry.IsDir() {
+			// MiniMax's cross-process locks are <file>.lock directories. A copy
+			// has no owner in the private profile, so native code would wait
+			// for it to go stale instead of acquiring it.
+			if path != source && strings.HasSuffix(entry.Name(), ".lock") {
+				return fs.SkipDir
+			}
 			return os.MkdirAll(dst, 0o700)
 		}
 		s.count++
@@ -606,10 +612,14 @@ func officialLauncherNode(binary string) string {
 	for _, line := range strings.Split(string(launcher), "\n") {
 		line = strings.TrimSpace(line)
 		if windows {
-			// The runtime is the first quoted word; cmd variables are not resolved.
+			// The runtime is the first quoted word. install.ps1 writes a literal
+			// percent as %%; any other percent is a cmd variable, not resolved.
 			if rest, ok := strings.CutPrefix(line, `"`); ok {
-				if end := strings.IndexByte(rest, '"'); end > 0 && !strings.Contains(rest[:end], "%") {
-					node = rest[:end]
+				if end := strings.IndexByte(rest, '"'); end > 0 {
+					word := strings.ReplaceAll(rest[:end], "%%", "\x00")
+					if !strings.Contains(word, "%") {
+						node = strings.ReplaceAll(word, "\x00", "%")
+					}
 				}
 				break
 			}

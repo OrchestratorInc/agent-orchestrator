@@ -22,13 +22,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/minimaxacp/testfixture"
 )
 
-// This test needs a candidate binary with MiniMax registered using a CI-only Go
-// source overlay. It never enables registration through a shipping runtime flag.
+// This test drives the shipped MiniMax Chat registration through a real daemon.
 // The daemon, HTTP API, SQLite projections, native CLI, tools and history are real;
 // only the explicitly configured loopback model endpoint is scripted.
 func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 	if os.Getenv("AO_NATIVE_MINIMAX_ACP_E2E") != "1" {
-		t.Skip("set AO_NATIVE_MINIMAX_ACP_E2E=1 with the CI-only MiniMax registry overlay")
+		t.Skip("set AO_NATIVE_MINIMAX_ACP_E2E=1 with mcode 0.6.5 installed")
 	}
 	if _, err := exec.LookPath("mcode"); err != nil {
 		t.Fatalf("opt-in native MiniMax qualification requires mcode 0.6.5: %v", err)
@@ -48,7 +47,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 	}
 	d.mustCall("GET", "/settings", http.StatusOK, nil, &settings)
 	if !slices.Contains(settings.ChatHarnesses, "minimax-code") {
-		t.Fatal("candidate daemon did not register MiniMax; apply the isolated CI source overlay")
+		t.Fatal("daemon did not register MiniMax Chat")
 	}
 	project := seedProject(t, d, "minimax-native-chat")
 	var projectRead struct {
@@ -387,7 +386,7 @@ func assertMiniMaxDaemonOwnership(t *testing.T, d *daemon) {
 		t.Fatal(err)
 	}
 	if response.StatusCode != http.StatusOK || ready.PID != d.cmd.Process.Pid || ready.ExecutablePath != buildDaemon(t) {
-		t.Fatal("readyz did not identify the owned candidate daemon")
+		t.Fatal("readyz did not identify the owned test daemon")
 	}
 }
 
