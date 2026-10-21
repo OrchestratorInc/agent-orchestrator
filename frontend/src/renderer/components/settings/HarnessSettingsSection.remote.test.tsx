@@ -109,7 +109,7 @@ it("routes installer, login, readiness, terminal, and cleanup to the selected ho
 	const codex = await openHarness("codex");
 	await userEvent.click(await within(codex).findByRole("button", { name: "Install" }));
 	await waitFor(() => expect(calls).toContain("POST /token-a/api/v1/agents/codex/install"));
-	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
+	await userEvent.click(screen.getByRole("button", { name: "All agents" }));
 	const claude = await openHarness("claude-code");
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
 	await within(claude).findByTestId("remote-auth-terminal");
@@ -173,7 +173,7 @@ it("closes a remote login terminal returned after switching away from its host",
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
 	await waitFor(() => expect(calls).toContain("POST /token-a/api/v1/agents/claude-code/auth"));
 	// Host selection lives on the harness list.
-	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
+	await userEvent.click(screen.getByRole("button", { name: "All agents" }));
 	await userEvent.click(screen.getByRole("button", { name: "Host" }));
 	await userEvent.click(screen.getByRole("menuitem", { name: "This computer" }));
 	await act(async () => finishAuth(Response.json({

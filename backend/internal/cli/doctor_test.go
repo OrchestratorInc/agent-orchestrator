@@ -481,8 +481,8 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 	for _, want := range []string{
 		"Core:\nPASS config:",
 		"Tools:\nPASS git:",
-		// Agent harnesses section — spot-check original three plus new additions.
-		"Agent harnesses:\nWARN claude-code:",
+		// Agents section — spot-check original three plus new additions.
+		"Agents:\nWARN claude-code:",
 		"WARN codex:",
 		"WARN opencode:",
 		"WARN muse:",

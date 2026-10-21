@@ -3882,7 +3882,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
 		{"delete shared history", fmt.Errorf("delete mer-1: %w", domain.ErrSessionHistoryShared), apierr.KindConflict, "SESSION_HISTORY_SHARED"},
 		{"delete cleanup refused", fmt.Errorf("delete mer-1: %w", &sessionmanager.CleanupRefusedError{Code: domain.CleanupSkipDirty, Reason: "workspace has uncommitted changes"}), apierr.KindConflict, "WORKSPACE_CLEANUP_REFUSED"},
-		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
+		{"unknown agent", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
@@ -4477,8 +4477,8 @@ func TestSpawnOrchestratorVerifiesReplacementHarness(t *testing.T) {
 	svc := &Service{manager: fc, store: st}
 
 	_, err := svc.SpawnOrchestrator(context.Background(), "mer", false, "", "")
-	if err == nil || !strings.Contains(err.Error(), `uses harness "claude-code", want "codex"`) {
-		t.Fatalf("SpawnOrchestrator err = %v, want harness verification failure", err)
+	if err == nil || !strings.Contains(err.Error(), `uses agent "claude-code", want "codex"`) {
+		t.Fatalf("SpawnOrchestrator err = %v, want agent verification failure", err)
 	}
 }
 

@@ -385,7 +385,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	if mainArtifact != nil {
 		kind, ok := sourceKindForHarness(session.Harness)
 		if !ok {
-			return fmt.Errorf("usage: unsupported harness %q", session.Harness)
+			return fmt.Errorf("usage: unsupported agent %q", session.Harness)
 		}
 		changed, err := c.registerHookSource(
 			ctx,
@@ -503,7 +503,7 @@ func (c *Collector) hookSession(
 	}
 	if signal.Harness != "" && signal.Harness != session.Harness {
 		return domain.SessionRecord{}, false, fmt.Errorf(
-			"usage hook harness %s does not match session harness %s",
+			"usage hook agent %s does not match session agent %s",
 			signal.Harness,
 			session.Harness,
 		)
@@ -639,7 +639,7 @@ func (c *Collector) backfillSession(ctx context.Context, session domain.SessionR
 
 	kind, ok := sourceKindForHarness(session.Harness)
 	if !ok {
-		return fmt.Errorf("usage: unsupported harness %q", session.Harness)
+		return fmt.Errorf("usage: unsupported agent %q", session.Harness)
 	}
 	if _, err := c.registerSource(ctx, binding, kind, nativeID, "", path, now, false); err != nil {
 		return err
@@ -895,7 +895,7 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 
 	kind, ok := sourceKindForHarness(binding.Harness)
 	if !ok {
-		return fmt.Errorf("usage: unsupported harness %q", binding.Harness)
+		return fmt.Errorf("usage: unsupported agent %q", binding.Harness)
 	}
 	if _, err := c.registerSource(ctx, binding, kind, binding.NativeRootID, "", path, now, false); err != nil {
 		return err

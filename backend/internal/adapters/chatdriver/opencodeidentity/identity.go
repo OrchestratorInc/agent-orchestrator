@@ -30,14 +30,14 @@ func Decode(expected domain.AgentHarness, stored string) (string, error) {
 		if expected == domain.HarnessOpenCode && stored != "" {
 			return stored, nil
 		}
-		return "", fmt.Errorf("%w: provider conversation has no %s harness identity", ports.ErrChatResumeFailed, expected)
+		return "", fmt.Errorf("%w: provider conversation has no %s agent identity", ports.ErrChatResumeFailed, expected)
 	}
 	harness, providerID, found := strings.Cut(value, ":")
 	if !found || providerID == "" {
 		return "", fmt.Errorf("%w: invalid OpenCode provider conversation identity", ports.ErrChatResumeFailed)
 	}
 	if domain.AgentHarness(harness) != expected {
-		return "", fmt.Errorf("%w: provider conversation belongs to harness %q, not %q", ports.ErrChatResumeFailed, harness, expected)
+		return "", fmt.Errorf("%w: provider conversation belongs to agent %q, not %q", ports.ErrChatResumeFailed, harness, expected)
 	}
 	return providerID, nil
 }

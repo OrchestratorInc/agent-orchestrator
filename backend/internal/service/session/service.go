@@ -407,7 +407,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_PROJECT_FEATURE_UNSUPPORTED", "Standalone sessions do not support issues or branches", nil)
 		}
 		if cfg.Harness == "" {
-			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
+			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "an agent is required for a standalone session", nil)
 		}
 	}
 	if s.agentReadiness != nil && cfg.Harness != "" {
@@ -416,7 +416,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, err
 		}
 		if readiness.Installation.State == domain.AgentInstallationNotInstalled {
-			return domain.Session{}, 0, 0, apierr.Invalid("AGENT_BINARY_NOT_FOUND", "The selected agent harness is not installed", map[string]any{"agentId": cfg.Harness})
+			return domain.Session{}, 0, 0, apierr.Invalid("AGENT_BINARY_NOT_FOUND", "The selected agent is not installed", map[string]any{"agentId": cfg.Harness})
 		}
 		if cfg.Harness == domain.HarnessCodex &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
@@ -846,7 +846,7 @@ func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, se
 		return orchestratorReplacementUnverified("new session %s has kind %q", sess.ID, sess.Kind)
 	}
 	if expected := project.Config.Orchestrator.Harness; expected != "" && sess.Harness != expected {
-		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
+		return orchestratorReplacementUnverified("new session %s uses agent %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
 	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
@@ -1392,7 +1392,7 @@ func (s *Service) Unpin(ctx context.Context, id domain.SessionID) (domain.Sessio
 // clears the preference and restores the project-level fallback.
 func (s *Service) SetReviewerHarness(ctx context.Context, id domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (domain.Session, error) {
 	if harness != "" && !harness.IsKnown() {
-		return domain.Session{}, apierr.Invalid("UNKNOWN_REVIEWER_HARNESS", "Unknown reviewer harness", nil)
+		return domain.Session{}, apierr.Invalid("UNKNOWN_REVIEWER_HARNESS", "Unknown reviewer agent", nil)
 	}
 	if err := config.Validate(); err != nil {
 		return domain.Session{}, apierr.Invalid("INVALID_REVIEWER_CONFIG", "Invalid reviewer config", map[string]any{"detail": err.Error()})
@@ -1851,7 +1851,7 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrArtifactOutputUnavailable):
 		return apierr.Invalid("ARTIFACT_OUTPUT_UNAVAILABLE", "Artifact output needs a daemon data directory to hold the session's artifacts", nil)
 	case errors.Is(err, sessionmanager.ErrHarnessInstallActive):
-		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
+		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected agent is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):

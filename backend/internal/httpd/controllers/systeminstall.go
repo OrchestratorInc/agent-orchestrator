@@ -128,7 +128,7 @@ func (c *SystemInstallController) cancelAgent(w http.ResponseWriter, r *http.Req
 	}
 	job, err := c.Installer.CancelAgentOperation(r.Context(), target)
 	if errors.Is(err, systeminstall.ErrNotWaiting) {
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_NOT_WAITING", "no update is waiting for idle sessions for this harness", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_NOT_WAITING", "no update is waiting for idle sessions for this agent", nil)
 		return
 	}
 	if err != nil {
@@ -175,9 +175,9 @@ func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) b
 	var active *systeminstall.HarnessActiveError
 	if errors.As(err, &active) {
 		details := harnessActiveDetails(active)
-		message := "end active sessions for this harness before changing its installation"
+		message := "end active sessions for this agent before changing its installation"
 		if active.Starting {
-			message = "a session for this harness is starting; try again when it has started"
+			message = "a session for this agent is starting; try again when it has started"
 		}
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", message, details)
 		return true
@@ -190,13 +190,13 @@ func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) b
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INSTALL_METHOD_UNAVAILABLE", "the selected install method is unavailable", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrInstallOwner):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "AO could not confirm this method installed the harness it runs; update it with the tool that installed it", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "AO could not confirm this method installed the agent it runs; update it with the tool that installed it", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrHarnessActive):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", "end active sessions for this harness before changing its installation", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", "end active sessions for this agent before changing its installation", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrInstallActive):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_ACTIVE", "an install or verification job is already active for this harness", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_ACTIVE", "an install or verification job is already active for this agent", nil)
 		return true
 	default:
 		return false

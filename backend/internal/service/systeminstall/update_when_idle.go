@@ -16,7 +16,7 @@ import (
 var errUpdateWhenIdle = errors.New("systeminstall: update waits for idle sessions")
 
 // ErrNotWaiting rejects cancelling an update that is not waiting for sessions.
-var ErrNotWaiting = errors.New("systeminstall: no update is waiting for this harness")
+var ErrNotWaiting = errors.New("systeminstall: no update is waiting for this agent")
 
 // IdleUpdateCoordinator stops and resumes a harness's sessions around an
 // update that cannot replace a running executable.
