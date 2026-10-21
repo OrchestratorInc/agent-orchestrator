@@ -84,7 +84,7 @@ func TestFXCatalogDoesNotWarnForConnectionsNeverSetUp(t *testing.T) {
 		}
 		return []byte("fx: no Grok model is selected"), errors.New("exit status 1")
 	}
-	got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": home}}, run)
+	got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": home, "FX_PROVIDER": ""}}, run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestFXCatalogLegacySavedModels(t *testing.T) {
 						}
 						return nil, errors.New("offline")
 					}
-					got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": home}}, run)
+					got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": home, "FX_PROVIDER": ""}}, run)
 					if err != nil {
 						t.Fatal(err)
 					}
