@@ -196,7 +196,8 @@ vi.mock("../lib/api-client", () => ({
 				? resumeAgentPostMock(path, ...args)
 				: chatViewPostMock(path, ...args)),
 	},
-	apiErrorCode: (error: { code?: string }) => error.code,
+	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
+	apiErrorRequestId: (error: { requestId?: string } | undefined) => error?.requestId,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -1162,6 +1163,105 @@ describe("SessionView", () => {
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await act(async () => {});
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers the opened chat after a transient resume timeout without another click", async () => {
+		vi.useFakeTimers();
+		try {
+			const session = workerSession("sess-1");
+			session.mode = "chat";
+			session.status = "exited";
+			session.activity = { state: "exited", lastActivityAt: "" };
+			resumeAgentPostMock.mockResolvedValueOnce({
+				error: { code: "SERVICE_UNAVAILABLE", message: "Please retry", requestId: "resume-timeout" },
+				response: new Response(null, { status: 503 }),
+			}).mockImplementationOnce(async () => {
+				session.status = "idle";
+				session.activity = { state: "idle", lastActivityAt: "" };
+				return { data: {}, response: new Response() };
+			});
+			render(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+			await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+			await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(2);
+			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops retrying a persistently timed-out chat after three attempts", async () => {
+		vi.useFakeTimers();
+		try {
+			const session = workerSession("sess-1");
+			session.mode = "chat";
+			session.status = "exited";
+			session.activity = { state: "exited", lastActivityAt: "" };
+			// The REST timeout middleware may return a 504 without a JSON body.
+			resumeAgentPostMock.mockResolvedValue({ response: new Response(null, { status: 504 }) });
+			const view = render(<SessionView sessionId="sess-1" />);
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			await act(async () => { await vi.advanceTimersByTimeAsync(7001); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(3);
+			expect(view.client.isMutating()).toBe(0);
+			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
+			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not retry an opened chat after leaving its view", async () => {
+		vi.useFakeTimers();
+		try {
+			const session = workerSession("sess-1");
+			session.mode = "chat";
+			session.status = "exited";
+			session.activity = { state: "exited", lastActivityAt: "" };
+			resumeAgentPostMock.mockResolvedValue({
+				error: { code: "SERVICE_UNAVAILABLE" }, response: new Response(null, { status: 503 }),
+			});
+			const view = render(<SessionView sessionId="sess-1" />);
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+			view.unmount();
+			await act(async () => { await vi.advanceTimersByTimeAsync(7001); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["navigation", "termination", "manual resume"])("cancels a delayed resume retry after %s", async (change) => {
+		vi.useFakeTimers();
+		try {
+			const session = workerSession("sess-1");
+			session.mode = "chat";
+			session.status = "exited";
+			session.activity = { state: "exited", lastActivityAt: "" };
+			resumeAgentPostMock.mockResolvedValue({
+				error: { code: "SERVICE_UNAVAILABLE" }, response: new Response(null, { status: 503 }),
+			});
+			const view = render(<SessionView sessionId="sess-1" />);
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+			if (change === "navigation") {
+				view.rerender(<SessionView sessionId="sess-2" />);
+			} else {
+				session.isTerminated = change === "termination";
+				session.status = change === "termination" ? "terminated" : "idle";
+				session.activity = { state: change === "termination" ? "exited" : "idle", lastActivityAt: "" };
+				view.rerender(<SessionView sessionId="sess-1" />);
+			}
+			await act(async () => { await vi.advanceTimersByTimeAsync(7001); });
+			expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps a newly selected Cloud session mounted while its row resolves", () => {
