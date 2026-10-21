@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,8 +92,9 @@ func (g triageGitHub) summary() string {
 	return fmt.Sprintf("## GitHub\ngh=%s\nauth=%s\nlabel needs-triage=%s\nfiling=%s\n", gh, g.Auth, g.Label, filing)
 }
 
-var triageLevel = regexp.MustCompile(`(?i)\b(?:ERROR|WARN|WARNING)\b`)
-var triageMessage = regexp.MustCompile(`(?:msg|message)"?\s*[:=]\s*"([^"]*)"`)
+var triageLevel = regexp.MustCompile(`(?i)(?:^|[\s{,])"?level"?\s*[:=]\s*"?([a-z]+)\b`)
+var triagePlainLevel = regexp.MustCompile(`(?i)^(?:\d{4}-\d{2}-\d{2}\S*\s+)?\[?([a-z]+)\]?:?\s+`)
+var triageMessage = regexp.MustCompile(`(?:^|[\s{,])"?(msg|message|error)(?:"\s*:|\s*=)\s*("(?:\\.|[^"\\])*"|[^\s,}]+)`)
 var triageNoise = regexp.MustCompile(`\[[^\]]*\]|\S*[/\\]\S*|\b\S*\d\S*|\b\w+=\S+`)
 var triageWord = regexp.MustCompile(`[a-z]{3,}`)
 
@@ -101,17 +103,39 @@ func triageLogMessages(logs string) []string {
 	seen := map[string]bool{}
 	lines := strings.Split(logs, "\n")
 	for i := len(lines) - 1; i >= 0 && len(messages) < 8; i-- {
-		loc := triageLevel.FindStringIndex(lines[i])
-		if loc == nil {
+		// Desktop marks daemon stderr as [error]; prefer the daemon's own level.
+		level := triageLevel.FindStringSubmatchIndex(lines[i])
+		if level == nil {
+			level = triagePlainLevel.FindStringSubmatchIndex(lines[i])
+		}
+		if level == nil {
 			continue
 		}
-		message := strings.TrimSpace(lines[i][loc[1]:])
-		if m := triageMessage.FindStringSubmatch(lines[i]); m != nil {
-			message = m[1]
+		switch strings.ToUpper(lines[i][level[2]:level[3]]) {
+		case "ERROR", "WARN", "WARNING", "PANIC", "FATAL":
+		default:
+			continue
+		}
+		message, detail := strings.TrimSpace(lines[i][level[1]:]), ""
+		for _, field := range triageMessage.FindAllStringSubmatch(lines[i], -1) {
+			value := field[2]
+			if unquoted, err := strconv.Unquote(value); err == nil {
+				value = unquoted
+			}
+			if field[1] == "error" {
+				if value != "null" && value != "<nil>" {
+					detail = value
+				}
+			} else {
+				message = value
+			}
 		}
 		if message != "" && !seen[message] {
 			seen[message] = true
-			messages = append(messages, message)
+			if detail != "" {
+				message += ": " + detail
+			}
+			messages = append(messages, strings.Join(strings.Fields(message), " "))
 		}
 	}
 	return messages
@@ -149,7 +173,7 @@ func triageKeywords(logs string) []string {
 func triageDuplicates(ctx context.Context, path string, queries []string) string {
 	queries = slices.DeleteFunc(slices.Clone(queries), func(query string) bool { return len(strings.Fields(query)) < 3 })
 	if len(queries) == 0 {
-		return "none: no error lines to search from\n"
+		return "skipped: no error lines to search for\n"
 	}
 	if path == "" {
 		return "unavailable: gh missing\n"

@@ -37,10 +37,10 @@ Failed or empty searches do not prove there are no duplicates. Say what was unch
 Edit only the human sections and first status line of `bug-report.md`.
 Fill Title, what happened, what was expected, and up to five steps. Delete unused steps.
 Keep the Seen on details except Related, and keep evidence unless it contains private data. Privacy filtering takes priority: redact or omit unsafe evidence.
-For a duplicate, `Related: #n` must target an ISSUE number; fill Comment with the new observation.
+For a duplicate, `Related: #n` must target an ISSUE number. Comment is only for duplicates and is the only human text posted to the existing issue; the body is unused.
 Keep `status:`, `Title:`, `Related:`, `## Comment`, and `## Agent-collected evidence` literal in every language.
 Keep exactly one Comment heading followed by exactly one Agent-collected evidence heading.
-Use two or three sentences for that comment. Preserve the reporter's meaning.
+For duplicates, fill Comment with the new observation in two or three sentences. For a new issue, leave Comment empty. Preserve the reporter's meaning.
 Write plain, short sentences. No em dashes, filler, root cause, priority, or confidence prose.
 Prefer fewer sentences; cut anything the maintainer does not need to reproduce or understand the symptom.
 Keep raw logs out of the human body. Evidence belongs in a separate comment.

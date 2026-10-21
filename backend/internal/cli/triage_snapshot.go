@@ -55,20 +55,31 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 		fmt.Fprintf(&evidence, "- Daemon check unavailable: %s\n", triageErrorReason(err))
 	}
 	home, _ := os.UserHomeDir()
+	logLines := 0
 	for _, path := range []string{filepath.Join(data, "daemon.log"), filepath.Join(data, "desktop.log"), filepath.Join(data, "hooks.log")} {
 		fmt.Fprintf(&b, "\n## Log: %s\n", path)
 		tail, err := triageLogTail(ctx, path)
 		if err != nil {
 			fmt.Fprintf(&b, "unavailable: %s\n", triageErrorReason(err))
 		} else {
-			b.WriteString(tail)
+			lines := 0
+			if tail != "" {
+				lines = strings.Count(tail, "\n") + 1
+			}
+			logLines += lines
+			messages := triageLogMessages(tail)
+			if len(messages) == 0 {
+				fmt.Fprintf(&b, "- Logs: no warnings or errors in the last %d lines\n", lines)
+			}
+			for _, message := range messages {
+				fmt.Fprintf(&b, "- Log excerpt: %s\n", message)
+			}
 			logs.WriteString(redactTriage(tail, home) + "\n")
-			b.WriteByte('\n')
 		}
 	}
 	messages := triageLogMessages(logs.String())
 	if len(messages) == 0 {
-		evidence.WriteString("- Logs: no ERROR/WARN excerpts available\n")
+		fmt.Fprintf(&evidence, "- Logs: no warnings or errors in the last %d lines\n", logLines)
 	}
 	for _, message := range messages {
 		fmt.Fprintf(&evidence, "- Log excerpt: %.240s\n", message)
@@ -124,14 +135,18 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 	}
 	github := <-githubCh
 	duplicates := <-duplicatesCh
-	evidence.WriteString("- Duplicate candidates checked by keyword search only, not confirmed:\n")
-	for _, line := range strings.Split(strings.TrimSpace(duplicates), "\n") {
-		line = strings.TrimPrefix(line, "- ")
-		if strings.HasPrefix(line, "none found") {
-			line = "none found"
+	if len(queries) == 0 {
+		evidence.WriteString("- Duplicate pre-search " + duplicates)
+	} else {
+		evidence.WriteString("- Duplicate candidates checked by keyword search only, not confirmed:\n")
+		for _, line := range strings.Split(strings.TrimSpace(duplicates), "\n") {
+			line = strings.TrimPrefix(line, "- ")
+			if strings.HasPrefix(line, "none found") {
+				line = "none found"
+			}
+			line, _, _ = strings.Cut(line, " https://")
+			fmt.Fprintf(&evidence, "  - %s\n", line)
 		}
-		line, _, _ = strings.Cut(line, " https://")
-		fmt.Fprintf(&evidence, "  - %s\n", line)
 	}
 	draft := fmt.Sprintf(`status: draft
 
@@ -145,7 +160,7 @@ Title: <one line, the symptom as the user sees it>
 Seen on %s, %s/%s, daemon %s. Related: none.
 
 ## Comment
-<two or three sentences with the new observation>
+<Duplicates only: the new observation to post to the existing issue. For a new issue, leave empty.>
 
 ## Agent-collected evidence
 %s`, Version, runtime.GOOS, runtime.GOARCH, st.State, evidence.String())
@@ -153,7 +168,11 @@ Seen on %s, %s/%s, daemon %s. Related: none.
 	for i, query := range queries {
 		quoted[i] = fmt.Sprintf("%q", query)
 	}
-	text := redactTriage(b.String(), home) + "\n" + github.summary() + fmt.Sprintf("\n## Possible duplicates (keyword search: %s; candidates, not confirmed)\n", strings.Join(quoted, "; ")) + redactTriage(duplicates, home)
+	search := fmt.Sprintf("\n## Possible duplicates (keyword search: %s; candidates, not confirmed)\n", strings.Join(quoted, "; "))
+	if len(queries) == 0 {
+		search = "\n## Possible duplicates\nDuplicate pre-search "
+	}
+	text := redactTriage(b.String(), home) + "\n" + github.summary() + search + redactTriage(duplicates, home)
 	if len(text) > triageMaxBytes {
 		text = text[:triageMaxBytes-len("\n[truncated]\n")] + "\n[truncated]\n"
 	}
