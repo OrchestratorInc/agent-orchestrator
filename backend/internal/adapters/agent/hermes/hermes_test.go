@@ -571,15 +571,18 @@ func TestProviderFromStatusReadsActiveProvider(t *testing.T) {
 	}{
 		{"configured provider", "  Model:        (not set)\n  Provider:     OpenAI API\n  Providers:    OpenAI API, Anthropic\n", "OpenAI API", ports.AgentAuthStatusConfigured},
 		{"auto with connected providers", "  Provider:     Auto\n  Providers:    Anthropic, GitHub Copilot\n", "Anthropic, GitHub Copilot", ports.AgentAuthStatusConfigured},
-		// The Provider row falls back to the requested provider without credentials.
-		{"explicit label without credentials", "  Provider:     OpenAI API\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnauthorized},
-		{"auto without credentials", "  Provider:     Auto\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnauthorized},
+		// The Provider row falls back to the requested provider without
+		// credentials, and an empty inventory cannot prove one is missing.
+		{"explicit label without credentials", "  Provider:     OpenAI API\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
+		{"auto without credentials", "  Provider:     Auto\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"selected provider not connected", "  Provider:     defunct-provider\n  Providers:    Anthropic\n", "", ports.AgentAuthStatusUnknown},
 		{"label only", "  Provider:     Auto\n", "", ports.AgentAuthStatusUnknown},
 		// Hermes prints "unknown" when its inventory probe fails.
 		{"failed inventory", "  Provider:     Auto\n  Providers:    unknown\n", "", ports.AgentAuthStatusUnknown},
-		// LM Studio and other local routes run without a credential.
+		// Keyless local routes and SDK chains (an AWS profile) are not listed.
 		{"keyless local route", "  Provider:     LM Studio\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
+		{"keyless loopback route", "  Provider:     Actual Computer\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
+		{"sdk credential chain", "  Provider:     AWS Bedrock\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"unrecognized output", "Hermes Agent Status\n", "", ports.AgentAuthStatusUnknown},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -665,6 +668,22 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			}
 		}
 	}
+	// Malformed encodings are refused: Hermes's replacement-character and
+	// latin-1 fallbacks can still apply assignments.
+	for _, form := range []string{
+		"# legacy comment \xff\n\u00a0HERMES_LANGUAGE=de\n",
+		"# legacy comment \xff\n\u00a0HERMES_EPHEMERAL_SYSTEM_PROMPT=native\n",
+		"\xffHERMES_LANGUAGE=de\n",
+		utf16LE("\ufeffHERMES_LANGUAGE=de\n") + "\x00\xd8",
+		"\xff\xfe\x00\x00H\x00\x00\x00",
+	} {
+		if err := os.WriteFile(filepath.Join(home, ".env"), []byte(form), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := hooks(); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Fatalf("%q in .env accepted: %v", form, err)
+		}
+	}
 	// A key named inside another quoted value is not an assignment.
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("NOTES='first line\nHERMES_LANGUAGE=just documentation\nlast line'\n# HERMES_LANGUAGE=de\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -710,6 +729,15 @@ func TestResolveHomeExpandsLikeHermes(t *testing.T) {
 	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "${AO_REVIEW_EMPTY}/custom", "AO_REVIEW_EMPTY": ""})
 	if err != nil || got != "/custom" {
 		t.Fatalf("ResolveHome(empty child var) = %q, %v", got, err)
+	}
+	// Hermes resolves a relative home against the session workspace, not the
+	// daemon's directory, so it is refused rather than inspected elsewhere.
+	if got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": ".ao-review-relative-hermes"}); err == nil {
+		t.Fatalf("ResolveHome(relative) = %q, want error", got)
+	}
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", WorkspacePath: t.TempDir(), Env: map[string]string{"HERMES_HOME": ".ao-review-relative-hermes"}, SystemPrompt: "AO"}
+	if err := New().GetAgentHooks(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("relative HERMES_HOME accepted: %v", err)
 	}
 }
 

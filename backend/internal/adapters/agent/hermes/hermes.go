@@ -431,6 +431,11 @@ func ResolveHome(env map[string]string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// Hermes resolves a relative home against its own working directory,
+		// the session workspace, so AO would inspect a different directory.
+		if !filepath.IsAbs(expanded) {
+			return "", fmt.Errorf("hermes: HERMES_HOME %q must be an absolute path", expanded)
+		}
 		return filepath.Clean(expanded), nil
 	}
 	if runtime.GOOS == "windows" {
@@ -635,7 +640,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	// Hermes loads <HERMES_HOME>/.env with override before reading these, so a
 	// value there would silently replace AO's instructions or chrome language.
-	for _, binding := range dotenvBindings(filepath.Join(home, ".env")) {
+	bindings, err := dotenvBindings(filepath.Join(home, ".env"))
+	if err != nil {
+		return err
+	}
+	for _, binding := range bindings {
 		switch key := binding.key; key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
 			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, filepath.Join(home, ".env"))

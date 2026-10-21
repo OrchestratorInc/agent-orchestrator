@@ -2,6 +2,8 @@ package hermes
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -44,17 +46,21 @@ type dotenvBinding struct {
 }
 
 // dotenvBindings parses a dotenv file the way Hermes loads it: normalized by
-// its sanitizer first, then parsed by python-dotenv. A missing or unreadable
-// file has no bindings. Values are returned only so callers can test
-// emptiness, never to log.
-func dotenvBindings(path string) []dotenvBinding {
+// its sanitizer first, then parsed by python-dotenv. A missing file has no
+// bindings; an unreadable or ambiguously encoded one is an error, because
+// Hermes may still load assignments from it. Values are returned only so
+// callers can test emptiness, never to log.
+func dotenvBindings(path string) ([]dotenvBinding, error) {
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	text, ok := hermesDotenvText(raw)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("hermes: %s is not valid UTF-8 or BOM-marked UTF-16; re-save it as UTF-8", path)
 	}
 	var bindings []dotenvBinding
 	for text != "" {
@@ -64,13 +70,16 @@ func dotenvBindings(path string) []dotenvBinding {
 			bindings = append(bindings, binding)
 		}
 	}
-	return bindings
+	return bindings, nil
 }
 
 // hermesDotenvText mirrors _sanitize_env_file_if_needed followed by the
-// loader's decode. UTF-16 (Notepad "Unicode") is decoded through its BOM;
-// UTF-32 is left untouched by Hermes and then yields no usable keys. The
-// sanitizer strips NULs and trims every non-blank, non-comment line.
+// loader's decode for files that decode cleanly: UTF-8 (optionally with a
+// BOM) and UTF-16 through its BOM (Notepad "Unicode"). The sanitizer strips
+// NULs and trims every non-blank, non-comment line. Anything else (UTF-32,
+// malformed UTF-8 or UTF-16) is ambiguous: Hermes's replacement-character
+// and latin-1 fallbacks can still apply assignments AO cannot predict, so it
+// is reported as undecodable rather than as having no assignments.
 func hermesDotenvText(raw []byte) (string, bool) {
 	var text string
 	switch {
@@ -88,21 +97,22 @@ func hermesDotenvText(raw []byte) (string, bool) {
 				units = append(units, uint16(raw[i])<<8|uint16(raw[i+1]))
 			}
 		}
+		for i := 0; i < len(units); i++ {
+			// A lone surrogate fails Python's strict UTF-16 decode.
+			if utf16.IsSurrogate(rune(units[i])) {
+				if i+1 >= len(units) || utf16.DecodeRune(rune(units[i]), rune(units[i+1])) == utf8.RuneError {
+					return "", false
+				}
+				i++
+			}
+		}
 		text = string(utf16.Decode(units))
 	default:
 		raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 		if !utf8.Valid(raw) {
-			// Hermes's sanitizer leaves the file untouched when the first line
-			// fails to decode, and its loader then falls back to latin-1.
-			if first, _, _ := bytes.Cut(raw, []byte("\n")); !utf8.Valid(first) {
-				runes := make([]rune, len(raw))
-				for i, b := range raw {
-					runes[i] = rune(b)
-				}
-				return string(runes), true
-			}
+			return "", false
 		}
-		text = strings.ToValidUTF8(string(raw), "�")
+		text = string(raw)
 	}
 	text = strings.ReplaceAll(text, "\x00", "")
 	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")

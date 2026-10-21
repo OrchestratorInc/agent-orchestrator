@@ -37,8 +37,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 // AuthStatusWithDiagnostics asks Hermes which provider it resolves. Hermes has
 // no status command that verifies a credential, so a resolved provider is
-// configured, not authorized; no provider at all means Hermes cannot run.
-// When the probe is inconclusive, Hermes's own credential stores decide.
+// configured, not authorized, and its inventory cannot prove a credential is
+// missing. When the probe is inconclusive, Hermes's own credential stores decide.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -69,20 +69,15 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return ports.AgentAuthStatusConfigured, identity, steps, nil
 }
 
-// hermesKeylessProviders are `hermes status` labels for local routes that
-// Hermes runs without an inference credential (provider ids and display names).
-var hermesKeylessProviders = map[string]bool{
-	"lmstudio": true, "lm studio": true, "custom": true, "custom endpoint": true,
-	"ollama": true, "vllm": true, "llamacpp": true, "llama.cpp": true,
-}
-
 // providerFromStatus reads `hermes status`. Its "Provider:" row is a display
 // label that falls back to the requested provider even without credentials,
-// so only the "Providers:" row of connected credentials is evidence. A
-// concrete selected provider absent from that row stays unresolved, since the
-// two rows may label it differently; the credential stores then decide.
+// so only the "Providers:" row of connected credentials is evidence. That row
+// is not a complete inventory: it omits keyless local routes (LM Studio,
+// Actual Computer, custom endpoints) and SDK credential chains such as an AWS
+// profile, so an empty or non-matching row stays unresolved and the
+// credential stores then decide.
 func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
-	selected, connected, sawConnected := "", []string(nil), false
+	selected, connected := "", []string(nil)
 	for _, line := range strings.Split(output, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if !ok {
@@ -93,13 +88,8 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 		case "Provider":
 			selected = value
 		case "Providers":
-			lower := strings.ToLower(value)
-			if lower == "unknown" {
-				// Hermes prints this when its provider inventory probe fails.
-				continue
-			}
-			sawConnected = true
-			if value == "" || strings.HasPrefix(lower, "none") || lower == "(none)" {
+			// "unknown" means Hermes's own inventory probe failed.
+			if lower := strings.ToLower(value); value == "" || lower == "unknown" || strings.HasPrefix(lower, "none") || lower == "(none)" {
 				continue
 			}
 			for _, name := range strings.Split(value, ",") {
@@ -109,17 +99,8 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 			}
 		}
 	}
-	if !sawConnected {
-		return "", ports.AgentAuthStatusUnknown
-	}
 	if len(connected) == 0 {
-		// A local OpenAI-compatible route runs without a credential: Hermes
-		// substitutes a placeholder key for LM Studio, and custom endpoints
-		// may need none, so an empty inventory proves nothing for them.
-		if hermesKeylessProviders[strings.ToLower(selected)] {
-			return "", ports.AgentAuthStatusUnknown
-		}
-		return "", ports.AgentAuthStatusUnauthorized
+		return "", ports.AgentAuthStatusUnknown
 	}
 	switch lower := strings.ToLower(selected); {
 	case lower == "" || lower == "auto" || lower == "(not set)":
@@ -150,7 +131,8 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 }
 
 func envFileHasCredential(path string) bool {
-	for _, binding := range dotenvBindings(path) {
+	bindings, _ := dotenvBindings(path)
+	for _, binding := range bindings {
 		if binding.value != "" && slices.Contains(hermesCredentialEnv, binding.key) {
 			return true
 		}
