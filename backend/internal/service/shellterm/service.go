@@ -520,6 +520,37 @@ func MatchInitialInputReadyState(output string, readyStates []InitialInputReadyS
 	return nil
 }
 
+func (s *Service) initialInputReadyState(ctx context.Context, handle ports.RuntimeHandle, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
+	if err != nil {
+		return nil
+	}
+	ready := MatchInitialInputReadyState(output, readyStates)
+	if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+		if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
+			if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
+				return renderedReady
+			}
+		}
+	}
+	return ready
+}
+
+func (s *Service) waitForInitialInputReadyState(ctx context.Context, handle ports.RuntimeHandle, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	ticker := time.NewTicker(initialInputPollInterval)
+	defer ticker.Stop()
+	for {
+		if ready := s.initialInputReadyState(ctx, handle, readyStates); ready != nil {
+			return ready
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
 // sendInitialInputAfterTimeout delivers the reviewed input once the ready
 // wait has expired without a marker, as long as the terminal is still alive.
 func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input string) {
@@ -539,47 +570,34 @@ func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input
 func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState, sendOnTimeout bool) {
 	ctx, cancel := context.WithTimeout(ctx, s.initialInputTimeout)
 	defer cancel()
-	ticker := time.NewTicker(initialInputPollInterval)
-	defer ticker.Stop()
-	for {
-		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
-		if err == nil {
-			ready := MatchInitialInputReadyState(output, readyStates)
-			if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
-				if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
-					if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
-						ready = renderedReady
-					}
-				}
-			}
-			if ready != nil && ready.SkipInput {
-				return
-			}
-			if ready == nil {
-				goto wait
-			}
-			if ready.RawPrefix != "" {
-				if err := s.runtime.SendInput(ctx, handle, ready.RawPrefix); err != nil {
-					s.log.Warn("authentication terminal initial input prefix failed", "handleId", handle.ID, "error", err)
-					return
-				}
-			}
-			if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
-				s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
-			}
+	ready := s.waitForInitialInputReadyState(ctx, handle, readyStates)
+	if ready == nil {
+		if sendOnTimeout {
+			s.sendInitialInputAfterTimeout(handle, input)
 			return
 		}
-	wait:
-		select {
-		case <-ctx.Done():
-			if sendOnTimeout {
-				s.sendInitialInputAfterTimeout(handle, input)
-				return
-			}
-			s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
+		s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
+		return
+	}
+	if ready.SkipInput {
+		return
+	}
+	if ready.RawPrefix != "" {
+		if err := s.runtime.SendInput(ctx, handle, ready.RawPrefix); err != nil {
+			s.log.Warn("authentication terminal initial input prefix failed", "handleId", handle.ID, "error", err)
 			return
-		case <-ticker.C:
 		}
+	}
+	if ready.SubmitReadyText != "" {
+		if s.waitForInitialInputReadyState(ctx, handle, []InitialInputReadyState{{Text: ready.SubmitReadyText}}) == nil {
+			// The prefix is already in the editor. Without the reviewed completion
+			// marker, Enter could send it as a prompt to the model.
+			s.log.Warn("authentication terminal initial input completion did not appear", "handleId", handle.ID)
+			return
+		}
+	}
+	if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
+		s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
 	}
 }
 
@@ -706,6 +724,9 @@ func validateOpenCommandTerminalInput(in OpenCommandTerminalInput) error {
 	for _, state := range in.InitialInputReadyStates {
 		if strings.TrimSpace(state.Text) == "" {
 			return apierr.Invalid("SHELL_TERMINAL_INITIAL_INPUT_READY_TEXT_REQUIRED", "A reviewed readiness marker is required for automatic terminal input", nil)
+		}
+		if state.SubmitReadyText != "" && strings.TrimSpace(state.SubmitReadyText) == "" {
+			return apierr.Invalid("SHELL_TERMINAL_INITIAL_INPUT_READY_TEXT_REQUIRED", "A reviewed submission marker must not be whitespace", nil)
 		}
 	}
 	return nil

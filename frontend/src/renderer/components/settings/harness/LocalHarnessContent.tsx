@@ -60,6 +60,11 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
 
+function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
+	if (workflow.action === "logout") return status === "unauthorized";
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code"));
+}
+
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
 type AgentAuthProbeResult = Awaited<ReturnType<typeof probeAgentAuth>>;
 const AUTH_STATE_RANK = {
@@ -599,10 +604,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
 		setAuthWorkflow(authWorkflowRef.current);
-		// MiMo can confirm a stored provider key locally without validating it upstream.
-		const completed = (candidate: AgentAuthProbeResult | undefined) => workflow.action === "logout"
-			? candidate?.agent?.authStatus === "unauthorized"
-			: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
+		const completed = (candidate: AgentAuthProbeResult | undefined) => authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
 		let result = await checkAuth(workflow.agentId, { fresh: true });
 		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !completed(result); attempt++) {
 			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
@@ -652,8 +654,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// instead of leaving a stale "signed out" terminal on screen.
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
-		const expected = authWorkflow.action === "logout" ? "unauthorized" : "authorized";
-		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === expected) void closeAuth(authWorkflow);
+		if (authWorkflowSucceeded(authWorkflow, readinessAgents.get(authWorkflow.agentId)?.authentication.state)) void closeAuth(authWorkflow);
 	}, [authWorkflow, readinessAgents, closeAuth]);
 
 	useEffect(() => {

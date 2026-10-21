@@ -106,14 +106,14 @@ export function describeHarness(input: HarnessDescribeInput) {
 	].filter(Boolean).join(" · ") || undefined : undefined;
 	const rowAuthWorkflow = input.authWorkflow;
 	const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
-	const needsLogin = needsHarnessLogin(authPlan, authStatus);
+	const needsLogin = needsHarnessLogin(authPlan, authStatus) || (isSetupAction && authStatus === "unknown");
 	const showUpdate = updateAvailable && !input.authPlansPending && !input.authPlansFailed;
 	// The daemon retains this component-repair instruction in persisted output,
 	// including after CLI verification succeeds or AO restarts.
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
-	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
+	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction && agentId !== "gemini" ? "settings.harness.configured" : "settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
