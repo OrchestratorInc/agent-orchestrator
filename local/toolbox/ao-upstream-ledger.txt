@@ -1,7 +1,8 @@
 # Леджер разбора апстрим-дельты (политика 2026-10-21 «из апстрима только
 # багфиксы, фичи не нужны совсем»). Ведёт ao-sync.sh (режим fixes-only):
-# строка «<sha> <taken|skipped> <subject/причина>» на каждый разобранный
-# апстрим-коммит. Пограничные «фиксы» пре-сидируются сюда строкой skipped
+# строка «<sha> <taken|skipped|pending> <subject/причина>» на каждый разобранный
+# апстрим-коммит. pending = решение не принято, ao-sync проходит мимо до смены
+# статуса вручную. Пограничные «фиксы» пре-сидируются сюда строкой skipped
 # с причиной ДО прогона синка — скрипт содержимое коммитов не судит.
 4d175a54b97a2bd443cefb5db5a75be7a026f347 skipped fix(awake): не применим без скипнутой feat 91b5eee23e (правит useStayAwake.ts, созданный фичей)
 6dcb6f2a66aa9a52e845d70c9f0969aeacffb850 skipped fix(prompt): по содержанию изменение текста системного промпта, не багфикс — решение владельца 2026-10-21
@@ -15,3 +16,5 @@ c2cf620fda3e62ae06e7bf2c78c228b0cefae94e taken fix(cloud): wait for the user aft
 0358e96642d7381a87389c5552a1ce36d7133905 taken fix: show a failed Setup the same way in cloud and local, say what went wrong, and allow 30 minutes per step (#6976)
 5ad319c5c42be0c54a06feeb502f31489fa8aff2 taken fix(chat): preserve question and answer history (#6943)
 10d15d6744599d4017c8b3623c45eed939062403 skipped feat(remote-hosts): let this computer link itself to your AO account (#6974)
+ea4a5ee123c8f3ef15b38979d25d659648dcbfa2 taken fix(cloud): start a cloud task in the default session mode (#6978) — закрыт вручную, union-резолюция TaskComposer.tsx (1fde1f280a)
+e152ec1a3221c30ee81d4e1beda509589efdeca0 pending fix(models): show cached catalogs while refreshing in background (#6898) — конфликт с role-тредингом дельты, решение: axisrow/agent-orchestrator#105
