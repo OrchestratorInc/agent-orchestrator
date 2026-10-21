@@ -42,9 +42,15 @@ func ReportDeliveryID(message string) (string, bool) {
 // as the user's unsent draft) can end up in front of the envelope. The check
 // lets the hook accept an envelope that is not at the start, but only when its
 // body arrived whole.
+//
+// The check sits on its own line after an unchanged opening tag, so a hook
+// from an older AO (for example, an agent still running from the installed app
+// while a newer daemon is in use) reads the envelope exactly as before.
 func wrapDelivery(tag, id, message string) string {
-	return fmt.Sprintf("<%s id=%q check=%q>\n%s\n</%s>", tag, id, deliveryCheck(message), message, tag)
+	return fmt.Sprintf("<%s id=%q>\n%s%s\"/>\n%s\n</%s>", tag, id, deliveryCheckOpen, deliveryCheck(message), message, tag)
 }
+
+const deliveryCheckOpen = `<ao-delivery-check sum="`
 
 // deliveryCheck hashes the body with whitespace removed, so harmless changes
 // (dropped blank lines, CRLF line endings) still match while lost, reordered,
@@ -88,22 +94,22 @@ func envelopeAt(message string, at int, open, closeTag string) (string, bool) {
 		return "", false
 	}
 	id, rest := rest[:end], rest[end:]
-	if strings.HasPrefix(rest, `">`) {
+	if !strings.HasPrefix(rest, `">`) {
+		return "", false
+	}
+	body := strings.TrimLeft(rest[len(`">`):], " \t\r\n")
+	if !strings.HasPrefix(body, deliveryCheckOpen) {
 		if at != 0 {
 			return "", false
 		}
 		return id, true
 	}
-	const checkAttr = `" check="`
-	if !strings.HasPrefix(rest, checkAttr) {
+	body = body[len(deliveryCheckOpen):]
+	if len(body) < deliveryCheckLen+3 || body[deliveryCheckLen:deliveryCheckLen+3] != `"/>` {
 		return "", false
 	}
-	rest = rest[len(checkAttr):]
-	if len(rest) < deliveryCheckLen+2 || rest[deliveryCheckLen:deliveryCheckLen+2] != `">` {
-		return "", false
-	}
-	check, body := rest[:deliveryCheckLen], rest[deliveryCheckLen+2:]
-	if !strings.HasSuffix(body, closeTag) || deliveryCheck(strings.TrimSuffix(body, closeTag)) != check {
+	check, content := body[:deliveryCheckLen], body[deliveryCheckLen+3:]
+	if !strings.HasSuffix(content, closeTag) || deliveryCheck(strings.TrimSuffix(content, closeTag)) != check {
 		return "", false
 	}
 	return id, true

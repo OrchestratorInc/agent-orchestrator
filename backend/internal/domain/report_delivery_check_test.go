@@ -98,3 +98,43 @@ func TestRejectedLegacyEnvelopeReturnsNoID(t *testing.T) {
 		t.Fatalf("ReportDeliveryID() = %q, %v; want \"\", false", got, ok)
 	}
 }
+
+// legacyDeliveryID is the parser hooks used before the check existed. Agents
+// keep calling the hook binary they were started with, so an older hook can
+// meet a newer daemon's envelope.
+func legacyDeliveryID(message, prefix string) (string, bool) {
+	message = strings.TrimSpace(message)
+	if !strings.HasPrefix(message, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(message, prefix)
+	end := strings.Index(rest, `">`)
+	if end <= 0 || end > 128 {
+		return "", false
+	}
+	id := rest[:end]
+	if !validDeliveryID(id) {
+		return "", false
+	}
+	return id, true
+}
+
+func TestOlderHooksStillReadTheCheckedEnvelope(t *testing.T) {
+	for prefix, wrapped := range map[string]string{
+		`<ao-report-delivery id="`:  WrapReportDelivery(testDeliveryBatchID, testDeliveryBody),
+		`<ao-session-delivery id="`: WrapSessionDelivery("session-send:1", "run the test pass."),
+	} {
+		if _, ok := legacyDeliveryID(wrapped, prefix); !ok {
+			t.Fatalf("an older hook cannot read %q", wrapped[:60])
+		}
+	}
+}
+
+func TestCheckedEnvelopeWithoutItsEndIsRejected(t *testing.T) {
+	// The check line marks the envelope as checked, so losing the end of the
+	// text is caught even when the envelope is at the start.
+	whole := WrapReportDelivery(testDeliveryBatchID, testDeliveryBody)
+	if got, ok := ReportDeliveryID(whole[:len(whole)-40]); ok {
+		t.Fatalf("truncated envelope = %q, true; want rejected", got)
+	}
+}
