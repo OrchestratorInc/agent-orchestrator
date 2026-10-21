@@ -1650,6 +1650,104 @@ func TestSourceCleanlinessIgnoresInheritedGitContextAndCache(t *testing.T) {
 	}
 }
 
+func TestSourceCatalogPathsInvalidateFreshAndCachedQualification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell launcher and filenames")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	for _, quotePath := range []string{"true", "false"} {
+		t.Run("quotePath="+quotePath, func(t *testing.T) {
+			root := t.TempDir()
+			git := func(args ...string) string {
+				t.Helper()
+				cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+				cmd.Dir = root
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, out)
+				}
+				return strings.TrimSpace(string(out))
+			}
+			git("init", "-q", "-b", "main")
+			git("config", "core.quotePath", quotePath)
+			git("commit", "-q", "--allow-empty", "-m", "release")
+			git("tag", "v0.22.2")
+			head := git("rev-parse", "HEAD")
+			banner := "Hermes Agent vgit." + head[:7]
+			launcher := filepath.Join(root, ".hermes", "bin", "hermes")
+			if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2'\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { forgetIdentity(launcher) })
+			for _, tt := range []struct {
+				name, path string
+				modified   bool
+			}{
+				{"ascii", "plugins/pack/locales/en.yaml", true},
+				{"unicode", "plugins/日本語/locales/en.yaml", true},
+				{"quote", "plugins/pack\"quoted/locales/en.tui.yaml", true},
+				{"tab", "plugins/pack\tname/locales/en.core.yml", true},
+				{"newline", "plugins/pack\nname/locales/en.desktop.yaml", true},
+				{"spaces", "plugins/ pack /locales/en.yaml", true},
+				{"non-English", "plugins/日本語/locales/de.yaml", false},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					// Prime the same identity while the source is still clean.
+					if ok, why, _ := probeNativeVersion(t.Context(), launcher); !ok {
+						t.Fatalf("clean checkout rejected: %s", why)
+					}
+					rememberIdentity(launcher)
+					if !identityConfirmed(t.Context(), launcher) {
+						t.Fatal("clean confirmation not reused")
+					}
+					path := filepath.Join(root, tt.path)
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte("cli:\n  tui:\n    placeholder_busy: REVIEW WORKING\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					for _, ignored := range []bool{false, true} {
+						if ignored {
+							// Ignore the root so filenames with newlines are covered too.
+							if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("/plugins/\n"), 0o600); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if modified, known := sourceModified(t.Context(), root); !known || modified != tt.modified {
+							t.Errorf("ignored=%v: sourceModified = %v, %v; want %v, true", ignored, modified, known, tt.modified)
+						}
+						if ok, why, _ := probeNativeVersion(t.Context(), launcher); ok == tt.modified {
+							t.Errorf("ignored=%v: fresh qualification = %v, %s; want %v", ignored, ok, why, !tt.modified)
+						}
+						if got := identityConfirmed(t.Context(), launcher); got == tt.modified {
+							t.Errorf("ignored=%v: cached qualification = %v; want %v", ignored, got, !tt.modified)
+						}
+						wantTag := "v0.22.2"
+						if tt.modified {
+							wantTag = ""
+						}
+						if tag := SourceReleaseTag(t.Context(), launcher, banner); tag != wantTag {
+							t.Errorf("ignored=%v: source release = %q; want %q", ignored, tag, wantTag)
+						}
+					}
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestStructuredPersonalityRendersLikeNative(t *testing.T) {
 	t.Setenv("HERMES_BUNDLED_LOCALES", "")
 	t.Setenv("HERMES_BUNDLED_PLUGINS", "")

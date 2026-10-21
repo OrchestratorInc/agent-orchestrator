@@ -560,11 +560,11 @@ func sourceModified(ctx context.Context, root string) (modified, known bool) {
 		return true, true
 	}
 	// Without --exclude-standard, --others also lists ignored files.
-	untracked, ok := runGit(ctx, root, "ls-files", "--others", "--", "locales", "plugins")
+	untracked, ok := runGitOutput(ctx, root, "ls-files", "-z", "--others", "--", "locales", "plugins")
 	if !ok {
 		return false, false
 	}
-	for _, path := range strings.Split(untracked, "\n") {
+	for _, path := range strings.Split(untracked, "\x00") {
 		dir, name := filepath.Split(filepath.FromSlash(path))
 		if englishLocaleFile.MatchString(name) && filepath.Base(filepath.Clean(dir)) == "locales" {
 			return true, true
@@ -579,11 +579,17 @@ func sameDir(a, b string) bool {
 	return errA == nil && errB == nil && filepath.Clean(a) == filepath.Clean(b)
 }
 
-// runGit runs a read-only git query in a checkout without taking optional
+func runGit(ctx context.Context, root string, args ...string) (string, bool) {
+	out, ok := runGitOutput(ctx, root, args...)
+	return strings.TrimSpace(out), ok
+}
+
+// runGitOutput preserves raw output, including filename whitespace and NULs.
+// It runs a read-only git query in a checkout without taking optional
 // locks, so it cannot strand an index.lock in the user's installation.
 // AO's own GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...)
 // would redirect the query to another repository, so none are inherited.
-func runGit(ctx context.Context, root string, args ...string) (string, bool) {
+func runGitOutput(ctx context.Context, root string, args ...string) (string, bool) {
 	gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(gitCtx, "git", append([]string{"--no-optional-locks", "-C", root}, args...)...)
@@ -593,7 +599,7 @@ func runGit(ctx context.Context, root string, args ...string) (string, bool) {
 	env = append(env, "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
 	cmd.Env = env
 	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err == nil
+	return string(out), err == nil
 }
 
 // supportedNativeVersion accepts a Hermes --version first line from a
