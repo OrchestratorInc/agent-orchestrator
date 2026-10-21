@@ -327,11 +327,13 @@ type Job struct {
 	// omits the field, matching FinishedAt's documented "zero until the job
 	// finishes" contract.
 	// WaitingOn lists the sessions a waiting_for_idle job still waits for.
-	WaitingOn    []domain.SessionWait `json:"waitingOn,omitempty" description:"While waiting_for_idle, the sessions the update still waits for and why."`
-	StartedAt    *time.Time           `json:"startedAt,omitempty"`
-	FinishedAt   *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
-	UpdatedAt    *time.Time           `json:"updatedAt,omitempty"`
-	RunStartedAt *time.Time           `json:"runStartedAt,omitempty" description:"When the install command started running. Later than startedAt when an update first waited for idle sessions."`
+	WaitingOn  []domain.SessionWait `json:"waitingOn,omitempty" description:"While waiting_for_idle, the sessions the update still waits for and why."`
+	StartedAt  *time.Time           `json:"startedAt,omitempty"`
+	FinishedAt *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
+	UpdatedAt  *time.Time           `json:"updatedAt,omitempty"`
+	// Operation is absent for a job recovered after a daemon restart.
+	Operation    AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"What this harness job does. Absent for a job recovered after a daemon restart."`
+	RunStartedAt *time.Time     `json:"runStartedAt,omitempty" description:"When the install command started running. Later than startedAt when an update first waited for idle sessions."`
 	// live is the running command's output, read into Output by snapshot
 	// so a long install shows what it has printed so far. Guarded by s.mu.
 	live *capturedOutput
@@ -906,7 +908,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		finishedAt = &now
 	}
 	job := &Job{
-		Target: target, Status: status, Method: plan.Method,
+		Target: target, Status: status, Method: plan.Method, Operation: operation,
 		Command: displayCommand(plan), ExpectedDestination: plan.ExpectedDestination,
 		Error: plan.Reason, Notice: plan.Notice, StartedAt: &now, FinishedAt: finishedAt, UpdatedAt: &now,
 	}

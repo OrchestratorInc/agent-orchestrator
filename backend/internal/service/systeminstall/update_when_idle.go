@@ -84,7 +84,7 @@ func (s *Service) startIdleUpdate(ctx context.Context, plan Plan, baseline *inst
 		return Job{}, ErrInstallActive
 	}
 	job := &Job{
-		Target: target, Status: StatusWaitingForIdle, Method: plan.Method,
+		Target: target, Status: StatusWaitingForIdle, Method: plan.Method, Operation: AgentOperationUpdate,
 		Command: displayCommand(plan), ExpectedDestination: plan.ExpectedDestination,
 		Notice: plan.Notice, StartedAt: &now, UpdatedAt: &now,
 	}

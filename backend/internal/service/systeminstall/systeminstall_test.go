@@ -2070,6 +2070,9 @@ func TestRunningAgentJobShowsOutputSoFar(t *testing.T) {
 	if len(jobs) != 1 || !strings.Contains(jobs[0].Output, "downloading codex 40%") {
 		t.Fatalf("AgentJobs = %+v, want the running job's output so far", jobs)
 	}
+	if job.Operation != AgentOperationInstall {
+		t.Fatalf("running job operation = %q, want install", job.Operation)
+	}
 	if job.RunStartedAt == nil || job.RunStartedAt.Before(*job.StartedAt) {
 		t.Fatalf("running job run start = %v, started = %v", job.RunStartedAt, job.StartedAt)
 	}

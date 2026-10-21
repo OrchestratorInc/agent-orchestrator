@@ -270,6 +270,9 @@ func TestIdleUpdateTimesTheRunFromWhenItStopsWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	waiting := waitForJob(t, s, TargetAuggie, func(job Job) bool { return len(job.WaitingOn) == 1 })
+	if waiting.Operation != AgentOperationUpdate {
+		t.Fatalf("waiting job operation = %q, want update", waiting.Operation)
+	}
 	if waiting.RunStartedAt != nil {
 		t.Fatalf("a waiting update reports a run start: %+v", waiting)
 	}

@@ -1054,16 +1054,16 @@ describe("HarnessSettingsSection", () => {
 		expect(within(await findListRow("codex")).getByRole("status")).toHaveTextContent("Updating…");
 	});
 
-	it("shows how long an update has run and, once it is slow, its output", async () => {
+	it("names an update started elsewhere, shows how long it has run and, once it is slow, its output", async () => {
 		mockInstalledOperations("npm");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", method: "npm", status: "installing", startedAt: new Date(Date.now() - 161_000).toISOString(), output: "npm http fetch GET 200 @openai/codex" }] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", method: "npm", operation: "update", status: "installing", startedAt: new Date(Date.now() - 161_000).toISOString(), output: "npm http fetch GET 200 @openai/codex" }] } } as never;
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		renderSection();
 		const row = await findAgentRow("codex");
-		expect(await within(row).findByRole("button", { name: "Working…" })).toHaveTextContent(/Working…2:4\d/);
+		expect(await within(row).findByRole("button", { name: "Updating…" })).toHaveTextContent(/Updating…2:4\d/);
 		expect(within(row).getByText("Still downloading. This can take a few minutes on slow networks.")).toBeInTheDocument();
 		await userEvent.click(within(row).getByRole("button", { name: "Show output" }));
 		expect(within(row).getByLabelText("Installer output")).toHaveTextContent("npm http fetch GET 200 @openai/codex");
