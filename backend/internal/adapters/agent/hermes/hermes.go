@@ -571,7 +571,8 @@ func runGit(ctx context.Context, root string, args ...string) (string, bool) {
 	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		return strings.HasPrefix(strings.ToUpper(kv), "GIT_")
 	})
-	cmd.Env = append(env, "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	env = append(env, "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	cmd.Env = env
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err == nil
 }
