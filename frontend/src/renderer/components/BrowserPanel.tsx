@@ -1369,7 +1369,7 @@ export function BrowserPanelView({
 					</span>
 				) : null}
 				{tabNotice ? (
-					<span className="max-w-24 truncate text-caption text-accent" role="status">
+					<span className="max-w-24 truncate text-caption text-accent-strong" role="status">
 						{tabNotice}
 					</span>
 				) : null}
@@ -1427,7 +1427,7 @@ export function BrowserPanelView({
 							<DropdownMenuTrigger asChild>
 									<Button
 									aria-label={t("browser.downloads.title")}
-									className={cn("relative", hasActiveDownload && "text-accent")}
+									className={cn("relative", hasActiveDownload && "text-accent-strong")}
 										size="icon-sm"
 										type="button"
 										variant="ghost"
@@ -1508,7 +1508,7 @@ export function BrowserPanelView({
 								<div className="my-1 h-px bg-border" role="separator" />
 						<DropdownMenuItem className="gap-1.5" onSelect={() => setDevicePreset(null)}>
 							<span className="flex size-4 shrink-0 items-center justify-center">
-								{devicePreset === null ? <Check aria-hidden="true" className="text-accent" /> : null}
+								{devicePreset === null ? <Check aria-hidden="true" className="text-accent-strong" /> : null}
 							</span>
 							{t("browser.deviceFit")}
 						</DropdownMenuItem>
@@ -1523,7 +1523,7 @@ export function BrowserPanelView({
 										onSelect={() => setDevicePreset(preset.id)}
 									>
 										<span className="flex size-4 shrink-0 items-center justify-center">
-											{devicePreset === preset.id ? <Check aria-hidden="true" className="text-accent" /> : null}
+											{devicePreset === preset.id ? <Check aria-hidden="true" className="text-accent-strong" /> : null}
 										</span>
 										<PresetIcon aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 										<span className="flex-1 truncate">{preset.label}</span>
@@ -1547,7 +1547,7 @@ export function BrowserPanelView({
 							}}
 						>
 							<span className="flex size-4 shrink-0 items-center justify-center">
-								{devicePreset === CUSTOM_DEVICE_PRESET_ID ? <Check aria-hidden="true" className="text-accent" /> : null}
+								{devicePreset === CUSTOM_DEVICE_PRESET_ID ? <Check aria-hidden="true" className="text-accent-strong" /> : null}
 							</span>
 							<span className="flex-1">{t("browser.deviceCustomWidth")}</span>
 							<Input
@@ -1586,7 +1586,7 @@ export function BrowserPanelView({
 								<div className="my-1 h-px bg-border" role="separator" />
 								<DropdownMenuItem className="gap-2" disabled={agentBrowserActive} onSelect={() => selectBrowserProfile(null)}>
 									<span className="flex size-4 shrink-0 items-center justify-center">
-										{profileState.profileId === null ? <Check aria-hidden="true" className="text-accent" /> : null}
+										{profileState.profileId === null ? <Check aria-hidden="true" className="text-accent-strong" /> : null}
 									</span>
 									<span className="flex-1 truncate">{t("browser.profile.temporary")}</span>
 								</DropdownMenuItem>
@@ -1601,7 +1601,7 @@ export function BrowserPanelView({
 											onSelect={() => selectBrowserProfile(profile.id)}
 										>
 											<span className="flex size-4 shrink-0 items-center justify-center">
-												{profileState.profileId === profile.id ? <Check aria-hidden="true" className="text-accent" /> : null}
+												{profileState.profileId === profile.id ? <Check aria-hidden="true" className="text-accent-strong" /> : null}
 											</span>
 											<span className="flex-1 truncate">{profile.name}</span>
 										</DropdownMenuItem>
@@ -1660,7 +1660,7 @@ export function BrowserPanelView({
 								>
 									<Bug aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t(devtoolsState.open ? "browser.closeDevTools" : "browser.openDevTools")}</span>
-									{devtoolsState.open ? <Check aria-hidden="true" className="text-accent" /> : null}
+									{devtoolsState.open ? <Check aria-hidden="true" className="text-accent-strong" /> : null}
 								</DropdownMenuItem>
 								<DropdownMenuItem className="gap-2" disabled={!canTakeScreenshot} onSelect={() => void takeScreenshot()}>
 									<Camera aria-hidden="true" className="size-icon-base shrink-0" />
@@ -2055,7 +2055,7 @@ function StaticPreview({ url }: { url: string }) {
 		<div className="absolute inset-0 overflow-auto bg-background text-foreground">
 			<div className="border-b border-border bg-surface px-4 py-3">
 				<div className="text-caption font-semibold uppercase tracking-wide-md text-muted-foreground">AO Preview</div>
-				<div className="mt-1 truncate font-mono text-xs text-accent">{url}</div>
+				<div className="mt-1 truncate font-mono text-xs text-accent-strong">{url}</div>
 			</div>
 			<div className="mx-auto max-w-preview-max px-5 py-6">
 				<div className="rounded-lg border border-border bg-card p-5 shadow-sm">

@@ -119,7 +119,7 @@ function StepMark({ status }: { status: PlanStepStatus }) {
 			{status === "completed" ? (
 				<Check className="size-3 text-success" />
 			) : status === "in_progress" ? (
-				<Loader2 className="size-3 animate-spin text-accent" />
+				<Loader2 className="size-3 animate-spin text-accent-strong" />
 			) : (
 				<span className="size-[7px] rounded-full border border-border-strong" />
 			)}

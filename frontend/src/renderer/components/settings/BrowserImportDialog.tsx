@@ -288,7 +288,7 @@ export function BrowserImportDialog({
 					) : null}
 					{view === "running" ? (
 						<div className="flex flex-1 flex-col items-center justify-center gap-5 py-12 text-center">
-							<LoaderCircle aria-hidden="true" className="size-8 animate-spin text-accent" />
+							<LoaderCircle aria-hidden="true" className="size-8 animate-spin text-accent-strong" />
 							<div>
 								<p className="font-semibold">{t(`settings.browserImport.progress.${progress?.phase ?? "preparing"}`)}</p>
 								<p className="mt-1 text-xs text-muted-foreground">{t("settings.browserImport.progress.keepOpen")}</p>
@@ -418,7 +418,7 @@ function ImportForm({
 									<span className="flex w-full min-w-0 items-center gap-2">
 										<span className="min-w-0 flex-1 truncate">{candidate.name}</span>
 										{candidate.profilesDeferred ? null : <span className="text-xs text-muted-foreground">{t("settings.browserImport.profileCount", { count: candidate.profiles.length })}</span>}
-										{selected ? <CheckCircle2 aria-hidden="true" className="size-4 shrink-0 text-accent" /> : null}
+										{selected ? <CheckCircle2 aria-hidden="true" className="size-4 shrink-0 text-accent-strong" /> : null}
 									</span>
 								</SelectItem>
 							);
