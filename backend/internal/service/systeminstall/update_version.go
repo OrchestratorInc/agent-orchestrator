@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 )
 
 var (
@@ -48,6 +50,8 @@ var hermesVersionToken = regexp.MustCompile(`^Hermes Agent (v\d[^ \r\n]*)`)
 // installed release. Hermes's --version also prints its release date and its
 // Python and SDK versions, and its Homebrew build reports a stale built-in
 // version, so a Homebrew Cellar path's version wins, then the banner's token.
+// A tagless source checkout's `vgit.<sha>` banner names the release tag at
+// that commit.
 func installedVersionText(target Target, resolvedPath, output string) string {
 	if target != TargetHermes {
 		return output
@@ -59,6 +63,9 @@ func installedVersionText(target Target, resolvedPath, output string) string {
 				return parts[i+2]
 			}
 		}
+	}
+	if tag := hermes.SourceReleaseTag(resolvedPath, output); tag != "" {
+		return tag
 	}
 	if m := hermesVersionToken.FindStringSubmatch(output); m != nil {
 		return m[1]

@@ -1021,3 +1021,86 @@ func TestCompactComposerBelow64ColumnsIsIdle(t *testing.T) {
 		})
 	}
 }
+
+func TestHooksIgnoreEnvExamplesInConfigComments(t *testing.T) {
+	home := t.TempDir()
+	hooks := func(config string) error {
+		if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
+	}
+	// The installer's generated config documents ${VAR} in comments.
+	if err := hooks("# api_key: ${OPENROUTER_API_KEY}\nmodel:\n  default: gpt\n  base_url: ${CUSTOM_BASE_URL}\n"); err != nil {
+		t.Fatalf("comment or non-instruction ${VAR} refused: %v", err)
+	}
+	for _, config := range []string{
+		"agent:\n  system_prompt: \"Use ${PROJECT}\"\n",
+		"display:\n  personality: mine\npersonalities:\n  mine: \"I am ${NAME}\"\n",
+		"agent:\n  personalities:\n    mine:\n      system_prompt: ${PROMPT}\n",
+	} {
+		if err := hooks(config); err == nil || !strings.Contains(err.Error(), "environment-expanded") {
+			t.Fatalf("instruction ${VAR} accepted for %q: %v", config, err)
+		}
+	}
+}
+
+func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	root := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "release")
+	launcher := filepath.Join(root, ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	head := git("rev-parse", "HEAD")
+	banner := "Hermes Agent vgit." + head[:7] + " (2026.9.24) · stable · local " + head[:12]
+	if qualifiedSourceCheckout(launcher, banner) {
+		t.Fatal("untagged checkout accepted")
+	}
+	// An annotated tag is a loose ref and object, then packed with a peel line.
+	git("tag", "-a", "v0.22.2", "-m", "v0.22.2")
+	if !qualifiedSourceCheckout(launcher, banner) {
+		t.Fatal("loose annotated qualified tag at HEAD rejected")
+	}
+	git("pack-refs", "--all")
+	if !qualifiedSourceCheckout(launcher, banner) {
+		t.Fatal("packed annotated qualified tag at HEAD rejected")
+	}
+	for _, line := range []string{
+		"Hermes Agent vgit." + head[:7] + ".dirty (2026.9.24)",
+		"Hermes Agent vgit.0000000 (2026.9.24)",
+	} {
+		if qualifiedSourceCheckout(launcher, line) {
+			t.Fatalf("%q accepted", line)
+		}
+	}
+	// A commit past the tag, or an unqualified line, is not that release.
+	git("tag", "v0.23.0")
+	git("tag", "-d", "v0.22.2")
+	if qualifiedSourceCheckout(launcher, banner) {
+		t.Fatal("unqualified release tag accepted")
+	}
+	git("tag", "v0.22.2")
+	git("commit", "-q", "--allow-empty", "-m", "after")
+	head = git("rev-parse", "HEAD")
+	if qualifiedSourceCheckout(launcher, "Hermes Agent vgit."+head[:7]+" (2026.9.24)") {
+		t.Fatal("commit past the release tag accepted")
+	}
+}

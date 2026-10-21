@@ -4,12 +4,15 @@
 package hermes
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/url"
 	"os"
@@ -56,6 +59,9 @@ var (
 	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
 	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+	// A tagless clean checkout; a ".dirty" suffix never matches.
+	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
+	stableReleaseTag        = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 // New creates the native TUI adapter.
@@ -302,15 +308,7 @@ func installedLaunchers() []string {
 // or the branch ref from its loose file or packed-refs. A linked worktree keeps
 // HEAD in its own git directory and branch refs in the one named by commondir.
 func gitHead(checkout string) string {
-	gitDir := filepath.Join(checkout, ".git")
-	if b, err := os.ReadFile(gitDir); err == nil {
-		if dir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:"); ok {
-			gitDir = strings.TrimSpace(dir)
-			if !filepath.IsAbs(gitDir) {
-				gitDir = filepath.Join(checkout, gitDir)
-			}
-		}
-	}
+	gitDir, refsDir := gitDirs(checkout)
 	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
 		return ""
@@ -320,12 +318,6 @@ func gitHead(checkout string) string {
 		return strings.TrimSpace(string(head))
 	}
 	ref = strings.TrimSpace(ref)
-	refsDir := gitDir
-	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
-		if refsDir = strings.TrimSpace(string(b)); !filepath.IsAbs(refsDir) {
-			refsDir = filepath.Join(gitDir, refsDir)
-		}
-	}
 	for _, dir := range []string{gitDir, refsDir} {
 		if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ref))); err == nil {
 			return strings.TrimSpace(string(b))
@@ -341,6 +333,96 @@ func gitHead(checkout string) string {
 		}
 	}
 	return ref
+}
+
+// gitDirs locates a checkout's git directory and the directory holding its
+// shared refs and objects (the same, except in a linked worktree).
+func gitDirs(checkout string) (gitDir, commonDir string) {
+	gitDir = filepath.Join(checkout, ".git")
+	if b, err := os.ReadFile(gitDir); err == nil {
+		if dir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:"); ok {
+			gitDir = strings.TrimSpace(dir)
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(checkout, gitDir)
+			}
+		}
+	}
+	commonDir = gitDir
+	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		if commonDir = strings.TrimSpace(string(b)); !filepath.IsAbs(commonDir) {
+			commonDir = filepath.Join(gitDir, commonDir)
+		}
+	}
+	return gitDir, commonDir
+}
+
+// releaseTagsAt lists the vX.Y.Z tags that point at commit in a checkout,
+// peeling annotated tags through packed-refs or their loose tag object.
+func releaseTagsAt(checkout, commit string) []string {
+	if commit == "" {
+		return nil
+	}
+	_, commonDir := gitDirs(checkout)
+	var tags []string
+	add := func(name, target string) {
+		if tag, ok := strings.CutPrefix(name, "refs/tags/"); ok && target == commit && stableReleaseTag.MatchString(tag) && !slices.Contains(tags, tag) {
+			tags = append(tags, tag)
+		}
+	}
+	if packed, err := os.ReadFile(filepath.Join(commonDir, "packed-refs")); err == nil {
+		lines := strings.Split(string(packed), "\n")
+		for i, line := range lines {
+			sha, name, ok := strings.Cut(strings.TrimSpace(line), " ")
+			if !ok || strings.HasPrefix(sha, "#") {
+				continue
+			}
+			add(name, sha)
+			if i+1 < len(lines) {
+				if peeled, ok := strings.CutPrefix(strings.TrimSpace(lines[i+1]), "^"); ok {
+					add(name, peeled)
+				}
+			}
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(commonDir, "refs", "tags"))
+	for _, entry := range entries {
+		b, err := os.ReadFile(filepath.Join(commonDir, "refs", "tags", entry.Name()))
+		if err != nil {
+			continue
+		}
+		sha := strings.TrimSpace(string(b))
+		add("refs/tags/"+entry.Name(), sha)
+		add("refs/tags/"+entry.Name(), looseTagTarget(commonDir, sha))
+	}
+	return tags
+}
+
+// looseTagTarget reads the object an annotated tag stored as a loose object
+// names; packed objects are not read.
+func looseTagTarget(commonDir, sha string) string {
+	if len(sha) != 40 {
+		return ""
+	}
+	f, err := os.Open(filepath.Join(commonDir, "objects", sha[:2], sha[2:]))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	r, err := zlib.NewReader(f)
+	if err != nil {
+		return ""
+	}
+	defer r.Close()
+	b, _ := io.ReadAll(io.LimitReader(r, 512))
+	header, body, ok := bytes.Cut(b, []byte{0})
+	if !ok || !bytes.HasPrefix(header, []byte("tag ")) {
+		return ""
+	}
+	target, ok := bytes.CutPrefix(body, []byte("object "))
+	if !ok || len(target) < 40 {
+		return ""
+	}
+	return string(target[:40])
 }
 
 func identityConfirmed(path string) bool {
@@ -377,7 +459,7 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	}
 	firstLine, _, _ := strings.Cut(string(b), "\n")
 	firstLine = strings.TrimSuffix(firstLine, "\r")
-	if err == nil && supportedNativeVersion(firstLine) {
+	if err == nil && (supportedNativeVersion(firstLine) || qualifiedSourceCheckout(path, firstLine)) {
 		return true, "", false
 	}
 	if len(firstLine) > 120 {
@@ -396,6 +478,45 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 // compared: Hermes derives its banner from git tags, so the same build can
 // report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
 var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
+
+// qualifiedSourceCheckout accepts the banner Hermes prints when its own git
+// lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
+// checkout) if the launcher's clean source checkout sits exactly on a
+// qualified release tag at that commit.
+func qualifiedSourceCheckout(launcher, line string) bool {
+	tag := SourceReleaseTag(launcher, line)
+	return tag != "" && supportedNativeVersion("Hermes Agent "+tag)
+}
+
+// SourceReleaseTag names the release a tagless `vgit.<sha>` banner was built
+// from: the vX.Y.Z tag (preferring a qualified line) at the clean HEAD of the
+// source checkout the launcher runs, when that HEAD matches the banner. It
+// returns "" for any other banner or checkout.
+func SourceReleaseTag(launcher, banner string) string {
+	firstLine, _, _ := strings.Cut(banner, "\n")
+	m := nativeSourceVersionLine.FindStringSubmatch(strings.TrimSuffix(firstLine, "\r"))
+	if m == nil {
+		return ""
+	}
+	root := launcherSourceRoot(launcher)
+	if root == "" {
+		return ""
+	}
+	head := gitHead(root)
+	if len(head) != 40 || !strings.HasPrefix(head, m[1]) {
+		return ""
+	}
+	tags := releaseTagsAt(root, head)
+	for _, tag := range tags {
+		if supportedNativeVersion("Hermes Agent " + tag) {
+			return tag
+		}
+	}
+	if len(tags) > 0 {
+		return tags[0]
+	}
+	return ""
+}
 
 // supportedNativeVersion accepts a Hermes --version first line from a
 // qualified release line.
@@ -784,13 +905,19 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return readErr
 		}
-		if strings.Contains(string(b), "${") {
-			return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
-		}
 		var config map[string]any
 		if len(b) > 0 {
 			if err := yaml.Unmarshal(b, &config); err != nil {
 				return fmt.Errorf("hermes: invalid native configuration: %w", err)
+			}
+		}
+		// Only parsed instruction values matter: the installer's generated
+		// config shows ${VAR} examples in comments.
+		agent, _ := config["agent"].(map[string]any)
+		display, _ := config["display"].(map[string]any)
+		for _, value := range []any{agent["system_prompt"], agent["personalities"], config["personalities"], display["personality"]} {
+			if referencesEnv(value) {
+				return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
 			}
 		}
 		original = nativeOverlay(config)
@@ -848,6 +975,23 @@ func refuseDotenvOverrides(envFile string) error {
 		}
 	}
 	return nil
+}
+
+// referencesEnv reports whether a parsed YAML value holds a ${VAR} reference.
+func referencesEnv(value any) bool {
+	switch v := value.(type) {
+	case string:
+		return strings.Contains(v, "${")
+	case map[string]any:
+		for key, item := range v {
+			if strings.Contains(key, "${") || referencesEnv(item) {
+				return true
+			}
+		}
+	case []any:
+		return slices.ContainsFunc(v, referencesEnv)
+	}
+	return false
 }
 
 func nativeOverlay(config map[string]any) string {
