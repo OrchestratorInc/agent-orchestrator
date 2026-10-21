@@ -69,6 +69,78 @@ func TestShutdownGuard(t *testing.T) {
 	}
 }
 
+// TestShutdownTeardownChildrenControl pins the full-stop marker `ao stop`
+// sends (issue #35): ?teardown=children is the only caller signal that turns
+// shutdown into a child-process teardown. It must follow the same loopback
+// guard as every other control route, an unknown value must not enable it, and
+// the plain /shutdown (used by the desktop app's daemon replacement) must stay
+// non-destructive.
+func TestShutdownTeardownChildrenControl(t *testing.T) {
+	cases := []struct {
+		name           string
+		url            string
+		origin         string
+		wantStatus     int
+		wantFired      bool
+		wantTeardown   bool
+		wantResponseOn string
+	}{
+		{name: "plain shutdown stays non-destructive", url: "/shutdown", wantStatus: http.StatusAccepted, wantFired: true, wantTeardown: false},
+		{name: "teardown marker", url: "/shutdown?teardown=children", wantStatus: http.StatusAccepted, wantFired: true, wantTeardown: true},
+		{name: "unknown teardown value is ignored", url: "/shutdown?teardown=bogus", wantStatus: http.StatusAccepted, wantFired: true, wantTeardown: false},
+		{name: "teardown marker from browser is forbidden", url: "/shutdown?teardown=children", origin: "https://evil.example", wantStatus: http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fired := make(chan string, 1)
+			r := NewRouterWithControl(config.Config{}, discardLogger(), nil, APIDeps{}, ControlDeps{
+				RequestShutdown:             func() { fired <- "plain" },
+				RequestShutdownWithTeardown: func() { fired <- "teardown" },
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:3001"+tc.url, nil)
+			req.Host = "127.0.0.1:3001"
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+			}
+			if tc.wantStatus != http.StatusAccepted {
+				select {
+				case got := <-fired:
+					t.Fatalf("forbidden shutdown fired as %q", got)
+				default:
+				}
+				return
+			}
+			select {
+			case got := <-fired:
+				want := "plain"
+				if tc.wantTeardown {
+					want = "teardown"
+				}
+				if got != want {
+					t.Fatalf("shutdown fired as %q, want %q", got, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("shutdown did not fire")
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			_, hasMarker := body["teardown"]
+			if hasMarker != tc.wantTeardown {
+				t.Fatalf("response teardown marker = %v, want %v (%#v)", hasMarker, tc.wantTeardown, body)
+			}
+		})
+	}
+}
+
 func TestAgentSwitchPolicyControlRoutesAreTypedAndLoopbackOnly(t *testing.T) {
 	policy := &policyControlFake{
 		prepareAck: ports.AgentSwitchFailurePolicyAcknowledgement{

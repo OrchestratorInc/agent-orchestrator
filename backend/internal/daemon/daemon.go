@@ -1326,6 +1326,21 @@ func Run() error {
 	chatStopCtx, chatCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	chatSvc.StopAll(chatStopCtx)
 	chatCancel()
+	// An explicit `ao stop` asked (via ?teardown=children) for a full stop:
+	// after the server drained and StopAll detached the chat controllers, end
+	// every live session's runtime process — terminal panes with their worker
+	// children, and chat provider hosts (StopChat conclusively shuts down the
+	// persistent host StopAll left running). SIGTERM and a plain /shutdown
+	// never reach this: their sessions survive for the next boot's Reconcile.
+	// The tmux server itself needs no signal: it exits once its last session
+	// ends, and a user-opened shell terminal legitimately keeps it alive.
+	if srv.TeardownChildrenRequested() {
+		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		if err := sessMgr.StopAllSessionProcesses(teardownCtx); err != nil {
+			log.Error("session process teardown on stop", "err", err)
+		}
+		teardownCancel()
+	}
 	if usageDone != nil {
 		<-usageDone
 	}

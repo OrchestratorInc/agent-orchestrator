@@ -27,6 +27,12 @@ type Server struct {
 
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
+	// teardownChildrenRequested is closed only by a shutdown that carries the
+	// `ao stop` teardown marker, alongside shutdownRequested. Run's caller
+	// reads it after Run returns to decide whether to end child session
+	// processes; the channel close provides the happens-before edge.
+	teardownChildrenRequested chan struct{}
+	teardownChildrenOnce      sync.Once
 }
 
 // NewWithDeps constructs a Server with API dependencies supplied by the daemon
@@ -59,15 +65,17 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 	}
 
 	srv := &Server{
-		cfg:               cfg,
-		log:               log,
-		listen:            ln,
-		shutdownRequested: make(chan struct{}),
+		cfg:                       cfg,
+		log:                       log,
+		listen:                    ln,
+		shutdownRequested:         make(chan struct{}),
+		teardownChildrenRequested: make(chan struct{}),
 	}
 	srv.http = &http.Server{
 		Handler: NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{
-			RequestShutdown:   srv.requestShutdown,
-			AgentSwitchPolicy: deps.AgentSwitchPolicy,
+			RequestShutdown:             srv.requestShutdown,
+			RequestShutdownWithTeardown: srv.requestShutdownWithTeardown,
+			AgentSwitchPolicy:           deps.AgentSwitchPolicy,
 		}),
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
@@ -170,6 +178,27 @@ func (s *Server) requestShutdown() {
 	s.shutdownOnce.Do(func() {
 		close(s.shutdownRequested)
 	})
+}
+
+// requestShutdownWithTeardown is requestShutdown plus the marker that Run's
+// caller uses to tear down child session processes after the server drains.
+func (s *Server) requestShutdownWithTeardown() {
+	s.requestShutdown()
+	s.teardownChildrenOnce.Do(func() {
+		close(s.teardownChildrenRequested)
+	})
+}
+
+// TeardownChildrenRequested reports whether shutdown was requested with the
+// `ao stop` teardown marker (POST /shutdown?teardown=children). Read it after
+// Run returns.
+func (s *Server) TeardownChildrenRequested() bool {
+	select {
+	case <-s.teardownChildrenRequested:
+		return true
+	default:
+		return false
+	}
 }
 
 // RequestShutdown triggers the same clean shutdown as POST /shutdown: it makes

@@ -28,8 +28,15 @@ import (
 // ControlDeps carries the daemon-control hooks the router exposes, such as the
 // callback that requests a graceful shutdown.
 type ControlDeps struct {
-	RequestShutdown   func()
-	AgentSwitchPolicy AgentSwitchPolicyControl
+	RequestShutdown func()
+	// RequestShutdownWithTeardown requests the same shutdown as
+	// RequestShutdown, plus a full stop of the daemon's child session
+	// processes (issue #35). Only `ao stop` sends the teardown marker; the
+	// desktop app's daemon replacement and SIGTERM keep using RequestShutdown
+	// so sessions survive them. Optional: a nil callback falls back to
+	// RequestShutdown.
+	RequestShutdownWithTeardown func()
+	AgentSwitchPolicy           AgentSwitchPolicyControl
 }
 
 // AgentSwitchPolicyControl coordinates the daemon side of desktop telemetry
@@ -196,11 +203,24 @@ func mountControl(r chi.Router, deps ControlDeps) {
 			})
 			return
 		}
-		envelope.WriteJSON(w, http.StatusAccepted, map[string]any{
+		// `ao stop` is the only caller that may end the daemon's child session
+		// processes: it marks its request with ?teardown=children. The desktop
+		// app's daemon replacement and SIGTERM shutdowns leave sessions alive
+		// for the next boot to adopt, so they never send the marker.
+		teardownChildren := req.URL.Query().Get("teardown") == "children"
+		payload := map[string]any{
 			"status":  "shutting_down",
 			"service": daemonmeta.ServiceName,
 			"pid":     os.Getpid(),
-		})
+		}
+		shutdown := deps.RequestShutdown
+		if teardownChildren {
+			payload["teardown"] = "children"
+			if deps.RequestShutdownWithTeardown != nil {
+				shutdown = deps.RequestShutdownWithTeardown
+			}
+		}
+		envelope.WriteJSON(w, http.StatusAccepted, payload)
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -208,7 +228,7 @@ func mountControl(r chi.Router, deps ControlDeps) {
 		// leave this handler. Otherwise http.Server.Shutdown can observe the
 		// /shutdown request itself as still active and wait until its graceful
 		// deadline under the race detector.
-		time.AfterFunc(10*time.Millisecond, deps.RequestShutdown)
+		time.AfterFunc(10*time.Millisecond, shutdown)
 	})
 }
 

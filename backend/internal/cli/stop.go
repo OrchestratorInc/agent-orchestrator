@@ -80,7 +80,11 @@ func (c *commandContext) requestShutdown(ctx context.Context, port int) error {
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, fmt.Sprintf("http://%s:%d/shutdown", config.LoopbackHost, port), http.NoBody)
+	// The teardown marker is what separates `ao stop` from every other daemon
+	// shutdown (desktop app quit, daemon replacement): only the CLI asks the
+	// daemon to end its child session processes after draining (issue #35).
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
+		fmt.Sprintf("http://%s:%d/shutdown?teardown=children", config.LoopbackHost, port), http.NoBody)
 	if err != nil {
 		return err
 	}

@@ -231,6 +231,13 @@ type sessionLifecycle interface {
 	ReapOrphanWorkers(ctx context.Context) ([]string, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	// StopAllSessionProcesses ends every live session's runtime process
+	// without terminating the session rows. Like SaveAndTeardownAll's absence
+	// above, its presence is a visible, reviewable interface decision: only
+	// the explicit full-stop path (`ao stop`, POST /shutdown?teardown=children,
+	// issue #35) calls it; SIGTERM and the desktop app's daemon replacement
+	// never do, so sessions keep surviving an ordinary daemon restart.
+	StopAllSessionProcesses(ctx context.Context) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
 	// is built after Session Manager during boot (see startShellTerminals), so

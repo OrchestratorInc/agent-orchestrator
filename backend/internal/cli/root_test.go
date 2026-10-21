@@ -385,6 +385,61 @@ func TestStopUsesShutdownEndpoint(t *testing.T) {
 	}
 }
 
+// TestStopRequestsFullChildTeardown pins the CLI side of issue #35: `ao stop`
+// asks the daemon for a full stop — shutdown plus child-process teardown — via
+// the teardown query marker, which is what separates it from the desktop app's
+// plain daemon-replacement shutdown.
+func TestStopRequestsFullChildTeardown(t *testing.T) {
+	cfg := setConfigEnv(t)
+	shutdownCalled := make(chan string, 1)
+	var shutdownSeen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		case "/shutdown":
+			if err := runfile.Remove(cfg.runFile); err != nil {
+				t.Fatal(err)
+			}
+			shutdownSeen.Store(true)
+			shutdownCalled <- r.URL.RawQuery
+			_, _ = fmt.Fprintf(w, `{"status":"shutting_down","service":%q,"pid":%d,"teardown":"children"}`, daemonmeta.ServiceName, os.Getpid())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool {
+			if pid != os.Getpid() {
+				return false
+			}
+			return !shutdownSeen.Load()
+		},
+	}, "stop", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-shutdownCalled:
+		if got != "teardown=children" {
+			t.Fatalf("stop shutdown query = %q, want %q", got, "teardown=children")
+		}
+	default:
+		t.Fatal("stop did not call daemon shutdown endpoint")
+	}
+	if !strings.Contains(out, `"state": "stopped"`) {
+		t.Fatalf("stop did not report stopped:\n%s", out)
+	}
+}
+
 func TestStatusKeepsLiveProbeFailureUnhealthy(t *testing.T) {
 	cfg := setConfigEnv(t)
 	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: closedPort(t), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
