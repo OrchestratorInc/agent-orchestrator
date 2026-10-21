@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -179,6 +180,9 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
+		if errors.Is(err, domain.ErrReportDeliveryUnacknowledged) {
+			return c.retryLater(ctx, batch, err)
+		}
 		return c.release(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
@@ -259,6 +263,39 @@ func (c *Coordinator) ReleasePiggyback(ctx context.Context, batch PreparedBatch,
 	return c.release(ctx, batch, cause)
 }
 
+// retryLater returns a batch whose text reached the agent's terminal but was
+// never acknowledged. Each retry types the whole batch in front of the agent
+// again, so the wait grows with every attempt instead of repeating every few
+// seconds (#6931).
+func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause error) error {
+	next := c.now().UTC().Add(reportRetryWait(batch.attempts()))
+	if _, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, next, cause.Error()); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
+// reportRetryWait is 15s after the first unacknowledged attempt, doubling each
+// time up to 10 minutes.
+func reportRetryWait(attempts int64) time.Duration {
+	const first, limit = 15 * time.Second, 10 * time.Minute
+	if attempts <= 1 {
+		return first
+	}
+	if attempts > 7 {
+		return limit
+	}
+	return min(first<<(attempts-1), limit)
+}
+
+func (b PreparedBatch) attempts() int64 {
+	var most int64
+	for _, report := range b.Reports {
+		most = max(most, report.DeliveryAttempts)
+	}
+	return most
+}
+
 func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause error) error {
 	_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if releaseErr != nil {
@@ -315,12 +352,40 @@ func (b PreparedBatch) Render() string {
 		}
 		if text != "" {
 			out.WriteString("\n")
-			out.WriteString(text)
+			out.WriteString(quoteImagePaths(text))
 		}
 		for _, output := range report.Outputs {
-			fmt.Fprintf(&out, "\n%s: %s", output.Kind, output.Reference)
+			// Backticks keep a path ending in an image extension as plain text:
+			// Claude Code turns a bare one into an attachment and moves an
+			// [Image #N] placeholder in front of the envelope (#6931).
+			fmt.Fprintf(&out, "\n%s: `%s`", output.Kind, output.Reference)
 		}
 	}
+	return out.String()
+}
+
+var (
+	bareWord     = regexp.MustCompile("[^\\s`]+")
+	imageFileEnd = regexp.MustCompile(`(?i)\.(png|jpe?g|gif|webp)$`)
+)
+
+// quoteImagePaths puts backticks around words that end in an image extension,
+// for the same reason output references are quoted: a bare one becomes an
+// image attachment when the text is pasted into Claude Code.
+func quoteImagePaths(text string) string {
+	var out strings.Builder
+	last := 0
+	for _, loc := range bareWord.FindAllStringIndex(text, -1) {
+		start, end := loc[0], loc[1]
+		if !imageFileEnd.MatchString(text[start:end]) ||
+			(start > 0 && text[start-1] == '`') || (end < len(text) && text[end] == '`') {
+			continue
+		}
+		out.WriteString(text[last:start])
+		out.WriteString("`" + text[start:end] + "`")
+		last = end
+	}
+	out.WriteString(text[last:])
 	return out.String()
 }
 

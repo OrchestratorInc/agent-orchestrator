@@ -1,46 +1,106 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
-const reportDeliveryPrefix = `<ao-report-delivery id="`
+const (
+	reportDeliveryTag  = "ao-report-delivery"
+	sessionDeliveryTag = "ao-session-delivery"
+	// deliveryCheckLen is the number of hex digits in an envelope's check.
+	deliveryCheckLen = 16
+)
+
+// ErrReportDeliveryUnacknowledged means AO wrote a delivery into an agent's
+// terminal but the agent never confirmed receiving it whole. A retry puts
+// another full copy in front of the agent, so callers should wait longer
+// between such retries (#6931).
+var ErrReportDeliveryUnacknowledged = errors.New("delivery was written but not acknowledged")
 
 // WrapReportDelivery marks an AO-authored report batch so provider prompt
 // hooks can correlate semantic acceptance with its durable delivery identity.
 func WrapReportDelivery(id, message string) string {
-	return fmt.Sprintf("%s%s\">\n%s\n</ao-report-delivery>", reportDeliveryPrefix, id, message)
+	return wrapDelivery(reportDeliveryTag, id, message)
 }
 
 // ReportDeliveryID returns the durable identity from an AO report envelope.
 // Delivery ids are generated internally and deliberately restricted so a
 // malformed prompt cannot manufacture markup or an unbounded correlation key.
 func ReportDeliveryID(message string) (string, bool) {
-	return deliveryID(message, reportDeliveryPrefix)
+	return deliveryID(message, reportDeliveryTag)
 }
 
-func deliveryID(message, prefix string) (string, bool) {
+// wrapDelivery adds a check of the body to the envelope. Terminals can drop,
+// reorder, or insert text while a long prompt is typed, and other text (such
+// as the user's unsent draft) can end up in front of the envelope. The check
+// lets the hook accept an envelope wherever it appears, but only when its body
+// arrived whole.
+func wrapDelivery(tag, id, message string) string {
+	return fmt.Sprintf("<%s id=\"%s\" check=\"%s\">\n%s\n</%s>", tag, id, deliveryCheck(message), message, tag)
+}
+
+// deliveryCheck hashes the body with whitespace removed, so harmless changes
+// (dropped blank lines, CRLF line endings) still match while lost, reordered,
+// or inserted text does not.
+func deliveryCheck(body string) string {
+	sum := sha256.Sum256([]byte(strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, body)))
+	return hex.EncodeToString(sum[:])[:deliveryCheckLen]
+}
+
+func deliveryID(message, tag string) (string, bool) {
 	message = strings.TrimSpace(message)
-	if !strings.HasPrefix(message, prefix) {
+	open := "<" + tag + ` id="`
+	start := strings.Index(message, open)
+	if start < 0 {
 		return "", false
 	}
-	rest := strings.TrimPrefix(message, prefix)
-	end := strings.Index(rest, `">`)
-	if end <= 0 || end > 128 {
+	rest := message[start+len(open):]
+	end := strings.IndexByte(rest, '"')
+	if end <= 0 || end > 128 || !validDeliveryID(rest[:end]) {
 		return "", false
 	}
-	id := rest[:end]
+	id, rest := rest[:end], rest[end:]
+	if strings.HasPrefix(rest, `">`) {
+		// An envelope without a check (written before it existed) cannot prove
+		// its body is whole, so it keeps the old rule: trusted only at the start.
+		return id, start == 0
+	}
+	const checkAttr = `" check="`
+	if !strings.HasPrefix(rest, checkAttr) {
+		return "", false
+	}
+	rest = rest[len(checkAttr):]
+	if len(rest) < deliveryCheckLen+2 || rest[deliveryCheckLen:deliveryCheckLen+2] != `">` {
+		return "", false
+	}
+	check, body := rest[:deliveryCheckLen], rest[deliveryCheckLen+2:]
+	closeAt := strings.LastIndex(body, "</"+tag+">")
+	if closeAt < 0 || deliveryCheck(body[:closeAt]) != check {
+		return "", false
+	}
+	return id, true
+}
+
+func validDeliveryID(id string) bool {
 	for _, r := range id {
 		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
 			(r < '0' || r > '9') && r != ':' && r != '-' && r != '_' {
-			return "", false
+			return false
 		}
 	}
-	return id, true
+	return true
 }
 
 const (
@@ -207,7 +267,7 @@ func ValidateReportContent(state ReportState, note, message string, outputs []Re
 // WrapSessionDelivery preserves AO session-origin direction as coordination in
 // terminal prompt hooks, without labeling it as a human prompt or worker report.
 func WrapSessionDelivery(id, message string) string {
-	return fmt.Sprintf("<ao-session-delivery id=%q>\n%s\n</ao-session-delivery>", id, message)
+	return wrapDelivery(sessionDeliveryTag, id, message)
 }
 
 // CoordinationDeliveryID recognizes both durable reports and session sends.
@@ -215,5 +275,5 @@ func CoordinationDeliveryID(message string) (string, bool) {
 	if id, ok := ReportDeliveryID(message); ok {
 		return id, true
 	}
-	return deliveryID(message, `<ao-session-delivery id="`)
+	return deliveryID(message, sessionDeliveryTag)
 }

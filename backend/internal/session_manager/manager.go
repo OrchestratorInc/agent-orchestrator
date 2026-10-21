@@ -541,6 +541,9 @@ type Manager struct {
 	// actually became active (the agent accepted the prompt). New fills in the
 	// sendConfirm* defaults; tests in this package shrink the timings directly.
 	sendConfirm sendConfirmConfig
+	// semanticAcceptTimeout bounds how long SendSemantic waits for a TUI's
+	// prompt hook to confirm a delivery it already typed. Zero means 10s.
+	semanticAcceptTimeout time.Duration
 	// interfaceTransition bounds only contradictory stale-idle proof. Turns and
 	// user-paced waits reported through the activity boundary remain unbounded.
 	interfaceTransition interfaceTransitionConfig
@@ -4907,7 +4910,11 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	if err := m.send(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}); err != nil {
 		return err
 	}
-	deadline := time.NewTimer(10 * time.Second)
+	acceptWait := m.semanticAcceptTimeout
+	if acceptWait <= 0 {
+		acceptWait = 10 * time.Second
+	}
+	deadline := time.NewTimer(acceptWait)
 	defer deadline.Stop()
 	ticker := time.NewTicker(m.sendConfirm.pollInterval)
 	defer ticker.Stop()
@@ -4926,7 +4933,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%w: prompt submission was not observed", ErrSemanticAcceptanceUnsupported)
+			return fmt.Errorf("%w: %w: prompt submission was not observed", ErrSemanticAcceptanceUnsupported, domain.ErrReportDeliveryUnacknowledged)
 		case <-ticker.C:
 		}
 	}

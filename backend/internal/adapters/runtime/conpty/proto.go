@@ -11,11 +11,14 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 2
+	conPTYHostProtocolVersion         = 3
 	conPTYStyledOutputProtocolVersion = 2
+	// conPTYPasteInputProtocolVersion is the first host that accepts
+	// MsgPasteInput. Older hosts ignore unknown frames, so clients check it.
+	conPTYPasteInputProtocolVersion = 3
 )
 
-// Message type constants. Values must match pty-host.ts MSG_* constants exactly.
+// Message type constants.
 const (
 	MsgTerminalData       byte = 0x01 // host -> client: raw PTY output
 	MsgTerminalInput      byte = 0x02 // client -> host: raw keystrokes
@@ -27,6 +30,7 @@ const (
 	MsgKillReq            byte = 0x08 // client -> host: empty
 	MsgGetStyledOutputReq byte = 0x09 // client -> host: JSON {lines}
 	MsgGetStyledOutputRes byte = 0x0a // host -> client: rendered UTF-8 text with ANSI styles
+	MsgPasteInput         byte = 0x0b // client -> host: prompt text to write as one paste
 )
 
 // JSON payload structs shared with later tasks (kept minimal).

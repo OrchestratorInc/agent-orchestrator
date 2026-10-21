@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -516,6 +517,14 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			}
 		}
 
+	case MsgPasteInput:
+		if _, alive := h.cfg.PTY.ExitCode(); !alive {
+			data := pasteBytes(payload, h.modes.BracketedPaste())
+			if n, err := h.cfg.PTY.Write(data); err != nil {
+				fmt.Fprintf(os.Stderr, "pty-host [%s]: paste: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(data), err)
+			}
+		}
+
 	case MsgResize:
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			var rp ResizePayload
@@ -580,4 +589,22 @@ func statusFrame(alive bool, pid int, exitCode *int) []byte {
 	b, _ := json.Marshal(sp)
 	frame, _ := EncodeMessage(MsgStatusRes, b) // b is small JSON, never overflows uint32
 	return frame
+}
+
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
+)
+
+// pasteBytes prepares prompt text for one write to the PTY. When the program
+// has turned on bracketed paste, the text is wrapped so the program receives
+// it as a single paste however its reads are split; otherwise it is written
+// as plain input. The markers are removed from the text itself so it cannot
+// end the paste early.
+func pasteBytes(text []byte, bracketed bool) []byte {
+	clean := strings.NewReplacer(pasteStart, "", pasteEnd, "").Replace(string(text))
+	if !bracketed {
+		return []byte(clean)
+	}
+	return []byte(pasteStart + clean + pasteEnd)
 }
