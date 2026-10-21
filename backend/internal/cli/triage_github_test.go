@@ -73,12 +73,12 @@ func TestTriageJSONAndDraft(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatal(info.Mode())
 	}
-	for _, want := range []string{"status: draft\n", "Title: <one line", "Seen on " + Version, runtime.GOOS, "daemon stopped", "Related: none", triageEvidenceHeading, "- Daemon: stopped\n", "claude: unavailable", "codex: unavailable", "Duplicate candidates", "daemon connection failed", "desktop connection failed", "hooks connection failed"} {
+	for _, want := range []string{"status: draft\n", "Title: <one line", "Seen on " + Version, runtime.GOOS, "daemon stopped", "Related: none", triageEvidenceHeading, "- Daemon: stopped\n", "claude: unavailable", "codex: unavailable", "daemon connection failed", "desktop connection failed", "hooks connection failed"} {
 		if !strings.Contains(string(draft), want) {
 			t.Errorf("missing %q in %s", want, draft)
 		}
 	}
-	if strings.Contains(string(draft), "private") || strings.Count(string(draft), "- Log excerpt:") > 8 {
+	if strings.Contains(string(draft), "private") || strings.Contains(string(draft), "Duplicate candidates") || strings.Count(string(draft), "- Log excerpt:") > 8 {
 		t.Fatal(string(draft))
 	}
 	snapshot, _ := os.ReadFile(packet["context"])
@@ -137,9 +137,9 @@ func TestTriageAuthTimeoutStillWritesFiles(t *testing.T) {
 
 func TestTriageDuplicateEvidence(t *testing.T) {
 	for _, tc := range []struct{ name, script, want string }{
-		{"candidate", `printf '[{"number":12,"title":"Stream breaks","state":"OPEN","url":"https://github.com/OrchestratorInc/agent-orchestrator/issues/12"}]'`, "  - issue #12 [OPEN] Stream breaks\n"},
-		{"none", "printf '[]'", "  - none found\n"},
-		{"unavailable", "exit 1", "  - unavailable: issue stream connection failed: search failed\n"},
+		{"candidate", `printf '[{"number":12,"title":"Stream breaks","state":"OPEN","url":"https://github.com/OrchestratorInc/agent-orchestrator/issues/12"}]'`, "issue #12 [OPEN] Stream breaks"},
+		{"none", "printf '[]'", "none found"},
+		{"unavailable", "exit 1", "unavailable: issue stream connection failed: search failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, _, dir := triageTestDeps(t)
@@ -154,9 +154,11 @@ func TestTriageDuplicateEvidence(t *testing.T) {
 				return "", exec.ErrNotFound
 			}
 			snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
-			_, evidence, _ := strings.Cut(draft, triageEvidenceHeading)
-			_, candidates, ok := strings.Cut(evidence, "- Duplicate candidates checked by keyword search only, not confirmed:\n")
-			if !ok || candidates != tc.want || strings.Contains(evidence, "## ") || !strings.Contains(snapshot, "## Possible duplicates") {
+			_, candidates, ok := strings.Cut(snapshot, "## Possible duplicates")
+			if !ok || !strings.Contains(candidates, tc.want) {
+				t.Fatal(snapshot)
+			}
+			if strings.Contains(draft, tc.want) || strings.Contains(draft, "pre-search") || strings.Contains(draft, "keyword search") {
 				t.Fatal(draft)
 			}
 		})
@@ -285,8 +287,14 @@ func TestTriageLogEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
+			if strings.Contains(draft, "pre-search") || strings.Contains(draft, "keyword search") {
+				t.Fatal(draft)
+			}
 			for _, text := range []string{snapshot, draft} {
 				for _, want := range tc.want {
+					if text == draft && strings.HasPrefix(want, "Duplicate") {
+						continue
+					}
 					if !strings.Contains(text, want) {
 						t.Errorf("missing %q in %s", want, text)
 					}

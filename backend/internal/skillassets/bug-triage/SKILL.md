@@ -30,13 +30,14 @@ Read the symptom before deciding. If you find a matching PR, mention `Related: P
 Run one own search using the user's words, including closed issues: `gh issue list --repo OrchestratorInc/agent-orchestrator --state all --search "<words>" --limit 10`.
 Call it a duplicate only for the same symptom. A similar area is not enough.
 Tell the user the matching link. A closed issue may have regressed.
-Failed or empty searches do not prove there are no duplicates. Say what was unchecked.
+Failed or empty searches do not prove there are no duplicates. Tell the user what was unchecked.
 
 ## Fill the draft
 
 Edit only the human sections and first status line of `bug-report.md`.
-Fill Title, what happened, what was expected, and up to five steps. Delete unused steps.
-Keep the Seen on details except Related, and keep evidence unless it contains private data. Privacy filtering takes priority: redact or omit unsafe evidence.
+For a new issue, fill Title, what happened, what was expected, and up to five steps. Delete unused steps.
+For a duplicate, fill Title and Comment only, and delete the what-happened and Steps placeholders. Never repeat Comment text in the body.
+Keep the Seen on details except Related, and keep program-filled evidence unless it contains private data. Privacy filtering takes priority: redact or omit unsafe evidence.
 For a duplicate, `Related: #n` must target an ISSUE number. Comment is only for duplicates and is the only human text posted to the existing issue; the body is unused.
 Keep `status:`, `Title:`, `Related:`, `## Comment`, and `## Agent-collected evidence` literal in every language.
 Keep exactly one Comment heading followed by exactly one Agent-collected evidence heading.
@@ -47,7 +48,7 @@ Keep raw logs out of the human body. Evidence belongs in a separate comment.
 Say what was not verified in the same sentence as the claim it limits.
 About 120 words is useful guidance, not a cap. Use more when the facts need it.
 Set the first line to `status: ready`, `status: duplicate`, or `status: draft` if incomplete.
-For a new issue, set `status: ready` when the user's observation is complete, even if diagnostics are missing or stale. Keep `status: duplicate` for a completed duplicate. Note diagnostic gaps in the evidence comment, not in the body.
+For a new issue, set `status: ready` when the user's observation is complete, even if diagnostics are missing or stale. Keep `status: duplicate` for a completed duplicate. Keep diagnostic gaps out of the body.
 
 ## Finish
 
