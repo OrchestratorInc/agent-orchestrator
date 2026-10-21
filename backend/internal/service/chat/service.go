@@ -2632,6 +2632,13 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 		for j := range out[i].Choices {
 			choice := &out[i].Choices[j]
 			choice.PermissionMode = ""
+			if harness == domain.HarnessMiniMaxCode && out[i].ID == "permissionMode" {
+				// MiniMax's process-scoped approval control. Annotating it saves a
+				// native Ask/Auto/Full access choice as the session's approval
+				// mode, so the next turn does not reapply the previous one.
+				choice.PermissionMode = miniMaxApprovalMode(choice.Value)
+				continue
+			}
 			if out[i].ID != "mode" {
 				continue
 			}
@@ -2667,6 +2674,21 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 		}
 	}
 	return out
+}
+
+// miniMaxApprovalMode maps MiniMax's native permissionMode values onto AO's
+// approval modes; unknown values stay unannotated.
+func miniMaxApprovalMode(value string) domain.PermissionMode {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault
+	case "auto":
+		return domain.PermissionModeAuto
+	case "bypassPermissions":
+		return domain.PermissionModeBypassPermissions
+	default:
+		return ""
+	}
 }
 
 // copilotComposerOptions removes the Copilot controls that would bypass AO's

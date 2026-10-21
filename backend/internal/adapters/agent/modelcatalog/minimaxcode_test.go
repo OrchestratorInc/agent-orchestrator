@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -51,5 +52,30 @@ func TestMiniMaxFingerprintTracksProfileConfig(t *testing.T) {
 	write("defaultModel: custom_provider:ao-b/model-b\n")
 	if after := CatalogFingerprint(context.Background(), "minimax-code", "", t.TempDir(), env); after == before {
 		t.Fatal("editing the MiniMax profile config left the catalog fingerprint unchanged")
+	}
+}
+
+// A HOME in the request environment moves MiniMax's default profile, so the
+// fingerprint must read the config under that HOME, not the daemon's.
+func TestMiniMaxFingerprintFollowsRequestHome(t *testing.T) {
+	home := t.TempDir()
+	key := "HOME"
+	if runtime.GOOS == "windows" {
+		key = "USERPROFILE"
+	}
+	env := map[string]string{key: home, "MINIMAX_DATA_DIR": "", "MAVIS_DATA_DIR": ""}
+	config := filepath.Join(home, ".minimax", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte("defaultModel: a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := CatalogFingerprint(context.Background(), "minimax-code", "", t.TempDir(), env)
+	if err := os.WriteFile(config, []byte("defaultModel: b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if after := CatalogFingerprint(context.Background(), "minimax-code", "", t.TempDir(), env); after == before {
+		t.Fatal("editing config under the request HOME left the fingerprint unchanged")
 	}
 }

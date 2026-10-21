@@ -179,7 +179,21 @@ func settleInterrupt(ctx context.Context, request acpdriver.AgentRequest, sessio
 // select control is process-scoped; each AO Chat session owns its own process.
 // A required launch option fails closed even if the provider omits the setter.
 func launchOptions(cfg acpdriver.LaunchConfig) []acpdriver.SessionOption {
-	return []acpdriver.SessionOption{{ID: "permissionMode", Value: string(ports.NormalizePermissionMode(cfg.Permissions))}}
+	return []acpdriver.SessionOption{{ID: "permissionMode", Value: nativePermissionMode(cfg.Permissions)}}
+}
+
+// nativePermissionMode spells an AO approval mode in MiniMax's advertised
+// vocabulary (default, auto, bypassPermissions). validateTurnSettings rejects
+// accept-edits, which MiniMax has no tier for.
+func nativePermissionMode(mode ports.PermissionMode) string {
+	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeAuto:
+		return "auto"
+	case ports.PermissionModeBypassPermissions:
+		return "bypassPermissions"
+	default:
+		return "default"
+	}
 }
 
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
@@ -191,7 +205,7 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 		out = append(out, acpdriver.SessionOption{ID: "thinkingEffort", Value: effort})
 	}
 	if settings.Approval != "" {
-		out = append(out, acpdriver.SessionOption{ID: "permissionMode", Value: string(ports.NormalizePermissionMode(settings.Approval))})
+		out = append(out, acpdriver.SessionOption{ID: "permissionMode", Value: nativePermissionMode(settings.Approval)})
 	}
 	return out
 }

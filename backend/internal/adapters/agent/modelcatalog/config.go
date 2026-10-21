@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -179,12 +180,20 @@ func deepseekProfileDir(home string, env map[string]string) string {
 }
 
 // miniMaxProfileDir resolves the profile MiniMax Code reads, in the CLI's
-// own precedence order.
+// own precedence order. Its default lives under Node's os.homedir(), which
+// follows the launch environment's HOME (USERPROFILE on Windows).
 func miniMaxProfileDir(home string, env map[string]string) string {
 	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
 		if root := envValue(env, key); root != "" {
 			return root
 		}
+	}
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	if requested := strings.TrimSpace(env[homeKey]); requested != "" {
+		home = requested
 	}
 	if home == "" {
 		return ""

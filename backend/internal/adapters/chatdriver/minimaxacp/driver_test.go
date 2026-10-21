@@ -163,14 +163,27 @@ func TestConfigurePrunesLegacyContextFiles(t *testing.T) {
 }
 
 func TestNativePermissionPolicyUsesConfigNotPlanMode(t *testing.T) {
-	for _, mode := range []ports.PermissionMode{"", ports.PermissionModeDefault, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+	// MiniMax advertises default, auto and bypassPermissions; AO's own
+	// spelling of bypass is rejected by the native setter.
+	for mode, native := range map[ports.PermissionMode]string{
+		"":                                    "default",
+		ports.PermissionModeDefault:           "default",
+		ports.PermissionModeAuto:              "auto",
+		ports.PermissionModeBypassPermissions: "bypassPermissions",
+	} {
 		cfg := acpdriver.LaunchConfig{Permissions: mode}
 		if err := validateTurnSettings(mode, ports.ChatTurnSettings{Approval: mode}); err != nil {
 			t.Fatal(err)
 		}
-		want := []acpdriver.SessionOption{{ID: "permissionMode", Value: string(ports.NormalizePermissionMode(mode))}}
+		want := []acpdriver.SessionOption{{ID: "permissionMode", Value: native}}
 		if got := launchOptions(cfg); !reflect.DeepEqual(got, want) {
 			t.Fatalf("launch options = %v, want %v", got, want)
+		}
+		if mode == "" {
+			continue
+		}
+		if got := sessionOptions(ports.ChatTurnSettings{Approval: mode}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("turn options = %v, want %v", got, want)
 		}
 	}
 	for _, mode := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, "unknown"} {

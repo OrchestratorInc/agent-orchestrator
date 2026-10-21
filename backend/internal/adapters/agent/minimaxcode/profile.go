@@ -328,12 +328,13 @@ const maxProfileLinkDepth = 8
 
 type profileSnapshot struct {
 	followLinks bool
+	skipLocks   bool
 	count       int
 	bytes       int64
 }
 
 func copyProfileTree(ctx context.Context, source, target string) error {
-	snapshot := &profileSnapshot{followLinks: linkedProfileResources[filepath.Base(source)]}
+	snapshot := &profileSnapshot{followLinks: linkedProfileResources[filepath.Base(source)], skipLocks: filepath.Base(source) == "auth"}
 	return snapshot.copyTree(ctx, source, target, 0)
 }
 
@@ -384,10 +385,10 @@ func (s *profileSnapshot) copyTree(ctx context.Context, source, target string, d
 			return s.copyLink(ctx, path, dst, depth)
 		}
 		if entry.IsDir() {
-			// MiniMax's cross-process locks are <file>.lock directories. A copy
-			// has no owner in the private profile, so native code would wait
-			// for it to go stale instead of acquiring it.
-			if path != source && strings.HasSuffix(entry.Name(), ".lock") {
+			// MiniMax's auth locks are <file>.lock directories. A copy has no
+			// owner in the private profile, so native OAuth would wait for it to
+			// go stale. Other trees keep such names: a plugin may be tools.lock.
+			if s.skipLocks && path != source && strings.HasSuffix(entry.Name(), ".lock") {
 				return fs.SkipDir
 			}
 			return os.MkdirAll(dst, 0o700)

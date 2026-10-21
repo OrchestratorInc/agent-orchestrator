@@ -447,3 +447,16 @@ func TestOfficialWindowsLauncherNodeDecodesPercent(t *testing.T) {
 		t.Fatalf("launcher node = %q, want %q", got, node)
 	}
 }
+
+// Only auth locks are skipped; a resource directory may legitimately end in .lock.
+func TestSnapshotKeepsResourceDirectoriesNamedDotLock(t *testing.T) {
+	source, target := t.TempDir(), t.TempDir()
+	manifest := filepath.Join("tools.lock", ".claude-plugin", "plugin.json")
+	writeRefreshFixture(t, filepath.Join(source, "plugins", manifest), `{"name":"tools"}`)
+	if err := copyProfileTree(context.Background(), filepath.Join(source, "plugins"), filepath.Join(target, "plugins")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "plugins", manifest)); err != nil {
+		t.Fatalf("plugin directory named tools.lock was dropped: %v", err)
+	}
+}
