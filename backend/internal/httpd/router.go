@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,7 @@ type AgentSwitchPolicyControl interface {
 //	requestLogger → slog-backed access log + 5xx telemetry, carries the request id
 //	recoverer     → turn a handler panic into 500 instead of crashing the daemon
 //	accountOrigin → exact renderer-origin boundary for Codex account management
+//	testingOrigin → exact renderer-origin boundary for testing management/tools
 //	cors          → CORS allowlist for the Electron renderer / dev origins
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
@@ -68,6 +70,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	// exception. This guard must wrap corsMiddleware so hostile preflights are
 	// rejected before the general CORS layer can answer them.
 	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
+	r.Use(testingOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
@@ -88,8 +91,28 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountAwake(r, &controllers.AwakeController{Svc: deps.Awake})
 	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
 	api.Register(r)
+	testingController := &controllers.TestingController{Svc: deps.Testing}
+	testingController.Register(r)
+	testingController.RegisterLegs(r)
 
 	return r
+}
+
+func testingOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+	allowed := exactAllowedOrigins(allowedOrigins)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if origin := r.Header.Get("Origin"); origin != "" && (r.URL.Path == "/api/v1/testing" || strings.HasPrefix(r.URL.Path, "/api/v1/testing/")) {
+				w.Header().Add("Vary", "Origin")
+				if _, ok := allowed[origin]; !ok {
+					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
+						"Origin is not allowed to access testing management or tools", nil)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 type applyAgentSwitchPolicyRequest struct {

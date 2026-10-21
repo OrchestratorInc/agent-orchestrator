@@ -47,6 +47,7 @@ func Build() ([]byte, error) {
 	r.DefaultOptions = append(r.DefaultOptions,
 		func(rc *jsonschema.ReflectContext) { rc.EnvelopNullability = true },
 		jsonschema.InterceptProp(requiredFromJSONTag),
+		jsonschema.InterceptSchema(testingInputAlternatives),
 		jsonschema.InterceptNullability(nonNullableSlices),
 		jsonschema.InterceptNullability(validNullableReferenceUnions),
 		// Clean component schema names (which become the generated TS type names):
@@ -157,6 +158,51 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainTestEvidenceReceipt":     "TestEvidenceReceipt",
+	"DomainTestScreenshotRequest":   "TestScreenshotRequest",
+	"DomainTestObserveRequest":      "TestObserveRequest",
+	"DomainTestElement":             "TestElement",
+	"DomainTestClickRequest":        "TestClickRequest",
+	"DomainTestTypeRequest":         "TestTypeRequest",
+	"DomainTestKeyRequest":          "TestKeyRequest",
+	"DomainTestReadLogsRequest":     "TestReadLogsRequest",
+	"DomainTestDaemonQueryRequest":  "TestDaemonQueryRequest",
+	"DomainTestSubmitReportRequest": "TestSubmitReportRequest",
+	"DomainTestScreenshot":          "TestScreenshot",
+	"DomainTestDesktopFrame":        "TestDesktopFrame",
+	"DomainTestWindowBounds":        "TestWindowBounds",
+	"DomainTestActionResult":        "TestActionResult",
+	"DomainTestLogResult":           "TestLogResult",
+	"DomainTestDaemonQueryResult":   "TestDaemonQueryResult",
+	"DomainTestSubmitReportResult":  "TestSubmitReportResult",
+
+	"ControllersTestingLegStartResponse":       "TestingLegStartResponse",
+	"ControllersTestingLegStartRequest":        "TestingLegStartRequest",
+	"ControllersStartTestingComparisonRequest": "StartTestingComparisonRequest",
+	"ControllersTestingLegParam":               "TestingLegParam",
+	"ControllersTestingWorkerIDParam":          "TestingWorkerIDParam",
+	"PortsTestingWorkerContext":                "TestingWorkerContext",
+
+	"ControllersTestingCapabilityHeader":                   "TestingCapabilityHeader",
+	"ControllersTestingRunIDParam":                         "TestingRunIDParam",
+	"ControllersTestingAttemptIDParam":                     "TestingAttemptIDParam",
+	"ControllersCreateTestingRunRequest":                   "CreateTestingRunRequest",
+	"ControllersTestingRunResponse":                        "TestingRunResponse",
+	"ControllersStartTestingAttemptRequest":                "StartTestingAttemptRequest",
+	"ControllersTestingAttemptStartResponse":               "TestingAttemptStartResponse",
+	"ControllersTestingAttemptResponse":                    "TestingAttemptResponse",
+	"ControllersTestingEvidenceResponse":                   "TestingEvidenceResponse",
+	"ControllersTestingScreenshotCall":                     "TestingScreenshotCall",
+	"ControllersTestingObserveCall":                        "TestingObserveCall",
+	"ControllersTestingClickCall":                          "TestingClickCall",
+	"ControllersTestingTypeCall":                           "TestingTypeCall",
+	"ControllersTestingKeyCall":                            "TestingKeyCall",
+	"ControllersTestingLogsCall":                           "TestingLogsCall",
+	"ControllersTestingQueryCall":                          "TestingQueryCall",
+	"ControllersTestingReportCall":                         "TestingReportCall",
+	"ControllersTestingToolResponse":                       "TestingToolResponse",
+	"ControllersTestingControlCall":                        "TestingControlCall",
+	"DomainTestTargetControlRequest":                       "TestTargetControlRequest",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
@@ -699,6 +745,30 @@ func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 	return nil
 }
 
+// The testing tools require one addressing path, including zero coordinates.
+func testingInputAlternatives(p jsonschema.InterceptSchemaParams) (bool, error) {
+	if !p.Processed || !p.Value.IsValid() {
+		return false, nil
+	}
+	typ := p.Value.Type()
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ != reflect.TypeOf(domain.TestClickRequest{}) && typ != reflect.TypeOf(domain.TestTypeRequest{}) {
+		return false, nil
+	}
+	element := jsonschema.Schema{Required: []string{"elementId"}}
+	coordinates := jsonschema.Schema{Required: []string{"x", "y"}}
+	x := jsonschema.Schema{Required: []string{"x"}}
+	y := jsonschema.Schema{Required: []string{"y"}}
+	anyCoordinate := jsonschema.Schema{AnyOf: []jsonschema.SchemaOrBool{x.ToSchemaOrBool(), y.ToSchemaOrBool()}}
+	element.WithNot(anyCoordinate.ToSchemaOrBool())
+	noElement := jsonschema.Schema{Required: []string{"elementId"}}
+	coordinates.WithNot(noElement.ToSchemaOrBool())
+	p.Schema.OneOf = []jsonschema.SchemaOrBool{element.ToSchemaOrBool(), coordinates.ToSchemaOrBool()}
+	return false, nil
+}
+
 // --- operation registry -----------------------------------------------------
 
 type respUnit struct {
@@ -724,6 +794,8 @@ func operations() []operation {
 	ops = append(ops, projectOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
+	ops = append(ops, testingOperations()...)
+	ops = append(ops, testingLegOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
@@ -3664,6 +3736,37 @@ func prOperations() []operation {
 			resps:   []respUnit{{http.StatusOK, map[string]any{"repos": []githubpat.Repo{}}}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}},
 		},
 	}
+}
+
+// Testing tools are loopback-only. The capability header is launch-only data.
+func testingOperations() []operation {
+	errors := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusForbidden, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}
+	postErrors := append(append([]respUnit(nil), errors...), respUnit{http.StatusUnsupportedMediaType, envelope.APIError{}})
+	ops := make([]operation, 0, 11)
+	ops = append(ops,
+		operation{method: http.MethodPost, path: "/api/v1/testing/runs", id: "createTestingRun", tag: "testing", summary: "Create an investigation using a configured recipe", reqBody: controllers.CreateTestingRunRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.TestingRunResponse{}}}, postErrors...)},
+		operation{method: http.MethodPost, path: "/api/v1/testing/runs/{runId}/attempts", id: "startTestingAttempt", tag: "testing", summary: "Start a target and investigator worker", pathParams: []any{controllers.TestingRunIDParam{}}, reqBody: controllers.StartTestingAttemptRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.TestingAttemptStartResponse{}}}, postErrors...)},
+		operation{method: http.MethodPost, path: "/api/v1/testing/attempts/{attemptId}/cancel", id: "cancelTestingAttempt", tag: "testing", summary: "Cancel an attempt and revoke its tools", pathParams: []any{controllers.TestingAttemptIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.TestingAttemptResponse{}}}, postErrors...)},
+		operation{method: http.MethodGet, path: "/api/v1/testing/attempts/{attemptId}/evidence", id: "listTestingEvidence", tag: "testing", summary: "List evidence retained after cancellation or target shutdown", pathParams: []any{controllers.TestingAttemptIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.TestingEvidenceResponse{}}}, errors...)},
+	)
+	tools := []struct {
+		name, id string
+		input    any
+	}{
+		{"screenshot", "testingScreenshot", controllers.TestingScreenshotCall{}},
+		{"observe", "testingObserve", controllers.TestingObserveCall{}},
+		{"click", "testingClick", controllers.TestingClickCall{}},
+		{"type", "testingType", controllers.TestingTypeCall{}},
+		{"key", "testingKey", controllers.TestingKeyCall{}},
+		{"read_target_logs", "testingReadTargetLogs", controllers.TestingLogsCall{}},
+		{"target_daemon_query", "testingTargetDaemonQuery", controllers.TestingQueryCall{}},
+		{"target_control", "testingTargetControl", controllers.TestingControlCall{}},
+		{"submit_report", "testingSubmitReport", controllers.TestingReportCall{}},
+	}
+	for _, tool := range tools {
+		ops = append(ops, operation{method: http.MethodPost, path: "/api/v1/testing/attempts/{attemptId}/tools/" + tool.name, id: tool.id, tag: "testing", summary: "Call the target-bound " + tool.name + " tool", pathParams: []any{controllers.TestingAttemptIDParam{}, controllers.TestingCapabilityHeader{}}, reqBody: tool.input, resps: append([]respUnit{{http.StatusOK, controllers.TestingToolResponse{}}}, postErrors...)})
+	}
+	return ops
 }
 
 func awakeOperations() []operation {

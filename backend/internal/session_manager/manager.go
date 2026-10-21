@@ -426,9 +426,10 @@ type Manager struct {
 	// defaults resolves the daemon-owned default session interface for a spawn
 	// that names no mode. Nil falls back to the compatibility default, so a build
 	// without it behaves exactly as before.
-	defaults     SessionModeDefaults
-	chat         ChatLauncher
-	modelCatalog interface {
+	defaults       SessionModeDefaults
+	chat           ChatLauncher
+	testingProfile TestingProfileResolver
+	modelCatalog   interface {
 		Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
 	}
 	lcm                         lifecycleRecorder
@@ -956,6 +957,10 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	return m.spawn(ctx, cfg, nil)
+}
+
+func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, prepare func(context.Context, domain.SessionID) error) (domain.SessionRecord, int, int, error) {
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1373,6 +1378,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAttachments, err)
 		}
 		prompt = appendAttachmentReferences(prompt, refs)
+	}
+
+	if prepare != nil {
+		if err := prepare(ctx, id); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrChatController, err)
+		}
 	}
 
 	// Everything above is shared: project, harness, prompts, seed row, worktree,
@@ -2613,6 +2625,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	}
 	if !ok {
 		return KillResult{}, nil // already gone: benign race
+	}
+	if err := m.cancelTestingWorker(ctx, id); err != nil {
+		return KillResult{}, fmt.Errorf("kill %s: testing target cleanup: %w", id, err)
 	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
