@@ -60,6 +60,7 @@ import primeAgentDarkLogo from "../assets/agents/prime-agent-dark.svg";
 import primeAgentLightLogo from "../assets/agents/prime-agent-light.svg";
 import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
+import tauLogo from "../assets/agents/tau.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
@@ -106,6 +107,7 @@ const LOGOS: AgentLogoSources = {
 	autohand: { light: autohandLightLogo, dark: autohandDarkLogo },
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
+	tau: tauLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
 };
 

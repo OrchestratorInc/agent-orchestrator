@@ -31,7 +31,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"grok", "Log in to Grok", "grok", "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview", "", ActionLogin, []string{"grok", "login"}},
 		{"kimi", "Log in to Kimi", "kimi", "Kimi opens its login picker automatically", "https://moonshotai.github.io/kimi-code/en/", "", ActionLogin, []string{"kimi"}},
 		{"pi", "Log in to Pi", "pi", "Pi opens its login picker automatically", "https://github.com/earendil-works/pi", "", ActionLogin, []string{"pi"}},
-		{"tau", "Set up Tau", "", "Run tau, then /login to configure a provider. AO requires explicit bypass permissions because Tau has no tool approval policy.", "https://twotimespi.dev/guides/providers-and-models/", "", ActionSetup, nil},
+		{"tau", "Log in to Tau", "tau", "Tau opens its login picker automatically", "https://twotimespi.dev/guides/providers-and-models/", "", ActionLogin, []string{"tau"}},
 		{"amp", "Log in to Amp", "amp", "Native browser flow", "https://ampcode.com/manual", "", ActionLogin, []string{"amp", "login"}},
 		{"auggie", "Log in to Auggie", "auggie", "Native browser flow", "https://docs.augmentcode.com/cli/overview", "", ActionLogin, []string{"auggie", "login"}},
 		{"droid", "Log in to Droid", "droid", "Select Open login after Droid finishes starting", "https://docs.factory.ai/droid-cli/cli-reference", "/login\r", ActionLogin, []string{"droid"}},
@@ -72,7 +72,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		// with no command to drive. DeepSeek Harness has no login subcommand either,
 		// but its web profile serves the Models page that writes the credential, so
 		// its setup is a terminal plan.
-		case "aider", "unreal-agent", "memcode", "tau":
+		case "aider", "unreal-agent", "memcode":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {
