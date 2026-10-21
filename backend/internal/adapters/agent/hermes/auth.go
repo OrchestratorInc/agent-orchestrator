@@ -160,12 +160,20 @@ func overridingAssignments(home string) (assigned map[string]string, known bool)
 			layers = append(layers, filepath.Join(managed, ".env"))
 		}
 	}
+	// Each layer resolves ${VAR} against the process environment as earlier
+	// layers left it.
+	lookup := func(name string) (string, bool) {
+		if value, ok := assigned[processEnvName(name)]; ok {
+			return value, true
+		}
+		return os.LookupEnv(name)
+	}
 	for _, layer := range layers {
 		bindings, err := dotenvBindings(layer)
 		if err != nil {
 			return nil, false
 		}
-		maps.Copy(assigned, dotenvEnvironment(bindings))
+		maps.Copy(assigned, dotenvEnvironment(bindings, lookup))
 	}
 	return assigned, true
 }
@@ -174,7 +182,7 @@ func overridingAssignments(home string) (assigned map[string]string, known bool)
 // assignment clears an earlier key, and a blank value is no key.
 func envFileHasCredential(path string) bool {
 	bindings, _ := dotenvBindings(path)
-	env := dotenvEnvironment(bindings)
+	env := dotenvEnvironment(bindings, os.LookupEnv)
 	for _, name := range hermesCredentialEnv {
 		if strings.TrimFunc(env[processEnvName(name)], pyIsSpace) != "" {
 			return true

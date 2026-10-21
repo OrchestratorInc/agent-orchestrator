@@ -23,6 +23,8 @@ import (
 	"time"
 	"unicode"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
 	sqlite3 "modernc.org/sqlite/lib"
@@ -305,6 +307,10 @@ func sourceRoots(home string, env map[string]string) []string {
 	if root, err := ResolveHome(defaultEnv); err == nil {
 		roots = append(roots, filepath.Join(root, "hermes-agent"))
 	}
+	defaultEnv["HERMES_DATA_DIR_SUFFIX"] = ""
+	if root, err := ResolveHome(defaultEnv); err == nil {
+		roots = append(roots, filepath.Join(root, "hermes-agent"))
+	}
 	for _, launcher := range installedLaunchers() {
 		if root := launcherSourceRoot(launcher); root != "" {
 			roots = append(roots, root)
@@ -440,7 +446,18 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	}
 	firstLine, _, _ := strings.Cut(string(b), "\n")
 	firstLine = strings.TrimSuffix(firstLine, "\r")
-	if err == nil && (supportedNativeVersion(firstLine) || qualifiedSourceCheckout(ctx, path, firstLine)) {
+	if err == nil && supportedNativeVersion(firstLine) {
+		// Hermes's release banner carries no dirty marker, so a source
+		// checkout with edited tracked files (locales, chrome) still prints
+		// it. Refuse when git reports such edits.
+		if root := launcherSourceRoot(path); root != "" {
+			if modified, known := sourceModified(ctx, root); known && modified {
+				return false, fmt.Sprintf("source checkout %s has modified tracked files; AO qualifies only unmodified releases", root), false
+			}
+		}
+		return true, "", false
+	}
+	if err == nil && qualifiedSourceCheckout(ctx, path, firstLine) {
 		return true, "", false
 	}
 	if len(firstLine) > 120 {
@@ -485,22 +502,14 @@ func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 	if root == "" {
 		return ""
 	}
-	git := func(args ...string) (string, bool) {
-		gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		cmd := aoprocess.CommandContext(gitCtx, "git", append([]string{"--no-optional-locks", "-C", root}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
-		out, err := cmd.Output()
-		return strings.TrimSpace(string(out)), err == nil
-	}
-	head, ok := git("rev-parse", "--verify", "HEAD^{commit}")
+	head, ok := runGit(ctx, root, "rev-parse", "--verify", "HEAD^{commit}")
 	if !ok || len(head) != 40 || !strings.HasPrefix(head, m[1]) {
 		return ""
 	}
-	if status, ok := git("status", "--porcelain", "--untracked-files=no"); !ok || status != "" {
+	if modified, known := sourceModified(ctx, root); !known || modified {
 		return ""
 	}
-	listed, ok := git("tag", "--points-at", head, "--list", "v*")
+	listed, ok := runGit(ctx, root, "tag", "--points-at", head, "--list", "v*")
 	if !ok {
 		return ""
 	}
@@ -520,6 +529,24 @@ func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 		return tags[0]
 	}
 	return ""
+}
+
+// sourceModified asks git whether a checkout has modified tracked files.
+// known is false when git cannot answer.
+func sourceModified(ctx context.Context, root string) (modified, known bool) {
+	status, ok := runGit(ctx, root, "status", "--porcelain", "--untracked-files=no")
+	return status != "", ok
+}
+
+// runGit runs a read-only git query in a checkout without taking optional
+// locks, so it cannot strand an index.lock in the user's installation.
+func runGit(ctx context.Context, root string, args ...string) (string, bool) {
+	gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := aoprocess.CommandContext(gitCtx, "git", append([]string{"--no-optional-locks", "-C", root}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err == nil
 }
 
 // supportedNativeVersion accepts a Hermes --version first line from a
@@ -673,25 +700,26 @@ func nativeHomeFrom(lookup envLookup, get func(string) string) (string, error) {
 	if dir := pyStrip(get("HERMES_HOME")); dir != "" {
 		return expandNativePath(dir, lookup)
 	}
+	// _get_platform_default_hermes_home: LOCALAPPDATA (or Path.home() /
+	// AppData/Local) on Windows, else Path.home(), with the unstripped
+	// HERMES_DATA_DIR_SUFFIX appended to the directory name.
+	suffix := get("HERMES_DATA_DIR_SUFFIX")
 	if runtime.GOOS == "windows" {
 		local := pyStrip(get("LOCALAPPDATA"))
 		if local == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
+			home, err := expandWindowsUser("~", lookup)
+			if err != nil || home == "~" {
+				return "", fmt.Errorf("hermes: cannot determine the user home directory")
 			}
 			local = filepath.Join(home, "AppData", "Local")
 		}
-		return filepath.Join(local, "hermes"), nil
+		return filepath.Join(local, "hermes"+suffix), nil
 	}
-	home := strings.TrimSpace(get("HOME"))
-	if home == "" {
-		var err error
-		if home, err = os.UserHomeDir(); err != nil {
-			return "", err
-		}
+	home, err := expandPOSIXUser("~", lookup)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(home, ".hermes"), nil
+	return filepath.Join(home, ".hermes"+suffix), nil
 }
 
 // expandNativePath applies Hermes's HERMES_HOME expansion,
@@ -881,6 +909,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 			return fmt.Errorf("hermes: managed native configuration is not supported by the additive instruction adapter")
 		}
 	}
+	// Hermes reads its English chrome through locale layers above the bundled
+	// catalog; any of them could reword the markers AO detects.
+	if err := refuseEnglishLocaleOverrides(home, cfg); err != nil {
+		return err
+	}
 	// Hermes loads <HERMES_HOME>/.env with override, and a source install's
 	// project .env too (with override when the home file is absent), so a value
 	// there would silently replace AO's instructions or chrome language, or
@@ -896,30 +929,44 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 			return err
 		}
 	}
+	b, readErr := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return readErr
+	}
+	var config map[string]any
+	if len(b) > 0 {
+		if err := unmarshalYAML11(b, &config); err != nil {
+			return fmt.Errorf("hermes: invalid native configuration: %w", err)
+		}
+	}
+	if err := refuseSecretSources(config); err != nil {
+		return err
+	}
 	cfg.Env["HERMES_HOME"] = home
 	// AO reads Hermes's English composer and busy chrome; HERMES_LANGUAGE
 	// outranks display.language for this process only.
 	cfg.Env["HERMES_LANGUAGE"] = "en"
+	// Pin the scope and locale redirects AO checked as unset, so a secret
+	// source's gap-fill cannot introduce them after these checks.
+	for _, name := range []string{"HERMES_MANAGED_DIR", "HERMES_BUNDLED_LOCALES"} {
+		if _, ok := childEnvLookup(cfg.Env)(name); !ok {
+			cfg.Env[name] = ""
+		}
+	}
 	original, exists := cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"]
 	if !exists {
 		original = cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
 	}
 	if original == "" {
-		b, readErr := os.ReadFile(filepath.Join(home, "config.yaml"))
-		if readErr != nil && !os.IsNotExist(readErr) {
-			return readErr
-		}
-		var config map[string]any
-		if len(b) > 0 {
-			if err := yaml.Unmarshal(b, &config); err != nil {
-				return fmt.Errorf("hermes: invalid native configuration: %w", err)
-			}
-		}
 		// Only parsed values the overlay renders matter: the installer's
 		// generated config shows ${VAR} examples in comments.
-		var envRef bool
-		if original, envRef = nativeOverlay(config); envRef {
+		var envRef, untyped bool
+		original, envRef, untyped = nativeOverlay(config)
+		if envRef {
 			return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
+		}
+		if untyped {
+			return fmt.Errorf("hermes: native instruction configuration has a non-text value (YAML 1.1 reads yes, on, ~ or numbers as non-strings); quote it in config.yaml")
 		}
 	}
 	cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"] = original
@@ -959,17 +1006,94 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
 }
 
+// refuseEnglishLocaleOverrides refuses the catalog layers that can reword
+// Hermes's English chrome (agent/i18n.py, i18n_layers.py): a sealed bundle
+// named by HERMES_BUNDLED_LOCALES, the profile overlay
+// <HERMES_HOME>/locales/en[.<surface>].yaml, and declarative plugin language
+// packs under the user or project plugin directories.
+func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) error {
+	for _, bundled := range []string{os.Getenv("HERMES_BUNDLED_LOCALES"), cfg.Env["HERMES_BUNDLED_LOCALES"]} {
+		if bundled = pyStrip(bundled); bundled != "" {
+			if st, err := os.Stat(bundled); err == nil && st.IsDir() {
+				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome AO reads; unset it for AO sessions")
+			}
+		}
+	}
+	dirs := []string{filepath.Join(home, "locales")}
+	pluginRoots := []string{filepath.Join(home, "plugins")}
+	if cfg.WorkspacePath != "" {
+		pluginRoots = append(pluginRoots, filepath.Join(cfg.WorkspacePath, ".hermes", "plugins"))
+	}
+	for _, root := range pluginRoots {
+		// A plugin tree AO cannot read could hold a pack it never saw.
+		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if path == root && errors.Is(err, os.ErrNotExist) {
+					return filepath.SkipDir
+				}
+				return err
+			}
+			if d.IsDir() {
+				if rel, _ := filepath.Rel(root, path); strings.Count(rel, string(filepath.Separator)) > 3 {
+					return filepath.SkipDir
+				}
+				if d.Name() == "locales" {
+					dirs = append(dirs, path)
+				}
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("hermes: cannot inspect plugin language packs under %s: %w", root, err)
+		}
+	}
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, entry := range entries {
+			if englishLocaleFile.MatchString(entry.Name()) && !entry.IsDir() {
+				return fmt.Errorf("hermes: %s rewords the English terminal chrome AO reads; remove or rename it for AO sessions", filepath.Join(dir, entry.Name()))
+			}
+		}
+	}
+	return nil
+}
+
+// englishLocaleFile is an i18n_layers locale file for language "en".
+var englishLocaleFile = regexp.MustCompile(`^en(?:\.(?:core|tui|desktop))?\.ya?ml$`)
+
+// refuseSecretSources refuses enabled external secret sources (config.yaml
+// secrets:, applied after the dotenv layers) that may override variables AO
+// sets. Bitwarden and 1Password override by default; a source configured
+// with override_existing: false only fills unset names, which AO pins.
+func refuseSecretSources(config map[string]any) error {
+	secrets, _ := config["secrets"].(map[string]any)
+	for name, source := range secrets {
+		source, ok := source.(map[string]any)
+		if enabled, _ := yaml11Bool(source["enabled"]); !ok || !enabled {
+			continue
+		}
+		if override, isBool := yaml11Bool(source["override_existing"]); !isBool || override {
+			return fmt.Errorf("hermes: secret source %q may override the language and instructions AO sets; set override_existing: false for it", name)
+		}
+	}
+	return nil
+}
+
 func refuseDotenvOverrides(envFile string) error {
 	bindings, err := dotenvBindings(envFile)
 	if err != nil {
 		return err
 	}
 	for _, binding := range bindings {
+		if !binding.assigned {
+			continue // a bare name without "=" sets nothing
+		}
 		switch key := guardedEnvName(binding.key); key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
 			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
 		case "HERMES_LANGUAGE":
 			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, envFile)
+		case "HERMES_BUNDLED_LOCALES":
+			return fmt.Errorf("hermes: %s in %s would replace the English terminal chrome AO reads", key, envFile)
 		case "HERMES_HOME", "HERMES_MANAGED_DIR":
 			return fmt.Errorf("hermes: %s in %s would move Hermes away from the configuration AO checked; set it in AO's environment instead", key, envFile)
 		}
@@ -998,13 +1122,20 @@ func referencesEnv(value any) bool {
 // selected personality's prompt (system_prompt, tone and style for a
 // structured one), or agent.system_prompt without one. envRef reports a
 // ${VAR} reference in any value that rendering consumes; UI-only fields such
-// as a personality's description are ignored.
-func nativeOverlay(config map[string]any) (overlay string, envRef bool) {
+// as a personality's description are ignored. untyped reports a consumed
+// value that is not text under Hermes's YAML 1.1 reading, whose Python str()
+// rendering AO does not reproduce.
+func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool) {
 	agent, _ := config["agent"].(map[string]any)
 	display, _ := config["display"].(map[string]any)
+	consume := func(v any) {
+		envRef = envRef || referencesEnv(v)
+		untyped = untyped || !isText(v)
+	}
 	selection := display["personality"]
-	name := strings.ToLower(pyStrip(fmt.Sprint(selection)))
+	name := pyLower(pyStrip(fmt.Sprint(selection)))
 	if selection != nil && name != "" && name != "none" && name != "default" && name != "neutral" {
+		consume(selection)
 		definitions := map[string]any{}
 		for k, v := range builtinPersonalities {
 			definitions[k] = v
@@ -1012,29 +1143,55 @@ func nativeOverlay(config map[string]any) (overlay string, envRef bool) {
 		for _, src := range []any{config["personalities"], agent["personalities"]} {
 			if m, ok := src.(map[string]any); ok {
 				for k, v := range m {
-					// A name that interpolates could select another definition.
+					// A name that interpolates or retypes could select another definition.
 					envRef = envRef || strings.Contains(k, "${")
-					definitions[strings.ToLower(pyStrip(k))] = v
+					untyped = untyped || strings.HasPrefix(k, yaml11Sentinel)
+					definitions[pyLower(pyStrip(k))] = v
 				}
 			}
 		}
-		envRef = envRef || referencesEnv(selection)
 		if v, ok := definitions[name]; ok {
 			if m, ok := v.(map[string]any); ok {
 				parts := []string{promptText(m["system_prompt"])}
-				envRef = envRef || referencesEnv(m["system_prompt"])
+				consume(m["system_prompt"])
 				for _, k := range []string{"tone", "style"} {
-					envRef = envRef || referencesEnv(m[k])
+					consume(m[k])
 					if s := promptText(m[k]); s != "" {
 						parts = append(parts, strings.ToUpper(k[:1])+k[1:]+": "+s)
 					}
 				}
-				return pyStrip(strings.Join(parts, "\n")), envRef
+				return pyStrip(strings.Join(parts, "\n")), envRef, untyped
 			}
-			return promptText(v), envRef || referencesEnv(v)
+			consume(v)
+			return promptText(v), envRef, untyped
 		}
 	}
-	return promptText(agent["system_prompt"]), envRef || referencesEnv(agent["system_prompt"])
+	consume(agent["system_prompt"])
+	return promptText(agent["system_prompt"]), envRef, untyped
+}
+
+// isText accepts an absent value, a string, or a list of strings: the
+// shapes whose Python str() AO reproduces exactly.
+func isText(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return true
+	case string:
+		return !strings.HasPrefix(v, yaml11Sentinel)
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); !ok || strings.HasPrefix(s, yaml11Sentinel) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// pyLower is Python's str.lower(), with full Unicode case mapping.
+func pyLower(s string) string {
+	return cases.Lower(language.Und).String(s)
 }
 
 func promptText(v any) string {
@@ -1324,4 +1481,72 @@ func committedMessageEchoes(message, screen string) int {
 		}
 	}
 	return count
+}
+
+// yaml11Sentinel marks a plain scalar that Hermes's YAML 1.1 loader
+// (hermes_yaml, ruamel at version 1.1) would not read as a string, such as
+// yes, on, y, ~ or 0755. yaml.v3 follows YAML 1.2 and reads them as text.
+const yaml11Sentinel = "\x00yaml1.1:"
+
+var yaml11NonString = regexp.MustCompile(`^(?:` +
+	`[yY]|[yY]es|YES|[nN]|[nN]o|NO|true|True|TRUE|false|False|FALSE|[oO]n|ON|[oO]ff|OFF` + // bool
+	`|~|[nN]ull|NULL` + // null
+	`|[-+]?0b[01_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+` + // int
+	`|[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*(?:[eE][-+]?[0-9]+)?|[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` + // float
+	`|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?` + // timestamp
+	`|=` + // value
+	`)$`)
+
+// yaml11Bool reads a value decoded by unmarshalYAML11 as Hermes's YAML 1.1
+// loader would: true/false, or a marked yes/no/on/off/y/n word.
+func yaml11Bool(v any) (value, ok bool) {
+	switch v := v.(type) {
+	case bool:
+		return v, true
+	case string:
+		word, marked := strings.CutPrefix(v, yaml11Sentinel)
+		if !marked {
+			return false, false
+		}
+		switch strings.ToLower(word) {
+		case "y", "yes", "true", "on":
+			return true, true
+		case "n", "no", "false", "off":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+// unmarshalYAML11 decodes YAML like yaml.Unmarshal, but marks every plain
+// scalar that YAML 1.1 types as non-string with yaml11Sentinel, so callers
+// can tell where Hermes would see a bool, null, number or date.
+func unmarshalYAML11(b []byte, out any) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(b, &root); err != nil {
+		return err
+	}
+	var mark func(n *yaml.Node)
+	seen := map[*yaml.Node]bool{}
+	mark = func(n *yaml.Node) {
+		if n == nil || seen[n] {
+			return
+		}
+		seen[n] = true
+		if n.Kind == yaml.ScalarNode && n.Style == 0 && n.Value != "" {
+			switch tag, nonString := n.ShortTag(), yaml11NonString.MatchString(n.Value); {
+			case tag == "!!str" && nonString:
+				n.Tag, n.Value = "!!str", yaml11Sentinel+n.Value
+			case (tag == "!!int" || tag == "!!float") && !nonString:
+				// YAML 1.2-only forms such as 0o755 are strings to YAML 1.1.
+				n.Tag = "!!str"
+			}
+		}
+		for _, child := range n.Content {
+			mark(child)
+		}
+		mark(n.Alias)
+	}
+	mark(&root)
+	return root.Decode(out)
 }

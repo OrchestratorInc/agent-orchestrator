@@ -376,11 +376,11 @@ func TestNativeLookupDoesNotExecuteEarlierPathCandidate(t *testing.T) {
 	}
 }
 func TestPersonalityPreservesNativePrecedence(t *testing.T) {
-	overlay, _ := nativeOverlay(map[string]any{"display": map[string]any{"personality": "technical"}, "agent": map[string]any{"system_prompt": "ignored native manual overlay"}})
+	overlay, _, _ := nativeOverlay(map[string]any{"display": map[string]any{"personality": "technical"}, "agent": map[string]any{"system_prompt": "ignored native manual overlay"}})
 	if overlay != builtinPersonalities["technical"] {
 		t.Fatalf("overlay=%q", overlay)
 	}
-	overlay, _ = nativeOverlay(map[string]any{"display": map[string]any{"personality": "custom"}, "personalities": map[string]any{"custom": "first"}, "agent": map[string]any{"personalities": map[string]any{"custom": map[string]any{"system_prompt": "native", "tone": "gentle"}}}})
+	overlay, _, _ = nativeOverlay(map[string]any{"display": map[string]any{"personality": "custom"}, "personalities": map[string]any{"custom": "first"}, "agent": map[string]any{"personalities": map[string]any{"custom": map[string]any{"system_prompt": "native", "tone": "gentle"}}}})
 	if overlay != "native\nTone: gentle" {
 		t.Fatalf("overlay=%q", overlay)
 	}
@@ -1247,5 +1247,175 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 	head = git("rev-parse", "HEAD")
 	if qualifiedSourceCheckout(t.Context(), launcher, "Hermes Agent vgit."+head[:7]+" (2026.9.24)") {
 		t.Fatal("commit past the release tag accepted")
+	}
+}
+
+func TestDotenvValuesFollowPythonDotenv(t *testing.T) {
+	for _, key := range hermesCredentialEnv {
+		t.Setenv(key, "")
+	}
+	t.Setenv("HERMES_MANAGED_DIR", "")
+	for content, found := range map[string]bool{
+		// ${VAR} and ${VAR:-default} resolve before the value is used.
+		"OPENROUTER_API_KEY=${AO_REVIEW_MISSING}\n":     false,
+		"OPENROUTER_API_KEY=${AO_REVIEW_MISSING:-sk}\n": true,
+		// Double-quoted escapes decode, so this is a tab: blank.
+		"OPENROUTER_API_KEY=\"\\t\"\n": false,
+		// A bare name sets nothing.
+		"OPENROUTER_API_KEY\n": false,
+	} {
+		home := t.TempDir()
+		t.Setenv("HERMES_HOME", home)
+		if err := os.WriteFile(filepath.Join(home, ".env"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, got := credentialStoreIdentity(t.Context()); got != found {
+			t.Errorf("%q: found = %v, want %v", content, got, found)
+		}
+	}
+	// A bare protected name without "=" is not an assignment.
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_LANGUAGE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"}); err != nil {
+		t.Fatalf("bare name refused: %v", err)
+	}
+}
+
+func TestHooksRefuseLayersThatReplaceAOValues(t *testing.T) {
+	t.Setenv("HERMES_BUNDLED_LOCALES", "")
+	hooks := func(home, workspace string, env map[string]string) error {
+		if env == nil {
+			env = map[string]string{}
+		}
+		env["HERMES_HOME"] = home
+		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", WorkspacePath: workspace, Env: env, SystemPrompt: "AO"})
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// External secret sources may override; only override_existing: false is safe.
+	for config, refused := range map[string]bool{
+		"secrets:\n  bitwarden:\n    enabled: true\n":                               true,
+		"secrets:\n  onepassword:\n    enabled: yes\n":                              true,
+		"secrets:\n  bitwarden:\n    enabled: true\n    override_existing: on\n":    true,
+		"secrets:\n  bitwarden:\n    enabled: true\n    override_existing: no\n":    false,
+		"secrets:\n  bitwarden:\n    enabled: true\n    override_existing: false\n": false,
+		"secrets:\n  bitwarden:\n    enabled: false\n":                              false,
+	} {
+		home := t.TempDir()
+		write(filepath.Join(home, "config.yaml"), config)
+		env := map[string]string{}
+		if err := hooks(home, "", env); (err != nil) != refused {
+			t.Errorf("%q: err = %v, want refused=%v", config, err, refused)
+		}
+		if !refused && (env["HERMES_MANAGED_DIR"] != "" || env["HERMES_BUNDLED_LOCALES"] != "") {
+			t.Errorf("%q: redirects not pinned empty: %v", config, env)
+		}
+		if _, pinned := env["HERMES_MANAGED_DIR"]; !refused && !pinned {
+			t.Errorf("%q: HERMES_MANAGED_DIR not pinned", config)
+		}
+	}
+	// English locale layers reword the chrome AO reads.
+	for _, rel := range []string{"locales/en.yaml", "locales/en.tui.yaml", "plugins/pack/locales/en.yaml", "plugins/category/pack/locales/en.core.yml"} {
+		home := t.TempDir()
+		write(filepath.Join(home, rel), "cli: {}\n")
+		if err := hooks(home, "", nil); err == nil || !strings.Contains(err.Error(), "English") {
+			t.Errorf("%s accepted: %v", rel, err)
+		}
+	}
+	home, workspace := t.TempDir(), t.TempDir()
+	write(filepath.Join(home, "locales", "de.yaml"), "cli: {}\n")
+	if err := hooks(home, workspace, nil); err != nil {
+		t.Fatalf("non-English overlay refused: %v", err)
+	}
+	write(filepath.Join(workspace, ".hermes", "plugins", "pack", "locales", "en.yaml"), "cli: {}\n")
+	if err := hooks(home, workspace, nil); err == nil {
+		t.Fatal("project plugin English pack accepted")
+	}
+	bundled := t.TempDir()
+	if err := hooks(t.TempDir(), "", map[string]string{"HERMES_BUNDLED_LOCALES": bundled}); err == nil {
+		t.Fatal("HERMES_BUNDLED_LOCALES accepted")
+	}
+	home = t.TempDir()
+	write(filepath.Join(home, ".env"), "HERMES_BUNDLED_LOCALES="+bundled+"\n")
+	if err := hooks(home, "", nil); err == nil {
+		t.Fatal("HERMES_BUNDLED_LOCALES in .env accepted")
+	}
+	// Hermes reads config.yaml as YAML 1.1: unquoted yes is a bool, not text.
+	for config, refused := range map[string]bool{
+		"agent:\n  system_prompt: yes\n":                                    true,
+		"agent:\n  system_prompt: 'yes'\n":                                  false,
+		"agent:\n  system_prompt: [first, on]\n":                            true,
+		"display:\n  personality: on\n":                                     true,
+		"display:\n  personality: mine\npersonalities:\n  mine: 0o755\n":    false,
+		"display:\n  personality: mine\npersonalities:\n  mine: 1_000\n":    true,
+		"agent:\n  system_prompt:\n":                                        false,
+		"agent:\n  personalities:\n    other: yes\n  system_prompt: text\n": false,
+	} {
+		home := t.TempDir()
+		write(filepath.Join(home, "config.yaml"), config)
+		if err := hooks(home, "", nil); (err != nil) != refused {
+			t.Errorf("%q: err = %v, want refused=%v", config, err, refused)
+		}
+	}
+}
+
+func TestResolveHomeAppliesDataDirSuffix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX default home")
+	}
+	home := t.TempDir()
+	got, err := ResolveHome(map[string]string{"HERMES_HOME": "", "HOME": home, "HERMES_DATA_DIR_SUFFIX": "-dev"})
+	if err != nil || got != filepath.Join(home, ".hermes-dev") {
+		t.Fatalf("ResolveHome = %q, %v", got, err)
+	}
+}
+
+func TestReleaseBannerRefusesModifiedSourceCheckout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell launcher")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	launcher := filepath.Join(root, ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2 (2026.9.24)'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: Working\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q", "-b", "main")
+	git("add", "en.yaml")
+	git("commit", "-q", "-m", "release")
+	if ok, why, _ := probeNativeVersion(t.Context(), launcher); !ok {
+		t.Fatalf("clean release checkout rejected: %s", why)
+	}
+	// The release banner has no dirty marker; git does.
+	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW LOCAL BUSY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
+		t.Fatal("modified source checkout accepted under a release banner")
 	}
 }

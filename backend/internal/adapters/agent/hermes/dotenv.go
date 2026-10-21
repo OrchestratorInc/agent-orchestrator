@@ -47,6 +47,9 @@ var (
 type dotenvBinding struct {
 	key   string
 	value string
+	// assigned is false for a bare name without "=", which python-dotenv
+	// parses with value None and load_dotenv never sets.
+	assigned bool
 }
 
 // dotenvBindings parses a dotenv file the way Hermes loads it: normalized by
@@ -136,15 +139,65 @@ func hermesDotenvText(raw []byte) (string, bool) {
 	return b.String(), true
 }
 
-// dotenvEnvironment is the environment the bindings leave behind: the last
-// assignment of each name wins, as when Hermes applies them with override.
-// Names are keyed by processEnvName.
-func dotenvEnvironment(bindings []dotenvBinding) map[string]string {
+// dotenvEnvironment is the environment the bindings leave behind when Hermes
+// loads them with override: each value's ${VAR} and ${VAR:-default}
+// references resolve against base overlaid with earlier assignments, and
+// the last assignment of a name wins. Names are keyed by processEnvName.
+func dotenvEnvironment(bindings []dotenvBinding, base envLookup) map[string]string {
 	env := make(map[string]string, len(bindings))
+	lookup := func(name string) (string, bool) {
+		if value, ok := env[processEnvName(name)]; ok {
+			return value, true
+		}
+		if base == nil {
+			return "", false
+		}
+		return base(name)
+	}
 	for _, binding := range bindings {
-		env[processEnvName(binding.key)] = binding.value
+		if binding.assigned {
+			env[processEnvName(binding.key)] = interpolateDotenv(binding.value, lookup)
+		}
 	}
 	return env
+}
+
+// dotenvVariable is python-dotenv's POSIX variable reference.
+var dotenvVariable = regexp.MustCompile(`\$\{([^}:]*)(?::-([^}]*))?\}`)
+
+// interpolateDotenv mirrors python-dotenv's Variable.resolve: a defined name
+// keeps its value even when empty, else the default (or empty) applies.
+func interpolateDotenv(value string, lookup envLookup) string {
+	return dotenvVariable.ReplaceAllStringFunc(value, func(ref string) string {
+		m := dotenvVariable.FindStringSubmatch(ref)
+		if resolved, ok := lookup(m[1]); ok {
+			return resolved
+		}
+		return m[2]
+	})
+}
+
+// dotenvEscapes are the control characters python-dotenv's unicode-escape
+// decoding produces for a double-quoted value.
+var dotenvEscapes = map[byte]byte{'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v'}
+
+// decodeDotenvEscapes applies python-dotenv's decode_escapes to a quoted
+// value: a backslash followed by one of allowed is decoded.
+func decodeDotenvEscapes(value, allowed string) string {
+	var b strings.Builder
+	for i := 0; i < len(value); i++ {
+		if value[i] != '\\' || i+1 >= len(value) || strings.IndexByte(allowed, value[i+1]) < 0 {
+			b.WriteByte(value[i])
+			continue
+		}
+		i++
+		if c, ok := dotenvEscapes[value[i]]; ok {
+			b.WriteByte(c)
+		} else {
+			b.WriteByte(value[i])
+		}
+	}
+	return b.String()
 }
 
 // processEnvName is the variable a dotenv key sets in Hermes's process:
@@ -213,6 +266,7 @@ func parseDotenvBinding(text string) (string, dotenvBinding, bool) {
 	}
 	read(dotenvWhitespace)
 	if strings.HasPrefix(text, "=") {
+		binding.assigned = true
 		read(dotenvEqualSign)
 		switch {
 		case strings.HasPrefix(text, "'"):
@@ -220,13 +274,13 @@ func parseDotenvBinding(text string) (string, dotenvBinding, bool) {
 			if !ok {
 				return fail()
 			}
-			binding.value = m[1]
+			binding.value = decodeDotenvEscapes(m[1], `\'`)
 		case strings.HasPrefix(text, `"`):
 			m, ok := read(dotenvDoubleQuotedValue)
 			if !ok {
 				return fail()
 			}
-			binding.value = m[1]
+			binding.value = decodeDotenvEscapes(m[1], `\'"abfnrtv`)
 		case text == "" || text[0] == '\n' || text[0] == '\r':
 		default:
 			m, _ := read(dotenvUnquotedValue)
