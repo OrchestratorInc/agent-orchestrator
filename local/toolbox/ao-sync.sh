@@ -126,15 +126,15 @@ if [ "$MODE" = "merge-all" ]; then
     exit 0
   fi
 else
-  # fixes-only: «синкать нечего» = в fork/main..origin/main нет коммитов,
-  # которых ещё нет в леджере (сравнение по полным sha, не по patch-id).
+  # fixes-only: «новых коммитов нет» НЕ значит «делать нечего» — пики могли
+  # пройти в прошлых прогонах (резюме), и гейты для них ещё не гонялись.
+  # Гейты идемпотентны — всегда дожимаем их (settle/regen не дадут диффа,
+  # tsc/gofmt/build дёшевы на неизменившемся дереве).
   awk '{print $1}' "$LEDGER" > "$GIT_DIR_SYNC/ao-sync-ledger-shas"
   NEW_COMMITS="$(git rev-list --no-merges fork/main..origin/main | grep -vxF -f "$GIT_DIR_SYNC/ao-sync-ledger-shas" || true)"
   rm -f "$GIT_DIR_SYNC/ao-sync-ledger-shas"
   if [ -z "$NEW_COMMITS" ]; then
-    echo "==> неклассифицированных апстрим-коммитов нет, синкать нечего."
-    rm -f "$BACKUP_MARKER"
-    exit 0
+    echo "==> новых неклассифицированных апстрим-коммитов нет — прогоняю гейты (идемпотентно)."
   fi
 fi
 
