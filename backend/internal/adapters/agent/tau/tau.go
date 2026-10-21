@@ -48,12 +48,12 @@ var _ ports.AgentInterruptInputProvider = (*Plugin)(nil)
 
 // Manifest describes the supported terminal contract.
 func (*Plugin) Manifest() adapters.Manifest {
-	return adapters.Manifest{ID: "tau", Name: "Tau", Description: "Tau terminal sessions; requires explicit bypass permissions (Tau has no tool approval policy).", Version: SupportedVersion, Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
+	return adapters.Manifest{ID: "tau", Name: "Tau", Description: "Tau terminal sessions; Tau has no tool approval policy, so every permission mode runs without approvals.", Version: SupportedVersion, Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
 // GetConfigSpec exposes configured provider/model selection.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	return agentbase.ModelConfigSpec(ctx, "Configured Tau provider/model. Tau requires explicit bypass permissions; project trust is not a tool approval policy.")
+	return agentbase.ModelConfigSpec(ctx, "Configured Tau provider/model.")
 }
 
 // GetPromptDeliveryStrategy keeps tasks out of Tau command dispatch.
@@ -79,7 +79,7 @@ func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (
 
 // GetLaunchCommand starts a new foreground native TUI session.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
-	cmd, err := p.command(ctx, cfg.WorkspacePath, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
+	cmd, err := p.command(ctx, cfg.WorkspacePath, cfg.Config, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if !nativeIDPattern.MatchString(id) {
 		return nil, false, fmt.Errorf("tau: invalid native session ID")
 	}
-	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
+	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Config, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
 	if err != nil {
 		return nil, false, err
 	}
@@ -150,16 +150,15 @@ func (p *Plugin) validateRestoreWorkspace(ctx context.Context, binary, id, works
 	return nil
 }
 
-func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentConfig, permissions ports.PermissionMode, prompt, promptFile string, allowed, denied []string, env map[string]string) ([]string, error) {
+func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentConfig, prompt, promptFile string, allowed, denied []string, env map[string]string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if len(allowed) != 0 || len(denied) != 0 {
 		return nil, fmt.Errorf("tau: tool allow/deny restrictions are not supported")
 	}
-	if permissions != ports.PermissionModeBypassPermissions {
-		return nil, fmt.Errorf("tau: select bypass-permissions explicitly; Tau does not implement manual, accept-edits or auto tool approvals")
-	}
+	// Permissions: like Pi, Tau has no tool approval policy or permission flags,
+	// so AO emits none for any mode and defers to Tau's own behavior.
 	if strings.TrimSpace(workspace) == "" {
 		return nil, fmt.Errorf("tau: workspace is required")
 	}

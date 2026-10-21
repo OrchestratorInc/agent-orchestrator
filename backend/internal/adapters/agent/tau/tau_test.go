@@ -21,7 +21,7 @@ func fixturePlugin() *Plugin {
 	}}
 }
 
-func TestLaunchKeepsTasksOutOfArgvAndRequiresExplicitBypass(t *testing.T) {
+func TestLaunchKeepsTasksOutOfArgv(t *testing.T) {
 	for _, prompt := range []string{"sessions", "setup", "--version", "first\nsecond"} {
 		t.Run(prompt, func(t *testing.T) {
 			p := fixturePlugin()
@@ -51,9 +51,23 @@ func TestLaunchKeepsTasksOutOfArgvAndRequiresExplicitBypass(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLaunchIgnoresPermissionMode pins Pi-style handling: Tau has no approval
+// policy, so every mode launches with the same argv and no permission flag.
+func TestLaunchIgnoresPermissionMode(t *testing.T) {
+	workspace := t.TempDir()
+	want, err := fixturePlugin().GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: workspace, Permissions: ports.PermissionModeBypassPermissions})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, mode := range []ports.PermissionMode{"", ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, "unknown"} {
-		if _, err := fixturePlugin().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: mode}); err == nil {
-			t.Fatalf("accepted unsupported permissions %q", mode)
+		got, err := fixturePlugin().GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: workspace, Permissions: mode})
+		if err != nil {
+			t.Fatalf("permissions %q rejected: %v", mode, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("permissions %q argv = %#v, want %#v", mode, got, want)
 		}
 	}
 }
