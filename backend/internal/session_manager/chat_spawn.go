@@ -350,7 +350,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 // AO_BROWSER_CAPABILITY.
 func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
-		// Its driver refuses AO-supplied tool servers; the agent uses `ao render`.
+		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
 	}
 	executable, err := m.executable()
@@ -496,11 +496,6 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
-	systemPrompt, err = m.systemPromptForNativeRestore(ctx, rec, systemPrompt)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: switched continuation: %w", operation, rec.ID, err)
-	}
-
 	agentConfig := restoredAgentConfig(rec, project.Config)
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions

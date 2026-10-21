@@ -597,6 +597,10 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			terminal.showLatestOutput();
 			setReplaySettled(true);
 		};
+		// Frames after the replay went quiet are the agent's live output, so a colour
+		// query in them is answered. Only a replay cut short by its size cap leaves
+		// history in the tail.
+		let tailHoldsHistory = false;
 		const drainPostReplayWrites = () => {
 			if (!isCurrentAttachment(generation, handle, mux)) return;
 			if (pendingReplayWrites > 0 || postReplayWriteActive) return;
@@ -613,7 +617,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				postReplayWriteActive = false;
 				pendingReplayWrites = Math.max(0, pendingReplayWrites - 1);
 				drainPostReplayWrites();
-			}, initialWriteSource);
+			}, tailHoldsHistory ? initialWriteSource : "live");
 		};
 
 		// End the buffered part of the initial replay: concatenate what arrived so
@@ -682,6 +686,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 					// A stream that never idles would restart the quiet window forever
 					// and grow the buffer without bound; flush on size instead.
 					if (r.replayBytes >= REPLAY_MAX_BYTES) {
+						tailHoldsHistory = initialWriteSource === "replay";
 						flushReplay(true);
 						return;
 					}

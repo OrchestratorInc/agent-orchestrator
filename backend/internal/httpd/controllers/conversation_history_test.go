@@ -187,6 +187,18 @@ func (f *fakeChatService) ReloadMCPServers(
 	return nil, nil
 }
 
+func (f *fakeChatService) SwitchProvider(context.Context, domain.SessionID, domain.ProviderSwitchRequest) error {
+	return nil
+}
+
+func (f *fakeChatService) SwitchProviderAndSend(context.Context, domain.SessionID, domain.ProviderSwitchRequest, ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	return domain.ConversationTurn{}, true, nil
+}
+
+func (f *fakeChatService) SessionHistory(context.Context, domain.SessionID, int, int) ([]domain.HandoffTurn, int, error) {
+	return nil, 0, nil
+}
+
 func (f *fakeChatService) SetTitle(_ context.Context, _ domain.SessionID, title string) (string, error) {
 	f.gotTitle = title
 	if f.setTitle != nil {

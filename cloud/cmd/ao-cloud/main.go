@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/billing"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
@@ -533,8 +534,10 @@ func run(logger *slog.Logger) error {
 		TerminalStreamEnabled:     cfg.TerminalStreamEnabled,
 		TerminalRelayEnabled:      cfg.TerminalRelayEnabled,
 		NotificationWake:          notificationProcessor.Wake,
-		Activity:                  activityRecorder,
-		SupportToken:              cfg.SupportToken,
+		// Off unless AO_CLOUD_POSTHOG_KEY is set.
+		Analytics:    analytics.NewPostHog(os.Getenv("AO_CLOUD_POSTHOG_KEY"), posthogHost(), cfg.Environment, nil, logger),
+		Activity:     activityRecorder,
+		SupportToken: cfg.SupportToken,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {
@@ -701,4 +704,11 @@ func newWorkOSVerifier(
 		return nil, err
 	}
 	return auth.NewOIDCVerifier(ctx, issuer, clientID, jwksURL, profiles, organizations)
+}
+
+func posthogHost() string {
+	if host := os.Getenv("AO_CLOUD_POSTHOG_HOST"); host != "" {
+		return host
+	}
+	return "https://us.i.posthog.com"
 }

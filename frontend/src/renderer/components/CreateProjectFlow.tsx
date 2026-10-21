@@ -604,7 +604,9 @@ export function CreateProjectFlow({
 					? t("createProject.cloneFailedGuidance", {
 						defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
 					})
-					: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
+					: apiErrorCode(err) === "GIT_CLONE_TIMED_OUT"
+						? t("createProject.cloneTimedOut")
+						: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
 			if (clonedPath) await abandonPreparedClone();
 			setCloneDialogOpen(true);
 		} finally {
@@ -812,6 +814,7 @@ export function CreateProjectFlow({
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}
+							cloning={isPreparingGit}
 							error={error}
 							existingProjectNames={existingProjectNames}
 							existingProjectPaths={existingProjectPaths}

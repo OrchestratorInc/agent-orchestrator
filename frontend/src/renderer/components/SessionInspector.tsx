@@ -81,7 +81,7 @@ import {
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
-import { FilesTopbarHostContext } from "./files-topbar-host";
+import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -220,6 +220,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
+	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
@@ -324,7 +325,9 @@ export const SessionInspector = memo(function SessionInspector({
 				filesView={
 					session ? (
 						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
-							<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							<FilesActionsHostContext.Provider value={filesActionsHost}>
+								<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							</FilesActionsHostContext.Provider>
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
@@ -336,6 +339,7 @@ export const SessionInspector = memo(function SessionInspector({
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
+							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
 							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
@@ -994,7 +998,7 @@ function PRSummaryCard({
 				canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-background hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"

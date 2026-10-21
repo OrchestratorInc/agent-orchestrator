@@ -27,6 +27,8 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { MascotLamp, Spinning } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { RenderFrame } from "./RenderFrame";
+import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
@@ -208,16 +210,20 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maxToRenderPerBatch={4}
 				updateCellsBatchingPeriod={32}
 				windowSize={5}
-				maintainVisibleContentPosition={inverted ? { minIndexForVisible: 0 } : undefined}
+				// Content off screen can resize (a page measured ahead, earlier history
+				// loading in); what is on screen stays put on both platforms.
+				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
 				onScroll={(event) => {
 					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
 					followsTail.current = inverted
 						? Math.abs(contentOffset.y) < 120
 						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
+					notifyRenderViewport();
 				}}
 				scrollEventThrottle={100}
 				onContentSizeChange={() => {
+					notifyRenderViewport();
 					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -359,6 +365,9 @@ const TimelineItem = memo(function TimelineItem({
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
 		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
 	}
+	// A page the agent published with html_render / ao render.
+	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
+	if (render) return <RenderFrame render={render} />;
 	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
