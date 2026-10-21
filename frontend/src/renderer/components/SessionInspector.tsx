@@ -53,6 +53,9 @@ import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifac
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
+import { ScriptRunPanel } from "./ScriptRunPanel";
+import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
+import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
@@ -483,10 +486,38 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
 	);
 });
+
+/**
+ * The latest Setup and Cleanup runs, collapsed: a terminal session's agent
+ * covers the startup loader once it starts, and Cleanup only runs after the
+ * session is deleted, so this is where both stay reachable.
+ */
+function CloudScriptRunSections({ cloud, sessionId }: { cloud: NonNullable<WorkspaceSession["cloud"]>; sessionId: string }) {
+	const { t } = useTranslation();
+	const runs = useCloudScriptRuns(cloud.orgId, sessionId, { lifecycle: cloud });
+	const setup = latestScriptRun(runs, "setup");
+	const cleanup = latestScriptRun(runs, "cleanup");
+	if (!setup && !cleanup) return null;
+	return (
+		<>
+			{setup ? (
+				<Section defaultOpen={false} surface={false} title={t("scriptRun.setup")}>
+					<ScriptRunPanel run={setup} showTitle={false} />
+				</Section>
+			) : null}
+			{cleanup ? (
+				<Section defaultOpen={false} surface={false} title={t("scriptRun.cleanup")}>
+					<ScriptRunPanel run={cleanup} showTitle={false} />
+				</Section>
+			) : null}
+		</>
+	);
+}
 
 const ReviewsView = memo(function ReviewsView({
 	session,
@@ -980,6 +1011,7 @@ function PRSummaryCard({
 			}
 			mergeError={mergeError}
 			openLabel={t("inspector.openPR", { number: pr.number })}
+			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>

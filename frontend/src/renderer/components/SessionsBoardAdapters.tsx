@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -103,6 +104,7 @@ export function BoardSessionCardAdapter({
 	memoryTone,
 	onOpen,
 	onOpenArtifact,
+	onOpenArtifacts,
 	onTerminate,
 	session,
 }: {
@@ -113,6 +115,7 @@ export function BoardSessionCardAdapter({
 	onOpen: () => void;
 	/** Opens the session with this artifact (by path) shown in the inspector. */
 	onOpenArtifact?: (path: string) => void;
+	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
 }) {
@@ -122,6 +125,7 @@ export function BoardSessionCardAdapter({
 			memoryTone={memoryTone}
 			onOpen={onOpen}
 			onOpenArtifact={onOpenArtifact}
+			onOpenArtifacts={onOpenArtifacts}
 			onTerminate={onTerminate}
 			session={session}
 		/>
@@ -182,6 +186,7 @@ function DesktopSessionCard({
 	memoryTone,
 	onOpen,
 	onOpenArtifact,
+	onOpenArtifacts,
 	onTerminate,
 	session,
 }: {
@@ -194,6 +199,7 @@ function DesktopSessionCard({
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
 	onOpenArtifact?: (path: string) => void;
+	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
 }) {
@@ -265,7 +271,7 @@ function DesktopSessionCard({
 			action={action}
 			artifacts={
 				interactive && onOpenArtifact ? (
-					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} session={session} />
+					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} onOpenInspector={onOpenArtifacts} session={session} />
 				) : undefined
 			}
 			branchAction={branchAction}
@@ -315,6 +321,8 @@ function DesktopSessionCard({
 }
 
 const BOARD_ARTIFACT_LIMIT = 2;
+const BOARD_ARTIFACT_EXPANDED_LIMIT = 10;
+const BOARD_ARTIFACT_HOVER_DELAY = 300;
 
 /** The session's most recently updated artifacts, newest first. */
 export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
@@ -329,41 +337,125 @@ export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOA
 function BoardArtifactLinks({
 	artifacts,
 	onOpen,
+	onOpenInspector,
 	session,
 }: {
 	artifacts: SessionArtifact[];
 	onOpen: (path: string) => void;
+	onOpenInspector?: () => void;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const [previewPath, setPreviewPath] = useState<string | null>(null);
+	const suppressedPointer = useRef<{ x: number; y: number } | null>(null);
+	const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const listId = useId();
+	const reduceMotion = useReducedMotion();
+	const cancelPendingPreview = () => {
+		if (previewTimer.current !== null) clearTimeout(previewTimer.current);
+		previewTimer.current = null;
+	};
+	useEffect(() => () => {
+		if (previewTimer.current !== null) clearTimeout(previewTimer.current);
+	}, []);
 	if (artifacts.length === 0) return null;
-	const latest = latestSessionArtifacts(artifacts);
-	const hidden = artifacts.length - latest.length;
+	const sorted = latestSessionArtifacts(artifacts, BOARD_ARTIFACT_EXPANDED_LIMIT);
+	const latest = sorted.slice(0, expanded ? BOARD_ARTIFACT_EXPANDED_LIMIT : BOARD_ARTIFACT_LIMIT);
 	return (
-		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
-			{latest.map((artifact) => (
-				<HoverCard key={artifact.path}>
-					<HoverCardTrigger asChild>
+		<div
+			className="flex min-w-0 flex-col gap-0.5 font-sans text-2xs"
+			data-testid="board-session-artifacts"
+			onPointerLeave={() => {
+				cancelPendingPreview();
+				suppressedPointer.current = null;
+			}}
+		>
+			<div className="flex min-w-0 flex-col" id={listId}>
+				<AnimatePresence initial={false}>
+					{latest.map((artifact) => (
+						<motion.div
+							key={artifact.path}
+							initial={{ height: 0, opacity: 0 }}
+							animate={{ height: "auto", opacity: 1 }}
+							exit={{ height: 0, opacity: 0 }}
+							transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+							className="flex min-w-0 flex-col overflow-hidden"
+						>
+							<HoverCard
+								openDelay={BOARD_ARTIFACT_HOVER_DELAY}
+								open={previewPath === artifact.path}
+								onOpenChange={(open) => {
+									if (open && !suppressedPointer.current) setPreviewPath(artifact.path);
+									else if (!open) setPreviewPath((current) => current === artifact.path ? null : current);
+								}}
+							>
+								<HoverCardTrigger asChild>
+									<button
+										aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
+										className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+										onFocus={() => {
+											cancelPendingPreview();
+											suppressedPointer.current = null;
+										}}
+										onPointerLeave={cancelPendingPreview}
+										onPointerMove={(event) => {
+											const pointer = suppressedPointer.current;
+											if (!pointer) return;
+											cancelPendingPreview();
+											if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) < 4) return;
+											previewTimer.current = setTimeout(() => {
+												previewTimer.current = null;
+												suppressedPointer.current = null;
+												setPreviewPath(artifact.path);
+											}, BOARD_ARTIFACT_HOVER_DELAY);
+										}}
+										onClick={(event) => {
+											event.stopPropagation();
+											onOpen(artifact.path);
+										}}
+										type="button"
+									>
+										<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
+										<span className="truncate leading-none">{artifact.name}</span>
+									</button>
+								</HoverCardTrigger>
+								<ArtifactPreviewCard artifact={artifact} session={session} />
+							</HoverCard>
+						</motion.div>
+					))}
+				</AnimatePresence>
+			</div>
+			{artifacts.length > BOARD_ARTIFACT_LIMIT ? (
+				<div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+					<button
+						aria-controls={listId}
+						aria-expanded={expanded}
+						className="self-start rounded-sm py-0.5 text-left text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						onClick={(event) => {
+							event.stopPropagation();
+							cancelPendingPreview();
+							suppressedPointer.current = { x: event.clientX, y: event.clientY };
+							setPreviewPath(null);
+							setExpanded(!expanded);
+						}}
+						type="button"
+					>
+						{expanded ? t("shell.showLess") : t("shell.moreArtifacts", { count: artifacts.length - BOARD_ARTIFACT_LIMIT })}
+					</button>
+					{expanded && artifacts.length > BOARD_ARTIFACT_EXPANDED_LIMIT && onOpenInspector ? (
 						<button
-							aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
-							className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-2xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							className="rounded-sm py-0.5 text-left text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 							onClick={(event) => {
 								event.stopPropagation();
-								onOpen(artifact.path);
+								onOpenInspector();
 							}}
 							type="button"
 						>
-							<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
-							<span className="truncate">{artifact.name}</span>
+							{t("shell.openArtifactsInInspector")}
 						</button>
-					</HoverCardTrigger>
-					<ArtifactPreviewCard artifact={artifact} session={session} />
-				</HoverCard>
-			))}
-			{hidden > 0 ? (
-				<span className="pl-[18px] text-2xs text-muted-foreground">
-					{t("shell.moreArtifacts", { count: hidden })}
-				</span>
+					) : null}
+				</div>
 			) : null}
 		</div>
 	);

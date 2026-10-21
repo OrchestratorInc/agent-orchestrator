@@ -50,6 +50,7 @@ type Store interface {
 	ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error)
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
+	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
@@ -601,18 +602,36 @@ func (s *Service) SpawnOrchestrator(
 	requestedMode domain.SessionMode,
 	approval domain.PermissionMode,
 ) (domain.Session, error) {
-	unlock := s.lockOrchestratorProject(projectID)
-	defer unlock()
-
 	project, err := s.requireProject(ctx, projectID)
 	if err != nil {
 		return domain.Session{}, err
 	}
+	// A start runs the project's Setup and a clean replacement first runs
+	// the retired orchestrator's Cleanup, both possibly longer than one REST
+	// request; the lock may also wait for another replacement. The request's
+	// budget covers them from here. The bounded context is not passed on:
+	// the spawn extends the budget again, from its own start, and a deadline
+	// set here would cap it.
+	budget := sessionmanager.SetupBudget(project)
+	if clean {
+		budget += sessionmanager.ReplacementCleanupBudget(project)
+	}
+	_, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, budget)
+	defer cancelBudget()
+	unlock := s.lockOrchestratorProject(projectID)
+	defer unlock()
+
 	mode := requestedMode
 	if clean {
 		existing, err := s.activeOrchestrators(ctx, projectID)
 		if err != nil {
 			return domain.Session{}, err
+		}
+		if len(existing) > 1 {
+			// Each retirement runs its own Cleanup.
+			_, cancelRetireBudget := ports.ExtendSpawnRequestBudget(ctx,
+				sessionmanager.SetupBudget(project)+time.Duration(len(existing))*sessionmanager.ReplacementCleanupBudget(project))
+			defer cancelRetireBudget()
 		}
 		if len(existing) > 0 && mode == "" {
 			// Clean replacement preserves the controller contract of the
@@ -1207,6 +1226,10 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	if err != nil {
 		return nil, fmt.Errorf("list review runs: %w", err)
 	}
+	interrupted, err := s.store.ListInterruptedSessions(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list interrupted sessions: %w", err)
+	}
 	var cleanupBySession map[domain.SessionID]domain.SessionCleanupRecord
 	if len(archived) > 0 {
 		if cleanupBySession, err = s.store.ListSessionCleanupFactsForSessions(ctx, archived); err != nil {
@@ -1216,7 +1239,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
-		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found))
+		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], interrupted[rec.ID], currentWorkspaceCleanup(rec, facts, found))
 		if err != nil {
 			return nil, err
 		}
@@ -1317,7 +1340,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1372,7 +1395,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	// ReconcileSessionOutputType is the sole writer); it is deliberately not
 	// recomputed here so the API and Kanban see the same durable
 	// classification rather than a value that can differ read to read.
-	presentation := deriveKanbanPresentation(rec, prs, runs, now, s.harnessSignals(rec.Harness))
+	presentation := deriveKanbanPresentation(rec, prs, runs, interrupted, now, s.harnessSignals(rec.Harness))
 	readiness := "ready"
 	if recovery, ok := s.manager.(interface {
 		SessionStatusReadiness(domain.SessionRecord) string
@@ -1614,6 +1637,11 @@ func toSpawnAPIError(err error) error {
 	if mapped := toAPIError(err); !errors.Is(mapped, err) {
 		return mapped
 	}
+	// A failed Setup step already explains itself; the spawn stage prefix is noise.
+	var setupErr *sessionmanager.SetupStepError
+	if errors.As(err, &setupErr) {
+		return apierr.Conflict("WORKSPACE_PROVISION_FAILED", setupErr.Error(), nil)
+	}
 	switch {
 	case errors.Is(err, sessionmanager.ErrClientRequestConflict):
 		return apierr.Conflict("CLIENT_REQUEST_CONFLICT", "clientRequestId belongs to a different task", nil)
@@ -1694,7 +1722,11 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 		}
 		cleanup = currentWorkspaceCleanup(rec, facts, found)
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs, cleanup)
+	interrupted, err := s.store.ListInterruptedSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil {
+		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
+	}
+	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
 }
 
 // currentWorkspaceCleanup is the teardown disposition recorded for an archived

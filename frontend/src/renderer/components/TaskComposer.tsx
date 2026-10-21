@@ -8,13 +8,13 @@ import {
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
+import { CloudCpError } from "../lib/cloud-cp";
 import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
@@ -24,9 +24,11 @@ import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFile
 import { useSettings } from "../hooks/useSettings";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
+import { createCloudSession } from "../lib/cloud-session-create";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -173,6 +175,7 @@ export function TaskComposer({
 	// project keeps the existing daemon flow untouched.
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
+	const cloudOffering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
 	const isCloudProject = !hostId && Boolean(cloudProject);
@@ -193,7 +196,10 @@ export function TaskComposer({
 			try {
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
-				const { session } = await cloudClient.createSession(cloudOrg.id, {
+				// The task starts in the interface the composer resolved (its choice,
+				// else the default session interface); an older control plane that
+				// predates the field starts it in the terminal (createCloudSession).
+				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
 					harness: input.agent ?? "claude-code",
@@ -201,6 +207,7 @@ export function TaskComposer({
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
+					...(input.mode ? { interfaceMode: input.mode } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
@@ -209,6 +216,8 @@ export function TaskComposer({
 				return session.id;
 			} catch (err) {
 				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				// The code drives the same fallbacks a local create error does ("Create as Terminal").
+				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
@@ -550,10 +559,13 @@ export function TaskComposer({
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
+	// A cloud project's Chat-capable harnesses come from the control plane, as a
+	// local project's come from the daemon.
+	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
-		!settings.chatHarnesses.includes(selectedAgent);
+		!(chatHarnesses ?? []).includes(selectedAgent);
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -673,7 +685,9 @@ export function TaskComposer({
 				model: requestedModel,
 				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
 				effort: requestedEffort,
-				mode: interfaceMode,
+				// The local daemon applies the default session mode itself; the control
+				// plane has none, so a cloud task carries it.
+				mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 				approvalMode,
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -773,10 +787,6 @@ export function TaskComposer({
 				mode: selectedMode,
 				catalog: modelCatalog,
 				fetching: modelCatalogQuery.isFetching,
-				loading:
-					selectedAgent !== "" &&
-					modelCatalogQuery.isFetching &&
-					modelCatalogQuery.data === undefined,
 				onModelChange: (value) => {
 					setModel(value);
 					setMode("");
@@ -880,7 +890,6 @@ function TaskModelPicker({
 	agentLabel,
 	catalog,
 	disabled,
-	loading,
 	value,
 	mode,
 	onModelChange,
@@ -890,9 +899,7 @@ function TaskModelPicker({
 }: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
 	const { t } = useTranslation();
 
-	// No agent selected: there is nothing loading and no model to choose yet, so
-	// show a clear "select an agent" placeholder, never a spinner. This returns
-	// before the loading check so a no-agent state can never render one.
+	// Keep the no-agent placeholder until there is an agent to configure.
 	if (agentId === "") {
 		return (
 			<span
@@ -901,25 +908,6 @@ function TaskModelPicker({
 				aria-label={t("newTask.model")}
 			>
 				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
-			</span>
-		);
-	}
-
-	if (loading) {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
-				aria-label={t("newTask.model")}
-			>
-				<span
-					className="inline-flex min-w-0 items-center gap-1.5"
-					role="status"
-					aria-label={t("settings.models.loading")}
-					aria-busy="true"
-				>
-					<Loader2 className="size-icon-sm shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-					<span className="truncate text-settings-muted">{t("settings.models.loading")}</span>
-				</span>
 			</span>
 		);
 	}

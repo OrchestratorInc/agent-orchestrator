@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, isWaitingForIdleJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
+import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { useLiveBrowserViewportRect, type ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { useWorkspaceTopbarBottom } from "../hooks/useWorkspaceTopbarBottom";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
@@ -356,12 +357,27 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 	const [height, setHeight] = useState(0);
 	useLayoutEffect(() => {
 		const element = frameRef.current;
-		if (!element) return;
-		const observer = new ResizeObserver(() => setHeight(element.getBoundingClientRect().height));
+		if (!element) {
+			publishHarnessUpdateNoticeRect(null);
+			return;
+		}
+		// Session content in this corner (a running step's timer, a session
+		// notice's dismiss button) reads this rect to keep itself clear.
+		const measure = () => {
+			const box = element.getBoundingClientRect();
+			setHeight(box.height);
+			publishHarnessUpdateNoticeRect(box.width > 0 ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null);
+		};
+		const observer = new ResizeObserver(measure);
 		observer.observe(element);
-		setHeight(element.getBoundingClientRect().height);
-		return () => observer.disconnect();
+		window.addEventListener("resize", measure);
+		measure();
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", measure);
+		};
 	});
+	useLayoutEffect(() => () => publishHarnessUpdateNoticeRect(null), []);
 	// Until a bar is laid out, assume the board's: below the toolbar (and Windows' titlebar).
 	const top = topbarBottom === null
 		? isWindowsPlatform() ? "calc(var(--size-window-titlebar) + var(--size-toolbar) + var(--space-3))" : "calc(var(--size-toolbar) + var(--space-3))"

@@ -2336,6 +2336,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		TranscriptPath:               capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TranscriptPath)), 4096),
 		LaunchID:                     capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.LaunchID))),
 		NativeEntrypoint:             capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Entrypoint))),
+		ProcessID:                    max(in.ProcessID, 0),
 	}
 	if in.RunningSubagentIDs != nil && len(*in.RunningSubagentIDs) <= 128 {
 		running := make([]string, 0, len(*in.RunningSubagentIDs))

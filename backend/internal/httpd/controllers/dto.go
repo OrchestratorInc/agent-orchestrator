@@ -1411,6 +1411,7 @@ type SetActivityRequest struct {
 	TranscriptPath               string                              `json:"transcriptPath,omitempty" maxLength:"4096" description:"Read-only provider-native transcript path exposed by the hook."`
 	LaunchID                     string                              `json:"launchId,omitempty" description:"AO process generation that produced the signal."`
 	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
+	ProcessID                    int                                 `json:"processId,omitempty" minimum:"0" description:"Process id of the provider process that fired the hook (Claude's CLAUDE_PID)."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
 }
 
@@ -2692,6 +2693,11 @@ type RetryTurnResponse struct {
 	State          domain.TurnState `json:"state,omitempty" enum:"queued,running,completed,recovered,interrupted,failed"`
 }
 
+// SetTurnAutoResumeRequest opts one usage-limited turn into a scheduled retry.
+type SetTurnAutoResumeRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // ActivateConversationBranchResponse reports the durable head after switching.
 type ActivateConversationBranchResponse struct {
 	ActiveBranchID string `json:"activeBranchId"`
@@ -2825,11 +2831,14 @@ type ConversationTurnResponse struct {
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
 	// HasRetryAttempt remains true when the attempt is outside the active branch.
-	HasRetryAttempt bool    `json:"hasRetryAttempt,omitempty"`
-	ErrorMessage    string  `json:"errorMessage,omitempty"`
-	RequestedAt     string  `json:"requestedAt"`
-	StartedAt       *string `json:"startedAt,omitempty"`
-	CompletedAt     *string `json:"completedAt,omitempty"`
+	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
+	// HasHumanPrompt includes durable human prompts outside this timeline page.
+	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
+	RequestedAt    string                          `json:"requestedAt"`
+	StartedAt      *string                         `json:"startedAt,omitempty"`
+	CompletedAt    *string                         `json:"completedAt,omitempty"`
 	// RolledBack marks a turn an undo discarded. Its messages and activities are
 	// absent from this snapshot because the agent no longer remembers them; the turn
 	// is still reported so a client can say what was taken back rather than letting
@@ -2850,6 +2859,13 @@ type ConversationTurnResponse struct {
 	// rather than a history of one: the earlier versions are the same plan with fewer
 	// steps ticked off.
 	Plan *ConversationPlanResponse `json:"plan,omitempty"`
+}
+
+// ConversationUsageLimitResponse separates a quota pause from other failures.
+type ConversationUsageLimitResponse struct {
+	ResetsAt    *string `json:"resetsAt,omitempty"`
+	AutoResume  bool    `json:"autoResume"`
+	ResumeError string  `json:"resumeError,omitempty"`
 }
 
 // ConversationPlanResponse is the agent's plan for one turn.

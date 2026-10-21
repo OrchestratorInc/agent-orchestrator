@@ -35,7 +35,12 @@ type Store interface {
 	MarkSandboxDeletionRequested(ctx context.Context, owner, orgID, sessionID string) error
 	RecordSandboxStartupRepair(ctx context.Context, owner, orgID, sessionID string) (int, error)
 	RecordSandboxStartupError(ctx context.Context, owner, orgID, sessionID, code, message string) error
+	RecordSandboxProviderFailure(ctx context.Context, owner, orgID, sessionID, failureID string) error
 	CompleteSandboxDeletion(ctx context.Context, owner, orgID, sessionID string) error
+	// UseSandboxCoderWorkspaceRetryName records the session's retry workspace
+	// name as its workspace name after a create found takenName held by
+	// another workspace (see sandbox.WorkspaceNameTakenError).
+	UseSandboxCoderWorkspaceRetryName(ctx context.Context, owner, orgID, sessionID, takenName string) (string, error)
 	DisconnectSessionWorkers(ctx context.Context, orgID, sessionID string) error
 }
 
@@ -182,6 +187,10 @@ type Reconciler struct {
 	wake chan struct{}
 	// activity receives support-trail events; nil records nothing.
 	activity ActivityRecorder
+	// cleanupHolds is how much longer each deletion's Cleanup may wait for a
+	// run slot behind its organization's runs, as this process's provider
+	// reported it (sandbox.WithCleanupQueueHold): org/session -> duration.
+	cleanupHolds sync.Map
 }
 
 func sha256HexOf(data []byte) string {
@@ -550,7 +559,7 @@ func (r *Reconciler) reconcileClaim(ctx context.Context, record domain.Sandbox) 
 func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox) error {
 	provider, err := r.providers.Resolve(ctx, record)
 	if err != nil {
-		return r.fail(ctx, record, err)
+		return r.failCreate(ctx, record, err)
 	}
 
 	if record.DesiredState == domain.SandboxDesiredDeleted {
@@ -565,8 +574,19 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 	// rather than stay parked. (A deleted-then-restored session already carries
 	// observed_state 'deleted' with no provider id and provisions below; this
 	// also covers un-terminating a session parked by the repair-storm ceiling.)
+	//
+	// A session parked by a startup failure stays parked while its intent is
+	// running, too, until a user retry or a resume reopens its startup window:
+	// any wake (opening the session, a terminal, Chat) would otherwise restart
+	// a stopped workspace or retry a create the user has not asked for.
+	// Parking suppresses Starts and Creates, never Stops: AO-managed compute
+	// of a session parked with a running intent is stopped again if something
+	// restarted it, as each (daily) re-park always did.
 	if record.ObservedState == domain.SandboxObservedTerminated &&
-		record.DesiredState != domain.SandboxDesiredRunning {
+		(record.DesiredState != domain.SandboxDesiredRunning || parkedAfterStartupFailure(record)) {
+		if record.DesiredState == domain.SandboxDesiredRunning {
+			r.stopParkedCompute(ctx, record, provider)
+		}
 		return r.observe(ctx, record, record.ProviderEnvironmentID,
 			domain.SandboxObservedTerminated, record.LastError, 24*time.Hour)
 	}
@@ -588,6 +608,18 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 		// provider ID, and try again — a provider outage must leave healthy
 		// sessions alone.
 		return r.fail(ctx, record, err)
+	}
+
+	// A failed provider build (a Coder workspace build) never finishes on its
+	// own. reconcileBuildFailure reports it or, when the user asked, starts
+	// one new build. Anything it leaves is treated as before failed builds were
+	// recognized: like a build in progress, bounded by the startup deadline and
+	// ceiling, with no build started that the user did not ask for.
+	if record.DesiredState == domain.SandboxDesiredRunning && environment.State == sandbox.StateFailed {
+		if handled, err := r.reconcileBuildFailure(ctx, record, environment, provider); handled {
+			return err
+		}
+		environment.State = sandbox.StateProvisioning
 	}
 
 	// A worker that never checked in is repaired in place until a hard ceiling.
@@ -810,10 +842,12 @@ func (r *Reconciler) reconcileDeletion(
 	environment, err := provider.Get(ctx, sandbox.ID(record.ProviderEnvironmentID))
 	switch {
 	case errors.Is(err, sandbox.ErrNotFound):
+		r.cleanupHolds.Delete(cleanupHoldKey(record))
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	case err != nil:
 		return r.fail(ctx, record, err)
 	case environment.State == sandbox.StateDeleted:
+		r.cleanupHolds.Delete(cleanupHoldKey(record))
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	}
 
@@ -829,13 +863,14 @@ func (r *Reconciler) reconcileDeletion(
 			r.log.WarnContext(ctx, "mark sandbox deletion requested",
 				"session_id", record.SessionID, "err", err)
 		}
-	} else if time.Since(*record.DeletionRequestedAt) >= r.options.DeletionDeadline {
+	} else if elapsed := time.Since(*record.DeletionRequestedAt); elapsed >= r.options.DeletionDeadline &&
+		elapsed >= r.deletionDeadline(ctx, record) {
 		r.log.WarnContext(ctx, "abandoning unreclaimable sandbox after deletion deadline",
 			"session_id", record.SessionID,
 			"provider", record.Provider,
 			"provider_id", record.ProviderEnvironmentID,
 			"provider_state", environment.State,
-			"deadline", r.options.DeletionDeadline,
+			"deadline", r.deletionDeadline(ctx, record),
 		)
 		// One last Delete without the project's Cleanup, so a Cleanup that
 		// outlived the deadline (a slow script, or a control plane restart
@@ -846,6 +881,7 @@ func (r *Reconciler) reconcileDeletion(
 					"session_id", record.SessionID, "provider_id", record.ProviderEnvironmentID, "err", err)
 			}
 		}
+		r.cleanupHolds.Delete(cleanupHoldKey(record))
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	}
 
@@ -869,7 +905,7 @@ func (r *Reconciler) reconcileDeletion(
 			"provider_id", record.ProviderEnvironmentID,
 		)
 	}
-	if err := provider.Delete(r.withCleanupCommands(ctx, record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+	if err := provider.Delete(r.withSessionEvents(r.withCleanupScope(r.withCleanupCommands(ctx, record), record), record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 		return r.fail(ctx, record, err)
 	}
 	// DELETE acceptance is not deletion confirmation. Keep the provider id and
@@ -884,6 +920,36 @@ func (r *Reconciler) reconcileDeletion(
 	)
 }
 
+// deletionDeadline is how long the reconciler keeps re-requesting a
+// sandbox's deletion: DeletionDeadline, plus how far the project's Cleanup
+// run may exceed the default budget (sandbox.CleanupBudget of its current and
+// its worker's installed commands, at most sandbox.MaxCleanupBudget) and how
+// much longer it may wait for a run slot (sandbox.CleanupDeletionExtra), plus
+// how long its organization's Cleanups ahead of it may still take, as the
+// provider reported when it queued the run (sandbox.WithCleanupQueueHold, at
+// most sandbox.MaxCleanupBudget). A Cleanup whose steps set long time limits,
+// or that waits behind its organization's long ones, still gets a slot and
+// finishes before the deletion is abandoned, and a deletion is never held for
+// more than that bound.
+func (r *Reconciler) deletionDeadline(ctx context.Context, record domain.Sandbox) time.Duration {
+	installed, _ := domain.InstalledCleanupCommands(record.BootstrapContext)
+	var current []string
+	if lookup, ok := r.store.(cleanupCommandsStore); ok {
+		if commands, err := lookup.ProjectCleanupCommands(ctx, record.OrgID, record.SessionID); err == nil {
+			current = commands
+		}
+	}
+	var hold time.Duration
+	if held, ok := r.cleanupHolds.Load(cleanupHoldKey(record)); ok {
+		hold = held.(time.Duration)
+	}
+	return r.options.DeletionDeadline + sandbox.CleanupDeletionExtra(sandbox.CleanupBudget(current, installed)) + hold
+}
+
+func cleanupHoldKey(record domain.Sandbox) string {
+	return record.OrgID + "/" + record.SessionID
+}
+
 // cleanupCommandsStore is the optional Store capability that reads a
 // session's current project Cleanup commands.
 type cleanupCommandsStore interface {
@@ -895,6 +961,11 @@ type cleanupCommandsStore interface {
 // local project's does. When they can't be read the provider runs the
 // commands the worker installed.
 func (r *Reconciler) withCleanupCommands(ctx context.Context, record domain.Sandbox) context.Context {
+	// The commands the worker was last given, which its hook runs when the
+	// current ones cannot be passed in.
+	if installed, ok := domain.InstalledCleanupCommands(record.BootstrapContext); ok {
+		ctx = sandbox.WithInstalledCleanupCommands(ctx, installed)
+	}
 	lookup, ok := r.store.(cleanupCommandsStore)
 	if !ok {
 		return ctx
@@ -906,6 +977,66 @@ func (r *Reconciler) withCleanupCommands(ctx context.Context, record domain.Sand
 		return ctx
 	}
 	return sandbox.WithCleanupCommands(ctx, commands)
+}
+
+// cleanupResumeStore is the optional Store capability that says whether a
+// sandbox being deleted may be resumed to run its project's Cleanup under its
+// organization's plan.
+type cleanupResumeStore interface {
+	CleanupResumeAllowed(ctx context.Context, orgID, sessionID string) error
+}
+
+// CleanupResumeRefusedReason is what each step of a Cleanup not run because
+// the organization is over its plan says.
+const CleanupResumeRefusedReason = "The sandbox was paused because the organization is over its plan, so it was not resumed to run this Cleanup step before it was deleted."
+
+// withCleanupScope names the sandbox's organization to Provider.Delete, so
+// its Cleanup runs count against the organization's share (and how long its
+// run may wait behind them extends the deletion deadline), and keeps a paused
+// sandbox paused (sandbox.WithoutCleanupResume) when the organization is over
+// its plan. A plan check that fails is logged and the sandbox may resume.
+func (r *Reconciler) withCleanupScope(ctx context.Context, record domain.Sandbox) context.Context {
+	ctx = sandbox.WithCleanupOrg(ctx, record.OrgID)
+	ctx = sandbox.WithCleanupQueueHold(ctx, func(hold time.Duration) {
+		r.cleanupHolds.Store(cleanupHoldKey(record), min(max(hold, 0), sandbox.MaxCleanupBudget))
+	})
+	plan, ok := r.store.(cleanupResumeStore)
+	if !ok {
+		return ctx
+	}
+	err := plan.CleanupResumeAllowed(ctx, record.OrgID, record.SessionID)
+	switch {
+	case err == nil:
+		return ctx
+	case postgres.IsPlanRefusal(err):
+		return sandbox.WithoutCleanupResume(ctx, CleanupResumeRefusedReason)
+	default:
+		r.log.WarnContext(ctx, "check whether the sandbox may resume for its Cleanup; resuming it if paused",
+			"session_id", record.SessionID, "err", err)
+		return ctx
+	}
+}
+
+// sessionEventTimeout bounds one event a provider appends to the session.
+const sessionEventTimeout = 10 * time.Second
+
+// withSessionEvents lets Provider.Delete append events to the session it
+// deletes the sandbox of (the project's Cleanup steps). The session row is
+// never removed (a deleted session is only terminated), so the events stay
+// readable afterwards; a failed append is only logged.
+func (r *Reconciler) withSessionEvents(ctx context.Context, record domain.Sandbox) context.Context {
+	return sandbox.WithSessionEventRecorder(ctx, func(ctx context.Context, eventType string, payload any) {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			r.log.WarnContext(ctx, "encode provider session event", "session_id", record.SessionID, "event_type", eventType, "err", err)
+			return
+		}
+		appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionEventTimeout)
+		defer cancel()
+		if _, err := r.store.AppendSessionEvent(appendCtx, record.OrgID, record.SessionID, eventType, encoded); err != nil {
+			r.log.WarnContext(ctx, "append provider session event", "session_id", record.SessionID, "event_type", eventType, "err", err)
+		}
+	})
 }
 
 func (r *Reconciler) restore(
@@ -1282,6 +1413,15 @@ func (r *Reconciler) bootstrapFailed(
 			"session_id", record.SessionID, "provider_id", environment.ID, "err", err)
 		return r.terminate(ctx, record, environment, provider, startupErr)
 	}
+	// A project working folder AO cannot use (outside the durable root, or
+	// one the bootstrap could not prepare) fails the same way on every retry,
+	// so park the session with the reason until its working folder changes.
+	if errors.As(err, &startupErr) && (startupErr.Code == sandbox.StartupErrorWorkingDirectoryNotDurable ||
+		startupErr.Code == sandbox.StartupErrorWorkingDirectoryUnusable) {
+		r.log.WarnContext(ctx, "project working folder cannot be used",
+			"session_id", record.SessionID, "provider_id", environment.ID, "code", startupErr.Code, "err", err)
+		return r.terminate(ctx, record, environment, provider, startupErr)
+	}
 	r.recordStartupError(ctx, record, err)
 	if errors.Is(err, sandbox.ErrWorkspaceNotReady) && record.WorkerLastSeenAt == nil {
 		r.log.InfoContext(ctx, "sandbox not ready for worker bootstrap; will retry",
@@ -1294,6 +1434,240 @@ func (r *Reconciler) bootstrapFailed(
 			domain.SandboxObservedProvisioning, err.Error(), notReadyRetryInterval)
 	}
 	return r.fail(ctx, record, err)
+}
+
+// stopParkedCompute stops the AO-managed compute of a parked session if it is
+// running again. It is best effort (the next re-park tries again) and never
+// touches an organization's own compute.
+func (r *Reconciler) stopParkedCompute(ctx context.Context, record domain.Sandbox, provider sandbox.Provider) {
+	if record.ProviderEnvironmentID == "" || customerOwnedCompute(record) {
+		return
+	}
+	environment, err := provider.Get(ctx, sandbox.ID(record.ProviderEnvironmentID))
+	if errors.Is(err, sandbox.ErrNotFound) {
+		return
+	}
+	if err != nil {
+		r.log.WarnContext(ctx, "probe parked sandbox", "session_id", record.SessionID, "err", err)
+		return
+	}
+	switch environment.State {
+	case sandbox.StateStopped, sandbox.StatePaused, sandbox.StateDeleted, sandbox.StateDeleting:
+		return
+	}
+	r.log.WarnContext(ctx, "stopping compute of a parked sandbox",
+		"session_id", record.SessionID,
+		"provider", record.Provider,
+		"provider_id", environment.ID,
+		"provider_state", environment.State,
+	)
+	if err := provider.Stop(ctx, environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+		r.log.WarnContext(ctx, "stop parked sandbox", "session_id", record.SessionID, "err", err)
+	}
+}
+
+// parkedAfterStartupFailure reports whether a sandbox whose worker never
+// checked in recorded its startup error in the current startup window. A user
+// retry clears the error, and a resume or restore opens a new window after it,
+// so a parked session that still matches has not been asked to start again.
+// Both times come from the database clock.
+func parkedAfterStartupFailure(record domain.Sandbox) bool {
+	return record.WorkerLastSeenAt == nil && record.StartupErrorAt != nil &&
+		(record.StartupStartedAt == nil || !record.StartupErrorAt.Before(*record.StartupStartedAt))
+}
+
+// What the reconciler did about a failed provider build, stored with the
+// build's id as the sandbox's ProviderFailureID: the bare id once it reported
+// the failure, restartedMark once it started the one new build a user retry
+// asked for, ignoredMark when a connected worker made it leave the failure
+// alone. Each failed build is acted on once.
+func restartedMark(failureID string) string { return failureID + "#restarted" }
+func ignoredMark(failureID string) string   { return failureID + "#ignored" }
+
+// reconcileBuildFailure acts on a failed build of a running-intent sandbox:
+//
+//   - a worker is connected (an old workspace still serving it): leave it
+//     alone, as before failed builds were recognized;
+//   - a failure not yet acted on: park the session with the provider's reason,
+//     instead of letting it wait out its whole startup budget;
+//   - a reported failure the user retried (the parked session was re-armed):
+//     start one new build;
+//   - a failure AO already started a new build for: wait for that build.
+//
+// It reports whether it handled the sandbox; when it did not, the caller
+// treats the failed build like one in progress. It never starts a build the
+// user did not ask for.
+func (r *Reconciler) reconcileBuildFailure(
+	ctx context.Context,
+	record domain.Sandbox,
+	environment sandbox.Environment,
+	provider sandbox.Provider,
+) (bool, error) {
+	failure := environment.Failure
+	if failure == nil || failure.Err == nil || failure.ID == "" {
+		// A failed stop or delete, or a provider that cannot identify the
+		// failure: nothing to report or retry.
+		return false, nil
+	}
+	if record.WorkerLastSeenAt != nil {
+		if record.ProviderFailureID != ignoredMark(failure.ID) {
+			if err := r.store.RecordSandboxProviderFailure(
+				ctx, r.owner, record.OrgID, record.SessionID, ignoredMark(failure.ID),
+			); err != nil {
+				return true, err
+			}
+		}
+		return false, nil
+	}
+	switch record.ProviderFailureID {
+	case ignoredMark(failure.ID), restartedMark(failure.ID):
+		return false, nil
+	case failure.ID:
+		if record.ObservedState == domain.SandboxObservedTerminated || record.StartupStartedAt == nil {
+			// Reported and not retried: stay parked.
+			return true, r.observe(ctx, record, string(environment.ID),
+				domain.SandboxObservedTerminated, record.LastError, 24*time.Hour)
+		}
+		// The user retried the reported failure: start one new build. The
+		// mark is stored first, so a crash after Start cannot start another.
+		if err := r.store.RecordSandboxProviderFailure(
+			ctx, r.owner, record.OrgID, record.SessionID, restartedMark(failure.ID),
+		); err != nil {
+			return true, err
+		}
+		r.log.InfoContext(ctx, "starting a new build for a failed sandbox after a retry",
+			"session_id", record.SessionID,
+			"provider", record.Provider,
+			"provider_id", environment.ID,
+			"failed_build", failure.ID,
+		)
+		if err := provider.Start(ctx, environment.ID); err != nil {
+			// Let the next retry try again.
+			if markErr := r.store.RecordSandboxProviderFailure(
+				ctx, r.owner, record.OrgID, record.SessionID, failure.ID,
+			); markErr != nil {
+				r.log.WarnContext(ctx, "record failed build after a failed restart",
+					"session_id", record.SessionID, "err", markErr)
+			}
+			return true, r.terminate(ctx, record, environment, provider, &sandbox.StartupError{
+				Code:    sandbox.StartupErrorWorkspaceBuildFailed,
+				Message: "AO couldn't start a new workspace build. Try again shortly.",
+				Err:     err,
+			})
+		}
+		return true, r.observe(ctx, record, string(environment.ID), domain.SandboxObservedProvisioning, "", 5*time.Second)
+	default:
+		if err := r.store.RecordSandboxProviderFailure(
+			ctx, r.owner, record.OrgID, record.SessionID, failure.ID,
+		); err != nil {
+			return true, err
+		}
+		cause := r.describeFailure(ctx, record, environment.ID, *failure, provider)
+		r.log.WarnContext(ctx, "sandbox workspace build failed",
+			"session_id", record.SessionID,
+			"provider", record.Provider,
+			"provider_id", environment.ID,
+			"failed_build", failure.ID,
+			"err", cause,
+		)
+		return true, r.terminate(ctx, record, environment, provider, cause)
+	}
+}
+
+// describeFailure is the reason a failed build is reported with: the
+// provider's explanation (which may read its logs, so it is asked only here,
+// once per failure), or the generic reason the failure carries.
+func (r *Reconciler) describeFailure(
+	ctx context.Context,
+	record domain.Sandbox,
+	id sandbox.ID,
+	failure sandbox.Failure,
+	provider sandbox.Provider,
+) *sandbox.StartupError {
+	describer, ok := provider.(sandbox.FailureDescriber)
+	if !ok {
+		return failure.Err
+	}
+	describeCtx, cancel := context.WithTimeout(ctx, diagnoseTimeout)
+	defer cancel()
+	if described := describer.DescribeFailure(describeCtx, id, failure, customerOwnedCompute(record)); described != nil &&
+		described.Code != "" && described.Message != "" {
+		return described
+	}
+	return failure.Err
+}
+
+// awaitingCreate reports whether the sandbox has been trying to get compute
+// created for a session whose worker never checked in: Create (or resolving
+// its provider) failed, or the provider had no capacity.
+func awaitingCreate(record domain.Sandbox) bool {
+	return record.ProviderEnvironmentID == "" &&
+		record.DesiredState == domain.SandboxDesiredRunning &&
+		record.WorkerLastSeenAt == nil &&
+		record.StartupStartedAt != nil &&
+		(record.ObservedState == domain.SandboxObservedFailed ||
+			record.ObservedState == domain.SandboxObservedProvisioning)
+}
+
+// failCreate records a failure to create a sandbox's compute, bounded by the
+// startup budget (boundCreate).
+func (r *Reconciler) failCreate(ctx context.Context, record domain.Sandbox, cause error) error {
+	if parked, err := r.boundCreate(ctx, record, cause); parked {
+		return err
+	}
+	return r.fail(ctx, record, cause)
+}
+
+// boundCreate keeps a session whose compute cannot be created from retrying
+// in silence forever. Past the startup budget it records why, while AO keeps
+// retrying; past the hard startup ceiling it parks the session until the user
+// retries. It reports whether it parked the session.
+func (r *Reconciler) boundCreate(ctx context.Context, record domain.Sandbox, cause error) (bool, error) {
+	if !awaitingCreate(record) {
+		return false, nil
+	}
+	startupErr := createFailedError(record, cause)
+	if r.terminalStartupDeadlineElapsed(record) {
+		ceiling := r.terminalStartupTimeout(record)
+		r.recordActivity(ctx, record, domain.ActivitySandboxTerminated, map[string]any{
+			"ceiling_ms":       ceiling.Milliseconds(),
+			"customer_owned":   customerOwnedCompute(record),
+			"startup_attempts": record.StartupAttempts,
+			"code":             startupErr.Code,
+		})
+		r.log.WarnContext(ctx, "parking sandbox whose compute could not be created",
+			"session_id", record.SessionID,
+			"provider", record.Provider,
+			"ceiling", ceiling,
+			"err", cause,
+		)
+		r.recordStartupError(ctx, record, startupErr)
+		return true, r.observe(ctx, record, "", domain.SandboxObservedTerminated, startupErr.Message, 24*time.Hour)
+	}
+	if r.startupDeadlineElapsed(record) {
+		r.recordStartupError(ctx, record, startupErr)
+	}
+	return false, nil
+}
+
+// createFailedError is the user-facing reason a sandbox's compute could not
+// be created. A provider error that already explains itself is kept. The raw
+// error (an API response, a network failure) is never shown: it stays in Err,
+// which reaches the operator logs and, for an organization's own compute
+// only, the startup error's detail.
+func createFailedError(record domain.Sandbox, cause error) *sandbox.StartupError {
+	var startupErr *sandbox.StartupError
+	if errors.As(cause, &startupErr) && startupErr.Code != "" && startupErr.Message != "" {
+		return startupErr
+	}
+	message := "AO couldn't create this session's workspace. Try again shortly."
+	switch {
+	case errors.Is(cause, sandbox.ErrAtCapacity):
+		message = "The sandbox provider had no capacity for this session's workspace. Try again shortly."
+	case customerOwnedCompute(record) && record.Provider == sandbox.ProviderCoder:
+		message = "AO couldn't create this session's workspace on your Coder deployment. The details show Coder's response."
+	}
+	return &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceCreateFailed, Message: message, Err: cause}
 }
 
 // recordStartupError stores err's user-facing reason, when it carries one.
@@ -1340,7 +1714,7 @@ func (r *Reconciler) provision(
 	if !rejectsDuplicates {
 		existing, found, err := provider.FindBySession(ctx, record.SessionID)
 		if err != nil {
-			return r.fail(ctx, record, err)
+			return r.failCreate(ctx, record, err)
 		}
 		if found {
 			return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
@@ -1349,7 +1723,7 @@ func (r *Reconciler) provision(
 
 	spec, err := r.workerSpec(ctx, record)
 	if err != nil {
-		return r.fail(ctx, record, err)
+		return r.failCreate(ctx, record, err)
 	}
 	payload, _ := json.Marshal(map[string]string{"provider": record.Provider})
 	if _, err := r.store.AppendSessionEvent(
@@ -1363,23 +1737,42 @@ func (r *Reconciler) provision(
 	startedAt := time.Now()
 	environment, err := provider.Create(ctx, spec)
 	if err != nil {
+		var nameTaken *sandbox.WorkspaceNameTakenError
+		if errors.As(err, &nameTaken) {
+			// Another workspace holds the session's name. Never adopt it:
+			// record the retry name first, so the next pass looks up and
+			// creates under the name actually used, crash or not.
+			name, useErr := r.store.UseSandboxCoderWorkspaceRetryName(
+				ctx, r.owner, record.OrgID, record.SessionID, nameTaken.Name,
+			)
+			if useErr != nil {
+				return r.failCreate(ctx, record, errors.Join(err, useErr))
+			}
+			r.log.WarnContext(ctx, "workspace name taken by another workspace; retrying with a longer name",
+				"session_id", record.SessionID, "provider", record.Provider,
+				"taken_name", nameTaken.Name, "workspace_name", name)
+			return r.observe(ctx, record, "", domain.SandboxObservedProvisioning, "", time.Second)
+		}
 		if errors.Is(err, sandbox.ErrAlreadyExists) {
 			existing, found, findErr := provider.FindBySession(ctx, record.SessionID)
 			if findErr != nil {
-				return r.fail(ctx, record, findErr)
+				return r.failCreate(ctx, record, findErr)
 			}
 			if found {
 				return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
 			}
-			return r.fail(ctx, record, err)
+			return r.failCreate(ctx, record, err)
 		}
 		if errors.Is(err, sandbox.ErrAtCapacity) {
+			if parked, parkErr := r.boundCreate(ctx, record, err); parked {
+				return parkErr
+			}
 			r.log.InfoContext(ctx, "provider at capacity; will retry",
 				"session_id", record.SessionID, "provider", record.Provider)
 			return r.observe(ctx, record, record.ProviderEnvironmentID,
 				domain.SandboxObservedProvisioning, "waiting for provider capacity", capacityRetryBackoff)
 		}
-		return r.fail(ctx, record, err)
+		return r.failCreate(ctx, record, err)
 	}
 	r.log.InfoContext(ctx, "sandbox provisioned",
 		"session_id", record.SessionID,

@@ -87,6 +87,11 @@ type ActivitySignal struct {
 	// launched; this field can. Empty means an older hook client or a provider
 	// that exposes no such marker.
 	NativeEntrypoint string
+	// ProcessID is the pid of the provider process that ran the hook
+	// (Claude's CLAUDE_PID), zero when unknown. A Claude process the agent or
+	// the user starts under the session inherits its env and launch id; the
+	// hook process gate (service/hookprocess) tells it from the terminal's.
+	ProcessID int
 	// ControllerGeneration is the required ownership fence for a runtime-less
 	// Chat controller. It is intentionally internal (provider events never call
 	// the public hook endpoint): lifecycle rejects a Chat signal without the

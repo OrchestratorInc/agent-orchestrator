@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -436,7 +437,7 @@ func TestResolveCoderPlacementCarriesDevEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	placement, err := resolveCoderPlacement(
-		json.RawMessage(`{"coder":{"templateId":"`+coderCfgTemplate+`","parameters":{"region":"us"}}}`),
+		json.RawMessage(`{"coder":{"templateId":"`+coderCfgTemplate+`","parameters":{"region":"us"}}}`), "https://github.com/acme/alice",
 		[]domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: connectionConfig}},
 		"",
 	)
@@ -476,7 +477,7 @@ func TestResolveCoderPlacementPrefersTheProjectWorkingDirectory(t *testing.T) {
 			if tc.project != "" {
 				projectConfig = `{"workingDirectory":"` + tc.project + `"}`
 			}
-			placement, err := resolveCoderPlacement(json.RawMessage(projectConfig),
+			placement, err := resolveCoderPlacement(json.RawMessage(projectConfig), "https://github.com/acme/alice",
 				[]domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: connectionConfig}}, "")
 			if err != nil {
 				t.Fatal(err)
@@ -485,6 +486,92 @@ func TestResolveCoderPlacementPrefersTheProjectWorkingDirectory(t *testing.T) {
 				t.Fatalf("override = %+v, want working directory %q", placement.override, tc.want)
 			}
 		})
+	}
+}
+
+// With the dedicated ao-worker user (a bring-your-own connection's default,
+// or the deployment's Coder), the project's working folder becomes the
+// session's checkout folder with {repo} resolved, plus the additional
+// repositories' folders beside it. The workspace user keeps its working
+// directory, and a project without a working folder or a repository keeps the
+// default checkout.
+func TestResolveCoderPlacementStampsTheWorkingFolderCheckoutForAOWorker(t *testing.T) {
+	t.Parallel()
+	byo := func(workerUser string) []domain.ProviderConnection {
+		config, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+			BaseURL: "https://coder.acme.example", Owner: "dev", WorkerUser: workerUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: config}}
+	}
+	withExtras := `{"workingDirectory":"~/work/{repo}","repos":[{"url":"https://github.com/acme/billing"},{"url":"https://github.com/acme/.dotfiles"},{"url":"https://github.com/other/billing.git"}]}`
+	for _, tc := range []struct {
+		name         string
+		config       string
+		repository   string
+		connections  []domain.ProviderConnection
+		wantCheckout string
+		wantSiblings []string
+	}{
+		{"byo ao-worker", withExtras, "https://github.com/acme/alice.git", byo(""), "~/work/alice", []string{"billing"}},
+		{"managed coder", `{"workingDirectory":"/srv/{repo}/src"}`, "https://github.com/acme/alice", nil, "/srv/alice/src", nil},
+		{"workspace user", withExtras, "https://github.com/acme/alice", byo(domain.CoderWorkerUserWorkspace), "", nil},
+		{"no working folder", `{}`, "https://github.com/acme/alice", byo(""), "", nil},
+		{"standalone", `{"workingDirectory":"~/work/scratch"}`, "https://scratch.ao.local/abc", byo(""), "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			placement, err := resolveCoderPlacement(json.RawMessage(tc.config), tc.repository, tc.connections, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkout, siblings := "", []string(nil)
+			if placement.options != nil {
+				checkout, siblings = placement.options.CheckoutDirectory, placement.options.CheckoutSiblings
+			}
+			if checkout != tc.wantCheckout || !slices.Equal(siblings, tc.wantSiblings) {
+				t.Fatalf("checkout = %q %q, want %q %q", checkout, siblings, tc.wantCheckout, tc.wantSiblings)
+			}
+			if placement.override != nil && tc.wantCheckout != "" && placement.override.WorkingDirectory != "" {
+				t.Fatalf("ao-worker session got a working directory: %+v", placement.override)
+			}
+		})
+	}
+}
+
+// A working folder the ao-worker checkout refuses (here, inside a hidden
+// folder, which a project saved before that rule may hold) is not dropped:
+// the session carries the reason, so it stops with a startup error instead of
+// starting in the durable root checkout. The workspace user keeps the folder.
+func TestResolveCoderPlacementRecordsAnUnusableWorkingFolder(t *testing.T) {
+	t.Parallel()
+	config := json.RawMessage(`{"workingDirectory":"~/.config/{repo}"}`)
+	placement, err := resolveCoderPlacement(config, "https://github.com/acme/alice", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.options == nil || placement.options.CheckoutDirectory != "" ||
+		placement.options.CheckoutDirectoryUnusable != "AO couldn't use this project's working folder (~/.config/{repo}): "+
+			"The working folder must not be inside a hidden folder. Change it in Project settings > Repositories, then start a new session." {
+		t.Fatalf("placement options = %+v", placement.options)
+	}
+	workspace, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+		BaseURL: "https://coder.acme.example", Owner: "dev", WorkerUser: domain.CoderWorkerUserWorkspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connections := []domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: workspace}}
+	placement, err = resolveCoderPlacement(config, "https://github.com/acme/alice", connections, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.options != nil && placement.options.CheckoutDirectoryUnusable != "" {
+		t.Fatalf("workspace-user placement options = %+v", placement.options)
+	}
+	if placement.override == nil || placement.override.WorkingDirectory != "~/.config/{repo}" {
+		t.Fatalf("workspace-user override = %+v", placement.override)
 	}
 }
 
@@ -553,4 +640,137 @@ func TestPutOrgCoderConfigRefusesNonAdminBeforeReadingTheToken(t *testing.T) {
 	if rec.Code != http.StatusForbidden || store.upserted != 0 || store.connectionRead {
 		t.Fatalf("status = %d, upserted = %d, connection read = %v", rec.Code, store.upserted, store.connectionRead)
 	}
+}
+
+// A project working folder outside the durable root of the organization's
+// Coder connection is refused when it is saved, for a connection that runs
+// the agent as ao-worker: its checkout would not survive a restart. The
+// workspace user keeps any folder (it adopts the template's own checkout).
+// With AO_CLOUD_CODER_WORKER_WORKING_FOLDER off an ao-worker session ignores
+// the working folder, so the folder is saved as it was before the flag.
+func TestUpdateProjectSettingsRefusesAWorkingFolderOutsideTheDurableRoot(t *testing.T) {
+	t.Parallel()
+	connection := func(t *testing.T, durableRoot, workerUser string) []domain.ProviderConnection {
+		t.Helper()
+		config, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+			BaseURL: "https://coder.acme.test", Owner: "ao-bot", DurableRoot: durableRoot, WorkerUser: workerUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: "default", Config: config}}
+	}
+	for name, tc := range map[string]struct {
+		durableRoot, workerUser, folder string
+		status                          int
+		message                         string
+	}{
+		"home, docker folder":      {"$HOME", "", "/workspace/{repo}", http.StatusUnprocessableEntity, "The working folder must be inside your home folder (~) so the agent's work survives restarts. Choose a folder there, for example ~/work/{repo}."},
+		"home, home folder":        {"$HOME", "", "~/work/{repo}", http.StatusOK, ""},
+		"absolute root, outside":   {"/srv/dev", "", "/srv/other/{repo}", http.StatusUnprocessableEntity, "The working folder must be inside /srv/dev so the agent's work survives restarts. Choose a folder there, for example /srv/dev/work/{repo}."},
+		"absolute root, inside":    {"/srv/dev", "", "/srv/dev/work/{repo}", http.StatusOK, ""},
+		"absolute root, home path": {"/srv/dev", "", "~/work/{repo}", http.StatusOK, ""},
+		"workspace user":           {"$HOME", domain.CoderWorkerUserWorkspace, "/workspace/{repo}", http.StatusOK, ""},
+	} {
+		for _, flag := range []bool{true, false} {
+			name, tc := name+", working folder flag on", tc
+			if !flag {
+				name, tc.status, tc.message = strings.TrimSuffix(name, "on")+"off", http.StatusOK, ""
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				store := &adminDevEnvStore{}
+				store.connections = connection(t, tc.durableRoot, tc.workerUser)
+				store.project = domain.Project{ID: devEnvProjectID, OrgID: coderCfgOrgID, Config: json.RawMessage(`{}`)}
+				srv := newCoderTemplatesServer(t, newTestCipher(t), store, nil)
+				srv.provisioning.Coder.WorkerWorkingFolder = flag
+				router := chi.NewRouter()
+				router.Patch("/orgs/{orgId}/projects/{projectId}/settings", srv.updateProjectSettings)
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+					"/orgs/"+coderCfgOrgID+"/projects/"+devEnvProjectID+"/settings",
+					strings.NewReader(`{"config":{"workingDirectory":"`+tc.folder+`"}}`)))
+				if rec.Code != tc.status {
+					t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
+				}
+				if tc.message != "" && (!strings.Contains(rec.Body.String(), domain.CoderWorkingFolderNotDurableCode) ||
+					!strings.Contains(rec.Body.String(), tc.message)) {
+					t.Fatalf("body = %s, want %q", rec.Body.String(), tc.message)
+				}
+			})
+		}
+	}
+}
+
+// A project working folder inside a hidden folder is refused when it is
+// saved for an organization whose Coder runs the agent as ao-worker (a
+// bring-your-own connection's default, or the deployment's Coder): the
+// bootstrap would let ao-worker enter that folder. The workspace user, a
+// standalone project and AO_CLOUD_CODER_WORKER_WORKING_FOLDER off keep it.
+func TestUpdateProjectSettingsRefusesAWorkingFolderInsideAHiddenFolder(t *testing.T) {
+	t.Parallel()
+	connection := func(t *testing.T, workerUser string) []domain.ProviderConnection {
+		t.Helper()
+		config, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+			BaseURL: "https://coder.acme.test", Owner: "ao-bot", DurableRoot: "$HOME", WorkerUser: workerUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: "default", Config: config}}
+	}
+	const refused = "The working folder must not be inside a hidden folder: AO checks the repository out there as its own ao-worker user"
+	for name, tc := range map[string]struct {
+		byo        bool
+		workerUser string
+		repository string
+		folder     string
+		flag       bool
+		status     int
+	}{
+		"byo ao-worker, hidden parent":         {true, "", "https://github.com/acme/alice", "~/.config/{repo}", true, http.StatusUnprocessableEntity},
+		"deployment coder, hidden parent":      {false, "", "https://github.com/acme/alice", "~/.config/{repo}", true, http.StatusUnprocessableEntity},
+		"byo ao-worker, hidden checkout":       {true, "", "https://github.com/acme/.github", "~/work/{repo}", true, http.StatusOK},
+		"byo ao-worker, hidden folder in home": {true, "", "https://github.com/acme/.local", "~/{repo}", true, http.StatusUnprocessableEntity},
+		"byo ao-worker, plain folder":          {true, "", "https://github.com/acme/alice", "~/work/{repo}", true, http.StatusOK},
+		"workspace user, hidden parent":        {true, domain.CoderWorkerUserWorkspace, "https://github.com/acme/alice", "~/.config/{repo}", true, http.StatusOK},
+		"standalone, hidden parent":            {true, "", "https://scratch.ao.local/abc", "~/.config/scratch", true, http.StatusOK},
+		"working folder flag off, hidden path": {true, "", "https://github.com/acme/alice", "~/.config/{repo}", false, http.StatusOK},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := &adminDevEnvStore{}
+			if tc.byo {
+				store.connections = connection(t, tc.workerUser)
+			}
+			store.project = domain.Project{ID: devEnvProjectID, OrgID: coderCfgOrgID, RepositoryURL: tc.repository, Config: json.RawMessage(`{}`)}
+			srv := newCoderTemplatesServer(t, newTestCipher(t), store, nil)
+			srv.provisioning.Coder.WorkerWorkingFolder = tc.flag
+			router := chi.NewRouter()
+			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", srv.updateProjectSettings)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+				"/orgs/"+coderCfgOrgID+"/projects/"+devEnvProjectID+"/settings",
+				strings.NewReader(`{"config":{"workingDirectory":"`+tc.folder+`"}}`)))
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
+			}
+			want := refused
+			if strings.HasPrefix(tc.folder, "~/{repo}") {
+				// The folder itself is hidden, not inside a hidden folder.
+				want = "The working folder must not be a hidden folder directly in the home folder: AO would create it as its own ao-worker user"
+			}
+			if tc.status != http.StatusOK && (!strings.Contains(rec.Body.String(), domain.WorkspaceStartupErrorWorkingDirectory) ||
+				!strings.Contains(rec.Body.String(), want)) {
+				t.Fatalf("body = %s, want %q", rec.Body.String(), want)
+			}
+		})
+	}
+}
+
+// adminDevEnvStore is a devEnvStore whose caller is an organization admin.
+type adminDevEnvStore struct{ devEnvStore }
+
+func (s *adminDevEnvStore) RequireOrgAdmin(context.Context, domain.Principal, string) error {
+	return nil
 }

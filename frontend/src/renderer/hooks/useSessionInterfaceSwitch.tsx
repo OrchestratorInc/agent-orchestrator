@@ -285,6 +285,15 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		!(isCloud && session?.mode === "tui" &&
 			interfaceSwitch.transition?.errorCode === "SOURCE_DRAIN_FAILED" &&
 			interfaceSwitch.transition.targetMode === "chat");
+	// The notice above is hidden for a Cloud terminal-to-Chat drain because the
+	// next switch from an idle terminal stops it directly. A drain the user
+	// watched in this view must still say why its wait ended without a switch.
+	const cloudDrainUnconfirmed = Boolean(isCloud && liveKey && liveTransitions.current.get(liveKey) &&
+		interfaceSwitch.transition && !interfaceSwitch.transition.noticeAcknowledgedAt &&
+		interfaceSwitch.transition.phase === "failed" && interfaceSwitch.transition.policy === "drain" &&
+		interfaceSwitch.transition.sourceMode === "tui" && interfaceSwitch.transition.targetMode === "chat" &&
+		(interfaceSwitch.transition.errorCode === "SOURCE_DRAIN_FAILED" ||
+			interfaceSwitch.transition.errorDetail?.startsWith("source controller activity cannot be verified;")));
 	const historyRecoveryNotice = hasNotice && interfaceTransitionOffersHistoryRecovery(interfaceSwitch.transition);
 	const restartRequiredNotice = interfaceTransitionNeedsRestart(interfaceSwitch.transition);
 	const chatLeaveLocked = Boolean(chatLeaveLock?.owner === owner && session?.mode === "chat");
@@ -460,6 +469,25 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 				<p className="mt-1 break-words text-muted-foreground">{interfaceSwitch.startError}</p>
 			</div>
 			<button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground" onClick={interfaceSwitch.resetStartError}>{t("session.dismissInterfaceSwitchNotice")}</button>
+		</div> : null}
+		{cloudDrainUnconfirmed && !hasNotice && !interfaceSwitch.startError ? <div
+			role="alert"
+			className="absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-3 rounded-lg border border-warning/30 bg-popover px-3 py-2.5 text-xs shadow-md"
+		>
+			<div className="min-w-0 flex-1">
+				<p className="font-medium">{t("session.interfaceSwitchDrainUnconfirmedTitle")}</p>
+				<p className="mt-1 break-words text-muted-foreground">{t("session.interfaceSwitchDrainUnconfirmed")}</p>
+			</div>
+			<button
+				type="button"
+				aria-label={t("session.dismissInterfaceSwitchError")}
+				className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"
+				disabled={interfaceSwitch.acknowledgingNotice}
+				onClick={() => {
+					const transitionId = interfaceSwitch.transition?.id;
+					if (transitionId) void interfaceSwitch.acknowledgeNotice(transitionId).catch(() => {});
+				}}
+			>{t("session.dismissInterfaceSwitchNotice")}</button>
 		</div> : null}
 		{(!interfaceSwitch.startError || historyRecoveryNotice || restartRequiredNotice) && hasNotice ? <SessionInterfaceTransitionNotice
 			transition={interfaceSwitch.transition}

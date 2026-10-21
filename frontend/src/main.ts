@@ -1483,6 +1483,11 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
 		...(bundledTmuxBinary ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" } : {}),
+		// The packaged macOS app ships cloudflared, so turning on remote access
+		// never waits for an install. An explicit AO_CLOUDFLARED_PATH still wins.
+		...(app.isPackaged && process.platform === "darwin"
+			? { AO_CLOUDFLARED_PATH: process.env.AO_CLOUDFLARED_PATH ?? path.join(process.resourcesPath, "cloudflared", "cloudflared") }
+			: {}),
 	};
 	// In dev mode, inject isolation defaults so the dev daemon never collides with
 	// the installed app. User-set env vars take priority (checked first).

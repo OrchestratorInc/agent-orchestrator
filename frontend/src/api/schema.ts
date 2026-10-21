@@ -2886,6 +2886,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Schedule or cancel a usage-limited turn retry */
+        patch: operations["setSessionConversationTurnAutoResume"];
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/cancel": {
         parameters: {
             query?: never;
@@ -5073,7 +5090,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Interrupted" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -5381,6 +5398,7 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
             plan?: components["schemas"]["ConversationPlanResponse"];
@@ -5391,12 +5409,18 @@ export interface components {
             startedAt?: null | string;
             /** @enum {string} */
             state: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed" | "cancelled";
+            usageLimit?: components["schemas"]["ConversationUsageLimitResponse"];
         };
         ConversationTurnSettingsPayload: {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             model?: string;
             reasoningEffort?: string;
+        };
+        ConversationUsageLimitResponse: {
+            autoResume: boolean;
+            resetsAt?: null | string;
+            resumeError?: string;
         };
         ConversationUsagePayload: {
             /** Format: int64 */
@@ -6686,6 +6710,8 @@ export interface components {
              * @description Time the local hook process observed the event, before delivery to the daemon.
              */
             observedAt?: string;
+            /** @description Process id of the provider process that fired the hook (Claude's CLAUDE_PID). */
+            processId?: number;
             /** @description Native main-turn identity reported by the hook, when supported. */
             providerTurnId?: string;
             /** @description Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot. */
@@ -6792,6 +6818,9 @@ export interface components {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+        };
+        SetTurnAutoResumeRequest: {
+            enabled: null | boolean;
         };
         SettingsResponse: {
             chatHarnesses: string[];
@@ -17526,6 +17555,78 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SetConversationTitleResponse"];
                 };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setSessionConversationTurnAutoResume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetTurnAutoResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Bad Request */
             400: {

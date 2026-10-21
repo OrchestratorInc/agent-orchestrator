@@ -95,6 +95,40 @@ func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
 	}
 }
 
+func TestClaudeHookReportsItsProcess(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tc := range []struct {
+		agent, env string
+		want       int
+	}{
+		{"claude-code", "4242", 4242},
+		{"claude-code", "", 0},
+		{"claude-code", "not-a-pid", 0},
+		{"claude-code", "1", 0},
+		// Only Claude names the process running a hook.
+		{"codex", "4242", 0},
+	} {
+		t.Setenv("CLAUDE_PID", tc.env)
+		if _, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", tc.agent, "stop"); err != nil {
+			t.Fatal(err)
+		}
+		var request setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.ProcessID != tc.want {
+			t.Fatalf("%s CLAUDE_PID %q forwarded as %d, want %d", tc.agent, tc.env, request.ProcessID, tc.want)
+		}
+	}
+}
+
 func TestClaudeSubmissionRetryReusesContextNonce(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "qa-1")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
@@ -612,6 +646,36 @@ func TestHooks_StopReportsIdle(t *testing.T) {
 	}
 	if got := capturedState(t, capture); got != "idle" {
 		t.Errorf("state = %q, want idle", got)
+	}
+}
+
+// Claude fires StopFailure instead of Stop when an API error (usage limit,
+// unknown model, expired login) ends the turn. It must report idle, tagged so
+// lifecycle treats it as a turn boundary, and must not certify the error text
+// as the turn's assistant answer.
+func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"session_id":"native-1","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 usage limit","last_assistant_message":"API Error: usage limit reached"}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for native-1", req)
+	}
+	if req.LatestAssistantUpdate != "" || req.LatestUserPrompt != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
 	}
 }
 

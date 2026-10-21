@@ -96,6 +96,8 @@ if (typeof window !== "undefined") {
 	const localStorageStub = (() => {
 		const values = new Map<string, string>();
 		return {
+			get length() { return values.size; },
+			key: (index: number) => [...values.keys()][index] ?? null,
 			clear: () => values.clear(),
 			getItem: (key: string) => values.get(key) ?? null,
 			removeItem: (key: string) => values.delete(key),
@@ -409,6 +411,7 @@ if (typeof window !== "undefined") {
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",

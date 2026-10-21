@@ -12,7 +12,7 @@ import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { fontScaleCap, iconSize, space, type } from "../tokens";
+import { fontScaleCap, iconSize, press, space, type } from "../tokens";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
@@ -27,6 +27,7 @@ import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
+import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { contextMeterModel } from "./contextMeter";
 import { RequestCard } from "./RequestCard";
@@ -75,6 +76,7 @@ export function ChatComposer({
 	onOpenReview,
 	sessionId,
 	config,
+	changes,
 	snapshot,
 	skills,
 	filePaths,
@@ -118,6 +120,8 @@ export function ChatComposer({
 	onOpenReview?(): void;
 	sessionId: string;
 	config: ServerConfig | null;
+	/** What this session changed, from git. Present only when it changed something. */
+	changes?: { files: number; additions: number; deletions: number; onOpen(): void };
 	snapshot: ConversationSnapshot;
 	skills: ChatSkill[];
 	filePaths: string[];
@@ -484,7 +488,25 @@ export function ChatComposer({
 				<View style={styles.settingsSlot}>
 				<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} onOpenFallback={onOpenSettings} />
 				</View>
-				{deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
+				{/* The changes pill takes the queue note's place: the placeholder already
+				    says a message waits for the turn. Attachments keep their note, and
+				    the steer action stays either way. */}
+				{changes && !(deliveryPresentation.showQueueNote && attachments.length) ? <View style={styles.deliveryNote}>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel={changesAccessibilityLabel(changes)}
+						accessibilityHint="Opens the changed files"
+						onPress={() => { haptics.tap(); changes.onOpen(); }}
+						style={({ pressed }) => [styles.changesPill, pressed && { opacity: press.opacity }]}
+					>
+						<Feather name="file-diff" size={12} color={t.textSecondary} />
+						<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.changesPillText}>{changes.files}</Text>
+						{/* The model picker keeps its room: line counts drop out when the context meter needs the row. */}
+						{!contextMeter && changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.changesPillCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
+						{!contextMeter && changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.changesPillCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
+					</Pressable>
+					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
+				</View> : deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
 					<Feather name="clock" size={12} color={t.textTertiary} />
 					<Text numberOfLines={1} style={styles.deliveryNoteText}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
 					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
@@ -676,6 +698,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	contextText: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
 	deliveryNote: { flexShrink: 0, maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xxs, paddingRight: space.xxs },
 	deliveryNoteText: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	changesPill: { minHeight: 30, flexShrink: 1, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 15, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
+	changesPillText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	changesPillCount: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
 	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: t.accentTint },
 	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 16, borderCurve: "continuous" },
 	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },
@@ -687,3 +712,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
 	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 });
+
+function changesAccessibilityLabel(changes: { files: number; additions: number; deletions: number }): string {
+	const files = `${changes.files} ${changes.files === 1 ? "file" : "files"} changed`;
+	return `${files}, ${changes.additions} ${changes.additions === 1 ? "line" : "lines"} added, ${changes.deletions} removed`;
+}

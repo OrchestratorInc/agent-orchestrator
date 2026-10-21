@@ -57,6 +57,7 @@ type lifecycleStack struct {
 	runtimeReaper    *reaper.Reaper
 	reaperDone       <-chan struct{}
 	activityDone     <-chan struct{}
+	turnFailureDone  <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
 	scmDone          <-chan struct{}
@@ -81,6 +82,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
+	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
 		// fx treats reporting as best effort; an occupied or unavailable socket
@@ -95,6 +97,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		runtimeReaper:    rp,
 		reaperDone:       rp.Start(ctx),
 		activityDone:     activityPoller.Start(ctx),
+		turnFailureDone:  turnFailurePoller.Start(ctx),
 		herdr:            herdrServer,
 		artifactsDone:    artifactsPoller.Start(ctx),
 	}
@@ -173,6 +176,9 @@ func (l *lifecycleStack) Stop() {
 	<-l.reaperDone
 	if l.activityDone != nil {
 		<-l.activityDone
+	}
+	if l.turnFailureDone != nil {
+		<-l.turnFailureDone
 	}
 	if l.artifactsDone != nil {
 		<-l.artifactsDone
