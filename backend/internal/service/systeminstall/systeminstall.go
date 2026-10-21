@@ -327,10 +327,11 @@ type Job struct {
 	// omits the field, matching FinishedAt's documented "zero until the job
 	// finishes" contract.
 	// WaitingOn lists the sessions a waiting_for_idle job still waits for.
-	WaitingOn  []domain.SessionWait `json:"waitingOn,omitempty" description:"While waiting_for_idle, the sessions the update still waits for and why."`
-	StartedAt  *time.Time           `json:"startedAt,omitempty"`
-	FinishedAt *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
-	UpdatedAt  *time.Time           `json:"updatedAt,omitempty"`
+	WaitingOn    []domain.SessionWait `json:"waitingOn,omitempty" description:"While waiting_for_idle, the sessions the update still waits for and why."`
+	StartedAt    *time.Time           `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
+	UpdatedAt    *time.Time           `json:"updatedAt,omitempty"`
+	RunStartedAt *time.Time           `json:"runStartedAt,omitempty" description:"When the install command started running. Later than startedAt when an update first waited for idle sessions."`
 	// live is the running command's output, read into Output by snapshot
 	// so a long install shows what it has printed so far. Guarded by s.mu.
 	live *capturedOutput
@@ -345,13 +346,6 @@ func (job *Job) snapshot() Job {
 		snapshot.Output = combineOutput(job.Output, job.live.String())
 	}
 	return snapshot
-}
-
-// setLiveOutput attaches or (with nil) detaches the running command's output.
-func (s *Service) setLiveOutput(job *Job, out *capturedOutput) {
-	s.mu.Lock()
-	job.live = out
-	s.mu.Unlock()
 }
 
 // HarnessVerifier performs post-install binary verification without probing
@@ -471,6 +465,15 @@ type Service struct {
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
+}
+
+// beginRun records that job's command starts now and attaches its output.
+func (s *Service) beginRun(job *Job, out *capturedOutput) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	job.RunStartedAt = &now
+	job.live = out
+	s.mu.Unlock()
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -1207,7 +1210,7 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	defer cancel()
 
 	out := &capturedOutput{max: maxOutputBytes}
-	s.setLiveOutput(job, out)
+	s.beginRun(job, out)
 	var runErr error
 	if s.installCommands != nil {
 		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
@@ -1269,7 +1272,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
 	// transitionAgentJob or finishAgentJob records out and detaches it.
-	s.setLiveOutput(job, out)
+	s.beginRun(job, out)
 	outputWriter := io.Writer(out)
 	var devinOutput *devinInstallOutput
 	if plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil {

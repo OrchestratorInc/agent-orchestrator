@@ -5888,6 +5888,11 @@ export interface components {
             notice?: string;
             /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. While the command runs, the output it has printed so far. */
             output?: string;
+            /**
+             * Format: date-time
+             * @description When the install command started running. Later than startedAt when an update first waited for idle sessions.
+             */
+            runStartedAt?: null | string;
             /** Format: date-time */
             startedAt?: null | string;
             /**

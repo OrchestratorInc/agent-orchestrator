@@ -17004,6 +17004,13 @@ components:
             to the last ~4000 bytes. While the command runs, the output it has printed
             so far.
           type: string
+        runStartedAt:
+          description: When the install command started running. Later than startedAt
+            when an update first waited for idle sessions.
+          format: date-time
+          type:
+          - "null"
+          - string
         startedAt:
           format: date-time
           type:

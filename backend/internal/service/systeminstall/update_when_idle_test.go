@@ -260,3 +260,33 @@ func TestIdleUpdateReportsSessionsItCouldNotResume(t *testing.T) {
 	}
 	t.Fatalf("no resume failure was reported: %+v", events.events)
 }
+
+func TestIdleUpdateTimesTheRunFromWhenItStopsWaiting(t *testing.T) {
+	s, coordinator, _ := windowsIdleService(t, false)
+	coordinator.mu.Lock()
+	coordinator.busy = []domain.SessionWait{{SessionID: "auggie-1", Reason: domain.SessionWaitCommand}}
+	coordinator.mu.Unlock()
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	waiting := waitForJob(t, s, TargetAuggie, func(job Job) bool { return len(job.WaitingOn) == 1 })
+	if waiting.RunStartedAt != nil {
+		t.Fatalf("a waiting update reports a run start: %+v", waiting)
+	}
+	coordinator.mu.Lock()
+	coordinator.busy = nil
+	coordinator.mu.Unlock()
+	// The wait ends at the next idle check, one poll after it began.
+	deadline := time.Now().Add(idleUpdatePoll + 5*time.Second)
+	job := waiting
+	for time.Now().Before(deadline) && job.Status != StatusSucceeded && job.Status != StatusFailed {
+		time.Sleep(20 * time.Millisecond)
+		job, _ = s.Status(context.Background(), TargetAuggie)
+	}
+	if job.Status != StatusSucceeded {
+		t.Fatalf("job = %+v", job)
+	}
+	if job.RunStartedAt == nil || job.RunStartedAt.Sub(*job.StartedAt) < idleUpdatePoll/2 {
+		t.Fatalf("run started at %v for a job that started waiting at %v; want the run timed from after the wait", job.RunStartedAt, job.StartedAt)
+	}
+}

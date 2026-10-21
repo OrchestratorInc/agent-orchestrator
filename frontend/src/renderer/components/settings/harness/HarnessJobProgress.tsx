@@ -28,10 +28,15 @@ export function terminalText(output: string): string {
 		.join("\n").trimEnd();
 }
 
-/** How long a running job has run, ticking each second; undefined while it is not running. */
-export function useJobElapsed(job?: Pick<InstallJob, "status" | "startedAt">): number | undefined {
+type TimedJob = Pick<InstallJob, "status" | "startedAt" | "runStartedAt">;
+
+/** How long a running job's command has run, ticking each second; undefined
+ * while it is not running. An update that first waited for idle sessions is
+ * timed from when its command started, not from when it began waiting. */
+export function useJobElapsed(job?: TimedJob): number | undefined {
 	const running = isActiveInstallJob(job) && !isWaitingForIdleJob(job);
-	const startedAt = running && job?.startedAt ? Date.parse(job.startedAt) : NaN;
+	const begun = job?.runStartedAt ?? job?.startedAt;
+	const startedAt = running && begun ? Date.parse(begun) : NaN;
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (Number.isNaN(startedAt)) return;
@@ -44,7 +49,7 @@ export function useJobElapsed(job?: Pick<InstallJob, "status" | "startedAt">): n
 
 /** How long a running job has run, beside its busy label. Hidden from
  * assistive technology so a status region does not announce every second. */
-export function JobElapsed({ job, className }: { job?: Pick<InstallJob, "status" | "startedAt">; className?: string }) {
+export function JobElapsed({ job, className }: { job?: TimedJob; className?: string }) {
 	const elapsedMs = useJobElapsed(job);
 	if (elapsedMs === undefined) return null;
 	return <span aria-hidden="true" data-job-elapsed="" className={cn("tabular-nums", className)}>{formatElapsed(elapsedMs)}</span>;
@@ -72,7 +77,11 @@ export function HarnessJobSlowDetail({ job, className }: { job?: InstallJob; cla
 	return <div className={cn("flex flex-col items-start gap-1 text-caption text-settings-muted", className)}>
 		{downloading ? <p role="status" className="break-words">{t("settings.harness.slowDownloadHint")}</p> : null}
 		<Button type="button" size="sm" variant="ghost" className="-ml-2 h-6 px-2 text-[length:var(--font-size-caption)]" aria-expanded={open} aria-controls={outputId}
-			onClick={() => setOpen((current) => !current)}>
+			onClick={() => {
+				// Reopened output starts at the latest line again.
+				pinnedToEnd.current = true;
+				setOpen((current) => !current);
+			}}>
 			{t(open ? "settings.harness.hideOutput" : "settings.harness.showOutput")}
 		</Button>
 		{open ? <pre id={outputId} ref={outputRef} aria-label={t("settings.harness.installOutput")} tabIndex={0}

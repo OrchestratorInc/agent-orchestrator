@@ -42,6 +42,13 @@ describe("harness job progress", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
+	it("times an update that waited for idle sessions from when its command started", () => {
+		const waited = job({ startedAt: new Date(NOW - 20 * 60_000).toISOString(), runStartedAt: new Date(NOW - 3_000).toISOString() });
+		const { container } = render(<><JobElapsed job={waited} /><HarnessJobSlowDetail job={waited} /></>);
+		expect(container).toHaveTextContent("0:03");
+		expect(screen.queryByText(/Still downloading/)).toBeNull();
+	});
+
 	it("waits a minute before explaining a slow download", () => {
 		const { container } = render(<HarnessJobSlowDetail job={job({ startedAt: new Date(NOW - 45_000).toISOString() })} />);
 		expect(container).toBeEmptyDOMElement();

@@ -2070,6 +2070,9 @@ func TestRunningAgentJobShowsOutputSoFar(t *testing.T) {
 	if len(jobs) != 1 || !strings.Contains(jobs[0].Output, "downloading codex 40%") {
 		t.Fatalf("AgentJobs = %+v, want the running job's output so far", jobs)
 	}
+	if job.RunStartedAt == nil || job.RunStartedAt.Before(*job.StartedAt) {
+		t.Fatalf("running job run start = %v, started = %v", job.RunStartedAt, job.StartedAt)
+	}
 	if jobs[0].live != nil || job.live != nil {
 		t.Fatal("a job snapshot kept the live output writer")
 	}
