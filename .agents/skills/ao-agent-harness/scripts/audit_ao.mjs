@@ -12,6 +12,8 @@ import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { authenticationAction, createEvidenceStore, redactOutput, sanitizeEvidence } from "./audit_evidence.mjs";
+import { capabilityMatrix, diagnoseGate } from "./audit_capabilities.mjs";
+import { SUITES, auditChatSuite, auditExtras, auditInterfaceSwitch, notRunGates } from "./audit_suites.mjs";
 export { createEvidenceStore } from "./audit_evidence.mjs";
 
 const LIVE_GATES = [
@@ -83,8 +85,12 @@ function gate(name, status, reason, evidence = undefined) {
   return { name, status, reason, ...(evidence === undefined ? {} : { evidence }) };
 }
 
+// UNSUPPORTED is a passing outcome: the capability is not declared for the
+// harness and AO refused it truthfully. A declared capability never records it.
+const PASSING = new Set(["PASS", "UNSUPPORTED"]);
+
 function firstFailedGate(gates) {
-  return gates.find((item) => item.status !== "PASS")?.name ?? "";
+  return gates.find((item) => !PASSING.has(item.status))?.name ?? "";
 }
 
 export function overallStatus(results) {
@@ -92,7 +98,7 @@ export function overallStatus(results) {
   if (statuses.includes("FAIL")) return "FAIL";
   if (statuses.includes("BLOCKED")) return "BLOCKED";
   if (statuses.includes("NOT_RUN")) return "NOT_RUN";
-  return statuses.length > 0 && statuses.every((status) => status === "PASS") ? "PASS" : "NOT_RUN";
+  return statuses.length > 0 && statuses.every((status) => PASSING.has(status)) ? "PASS" : "NOT_RUN";
 }
 
 // Set once the runner receives SIGINT/SIGTERM/SIGHUP. Lifecycle work still in
@@ -1987,6 +1993,36 @@ async function completeLifecycle({
   });
 }
 
+function suiteNotRun(suites, reason) {
+  return suites.flatMap(name => notRunGates(SUITES[name] ?? [], reason));
+}
+
+// Runs the selected capability suites after the TUI lifecycle and folds their
+// gates into the result. Extras and the interface switch reuse the lifecycle's
+// session; the Chat suite creates its own session in the same project.
+export async function runCapabilitySuites({ baseURL, agent, result, projectId, dataDir, scenario, restoredReadySpec, suites, timeoutMs, onIssue, onSession, log }) {
+  const statusOf = name => result.gates.find(item => item.name === name)?.status;
+  if (suites.includes("extras")) {
+    await log?.(`${agent}: extras (models refresh, prompt/skill files, hooks, usage)`);
+    result.gates.push(...await auditExtras({ baseURL, agent, dataDir, sessionId: result.sessionId, workspacePath: result.workspacePath, scenario, timeoutMs, onIssue }));
+  }
+  if (suites.includes("interface")) {
+    await log?.(`${agent}: TUI ↔ Chat interface switch`);
+    result.gates.push(...(result.sessionId && statusOf("post_restore_message") === "PASS"
+      ? await auditInterfaceSwitch({ baseURL, agent, sessionId: result.sessionId, scenario, restoredReadySpec, timeoutMs, onIssue })
+      : notRunGates(SUITES.interface, "interface switch needs the restored TUI session to have answered (post_restore_message must PASS)")));
+  }
+  if (suites.includes("chat")) {
+    await log?.(`${agent}: Chat suite`);
+    const chat = await auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, onIssue, onSession });
+    result.gates.push(...chat.gates);
+    Object.assign(result, { chatSessionId: chat.sessionId, chatWorkspacePath: chat.workspacePath, chatCapabilities: chat.capabilities });
+  }
+  result.status = overallStatus(result.gates);
+  result.failedGate = firstFailedGate(result.gates);
+  return result;
+}
+
 export async function refreshRestoreInstructions({ baseURL, projectId, restoreToken, timeoutMs }) {
   const path = `projects/${encodeURIComponent(projectId)}`;
   const before = await request({ baseURL, path, timeoutMs });
@@ -2095,10 +2131,19 @@ export function markdownReport(report) {
     const failed = result.gates.find((item) => item.name === result.failedGate);
     lines.push(`| ${safeCell(result.agent)} | ${result.status} | ${safeCell(result.failedGate)} | ${safeCell(result.sessionId)} | ${safeCell(failed?.reason)} |`);
   }
+  const suiteNames = new Set(Object.values(SUITES).flat());
   for (const result of report.results) {
     lines.push("", `## ${result.agent}`);
+    const matrix = result.capabilities ?? capabilityMatrix(result);
+    lines.push("", "### Capability matrix", "", "| Capability | Declared | Result | Detail |", "|---|---|---|---|");
+    for (const row of matrix) {
+      lines.push(`| ${safeCell(row.title)} | ${safeCell(row.support)} | ${row.status} | ${safeCell(row.reason)}${row.evidencePath ? ` (evidence: \`${safeCell(row.evidencePath)}\`)` : ""} |`);
+    }
     appendGateTable(lines, "Local CLI", result.gates.filter((item) => item.name.startsWith("local_")));
-    appendGateTable(lines, "AO / AOS11", result.gates.filter((item) => !item.name.startsWith("local_") && item.name !== "model_catalog_consistency"));
+    appendGateTable(lines, "AO TUI lifecycle", result.gates.filter((item) => !item.name.startsWith("local_") && item.name !== "model_catalog_consistency" && !suiteNames.has(item.name)));
+    appendGateTable(lines, "Extras", result.gates.filter((item) => SUITES.extras.includes(item.name)));
+    appendGateTable(lines, "Chat", result.gates.filter((item) => SUITES.chat.includes(item.name)));
+    appendGateTable(lines, "Interface switch", result.gates.filter((item) => SUITES.interface.includes(item.name)));
     appendGateTable(lines, "Cross-check", result.gates.filter((item) => item.name === "model_catalog_consistency"));
   }
   const cleanupUnconfirmed = Array.isArray(report.cleanup)
@@ -2128,6 +2173,20 @@ export function markdownReport(report) {
     for (const issue of report.issues) {
       lines.push(`| ${safeCell(issue.agent)} | ${safeCell(issue.gate)} | ${safeCell(issue.evidencePath)} | ${safeCell(issue.screenshot.status)}: ${safeCell(issue.screenshot.path || issue.screenshot.reason)} |`);
       if (issue.userAction) lines.push("", `User action: ${issue.userAction.message}`, "");
+    }
+    lines.push("", "## Failure diagnosis");
+    for (const issue of report.issues) {
+      const diagnosis = issue.diagnosis;
+      lines.push("", `### ${safeCell(issue.agent || "runner")} · ${safeCell(issue.gate)} · ${issue.status}`);
+      if (diagnosis?.capabilityTitle) lines.push(`- Capability: ${safeCell(diagnosis.capabilityTitle)} (declared: ${safeCell(diagnosis.declaredSupport)})`);
+      if (diagnosis?.expected) lines.push(`- Expected: ${safeCell(diagnosis.expected)}`);
+      for (const observed of (diagnosis?.observed ?? [issue.reason]).slice(0, 6)) lines.push(`- Observed: ${safeCell(observed)}`);
+      for (const cause of (diagnosis?.likelyCauses ?? []).slice(0, 4)) lines.push(`- Likely cause: ${safeCell(cause)}`);
+      if (diagnosis?.inspect?.length) lines.push(`- Inspect: ${diagnosis.inspect.map((path) => `\`${safeCell(path)}\``).join(", ")}`);
+      lines.push(`- Evidence: \`${safeCell(issue.evidencePath)}\``);
+      if (diagnosis?.daemonLogExcerpt?.length) {
+        lines.push("", "```text", ...diagnosis.daemonLogExcerpt.slice(-8).map((line) => line.replaceAll("`", "'")), "```");
+      }
     }
   }
   if (report.artifacts) {
@@ -2173,6 +2232,8 @@ Options:
   --timeout-seconds N      per lifecycle wait timeout (default: 180)
   --diagnostic-after-native-proof  collect later lifecycle evidence after native proof; preserve strict failures
   --no-live                run API preflight only; lifecycle gates are NOT_RUN
+  --suites LIST            capability suites after the TUI lifecycle: extras,chat,interface
+                           (default: all; "none" runs only the TUI lifecycle)
   --keep-daemon            leave the isolated daemon and restored sessions running
   -h, --help               show this help
 
@@ -2198,6 +2259,7 @@ export function parseArgs(argv) {
     diagnosticAfterNativeProof: false,
     keepDaemon: false,
     captureCommand: [],
+    suites: Object.keys(SUITES),
   };
   const values = new Map([
     ["--agent", ["agents", String]],
@@ -2217,6 +2279,14 @@ export function parseArgs(argv) {
     else if (argument === "--no-live") options.live = false;
     else if (argument === "--diagnostic-after-native-proof") options.diagnosticAfterNativeProof = true;
     else if (argument === "--keep-daemon") options.keepDaemon = true;
+    else if (argument === "--suites") {
+      const value = argv[index + 1];
+      if (value === undefined) throw new Error("missing value for --suites");
+      options.suites = value === "none" ? [] : [...new Set(value.split(",").map(item => item.trim()).filter(Boolean))];
+      const unknown = options.suites.filter(item => !SUITES[item]);
+      if (unknown.length) throw new Error(`unknown suite: ${unknown.join(", ")} (choose from ${Object.keys(SUITES).join(", ")}, or none)`);
+      index += 1;
+    }
     else if (values.has(argument)) {
       const value = argv[index + 1];
       if (value === undefined) throw new Error(`missing value for ${argument}`);
@@ -2262,14 +2332,23 @@ async function main(argv = process.argv.slice(2)) {
   let invalidInput = false;
   let reportWriteFailed = false;
   const report = {
-    schemaVersion: 4, state: "running", startedAt: now(), finishedAt: null,
+    schemaVersion: 5, state: "running", suites: options.suites, startedAt: now(), finishedAt: null,
     disposableRoot: root, live: options.live,
     diagnosticAfterNativeProof: options.diagnosticAfterNativeProof,
     auditClassification: options.diagnosticAfterNativeProof ? "diagnostic-only; full strict audit PASS not claimed" : "strict",
     daemon: { started: false, stopped: false, keptRunning: false },
     artifacts: evidence.paths, issues: evidence.issues, runErrors, cleanup, results,
   };
-  const recordIssue = data => evidence.issue({ ...data, baseURL: daemon?.baseURL || data.gate?.evidence?.baseURL || null, daemonLogs: daemon?.logs() || data.gate?.evidence?.daemonLogs || "" });
+  // Every FAIL/BLOCKED gate gets a diagnosis (expected, observed, likely
+  // causes, files to inspect, scoped daemon log lines) on both the gate in the
+  // report and its issue file.
+  const recordIssue = async data => {
+    const daemonLogs = daemon?.logs() || data.gate?.evidence?.daemonLogs || "";
+    const diagnosis = diagnoseGate(data.gate, { agent: data.agent, sessionId: data.sessionId, daemonLogs });
+    const item = await evidence.issue({ ...data, baseURL: daemon?.baseURL || data.gate?.evidence?.baseURL || null, daemonLogs, diagnosis });
+    if (data.gate) Object.assign(data.gate, { diagnosis: item.diagnosis, evidencePath: item.evidencePath });
+    return item;
+  };
   const addResult = async result => {
     results.push(result);
     for (const item of result.gates) {
@@ -2290,7 +2369,7 @@ async function main(argv = process.argv.slice(2)) {
         ...(options.diagnosticAfterNativeProof ? [{ status: "NOT_RUN" }] : [])]),
       total: results.length, pass: counts("PASS"), fail: counts("FAIL"), blocked: counts("BLOCKED"), notRun: counts("NOT_RUN"),
     };
-    report.results = results.map(sanitizeEvidence);
+    report.results = results.map(result => ({ ...sanitizeEvidence(result), capabilities: capabilityMatrix(result) }));
     return writeReports(report, base, root);
   };
   const startupAbort = new AbortController();
@@ -2379,6 +2458,8 @@ async function main(argv = process.argv.slice(2)) {
               if (LIVE_GATES.includes(item.name) && item.status === "NOT_RUN") item.reason = "user must resolve local login before AO live tests";
             }
           }
+          preflight.gates.push(...suiteNotRun(options.suites, !options.live ? "live suites disabled by --no-live"
+            : local.userAction ? "user must resolve local login before AO live tests" : "preflight prerequisite did not pass"));
           await addResult(mergeAuditResults(local, preflight));
           continue;
         }
@@ -2390,6 +2471,7 @@ async function main(argv = process.argv.slice(2)) {
           gates.push(failed);
           await recordIssue({ agent, gate: failed });
           markNotRun(gates, "project registration failed");
+          gates.push(...suiteNotRun(options.suites, "project registration failed"));
           await addResult(mergeAuditResults(local, resultFrom(agent, gates, { projectId: setup.projectId, projectPath: setup.projectPath, aoModels: preflight.aoModels })));
           continue;
         }
@@ -2402,13 +2484,19 @@ async function main(argv = process.argv.slice(2)) {
           modelsPath: localContract?.aoModelsPath, timeoutMs, scenario, onIssue: recordIssue,
           onSession: ({ sessionId }) => sessions.set(sessionId, agent),
         });
+        await runCapabilitySuites({
+          baseURL: daemon.baseURL, agent, result, projectId: setup.projectId, dataDir: daemon.dataDir, scenario,
+          restoredReadySpec: localContract?.restoredReady, suites: options.suites, timeoutMs, onIssue: recordIssue,
+          onSession: ({ sessionId }) => sessions.set(sessionId, agent),
+          log: message => evidence.log(`[${index + 1}/${selected.length}] ${message}`),
+        });
         result.projectPath = setup.projectPath;
         result.projectRegistration = apiEvidence(setup.response);
         await addResult(mergeAuditResults(local, result));
       } catch (error) {
         const failed = gate("runner_error", "FAIL", error.message);
         await recordIssue({ agent, gate: failed });
-        await addResult(mergeAuditResults(local, resultFrom(agent, addLiveNotRun([failed], "agent audit interrupted"))));
+        await addResult(mergeAuditResults(local, resultFrom(agent, [...addLiveNotRun([failed], "agent audit interrupted"), ...suiteNotRun(options.suites, "agent audit interrupted")])));
       } finally {
         await save();
       }
@@ -2489,6 +2577,12 @@ async function main(argv = process.argv.slice(2)) {
   if (interruption) return SIGNAL_EXIT_CODES[interruption.signal];
   return invalidInput || reportWriteFailed ? 2 : report.summary.status === "PASS" ? 0 : 1;
 }
+
+// Runner helpers shared with audit_suites.mjs.
+export {
+  CANCELLATION_PROMPT, CANCELLATION_WITNESS, apiEvidence, cancellationProcessState, expandHome, gate, gateRecorder,
+  hash, normalizedPath, parseCancellationStart, parseProof, request, sessionState, sleep, token, waitUntil, workspaceFile,
+};
 
 const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 if (invokedAsScript) {

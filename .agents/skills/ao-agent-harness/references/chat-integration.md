@@ -73,7 +73,10 @@ running states. Chat has no TUI composer/generation prerequisite. Observe its
 shared UI input state, snapshot and native protocol instead.
 Routes below are relative to `/api/v1/`; use the selected session's IDs and the
 current generated request schema. Exercise the actual UI action as well as its
-API/native effects. The TUI audit runner cannot execute or qualify these cases.
+API/native effects. The runner's `chat` suite automates the API side of new
+task, follow-up, approve, reject, cancel, kill/restore and compaction (see
+[capability suites](capability-suites.md)); UI reconnect, daemon/host recovery,
+negative restore and every actual UI action remain manual rows here.
 
 | Journey | Entry/action | Readiness or precondition | Required observable proof |
 | --- | --- | --- | --- |

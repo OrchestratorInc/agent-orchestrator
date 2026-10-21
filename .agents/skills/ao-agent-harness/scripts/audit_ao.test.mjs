@@ -343,7 +343,7 @@ test("markdownReport separates Local CLI, AO, and cross-check gates", () => {
     }],
   });
   assert.match(markdown, /### Local CLI/);
-  assert.match(markdown, /### AO \/ AOS11/);
+  assert.match(markdown, /### AO TUI lifecycle/);
   assert.match(markdown, /### Cross-check/);
 });
 

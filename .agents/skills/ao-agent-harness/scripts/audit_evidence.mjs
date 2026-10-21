@@ -1,6 +1,7 @@
 import { appendFile, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { diagnosisLine } from "./audit_capabilities.mjs";
 
 const secretKey = /^(?:authorization|cookie|set-cookie|password|secret|credential|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token)$/i;
 
@@ -62,7 +63,7 @@ export async function createEvidenceStore({ base, captureCommand = [], runComman
     console.error(line);
   };
   const daemonLog = async logs => writeFile(paths.daemonLog, redactOutput(logs).slice(-65_536), { mode: 0o600 });
-  const issue = async ({ agent = null, sessionId = null, baseURL = null, gate, daemonLogs = "" }) => {
+  const issue = async ({ agent = null, sessionId = null, baseURL = null, gate, daemonLogs = "", diagnosis = undefined }) => {
     const id = String(issues.length + 1).padStart(4, "0");
     const evidencePath = join(directory, `issue-${id}.json`);
     const screenshotPath = join(directory, `issue-${id}.png`);
@@ -71,6 +72,7 @@ export async function createEvidenceStore({ base, captureCommand = [], runComman
       id, recordedAt: new Date().toISOString(), agent, sessionId, baseURL,
       gate: gate.name, status: gate.status, reason: redactOutput(gate.reason),
       evidence: sanitizeEvidence(gate.evidence), evidencePath,
+      ...(diagnosis ? { diagnosis: sanitizeEvidence(diagnosis) } : {}),
       daemonLogTail: redactOutput(daemonLogs).slice(-65_536),
       screenshot: { status: "unavailable", reason: "Headless runner: no capture command configured." },
       ...(action ? { userAction: action } : {}),
@@ -97,7 +99,7 @@ export async function createEvidenceStore({ base, captureCommand = [], runComman
       await writeFile(evidencePath, `${JSON.stringify(item, null, 2)}\n`, { mode: 0o600 });
     }
     await event({ type: "issue", ...item });
-    await log(`${agent || "runner"}: ${gate.name} ${gate.status}; evidence=${evidencePath}; screenshot=${item.screenshot.status}`);
+    await log(`${diagnosisLine(agent, gate, item.diagnosis)}; evidence=${evidencePath}; screenshot=${item.screenshot.status}`);
     return item;
   };
   return { paths, issues, issue, log, daemonLog };

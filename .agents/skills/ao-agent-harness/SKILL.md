@@ -8,8 +8,11 @@ description: Use when adding or completing an AO coding-agent harness integratio
 This contributor skill provides an integration checklist and an executable,
 API-first audit runner. Discover registered harnesses from the selected AO
 checkout; keep provider commands in a runtime contract, not an allowlist inside
-the runner. It is not a shipped desktop feature, scheduled intake service,
-automatic PR publisher, or Chat conformance suite.
+the runner. Beyond the TUI lifecycle, the runner drives Chat, approvals,
+interrupt/steer, Chat restore, TUI ↔ Chat switching, model settings, hooks,
+prompt/skill files and usage, and reports a per-capability matrix with a
+diagnosis for every failure. It is not a shipped desktop feature, scheduled
+intake service, automatic PR publisher, or UI screenshot driver.
 
 | Task | Start here |
 | --- | --- |
@@ -18,6 +21,7 @@ automatic PR publisher, or Chat conformance suite.
 | Add ACP Chat and reuse the existing UI | [Chat integration and verification](references/chat-integration.md): source entry points, capability gates, real Chat journeys |
 | Operate an audit and identify coverage | [Operating recipe and journey map](references/audit-journeys.md): Doctor, actions, readiness, proof, UI gaps, cleanup |
 | Interpret results, preserve failures, capture screens | [Evidence and handoff](references/evidence-and-handoff.md): gates, diagnostic mode, artifacts, authentication, screenshots |
+| See what each capability proves and why a gate failed | [Capability suites and diagnosis](references/capability-suites.md): Chat/interface/extras suites, matrix statuses, per-failure diagnosis |
 
 Before an integration handoff, complete the
 [completion matrix](references/integration-path.md#completion-matrix) and
@@ -56,7 +60,8 @@ node /path/to/ao/.agents/skills/ao-agent-harness/scripts/audit_ao.mjs \
   --report /path/to/audit/attempt-001/report
 ```
 
-Use repeated `--agent ID` or `--all`. The runner builds and starts an isolated
+Use repeated `--agent ID` or `--all`, and `--suites extras,chat,interface`
+(default all; `none` for the TUI lifecycle only). The runner builds and starts an isolated
 AO daemon, waits for `/readyz`, then performs native checks and AO API checks.
 `--ao PATH` selects a prebuilt binary but still starts isolated AO state. Its
 actual executable basename must be `ao` (`ao.exe` on Windows): use a real copy
@@ -91,6 +96,12 @@ See the map for the exact read-only Doctor routes and a fresh-reader/live rehear
 check. Fixture success alone does not validate the operational recipe end to end.
 
 ## Judge and hand off the evidence
+
+Start from each agent's **Capability matrix** and the **Failure diagnosis**
+section in `report.md`: every FAIL/BLOCKED gate names the expected behavior,
+the observed API/command results, likely causes, the AO files to inspect and
+scoped daemon log lines. `UNSUPPORTED` is a truthful refusal of an undeclared
+capability; `MANUAL` rows still need the UI journeys below.
 
 A strict audit requires every mandatory gate and successful cleanup. Credential
 presence is `configured`, not verified authorization. Missing proof stays
