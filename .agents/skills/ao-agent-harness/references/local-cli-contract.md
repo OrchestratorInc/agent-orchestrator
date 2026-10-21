@@ -68,6 +68,43 @@ local session; see [evidence-and-handoff.md](evidence-and-handoff.md).
 `--no-live` skips `session.args` and marks `local_session_spawn` `NOT_RUN` while
 still running the safe binary, version, integration, and model-list checks.
 
+### Interface, model mode and known upstream limits
+
+Use these optional fields to state the harness's shape up front, so the runner
+neither forces checks that cannot apply nor retries failures no code change can
+fix:
+
+```json
+"surfaces": ["chat"],
+"modelSelection": "text",
+"knownUpstream": {
+  "cancellation": "stakpak/agent#767: v0.3.88 kills only the immediate child; fixed in an unreleased build"
+}
+```
+
+- `surfaces` lists the interfaces AO registers for this harness: `tui`, `chat`,
+  or both. Without `tui`, the runner skips the TUI lifecycle. It then asks AO
+  for a TUI session and expects a typed 4xx refusal (for example 400
+  `TERMINAL_UNSUPPORTED`). On that refusal, every TUI and interface gate becomes
+  a truthful `UNSUPPORTED`. If AO launches a TUI anyway, that is a `FAIL`, and
+  the stray session is cleaned up. Use `surfaces` for Chat-only harnesses such
+  as ZCode, Pool and Docker Agent, where the TUI-only runner previously produced
+  a wall of `BLOCKED` rows.
+- `modelSelection: "text"` declares free-form model entry, for a harness with no
+  native model list. `ao_models_api` passes only when AO also reports
+  `selectionMode: "text"`. The catalog cross-check is then `UNSUPPORTED`.
+  - If AO reports `selectionMode: "catalog"` with no models, that is still a
+    `FAIL`. Either source the models from the native list, profile or config,
+    or switch the harness to text entry.
+  - Do not parse unrelated output, such as a providers table, into model IDs.
+  - Catalog entries may be keyed by `id`, `model`, `value` or `slug`.
+- `knownUpstream` maps gate names to a short note and an upstream issue for
+  limitations that a **direct native repro outside AO** proved. The gate keeps
+  its `FAIL`. The fix loop classifies it as `unsupported_upstream`, never
+  reruns it, and ends with `upstream_decision`. Remove the entry when a fixed
+  native version ships. Never add an entry to silence a failure you have not
+  reproduced natively.
+
 
 ## Cancellation and restored input
 

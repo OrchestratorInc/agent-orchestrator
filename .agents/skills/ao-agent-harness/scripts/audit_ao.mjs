@@ -3,17 +3,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, statfs, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { StringDecoder } from "node:string_decoder";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { authenticationAction, createEvidenceStore, redactOutput, sanitizeEvidence } from "./audit_evidence.mjs";
-import { capabilityMatrix, diagnoseGate } from "./audit_capabilities.mjs";
-import { SUITES, auditChatSuite, auditExtras, auditInterfaceSwitch, notRunGates } from "./audit_suites.mjs";
+import { CAPABILITIES, capabilityMatrix, diagnoseGate } from "./audit_capabilities.mjs";
+import { buildFixLoop, classifyFailure, compareAttempts, shellQuote } from "./audit_fixloop.mjs";
+import { IFACE_GATES, SUITES, auditChatSuite, auditExtras, auditInterfaceSwitch, notRunGates } from "./audit_suites.mjs";
 export { createEvidenceStore } from "./audit_evidence.mjs";
 
 const LIVE_GATES = [
@@ -1100,7 +1101,7 @@ function modelIdsFromPayload(payload) {
   const values = catalog.map((entry) => {
     if (typeof entry === "string") return entry.trim();
     if (!entry || typeof entry !== "object") return "";
-    for (const key of ["id", "model", "value"]) {
+    for (const key of ["id", "model", "value", "slug"]) {
       if (typeof entry[key] === "string") return entry[key].trim();
     }
     return "";
@@ -1253,7 +1254,9 @@ export function mergeAuditResults(local, ao) {
   const aoSet = new Set(aoModels);
   const shared = localModels.filter((model) => aoSet.has(model));
   let comparison;
-  if (localModels.length === 0 || aoModels.length === 0) {
+  if (ao?.modelSelection === "text") {
+    comparison = gate("model_catalog_consistency", "UNSUPPORTED", "free-form model entry: there is no catalog to compare", { localModels, aoModels, shared });
+  } else if (localModels.length === 0 || aoModels.length === 0) {
     comparison = gate("model_catalog_consistency", "NOT_RUN", "both local and AO model catalogs are required for comparison", { localModels, aoModels, shared });
   } else if (shared.length === 0) {
     comparison = gate("model_catalog_consistency", "FAIL", "local and AO model catalogs have no shared model IDs", { localModels, aoModels, shared });
@@ -1290,6 +1293,46 @@ async function freePort() {
   await new Promise((resolveClose) => server.close(resolveClose));
   if (!port) throw new Error("could not allocate a loopback port for AO");
   return port;
+}
+
+// Unix socket paths are capped near 104 bytes (macOS) and 108 (Linux). A long
+// TMPDIR such as macOS /var/folders/... plus AO's data layout overflows them,
+// and native CLIs fail with `listen EINVAL` before the first turn (#6003, #6520).
+export function auditTempBase(base = tmpdir()) {
+  return process.platform !== "win32" && base.length > 24 ? "/tmp" : base;
+}
+
+const GiB = 1024 ** 3;
+
+// Host checks that decide, before any build or provider call, whether this
+// run can produce evidence at all. FAIL stops the run with one environment
+// receipt; ADVISORY items say which evidence will be missing and how to fix it.
+export async function hostPreflight({ root, repoRoot, aoPath = "", captureCommand = [] }) {
+  const checks = [];
+  const add = (name, status, detail) => checks.push({ name, status, detail });
+  try {
+    const fs = await statfs(root);
+    const free = fs.bavail * fs.bsize;
+    add("disk_free", free < GiB ? "FAIL" : "PASS", `${(free / GiB).toFixed(2)} GiB free at ${root}${free < GiB ? "; the runner needs at least 1 GiB (AO build, worktrees, provider caches). Free space or point TMPDIR at a larger volume" : ""}`);
+    if (free < 2 * GiB) add("ui_disk", "ADVISORY", `${(free / GiB).toFixed(2)} GiB free; npm ci plus Electron for UI screenshots needs about 2 GiB`);
+  } catch (error) {
+    add("disk_free", "ADVISORY", `could not measure free space: ${error.message}`);
+  }
+  for (const [tool, needed] of [["git", true], ["sqlite3", true], ["go", !aoPath]]) {
+    if (!needed) continue;
+    const found = await resolveExecutable(tool);
+    add(`tool_${tool}`, found ? "PASS" : "FAIL", found ? found : `${tool} is not on PATH${tool === "go" ? "; install the Go version in backend/go.mod or pass --ao with a prebuilt binary" : ""}`);
+  }
+  const socketProbe = join(root, "data", "chat-hosts", randomUUID(), "host.sock");
+  add("socket_path", socketProbe.length > 100 ? "FAIL" : "PASS", `${socketProbe.length} bytes for a typical AO socket path${socketProbe.length > 100 ? "; set TMPDIR to a short directory such as /tmp" : ""}`);
+  const nodeModules = await access(join(resolve(repoRoot), "frontend", "node_modules")).then(() => true, () => false);
+  if (!nodeModules || !captureCommand.length) {
+    add("ui_capture", "ADVISORY", [
+      !nodeModules ? "frontend/node_modules is absent (run `npm ci` in the checkout)" : "",
+      !captureCommand.length ? "no --capture-command, so failures get no screenshot" : "",
+    ].filter(Boolean).join("; ") + ". UI checkpoints will be BLOCKED for this reason; say so in the PR instead of retrying.");
+  }
+  return { checks, failed: checks.filter(item => item.status === "FAIL") };
 }
 
 async function defaultReadinessCheck(baseURL) {
@@ -1329,6 +1372,8 @@ export async function startManagedDaemon({
       await mkdir(binaryDir, { recursive: true });
       build = await runCommand("go", ["build", "-o", binary, "./cmd/ao"], {
         cwd: join(resolve(repoRoot), "backend"),
+        // A workspace go.work that includes ./cloud breaks the daemon build.
+        env: { ...process.env, GOWORK: "off" },
         timeoutMs: Math.max(timeoutMs, 120_000),
       });
       if (!build.ok) {
@@ -1352,6 +1397,9 @@ export async function startManagedDaemon({
     AO_TELEMETRY_METRICS: "off",
     AO_TELEMETRY_REMOTE: "off",
   };
+  // An inherited CI=1 makes some native TUIs hide their composer, so every
+  // launch looks stuck. Sessions must see an interactive environment.
+  delete environment.CI;
   // Detached on POSIX so a terminal Ctrl-C reaches only the runner; the runner
   // then kills its sessions through this daemon before stopping it.
   const child = spawn(command[0], [...command.slice(1), "daemon"], {
@@ -1431,6 +1479,13 @@ export async function startManagedDaemon({
     readiness,
     logs: () => logs,
     stop,
+    // For --keep-daemon: stop reading the daemon's output so the runner can
+    // exit while the daemon keeps running.
+    detach: () => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+    },
   };
 }
 
@@ -1487,6 +1542,7 @@ export async function auditAgent({
   localResult = null,
   interruptSpec = null,
   restoredReadySpec = null,
+  modelSelection = "catalog",
   dataDir = "",
   modelsPath = "agents/{agent}/models",
   timeoutMs = 180_000,
@@ -1567,12 +1623,21 @@ export async function auditAgent({
       durationMs: 0,
     };
   const aoModels = modelResponse.ok ? modelIdsFromPayload(modelResponse.response) : [];
-  const modelsOK = modelResponse.ok && aoModels.length > 0;
+  // A harness without a native model list uses free-form entry. That is a
+  // valid catalog only when AO says so and the contract declares it too.
+  const aoSelectionMode = modelResponse.response?.selectionMode;
+  const freeForm = modelResponse.ok && aoModels.length === 0 && aoSelectionMode === "text" && modelSelection === "text";
+  const modelsOK = modelResponse.ok && (aoModels.length > 0 || freeForm);
   await record(gate(
     "ao_models_api",
     modelsOK ? "PASS" : "FAIL",
-    modelsOK ? `AO model API listed ${aoModels.length} model(s)` : "AO model API failed or returned no models",
-    { ...apiEvidence(modelResponse), models: aoModels },
+    freeForm ? "AO and the contract both declare free-form model entry (selectionMode text)"
+      : modelsOK ? `AO model API listed ${aoModels.length} model(s)`
+      : !modelResponse.ok ? "AO model API failed"
+      : aoSelectionMode === "text" ? "AO reports free-form model entry (selectionMode text) but the contract does not declare modelSelection: \"text\""
+      : aoSelectionMode === "catalog" ? "AO advertises selectionMode catalog but returned no models; source them from the native list/profile/config or switch the harness to text entry"
+      : "AO model API returned no models",
+    { ...apiEvidence(modelResponse), models: aoModels, selectionMode: aoSelectionMode, contractModelSelection: modelSelection },
   ));
   const continuePastEmptyModels = diagnosticPrerequisites
     && (strictPreflightPassed || continuePastAuth) && modelResponse.ok && aoModels.length === 0;
@@ -1583,7 +1648,7 @@ export async function auditAgent({
     return finish(addLiveNotRun(gates, "AO model API prerequisite did not pass"), { projectId, aoModels });
   }
   if (!live) {
-    return finish(addLiveNotRun(gates, "live lifecycle disabled by --no-live"), { projectId, aoModels });
+    return finish(addLiveNotRun(gates, "live lifecycle disabled by --no-live"), { projectId, aoModels, modelSelection: freeForm ? "text" : "catalog" });
   }
 
   const spawnResponse = await request({
@@ -1726,6 +1791,7 @@ export async function auditAgent({
     record,
   });
   result.aoModels = aoModels;
+  result.modelSelection = freeForm ? "text" : "catalog";
   if (diagnosticAfterNativeProof) result.diagnostic = diagnostic;
   return result;
 }
@@ -1993,6 +2059,66 @@ async function completeLifecycle({
   });
 }
 
+const PREFLIGHT_GATES = ["registered", "installed", "fresh_probe", "authentication", "launch_readiness", "ao_models_api", "model_catalog_consistency"];
+const SESSION_EXTRA_GATES = ["tui_system_prompt_file", "ao_skill_pointer", "tui_hooks_installed", "tui_usage_recorded"];
+
+// Resolves --only (gate names or capability ids) to the gates in focus and the
+// smallest plan that can produce them: native and preflight gates always run
+// as prerequisites; the TUI lifecycle runs only when a focused gate needs its
+// session; suites run only when they own a focused gate.
+export function resolveOnly(entries) {
+  if (!entries?.length) return null;
+  const known = new Set([...LOCAL_GATES, ...PREFLIGHT_GATES, ...LIVE_GATES, ...Object.values(SUITES).flat()]);
+  const focus = new Set();
+  for (const entry of entries) {
+    const capability = CAPABILITIES.find(item => item.id === entry);
+    if (capability && !capability.gates.length) throw new Error(`--only ${entry}: this capability is MANUAL; the runner cannot drive it`);
+    if (capability) capability.gates.forEach(name => focus.add(name));
+    else if (known.has(entry)) focus.add(entry);
+    else throw new Error(`--only ${entry}: not a gate or capability id`);
+  }
+  const touches = names => names.some(name => focus.has(name));
+  return {
+    focus,
+    needsTui: touches(LIVE_GATES) || touches(SUITES.interface) || touches(SESSION_EXTRA_GATES),
+    suites: Object.keys(SUITES).filter(name => touches(SUITES[name])),
+  };
+}
+
+// Under --only, drop gates that were neither in focus nor executed, so the
+// verdict covers what this attempt actually tried.
+function applyScope(result, scope) {
+  if (!scope) return result;
+  result.gates = result.gates.filter(item => scope.focus.has(item.name) || item.status !== "NOT_RUN");
+  result.status = overallStatus(result.gates);
+  result.failedGate = firstFailedGate(result.gates);
+  return result;
+}
+
+// For a harness whose contract declares Chat only, AO must refuse a TUI
+// session with a typed 4xx (e.g. 400 TERMINAL_UNSUPPORTED). Then every TUI
+// and interface gate is a truthful UNSUPPORTED; if AO launches a TUI anyway,
+// that is a FAIL and the session is cleaned up.
+export async function probeTerminalRefusal({ baseURL, agent, projectId, timeoutMs, onIssue, onSession }) {
+  const response = await request({ baseURL, method: "POST", path: "sessions", timeoutMs, body: {
+    projectId, kind: "worker", harness: agent, mode: "tui", approvalMode: "bypass-permissions",
+    displayName: `audit-tui-refusal-${agent}`.slice(0, 100), prompt: "AO audit: this harness is Chat-only; AO should refuse this TUI session.",
+  } });
+  const sessionId = response.response?.session?.id;
+  if (sessionId) await onSession?.({ agent, sessionId });
+  const refused = !response.ok && response.status >= 400 && response.status < 500;
+  const code = response.response?.error?.code ?? response.response?.code ?? "";
+  if (!refused) {
+    const failed = gate("tui_spawn", "FAIL", response.ok
+      ? "AO launched a TUI session for a harness whose contract declares Chat only; register it as Chat-only (typed TUI refusal)"
+      : `AO answered the TUI request with HTTP ${response.status || "network error"} instead of a typed 4xx refusal`, apiEvidence(response));
+    await onIssue?.({ agent, baseURL, sessionId: sessionId ?? null, gate: failed });
+    return [failed, ...notRunGates([...LIVE_GATES.filter(name => name !== "tui_spawn"), ...IFACE_GATES], "TUI refusal check failed")];
+  }
+  const reason = `contract declares a Chat-only harness and AO refused TUI with HTTP ${response.status}${code ? ` ${code}` : ""}`;
+  return [...LIVE_GATES, ...IFACE_GATES].map((name, position) => gate(name, "UNSUPPORTED", reason, position === 0 ? apiEvidence(response) : undefined));
+}
+
 function suiteNotRun(suites, reason) {
   return suites.flatMap(name => notRunGates(SUITES[name] ?? [], reason));
 }
@@ -2000,7 +2126,7 @@ function suiteNotRun(suites, reason) {
 // Runs the selected capability suites after the TUI lifecycle and folds their
 // gates into the result. Extras and the interface switch reuse the lifecycle's
 // session; the Chat suite creates its own session in the same project.
-export async function runCapabilitySuites({ baseURL, agent, result, projectId, dataDir, scenario, restoredReadySpec, suites, timeoutMs, onIssue, onSession, log }) {
+export async function runCapabilitySuites({ baseURL, agent, result, projectId, dataDir, scenario, restoredReadySpec, suites, only = null, timeoutMs, onIssue, onSession, log }) {
   const statusOf = name => result.gates.find(item => item.name === name)?.status;
   if (suites.includes("extras")) {
     await log?.(`${agent}: extras (models refresh, prompt/skill files, hooks, usage)`);
@@ -2014,7 +2140,7 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   }
   if (suites.includes("chat")) {
     await log?.(`${agent}: Chat suite`);
-    const chat = await auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, onIssue, onSession });
+    const chat = await auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, only, onIssue, onSession });
     result.gates.push(...chat.gates);
     Object.assign(result, { chatSessionId: chat.sessionId, chatWorkspacePath: chat.workspacePath, chatCapabilities: chat.capabilities });
   }
@@ -2062,6 +2188,12 @@ export async function setupProject({ baseURL, root, agent, scenario, timeoutMs }
     ["git", ["init", "-b", "main"]],
     ["git", ["add", "AGENTS.md", "README.md"]],
     ["git", ["-c", "user.name=AO Audit", "-c", "user.email=ao-audit@localhost", "commit", "-m", "test: initialize audit fixture"]],
+    // AO resolves the default branch through origin/HEAD; without an origin,
+    // spawn fails with DEFAULT_BRANCH_UNRESOLVED before any harness code runs.
+    ["git", ["init", "-q", "--bare", "-b", "main", `${projectPath}.origin.git`]],
+    ["git", ["remote", "add", "origin", `${projectPath}.origin.git`]],
+    ["git", ["push", "-q", "origin", "main"]],
+    ["git", ["remote", "set-head", "origin", "main"]],
   ]) {
     const outcome = await runCommand(command, args, { cwd: projectPath, timeoutMs: Math.min(timeoutMs, 30_000) });
     if (!outcome.ok) {
@@ -2164,6 +2296,33 @@ export function markdownReport(report) {
     cleanupSummary,
     "Full API evidence is in the JSON report.",
   );
+  if (report.changes) {
+    const changes = report.changes;
+    lines.push("", "## Changes since previous attempt", "",
+      `Fixed: ${changes.fixed.length}; still failing: ${changes.stillFailing.length}; regressed: ${changes.regressed.length}; newly failing: ${changes.newlyFailing.length}`);
+    const rows = [
+      ...changes.regressed.map(item => ["REGRESSED", item]),
+      ...changes.stillFailing.map(item => [item.sameEvidence ? "STILL FAILING (same evidence)" : "STILL FAILING", item]),
+      ...changes.newlyFailing.map(item => ["NEW FAILURE", item]),
+      ...changes.fixed.map(item => ["FIXED", item]),
+    ];
+    if (rows.length) {
+      lines.push("", "| Change | Agent | Gate | Before → after |", "|---|---|---|---|");
+      for (const [label, item] of rows) lines.push(`| ${label} | ${safeCell(item.agent)} | ${safeCell(item.gate)} | ${item.before ?? "—"} → ${item.after} |`);
+    }
+  }
+  if (report.fixLoop?.items?.length) {
+    const loop = report.fixLoop;
+    lines.push("", "## Next actions (fix loop)", "", `Loop status: **${loop.status}** (max ${loop.maxAttempts} attempts per gate). Machine-readable plan: \`.next-actions.json\` beside this report.`);
+    for (const action of loop.userActions) lines.push("", `Needs user (${safeCell(action.agent)}): ${safeCell(action.message)}`);
+    lines.push("", "| Agent | Gate | Class | Attempt | Action |", "|---|---|---|---|---|");
+    for (const item of loop.items.filter(entry => entry.failureClass !== "prerequisite")) {
+      lines.push(`| ${safeCell(item.agent)} | ${safeCell(item.gate)} | ${item.failureClass}${item.exhausted ? " (stopped)" : ""} | ${item.attempt}/${loop.maxAttempts} | ${safeCell(item.action)} |`);
+    }
+    const skipped = loop.items.filter(entry => entry.failureClass === "prerequisite").length;
+    if (skipped) lines.push("", `${skipped} gate(s) were NOT_RUN only because an earlier gate failed; fix the first failure in each chain.`);
+    if (loop.next?.rerun) lines.push("", "Next rerun:", "", "```bash", loop.next.rerun, "```");
+  }
   if (report.runErrors?.length) {
     lines.push("", "## Run errors");
     for (const error of report.runErrors) lines.push(`- ${safeCell(error.stage)}: ${safeCell(error.message)}`);
@@ -2211,6 +2370,13 @@ async function writeReports(report, requested, root) {
   await rename(`${jsonPath}.tmp`, jsonPath);
   await writeFile(`${markdownPath}.tmp`, markdownReport(report), { mode: 0o600 });
   await rename(`${markdownPath}.tmp`, markdownPath);
+  if (report.fixLoop) {
+    // The file an agent iterates on: what to fix next, how, and how to rerun.
+    const nextPath = `${base}.next-actions.json`;
+    await writeFile(`${nextPath}.tmp`, `${JSON.stringify({ report: jsonPath, state: report.state, changes: report.changes, ...report.fixLoop }, null, 2)}\n`, { mode: 0o600 });
+    await rename(`${nextPath}.tmp`, nextPath);
+    return { jsonPath, markdownPath, nextPath };
+  }
   return { jsonPath, markdownPath };
 }
 
@@ -2234,6 +2400,10 @@ Options:
   --no-live                run API preflight only; lifecycle gates are NOT_RUN
   --suites LIST            capability suites after the TUI lifecycle: extras,chat,interface
                            (default: all; "none" runs only the TUI lifecycle)
+  --only LIST              rerun only these gates or capability ids (comma list), with their
+                           prerequisites; e.g. --only chat_interrupt or --only chat_approvals
+  --previous PATH          previous attempt's report JSON: report fixed/still-failing/regressed
+                           gates and carry fix-loop attempt counts forward
   --keep-daemon            leave the isolated daemon and restored sessions running
   -h, --help               show this help
 
@@ -2260,6 +2430,8 @@ export function parseArgs(argv) {
     keepDaemon: false,
     captureCommand: [],
     suites: Object.keys(SUITES),
+    only: [],
+    previous: "",
   };
   const values = new Map([
     ["--agent", ["agents", String]],
@@ -2271,6 +2443,7 @@ export function parseArgs(argv) {
     ["--capture-command", ["captureCommand", JSON.parse]],
     ["--startup-timeout-seconds", ["startupTimeoutSeconds", Number]],
     ["--timeout-seconds", ["timeoutSeconds", Number]],
+    ["--previous", ["previous", String]],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -2279,6 +2452,12 @@ export function parseArgs(argv) {
     else if (argument === "--no-live") options.live = false;
     else if (argument === "--diagnostic-after-native-proof") options.diagnosticAfterNativeProof = true;
     else if (argument === "--keep-daemon") options.keepDaemon = true;
+    else if (argument === "--only") {
+      const value = argv[index + 1];
+      if (value === undefined) throw new Error("missing value for --only");
+      options.only.push(...value.split(",").map(item => item.trim()).filter(Boolean));
+      index += 1;
+    }
     else if (argument === "--suites") {
       const value = argv[index + 1];
       if (value === undefined) throw new Error("missing value for --suites");
@@ -2299,6 +2478,7 @@ export function parseArgs(argv) {
     }
   }
   if (options.all && options.agents.length > 0) throw new Error("use --all or --agent, not both");
+  options.scope = resolveOnly(options.only);
   if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error("--port must be an integer between 1 and 65535");
   if (!Number.isFinite(options.startupTimeoutSeconds) || options.startupTimeoutSeconds <= 0) throw new Error("--startup-timeout-seconds must be positive");
   if (!Number.isFinite(options.timeoutSeconds) || options.timeoutSeconds <= 0) throw new Error("--timeout-seconds must be positive");
@@ -2314,7 +2494,7 @@ async function main(argv = process.argv.slice(2)) {
   catch (error) { console.error(`error: ${error.message}`); return 2; }
   if (options.help) { printHelp(); return 0; }
 
-  const root = await mkdtemp(join(tmpdir(), "ao-agent-harness-audit-"));
+  const root = await mkdtemp(join(auditTempBase(), "ao-audit-"));
   const base = reportBase(options.report, root);
   let evidence;
   try {
@@ -2323,6 +2503,19 @@ async function main(argv = process.argv.slice(2)) {
     console.error(`Cannot create evidence directory: ${redactOutput(error.message)}. Use a new --report basename for every attempt.`);
     return 2;
   }
+  let previousReport = null;
+  if (options.previous) {
+    try { previousReport = JSON.parse(await readFile(resolve(expandHome(options.previous)), "utf8")); }
+    catch (error) { console.error(`error: --previous ${options.previous}: ${redactOutput(error.message)}`); return 2; }
+  }
+  const scope = options.scope;
+  const suites = scope ? scope.suites : options.suites;
+  // The invocation an agent reruns from next-actions.json, minus agent/scope/report.
+  const rerunPrefix = ["node", shellQuote(fileURLToPath(import.meta.url)),
+    ...(options.aoPath ? ["--ao", shellQuote(resolve(expandHome(options.aoPath)))] : ["--repo", shellQuote(resolve(expandHome(options.repoRoot)))]),
+    ...(options.localContract ? ["--local-contract", shellQuote(resolve(expandHome(options.localContract)))] : []),
+    ...(options.diagnosticAfterNativeProof ? ["--diagnostic-after-native-proof"] : []),
+    "--timeout-seconds", String(options.timeoutSeconds)].join(" ");
   const results = [];
   const sessions = new Map();
   const cleanup = [];
@@ -2332,7 +2525,8 @@ async function main(argv = process.argv.slice(2)) {
   let invalidInput = false;
   let reportWriteFailed = false;
   const report = {
-    schemaVersion: 5, state: "running", suites: options.suites, startedAt: now(), finishedAt: null,
+    schemaVersion: 6, state: "running", suites, only: options.only,
+    previous: options.previous ? resolve(expandHome(options.previous)) : null, startedAt: now(), finishedAt: null,
     disposableRoot: root, live: options.live,
     diagnosticAfterNativeProof: options.diagnosticAfterNativeProof,
     auditClassification: options.diagnosticAfterNativeProof ? "diagnostic-only; full strict audit PASS not claimed" : "strict",
@@ -2345,12 +2539,16 @@ async function main(argv = process.argv.slice(2)) {
   const recordIssue = async data => {
     const daemonLogs = daemon?.logs() || data.gate?.evidence?.daemonLogs || "";
     const diagnosis = diagnoseGate(data.gate, { agent: data.agent, sessionId: data.sessionId, daemonLogs });
+    if (diagnosis) {
+      const previous = previousReport?.results?.find(item => item.agent === data.agent)?.gates?.find(item => item.name === data.gate.name) ?? null;
+      diagnosis.failureClass = classifyFailure({ ...data.gate, diagnosis }, { previous });
+    }
     const item = await evidence.issue({ ...data, baseURL: daemon?.baseURL || data.gate?.evidence?.baseURL || null, daemonLogs, diagnosis });
     if (data.gate) Object.assign(data.gate, { diagnosis: item.diagnosis, evidencePath: item.evidencePath });
     return item;
   };
   const addResult = async result => {
-    results.push(result);
+    results.push(applyScope(result, scope));
     for (const item of result.gates) {
       if ((item.status === "FAIL" || item.status === "BLOCKED") && !evidence.issues.some(issue => issue.agent === result.agent && issue.gate === item.name)) {
         await recordIssue({ agent: result.agent, sessionId: result.sessionId, gate: item });
@@ -2370,6 +2568,8 @@ async function main(argv = process.argv.slice(2)) {
       total: results.length, pass: counts("PASS"), fail: counts("FAIL"), blocked: counts("BLOCKED"), notRun: counts("NOT_RUN"),
     };
     report.results = results.map(result => ({ ...sanitizeEvidence(result), capabilities: capabilityMatrix(result) }));
+    report.changes = compareAttempts(report, previousReport);
+    report.fixLoop = buildFixLoop(report, { previousReport, base, command: rerunPrefix });
     return writeReports(report, base, root);
   };
   const startupAbort = new AbortController();
@@ -2399,6 +2599,14 @@ async function main(argv = process.argv.slice(2)) {
     try { localContracts = await loadLocalContracts(options.localContract); }
     catch (error) { invalidInput = true; throw error; }
     report.localContract = options.localContract ? resolve(expandHome(options.localContract)) : null;
+    stage = "host_preflight";
+    report.host = await hostPreflight({ root, repoRoot: options.repoRoot, aoPath: options.aoPath, captureCommand: options.captureCommand });
+    for (const item of report.host.checks.filter(check => check.status !== "PASS")) await evidence.log(`[host] ${item.name} ${item.status}: ${item.detail}`);
+    if (report.host.failed.length) {
+      const error = new Error(`host preflight failed: ${report.host.failed.map(item => `${item.name} (${item.detail})`).join("; ")}`);
+      error.evidence = { checks: report.host.checks };
+      throw error;
+    }
     stage = "startup";
     await evidence.log("[startup] building and starting isolated AO daemon");
     daemon = await startManagedDaemon({
@@ -2447,7 +2655,7 @@ async function main(argv = process.argv.slice(2)) {
           diagnosticAfterNativeProof: options.diagnosticAfterNativeProof, localResult: local,
           interruptSpec: localContract?.interrupt,
           restoredReadySpec: localContract?.restoredReady,
-          modelsPath: localContract?.aoModelsPath, timeoutMs, onIssue: recordIssue,
+          modelsPath: localContract?.aoModelsPath, modelSelection: localContract?.modelSelection, timeoutMs, onIssue: recordIssue,
         });
         const lifecycleEligible = options.diagnosticAfterNativeProof
           ? preflight.diagnostic?.lifecycleEligible === true
@@ -2458,7 +2666,7 @@ async function main(argv = process.argv.slice(2)) {
               if (LIVE_GATES.includes(item.name) && item.status === "NOT_RUN") item.reason = "user must resolve local login before AO live tests";
             }
           }
-          preflight.gates.push(...suiteNotRun(options.suites, !options.live ? "live suites disabled by --no-live"
+          preflight.gates.push(...suiteNotRun(suites, !options.live ? "live suites disabled by --no-live"
             : local.userAction ? "user must resolve local login before AO live tests" : "preflight prerequisite did not pass"));
           await addResult(mergeAuditResults(local, preflight));
           continue;
@@ -2471,8 +2679,32 @@ async function main(argv = process.argv.slice(2)) {
           gates.push(failed);
           await recordIssue({ agent, gate: failed });
           markNotRun(gates, "project registration failed");
-          gates.push(...suiteNotRun(options.suites, "project registration failed"));
+          gates.push(...suiteNotRun(suites, "project registration failed"));
           await addResult(mergeAuditResults(local, resultFrom(agent, gates, { projectId: setup.projectId, projectPath: setup.projectPath, aoModels: preflight.aoModels })));
+          continue;
+        }
+        const suiteArgs = {
+          baseURL: daemon.baseURL, agent, projectId: setup.projectId, dataDir: daemon.dataDir, scenario,
+          restoredReadySpec: localContract?.restoredReady, suites, only: scope?.focus ?? null, timeoutMs, onIssue: recordIssue,
+          onSession: ({ sessionId }) => sessions.set(sessionId, agent),
+          log: message => evidence.log(`[${index + 1}/${selected.length}] ${message}`),
+        };
+        const chatOnly = Array.isArray(localContract?.surfaces) && !localContract.surfaces.includes("tui");
+        if (chatOnly || (scope && !scope.needsTui)) {
+          // Chat-only harness, or a focused rerun that needs no TUI session:
+          // preflight plus suites, without the TUI lifecycle.
+          await evidence.log(`[${index + 1}/${selected.length}] ${agent}: ${chatOnly ? "Chat-only contract" : `--only ${options.only.join(",")}`} (TUI lifecycle skipped)`);
+          const result = resultFrom(agent, preflight.gates.filter(item => !LIVE_GATES.includes(item.name)), { projectId: setup.projectId, aoModels: preflight.aoModels, modelSelection: preflight.modelSelection });
+          if (chatOnly) result.gates.push(...await probeTerminalRefusal({ baseURL: daemon.baseURL, agent, projectId: setup.projectId, timeoutMs, onIssue: recordIssue, onSession: ({ sessionId }) => sessions.set(sessionId, agent) }));
+          await runCapabilitySuites({ ...suiteArgs, suites: chatOnly ? suiteArgs.suites.filter(name => name !== "interface") : suiteArgs.suites, result });
+          if (chatOnly && result.gates.some(item => item.name === "tui_spawn" && item.status === "UNSUPPORTED")) {
+            for (const item of result.gates) {
+              if (SESSION_EXTRA_GATES.includes(item.name) && item.status === "NOT_RUN") Object.assign(item, { status: "UNSUPPORTED", reason: "Chat-only harness: AO refused the TUI session these files belong to" });
+            }
+          }
+          result.projectPath = setup.projectPath;
+          if (localContract?.knownUpstream) result.knownUpstream = localContract.knownUpstream;
+          await addResult(mergeAuditResults(local, result));
           continue;
         }
         await evidence.log(`[${index + 1}/${selected.length}] ${agent}: live TUI + restore lifecycle`);
@@ -2481,22 +2713,18 @@ async function main(argv = process.argv.slice(2)) {
           diagnosticAfterNativeProof: options.diagnosticAfterNativeProof, localResult: local,
           interruptSpec: localContract?.interrupt,
           restoredReadySpec: localContract?.restoredReady,
-          modelsPath: localContract?.aoModelsPath, timeoutMs, scenario, onIssue: recordIssue,
+          modelsPath: localContract?.aoModelsPath, modelSelection: localContract?.modelSelection, timeoutMs, scenario, onIssue: recordIssue,
           onSession: ({ sessionId }) => sessions.set(sessionId, agent),
         });
-        await runCapabilitySuites({
-          baseURL: daemon.baseURL, agent, result, projectId: setup.projectId, dataDir: daemon.dataDir, scenario,
-          restoredReadySpec: localContract?.restoredReady, suites: options.suites, timeoutMs, onIssue: recordIssue,
-          onSession: ({ sessionId }) => sessions.set(sessionId, agent),
-          log: message => evidence.log(`[${index + 1}/${selected.length}] ${message}`),
-        });
+        await runCapabilitySuites({ ...suiteArgs, result });
         result.projectPath = setup.projectPath;
         result.projectRegistration = apiEvidence(setup.response);
+        if (localContract?.knownUpstream) result.knownUpstream = localContract.knownUpstream;
         await addResult(mergeAuditResults(local, result));
       } catch (error) {
         const failed = gate("runner_error", "FAIL", error.message);
         await recordIssue({ agent, gate: failed });
-        await addResult(mergeAuditResults(local, resultFrom(agent, [...addLiveNotRun([failed], "agent audit interrupted"), ...suiteNotRun(options.suites, "agent audit interrupted")])));
+        await addResult(mergeAuditResults(local, resultFrom(agent, [...addLiveNotRun([failed], "agent audit interrupted"), ...suiteNotRun(suites, "agent audit interrupted")])));
       } finally {
         await save();
       }
@@ -2559,6 +2787,7 @@ async function main(argv = process.argv.slice(2)) {
         console.error(`Daemon log write failed: ${redactOutput(error.message)}`);
       }
     }
+    if (daemon && options.keepDaemon) daemon.detach?.();
     report.state = "finished";
     report.finishedAt = now();
     try { await save({ final: true }); }

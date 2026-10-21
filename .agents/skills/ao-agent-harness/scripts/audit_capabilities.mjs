@@ -482,7 +482,7 @@ export function diagnoseGate(item, { agent = null, sessionId = null, daemonLogs 
 // One line per failure for the runner log and terminal: enough to start fixing
 // without opening the JSON.
 export function diagnosisLine(agent, item, diagnosis) {
-  const parts = [`${agent || "runner"}: ${item.name} ${item.status}`];
+  const parts = [`${agent || "runner"}: ${item.name} ${item.status}${diagnosis?.failureClass ? ` (${diagnosis.failureClass})` : ""}`];
   if (diagnosis?.capabilityTitle) parts.push(`[${diagnosis.capabilityTitle}]`);
   if (diagnosis?.expected) parts.push(`expected ${diagnosis.expected}`);
   if (diagnosis?.observed?.length) parts.push(`observed ${diagnosis.observed.slice(0, 2).join("; ")}`);

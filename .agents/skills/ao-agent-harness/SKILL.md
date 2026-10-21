@@ -22,6 +22,8 @@ intake service, automatic PR publisher, or UI screenshot driver.
 | Operate an audit and identify coverage | [Operating recipe and journey map](references/audit-journeys.md): Doctor, actions, readiness, proof, UI gaps, cleanup |
 | Interpret results, preserve failures, capture screens | [Evidence and handoff](references/evidence-and-handoff.md): gates, diagnostic mode, artifacts, authentication, screenshots |
 | See what each capability proves and why a gate failed | [Capability suites and diagnosis](references/capability-suites.md): Chat/interface/extras suites, matrix statuses, per-failure diagnosis |
+| Fix failures yourself and rerun until done | [Fix loop](references/fix-loop.md): failure classes, `next-actions.json`, `--only`/`--previous`, hard limits, PR/CI checks |
+| Avoid what broke earlier harness PRs | [Lessons from harness PRs](references/lessons-from-harness-prs.md): preflight, contract design, restore negatives, touchpoints, hygiene |
 
 Before an integration handoff, complete the
 [completion matrix](references/integration-path.md#completion-matrix) and
@@ -61,7 +63,10 @@ node /path/to/ao/.agents/skills/ao-agent-harness/scripts/audit_ao.mjs \
 ```
 
 Use repeated `--agent ID` or `--all`, and `--suites extras,chat,interface`
-(default all; `none` for the TUI lifecycle only). The runner builds and starts an isolated
+(default all; `none` for the TUI lifecycle only). `--only GATE|CAPABILITY`
+reruns just that slice with its prerequisites, and `--previous REPORT.json`
+compares it with the last attempt. A host preflight runs first and stops
+early when the host cannot produce evidence. The runner builds and starts an isolated
 AO daemon, waits for `/readyz`, then performs native checks and AO API checks.
 `--ao PATH` selects a prebuilt binary but still starts isolated AO state. Its
 actual executable basename must be `ao` (`ao.exe` on Windows): use a real copy
@@ -75,6 +80,33 @@ can leave owned processes behind; inspect the report and clean those exact
 processes before retrying. `--no-live` skips provider turns
 and AO sessions, but still builds/starts AO and runs safe binary, version,
 integration, and model-list commands. It is not an execution-free review mode.
+
+## Fix loop
+
+Every run writes `<report>.next-actions.json` next to the report. Each failure
+has a class:
+
+| Class | Meaning |
+| --- | --- |
+| `needs_user` | Login, quota or install |
+| `unsupported_upstream` | The native CLI lacks it |
+| `environment` | Host, build or tooling |
+| `contract` | The local CLI contract is wrong |
+| `ao_bug` | AO code or wiring is wrong |
+| `runner_bug` | The audit runner is wrong |
+| `flaky_provider` | The model skipped a token once |
+| `prerequisite` | An earlier gate failed |
+
+Each item gives its next step, the files to fix and a `--only` rerun command.
+Iterate: fix the next item, commit, run its rerun with `--previous`, and read
+**Changes since previous attempt**. Stop when `status` is `needs_user`,
+`blocked`, `upstream_decision` or `done`.
+
+Never pass a gate by weakening it. Never touch credentials. Each gate gets at
+most 3 attempts, and repeating the same evidence stops that gate. Before every
+push and after merging main, run `harness_touchpoints.mjs` and
+`harness_pr_check.mjs --pr N`. Details are in the
+[fix loop reference](references/fix-loop.md).
 
 ## Operating checklist
 

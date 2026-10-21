@@ -6,6 +6,12 @@ lifecycle. Implement each supported capability; do not stop after the first
 working interface. A narrower explicit user request scopes implementation, not
 truthful reporting. Do not register a capability before its gate passes.
 
+Read [lessons from harness PRs](lessons-from-harness-prs.md) before designing
+the adapter. Sixteen earlier integrations failed review on the same few
+problems: unverified auth, brittle ready cues, missing restore fallbacks,
+skipped touchpoints, and evidence committed to the repo. Work failures down
+with the [fix loop](fix-loop.md) rather than handing each one back.
+
 ## 0. Triage intake and existing work
 
 Read `AGENTS.md`, `docs/architecture.md`, `docs/STATUS.md`, and the nearest

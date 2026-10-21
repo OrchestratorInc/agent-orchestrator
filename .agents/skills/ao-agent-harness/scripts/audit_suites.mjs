@@ -304,7 +304,7 @@ function pickDecision(decisions, wanted) {
 
 // ---------------------------------------------------------------- chat suite
 
-export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, onIssue, onSession }) {
+export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, only = null, onIssue, onSession }) {
   const gates = [];
   const context = { agent, baseURL, sessionId: null };
   const { record, skipRest } = suiteRecorder(CHAT_GATES, gates, onIssue, () => context);
@@ -387,6 +387,61 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
       : "driver does not report MCP server status in the snapshot",
     { mcpServers }));
 
+  // Under --only the core chain (spawn → initial turn) always runs; optional
+  // steps run only when one of their gates is in focus.
+  const want = (...names) => !only || names.some((name) => only.has(name));
+  const followupRan = want("chat_turn_lifecycle", "chat_followup", "chat_idempotent_send");
+  const latestSnapshot = followupRan ? (await auditChatFollowup({ baseURL, sessionId, chat, timeoutMs, record })) ?? first.snapshot : first.snapshot;
+  if (want("chat_models", "chat_settings")) await auditChatModelSettings({ baseURL, sessionId, dataDir, timeoutMs, record });
+
+  if (capabilities.has("skills")) {
+    const skills = await request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}/conversation/skills`, timeoutMs });
+    const list = skills.response?.skills;
+    await record(gate("chat_skills", skills.ok && Array.isArray(list) ? "PASS" : "FAIL",
+      skills.ok && Array.isArray(list) ? `skills capability listed ${list.length} skill(s)` : "skills capability is advertised but listing failed",
+      { ...apiEvidence(skills), response: undefined, skills: Array.isArray(list) ? list.map((item) => item?.name ?? item?.id) : undefined }));
+  } else {
+    await record(gate("chat_skills", "UNSUPPORTED", "snapshot capabilities do not advertise skills", { capabilities: [...capabilities] }));
+  }
+
+  const usage = await request({ baseURL, path: `usage/sessions/${encodeURIComponent(sessionId)}`, timeoutMs });
+  const totals = usage.response?.totals ?? {};
+  const snapUsage = latestSnapshot?.usage ?? {};
+  const usageTokens = (totals.inputTokens ?? 0) + (totals.outputTokens ?? 0) + (snapUsage.inputTokens ?? 0) + (snapUsage.outputTokens ?? 0);
+  await record(gate("chat_usage", usageTokens > 0 ? "PASS" : "FAIL",
+    usageTokens > 0 ? `Chat usage recorded (${usageTokens} tokens across usage API and snapshot)` : "no Chat token usage in the usage API or conversation snapshot",
+    { usage: apiEvidence(usage), snapshotUsage: snapUsage }));
+
+  if (want("chat_steer")) await auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent });
+  if (want("chat_interrupt", "chat_post_interrupt_continuation")) await auditChatInterrupt({ baseURL, sessionId, chat, timeoutMs, record });
+  if (want("chat_approval_reject", "chat_approval_approve")) await auditChatApprovals({ baseURL, sessionId, timeoutMs, record });
+  if (want("chat_kill", "chat_restore", "chat_restore_continuation", "chat_compact")) {
+    await auditChatKillRestore({ baseURL, sessionId, dataDir, chat, followupRan, timeoutMs, record });
+  }
+
+  const restored = gates.find((item) => item.name === "chat_restore_continuation")?.status === "PASS";
+  if (!want("chat_compact")) {
+    // Out of --only focus: the final skipRest records it and the runner's scope drops it.
+  } else if (!capabilities.has("compaction")) {
+    await record(gate("chat_compact", "UNSUPPORTED", "snapshot capabilities do not advertise compaction", { capabilities: [...capabilities] }));
+  } else if (!restored) {
+    await record(gate("chat_compact", "NOT_RUN", "restored Chat conversation was not usable"));
+  } else {
+    const compact = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/conversation/compact`, body: {}, timeoutMs });
+    const compacted = compact.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (_, snapshot) => Boolean(snapshot?.compactedAt) }) : { done: false, evidence: {} };
+    const after = compacted.done ? await sendChat(baseURL, sessionId, updateProof({ afterCompactToken: chat.afterCompactToken })) : null;
+    const answered = after?.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (proof) => proof?.afterCompactToken === chat.afterCompactToken }) : { done: false, evidence: {} };
+    await record(gate("chat_compact", compact.ok && compacted.done && answered.done ? "PASS" : "FAIL",
+      !compact.ok ? "compact request was rejected"
+        : !compacted.done ? "compactedAt never appeared on the snapshot"
+        : !answered.done ? "conversation did not answer after compaction" : "conversation compacted and kept working",
+      { compact: apiEvidence(compact), compacted: compacted.evidence, after: answered.evidence }));
+  }
+  await skipRest("prerequisite Chat step did not complete");
+  return { gates, sessionId, workspacePath, capabilities: [...capabilities] };
+}
+
+async function auditChatFollowup({ baseURL, sessionId, chat, timeoutMs, record }) {
   // Follow-up: poll quickly so the running state and streaming are visible.
   const clientMessageId = token("ao-audit-followup");
   const followup = await sendChat(baseURL, sessionId, updateProof({ secondMessageToken: chat.secondToken }), clientMessageId);
@@ -420,7 +475,10 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
   } else {
     await record(gate("chat_idempotent_send", "NOT_RUN", "follow-up was not accepted"));
   }
+  return second.snapshot;
+}
 
+async function auditChatModelSettings({ baseURL, sessionId, dataDir, timeoutMs, record }) {
   // Models and settings.
   const modelsResponse = await request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}/conversation/models`, timeoutMs });
   const chatModels = Array.isArray(modelsResponse.response?.models) ? modelsResponse.response.models : [];
@@ -444,48 +502,6 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
   } else {
     await record(gate("chat_settings", "NOT_RUN", "no Chat model to select"));
   }
-
-  if (capabilities.has("skills")) {
-    const skills = await request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}/conversation/skills`, timeoutMs });
-    const list = skills.response?.skills;
-    await record(gate("chat_skills", skills.ok && Array.isArray(list) ? "PASS" : "FAIL",
-      skills.ok && Array.isArray(list) ? `skills capability listed ${list.length} skill(s)` : "skills capability is advertised but listing failed",
-      { ...apiEvidence(skills), response: undefined, skills: Array.isArray(list) ? list.map((item) => item?.name ?? item?.id) : undefined }));
-  } else {
-    await record(gate("chat_skills", "UNSUPPORTED", "snapshot capabilities do not advertise skills", { capabilities: [...capabilities] }));
-  }
-
-  const usage = await request({ baseURL, path: `usage/sessions/${encodeURIComponent(sessionId)}`, timeoutMs });
-  const totals = usage.response?.totals ?? {};
-  const snapUsage = second.snapshot?.usage ?? {};
-  const usageTokens = (totals.inputTokens ?? 0) + (totals.outputTokens ?? 0) + (snapUsage.inputTokens ?? 0) + (snapUsage.outputTokens ?? 0);
-  await record(gate("chat_usage", usageTokens > 0 ? "PASS" : "FAIL",
-    usageTokens > 0 ? `Chat usage recorded (${usageTokens} tokens across usage API and snapshot)` : "no Chat token usage in the usage API or conversation snapshot",
-    { usage: apiEvidence(usage), snapshotUsage: snapUsage }));
-
-  await auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent });
-  await auditChatInterrupt({ baseURL, sessionId, chat, timeoutMs, record });
-  await auditChatApprovals({ baseURL, sessionId, timeoutMs, record });
-  await auditChatKillRestore({ baseURL, sessionId, dataDir, chat, timeoutMs, record });
-
-  const restored = gates.find((item) => item.name === "chat_restore_continuation")?.status === "PASS";
-  if (!capabilities.has("compaction")) {
-    await record(gate("chat_compact", "UNSUPPORTED", "snapshot capabilities do not advertise compaction", { capabilities: [...capabilities] }));
-  } else if (!restored) {
-    await record(gate("chat_compact", "NOT_RUN", "restored Chat conversation was not usable"));
-  } else {
-    const compact = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/conversation/compact`, body: {}, timeoutMs });
-    const compacted = compact.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (_, snapshot) => Boolean(snapshot?.compactedAt) }) : { done: false, evidence: {} };
-    const after = compacted.done ? await sendChat(baseURL, sessionId, updateProof({ afterCompactToken: chat.afterCompactToken })) : null;
-    const answered = after?.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (proof) => proof?.afterCompactToken === chat.afterCompactToken }) : { done: false, evidence: {} };
-    await record(gate("chat_compact", compact.ok && compacted.done && answered.done ? "PASS" : "FAIL",
-      !compact.ok ? "compact request was rejected"
-        : !compacted.done ? "compactedAt never appeared on the snapshot"
-        : !answered.done ? "conversation did not answer after compaction" : "conversation compacted and kept working",
-      { compact: apiEvidence(compact), compacted: compacted.evidence, after: answered.evidence }));
-  }
-  await skipRest("prerequisite Chat step did not complete");
-  return { gates, sessionId, workspacePath, capabilities: [...capabilities] };
 }
 
 async function auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent }) {
@@ -642,7 +658,7 @@ async function auditChatApprovals({ baseURL, sessionId, timeoutMs, record }) {
   await request({ baseURL, method: "PATCH", path: settingsPath, body: { approvalMode: "bypass-permissions" }, timeoutMs });
 }
 
-async function auditChatKillRestore({ baseURL, sessionId, dataDir, chat, timeoutMs, record }) {
+async function auditChatKillRestore({ baseURL, sessionId, dataDir, chat, followupRan = true, timeoutMs, record }) {
   const column = `SELECT provider_conversation_id FROM sessions WHERE id=${quote(sessionId)} LIMIT 1;`;
   const nativeBefore = await sqliteValue(dataDir, column);
   const kill = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/kill`, body: {}, timeoutMs });
@@ -676,7 +692,7 @@ async function auditChatKillRestore({ baseURL, sessionId, dataDir, chat, timeout
   const recall = await sendChat(baseURL, sessionId,
     `Update ${CHAT_PROOF}: set chatHistoryRecall to the history-only token from the first message of this conversation. Preserve every existing field, write raw JSON only, then stop.`);
   const recalled = recall.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (proof) => proof?.chatHistoryRecall === chat.historyToken }) : { done: false, evidence: {} };
-  const kept = recalled.proof?.secondMessageToken === chat.secondToken && recalled.proof?.initialPromptToken === chat.initialToken;
+  const kept = recalled.proof?.initialPromptToken === chat.initialToken && (!followupRan || recalled.proof?.secondMessageToken === chat.secondToken);
   await record(gate("chat_restore_continuation", recall.ok && recalled.done && kept ? "PASS" : "FAIL",
     recall.ok && recalled.done && kept ? "restored Chat recalled the history-only token and kept earlier proof fields"
       : !recall.ok ? "continuation after restore was rejected"

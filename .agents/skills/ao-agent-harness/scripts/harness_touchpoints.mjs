@@ -99,6 +99,32 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "cli-spawn-help", surface: "tui", required: false, file: "backend/internal/cli/spawn.go",
     check: (ctx, text) => ({ ok: new RegExp(`[ ,]${escapeRe(ctx.id)}[ ,(]`).test(text) }),
     like: ref => new RegExp(`[ ,]${escapeRe(ref.id)}[ ,(]`) },
+  // `ao doctor` defaults to a PATH-only probe of a binary named like the ID.
+  // Add a spec when the binary differs or the adapter pins a version; a
+  // default probe reported a lookalike CLI as ready (#6493, #6496).
+  { id: "doctor-probe", surface: "tui", required: false, file: "backend/internal/cli/doctor.go",
+    check: (ctx, text) => ({ ok: new RegExp(`"${escapeRe(ctx.id)}"\\s*:\\s*\\{[^}]*BinaryName`).test(text), detail: "harnessProbeSpecs entry (BinaryName, VersionArg, ExpectedVersionPrefix); needed when the binary is not named like the ID or a version is pinned" }),
+    like: ref => new RegExp(`"${escapeRe(ref.id)}"\\s*:\\s*\\{`) },
+  // Every adapter declares terminal version refresh explicitly, and both
+  // registry matrices list it; main added these after several harness PRs
+  // branched, which turned their CI red after a merge (#6546, #6541).
+  { id: "terminal-refresh", surface: "tui", required: true, file: "backend/internal/adapters/agent/{pkg}/",
+    check: async (ctx) => {
+      const dir = join(ctx.repo, "backend/internal/adapters/agent", ctx.pkg);
+      let names = [];
+      try { names = (await readdir(dir)).filter(name => name.endsWith(".go") && !name.endsWith("_test.go")); } catch { return { ok: false, detail: "adapter package not found" }; }
+      for (const name of names) {
+        if ((await readFile(join(dir, name), "utf8")).includes("SupportsTerminalVersionRefresh")) return { ok: true, detail: name };
+      }
+      return { ok: false, detail: "adapter does not implement SupportsTerminalVersionRefresh (ports.AgentTerminalVersionRefresher)" };
+    } },
+  { id: "refresh-test-matrix", surface: "tui", required: true, file: "backend/internal/session_manager/tui_version_refresh_test.go",
+    check: async (ctx, text) => {
+      const registryTest = await readText(ctx.repo, "backend/internal/adapters/agent/registry/version_refresh_test.go") || "";
+      const inBinaries = new RegExp(`"${escapeRe(ctx.id)}"\\s*:\\s*"`).test(registryTest);
+      const inUnsupported = new RegExp(`\\[\\]string\\{[^}]*"${escapeRe(ctx.id)}"`).test(text);
+      return { ok: inBinaries || inUnsupported, detail: inBinaries ? "binary in registry/version_refresh_test.go" : inUnsupported ? "listed as unsupported" : "add the binary to registry/version_refresh_test.go, or list the ID as unsupported here" };
+    } },
   { id: "install-target", surface: "install", required: true, file: "backend/internal/service/systeminstall/systeminstall.go",
     check: (ctx, text) => constantInList(text, "Target", "agentTargets", ctx.id),
     like: ref => new RegExp(`Target\\s*=\\s*"${escapeRe(ref.id)}"`) },
@@ -114,6 +140,14 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "model-catalog", surface: "models", required: true, file: "backend/internal/adapters/agent/modelcatalog/catalog.go",
     check: (ctx, text) => ({ ok: text.includes(`"${ctx.id}"`) }),
     like: ref => new RegExp(`"${escapeRe(ref.id)}"`) },
+  // Effort is a hardcoded allowlist; a harness with native effort that is not
+  // listed fails every task with UNSUPPORTED_EFFORT (#6553). Optional because
+  // most harnesses have no effort control.
+  { id: "effort-gate", surface: "models", required: false, file: "backend/internal/session_manager/manager.go",
+    check: (ctx, text) => {
+      const gate = text.match(/effort is only supported for ([^"]+)"/);
+      return { ok: Boolean(gate && gate[1].includes(ctx.id)), detail: gate ? `only if the harness has native effort: allowlist is "${gate[1].trim()}"` : "effort allowlist not found" };
+    } },
   { id: "avatar-asset", surface: "branding", required: true, file: "frontend/src/renderer/assets/agents/{id}.svg|png",
     check: async (ctx) => ({ ok: await exists(ctx.repo, `frontend/src/renderer/assets/agents/${ctx.id}.svg`) || await exists(ctx.repo, `frontend/src/renderer/assets/agents/${ctx.id}.png`) }) },
   { id: "avatar-license", surface: "branding", required: true, file: "frontend/src/renderer/assets/agents/LICENSE-{id}.txt",
@@ -126,6 +160,9 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "docs-index", surface: "docs", required: false, file: "docs/README.md",
     check: (ctx, text) => ({ ok: text.includes(`harnesses/${ctx.id}.md`) }),
     like: ref => new RegExp(`harnesses/${escapeRe(ref.id)}\\.md`) },
+  { id: "docs-agents-index", surface: "docs", required: false, file: "frontend/src/landing/content/docs/plugins/agents/index.mdx",
+    check: (ctx, text) => ({ ok: text.toLowerCase().includes(ctx.id) }),
+    like: ref => new RegExp(escapeRe(ref.id), "i") },
   { id: "chat-registry", surface: "chat", required: true, file: "backend/internal/adapters/chatdriver/registry/registry.go",
     check: (ctx, text) => ({ ok: new RegExp(`\\w+\\.New\\(\\s*${escapeRe(ctx.pkg)}\\.New\\(`).test(text) }),
     like: ref => new RegExp(`\\w+\\.New\\(\\s*${escapeRe(ref.pkg)}\\.New\\(|adapters/agent/${escapeRe(ref.pkg)}"`) },

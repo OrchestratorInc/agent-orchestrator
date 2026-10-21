@@ -11,7 +11,7 @@ selected agents, local CLI contract, and a **new report basename** for each run.
 Use `--help` for flags. Reusing an existing artifact directory is rejected before
 starting AO, so login retries cannot overwrite the original evidence.
 
-Read report JSON schema version `5` (including its diagnostic metadata,
+Read report JSON schema version `6` (including `host`, `changes`, `fixLoop`, its diagnostic metadata,
 `suites`, each result's `capabilities` matrix and each failed gate's
 `diagnosis`; see [capability suites](capability-suites.md)). `state` is `running` until cleanup/report
 finalization, then `finished`. Do not treat intermediate snapshots as final.
