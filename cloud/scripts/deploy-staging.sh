@@ -147,7 +147,9 @@ fi
 	--default-org-billing "$AO_CLOUD_DEFAULT_ORG_BILLING" \
 	--paywalled-features "$AO_CLOUD_PAYWALLED_FEATURES" \
 	--idle-pause-threshold "$AO_CLOUD_IDLE_PAUSE_THRESHOLD" \
-	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"
+	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD" \
+	--coder-readable-names "$AO_CLOUD_CODER_READABLE_NAMES" \
+	--coder-worker-working-folder "$AO_CLOUD_CODER_WORKER_WORKING_FOLDER"
 echo "Offering: providers=${PROVIDERS} default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none}" >&2
 
 ./scripts/verify-ecs-service.py \
@@ -432,6 +434,8 @@ register_task_definition() {
 			--set-environment "AO_CLOUD_PAYWALLED_FEATURES=${AO_CLOUD_PAYWALLED_FEATURES}"
 			--set-environment "AO_CLOUD_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_IDLE_PAUSE_THRESHOLD}"
 			--set-environment "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD}"
+			--set-environment "AO_CLOUD_CODER_READABLE_NAMES=${AO_CLOUD_CODER_READABLE_NAMES}"
+			--set-environment "AO_CLOUD_CODER_WORKER_WORKING_FOLDER=${AO_CLOUD_CODER_WORKER_WORKING_FOLDER}"
 		)
 		if providers_has coder; then
 			render_args+=(

@@ -156,6 +156,47 @@ func TestUpdateProjectSettingsChecksRepositorySettingsAgainstTheMainRepository(t
 	}
 }
 
+// A step's time limit is saved in the stored, plain-string form a release
+// that predates per-step limits keeps, and a limit out of range is refused. A
+// limit equal to a default (10 for a Cleanup step) is kept as the step's own.
+func TestUpdateProjectSettingsStoresScriptStepTimeouts(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	setProjectRepos(t, admin, fixture.projectID, "https://github.com/octo/alice", `{}`)
+
+	project, err := store.UpdateProjectSettings(ctx, principal, fixture.orgID, fixture.projectID, domain.ProjectSettingsPatch{
+		Config: json.RawMessage(`{"postCreate":["make up",{"command":"npm ci","timeoutMinutes":45},"# ao-timeout: 120m\nmake seed"],"preRemove":[{"command":"make down","timeoutMinutes":10}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(project.Config, &config); err != nil {
+		t.Fatal(err)
+	}
+	var postCreate, preRemove []string
+	if err := json.Unmarshal(config["postCreate"], &postCreate); err != nil {
+		t.Fatalf("postCreate = %s: %v", config["postCreate"], err)
+	}
+	if err := json.Unmarshal(config["preRemove"], &preRemove); err != nil {
+		t.Fatalf("preRemove = %s: %v", config["preRemove"], err)
+	}
+	if strings.Join(postCreate, "|") != "make up|# ao-timeout: 45m\nnpm ci|# ao-timeout: 120m\nmake seed" ||
+		strings.Join(preRemove, "|") != "# ao-timeout: 10m\nmake down" {
+		t.Fatalf("stored steps = %q / %q", postCreate, preRemove)
+	}
+	for _, bad := range []string{
+		`{"postCreate":[{"command":"npm ci","timeoutMinutes":0}]}`,
+		`{"postCreate":[{"command":"npm ci","timeoutMinutes":121}]}`,
+		`{"preRemove":["# ao-timeout: 200m\nmake down"]}`,
+	} {
+		if _, err := store.UpdateProjectSettings(ctx, principal, fixture.orgID, fixture.projectID, domain.ProjectSettingsPatch{Config: json.RawMessage(bad)}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", bad, err)
+		}
+	}
+}
+
 // App tokens and pull requests only cover additional repositories that still
 // have an active grant through the main repository's installation.
 func TestWorkerSessionGrantedExtraReposKeepsOnlyActiveSameInstallationGrants(t *testing.T) {

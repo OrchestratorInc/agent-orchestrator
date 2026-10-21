@@ -454,7 +454,8 @@ export interface ChatWorkspaceProps {
 	daemonReady?: boolean;
 	/** Resolved color theme for the reviewer terminal pane. */
 	theme?: "light" | "dark";
-	onChooseSettings?: (settings: TurnSettings) => void;
+	/** `picked` names the setting the user chose from its own menu; other changes echo the shown settings. */
+	onChooseSettings?: (settings: TurnSettings, picked?: keyof TurnSettings) => void;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];

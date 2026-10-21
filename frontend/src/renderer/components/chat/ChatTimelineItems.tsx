@@ -69,6 +69,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
@@ -1075,6 +1076,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
@@ -2365,7 +2367,8 @@ function setupDuration(durationMs: number): { minutes: number; seconds: number }
  * How the project's Setup commands (Project settings > Scripts) ended, before
  * the agent started. Compact like the other system rows; the failed step's
  * output (the tail the worker kept, already redacted) opens below it in
- * monospace.
+ * monospace. Workers that publish workspace.script.step events get the
+ * ScriptRunPanel instead; this row stays for workers that predate them.
  */
 function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 	const { t } = useTranslation();
@@ -2386,8 +2389,23 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
 				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
 				: t("chat.projectSetup.failed", { step });
-	const output = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
 	const failed = status !== "succeeded";
+	const stepOutput = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	// The failed step's command, who and where it ran, and its full log, one
+	// fact per line above its output.
+	const setupFailure = failed ? detail?.setupFailure : undefined;
+	const contextLines: string[] = [];
+	if (setupFailure?.command) contextLines.push(t("chat.projectSetup.stepCommand", { step, command: setupFailure.command }));
+	if (setupFailure?.user) {
+		contextLines.push(setupFailure.groups?.length
+			? t("chat.projectSetup.ranAsWithGroups", { user: setupFailure.user, groups: setupFailure.groups.join(" ") })
+			: t("chat.projectSetup.ranAs", { user: setupFailure.user }));
+	}
+	if (setupFailure?.dir) contextLines.push(t("chat.projectSetup.ranIn", { dir: setupFailure.dir }));
+	if (setupFailure?.logPath) contextLines.push(t("chat.projectSetup.fullOutput", { path: setupFailure.logPath }));
+	const context = contextLines.join("\n");
+	const output = context ? (stepOutput ? `${context}\n\n${stepOutput}` : context) : stepOutput;
+	const hint = failed ? detail?.setupHint?.trim() : undefined;
 	const Icon = failed ? CircleAlert : SquareTerminal;
 	return (
 		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
@@ -2406,8 +2424,9 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 					</button>
 				) : null}
 			</div>
+			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
 			{output && expanded ? (
-				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground">{output}</pre>
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
 			) : null}
 		</div>
 	);

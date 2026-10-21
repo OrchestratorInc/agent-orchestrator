@@ -1322,7 +1322,7 @@ func cursorResolvedExecutionKey(s ports.ActivitySignal) (string, bool) {
 // gone: a definitive permission reply, a new prompt, or the end of the turn or
 // session. Generic active/tool events remain insufficient to clear blocked.
 func isTurnBoundaryEvent(event string) bool {
-	return event == "user-prompt-submit" || event == "stop" || event == "session-end" ||
+	return event == "user-prompt-submit" || event == "stop" || event == "stop-failure" || event == "interrupt" || event == "session-end" ||
 		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved" ||
 		event == "liveness-probe"
 }

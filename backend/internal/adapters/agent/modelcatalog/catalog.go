@@ -3,6 +3,7 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -54,6 +55,9 @@ type commandSpec struct {
 	// cancellation interrupts first; where that cannot be delivered (Windows),
 	// discovery is skipped.
 	interruptOnCancel bool
+	// retryEmpty reruns a listing that exits cleanly with no output once.
+	// OpenCode 2 prints nothing the first time it runs in a new folder.
+	retryEmpty bool
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -120,7 +124,7 @@ var commandSpecs = map[string]commandSpec{
 	// (and still honors the provider-presence env used for cloud scoping) without
 	// betting on a flag that can be rejected.
 	"opencode":    {args: []string{"models"}, parser: parseProviderIDLines},
-	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines},
+	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines, retryEmpty: true},
 	"grok":        {args: []string{"models"}, parser: parseGrokModels},
 	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
@@ -481,6 +485,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
 	}
 	output, err := cmd.CombinedOutput()
+	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
+		cancel()
+		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
+		defer cancel()
+		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
 	}

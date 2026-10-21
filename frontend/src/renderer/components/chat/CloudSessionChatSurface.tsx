@@ -3,13 +3,17 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
+import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
-import { cloudStartupProblem, isWorkspaceStartupError } from "../../lib/cloud-lifecycle";
+import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
-import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
+import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspace";
+import { requestWorkspaceRetry } from "../CloudSessionStartupError";
+import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
@@ -20,6 +24,12 @@ type EventPayload = {
 	exitCode?: unknown;
 	durationMs?: unknown;
 	output?: unknown;
+	command?: unknown;
+	dir?: unknown;
+	user?: unknown;
+	groups?: unknown;
+	logPath?: unknown;
+	hint?: unknown;
 	clientMessageId?: unknown;
 	requestId?: unknown;
 	decision?: unknown;
@@ -48,6 +58,25 @@ function allowedApprovalModes(harness: string, ceiling?: "read-only" | "standard
 	return ["default", "accept-edits", "auto", "bypass-permissions"];
 }
 
+// The approval mode the composer shows when the user hasn't picked one: what
+// the worker runs a turn without one with, from the session's mode (trusted
+// skips prompts; standard accepts edits for Claude and auto-reviews for
+// Codex). It is only shown: such a turn is sent without an approval mode, so
+// the worker can step down when the adapter does not offer this one.
+function defaultApprovalMode(harness: string, modes: ApprovalMode[], ceiling?: "read-only" | "standard" | "trusted"): ApprovalMode | undefined {
+	const preferred: ApprovalMode | undefined = ceiling === "trusted"
+		? "bypass-permissions"
+		: ceiling === "standard" ? (harness === "codex" ? "auto" : "accept-edits") : undefined;
+	return preferred && modes.includes(preferred) ? preferred : modes[0];
+}
+
+function savedApprovalMode(value: unknown): ApprovalMode | undefined {
+	return value === "default" || value === "accept-edits" || value === "auto" || value === "bypass-permissions" ? value : undefined;
+}
+
+// A saved approval mode counts only with approvalModeChosen: older builds
+// also saved the shown default this way, and sending it as the user's pick
+// overrode the session's mode (a trusted Chat asked before every command).
 export function readCloudTurnSettings(key: string): CloudTurnSettings {
 	try {
 		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
@@ -56,10 +85,27 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 			executionMode: saved.executionMode === "plan" || saved.executionMode === "agent" ? saved.executionMode : undefined,
 			model: typeof saved.model === "string" ? saved.model : undefined,
 			reasoningEffort: typeof saved.reasoningEffort === "string" ? saved.reasoningEffort : undefined,
-			approvalMode: saved.approvalMode === "default" || saved.approvalMode === "accept-edits" || saved.approvalMode === "auto" || saved.approvalMode === "bypass-permissions" ? saved.approvalMode : undefined,
+			approvalMode: saved.approvalModeChosen === true ? savedApprovalMode(saved.approvalMode) : undefined,
 		};
 	} catch {
 		return {};
+	}
+}
+
+function writeCloudTurnSettings(key: string, settings: CloudTurnSettings) {
+	const { approvalMode, ...rest } = settings;
+	localStorage.setItem(key, JSON.stringify(approvalMode ? { ...rest, approvalMode, approvalModeChosen: true } : rest));
+}
+
+// The project's remembered approval mode. Only "Remember for this project"
+// ever wrote this key, so a value saved before approvalModeChosen existed is
+// still the user's pick.
+function readRememberedApprovalMode(key: string): ApprovalMode | undefined {
+	try {
+		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+		return saved && typeof saved === "object" ? savedApprovalMode(saved.approvalMode) : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -126,6 +172,20 @@ function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
 }
 
 /**
+ * A failed Setup step's command, who and where it ran, and its full log in the
+ * sandbox; the timeline row words them.
+ */
+function projectSetupFailure(payload: EventPayload): SystemEventDetail["setupFailure"] {
+	const text = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value.trim() : undefined);
+	const groups = Array.isArray(payload.groups) ? payload.groups.filter((group): group is string => typeof group === "string") : [];
+	const failure = {
+		command: text(payload.command), user: text(payload.user), groups: groups.length > 0 ? groups : undefined,
+		dir: text(payload.dir), logPath: text(payload.logPath),
+	};
+	return Object.values(failure).some((value) => value !== undefined) ? failure : undefined;
+}
+
+/**
  * The outcome of the project's Setup commands (Project settings > Scripts), as
  * a system row: Setup runs before the agent starts, so it belongs to no turn.
  */
@@ -136,13 +196,122 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 	const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : undefined;
 	const durationMs = typeof payload.durationMs === "number" ? payload.durationMs : undefined;
 	const output = typeof payload.output === "string" && payload.output.trim() !== "" ? payload.output : undefined;
+	const hint = typeof payload.hint === "string" && payload.hint.trim() !== "" ? payload.hint : undefined;
 	return {
 		kind: "activity", id: `cloud-project-setup-${event.sequence}`, sequence: event.sequence, revision: 1,
 		activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
 		summary: status === "succeeded" ? "Setup passed" : status === "timed_out" ? "Setup timed out" : "Setup failed",
-		detail: { event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output },
+		detail: {
+			event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output,
+			setupFailure: projectSetupFailure(payload), setupHint: hint,
+		},
 		createdAt: event.createdAt,
 	};
+}
+
+/**
+ * One Setup or Cleanup run as a system row, placed where its first step event
+ * arrived. Its revision is the run's newest event, so the row redraws live
+ * even where only the newest event per step is kept.
+ */
+function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActivity {
+	return {
+		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.lastSequence,
+		activityKind: "system", status: run.status === "running" ? "running" : run.status === "failed" ? "failed" : "completed",
+		summary: appI18n.t("scriptRun.activitySummary", { phase: scriptRunTitle(run, appI18n.t), status: scriptRunStatusText(run, appI18n.t) }),
+		detail: { event: "workspace.script.run", scriptRun: run },
+		createdAt,
+	};
+}
+
+/** The session's newest Setup run with step events, if any. */
+function latestSetupRun(session: WorkspaceSession, events: readonly CloudCpClientEvent[]): ScriptRun | undefined {
+	return groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) })
+		.filter((run) => run.phase === "setup").at(-1);
+}
+
+/**
+ * The startup checklist a Cloud Chat session shows while its project's Setup
+ * runs: the worker takes no turn until Setup finishes, so the session's first
+ * prompt is waiting on Setup, not being worked on. Undefined once no Setup is
+ * running (a worker that sends no step events never shows it). It is the
+ * checklist a failed start shows (cloudStartupChecklist), with Setup running.
+ */
+export function cloudSetupStartupSteps(session: WorkspaceSession, events: readonly CloudCpClientEvent[]): SessionProvisionStep[] | undefined {
+	if (events.some((event) => event.type === "chat.turn_started")) return undefined;
+	const setup = latestSetupRun(session, events);
+	if (setup?.status !== "running") return undefined;
+	return [
+		{ id: "worktree", status: "done" },
+		{ id: "setup", status: "running", startedAt: setup.startedAt },
+		{ id: "agent", status: "pending" },
+	];
+}
+
+/** The workspace startup failure a Cloud Chat session shows as a failed local start: a failed checkout, Setup or agent start. */
+function workspaceStartupFailure(session: WorkspaceSession): Extract<CloudStartupProblem, { phase: "failed" }> | undefined {
+	const problem = cloudStartupProblem(session);
+	return problem?.phase === "failed" && isWorkspaceStartupError(problem.code) ? problem : undefined;
+}
+
+const startupStepOrder = ["worktree", "setup", "agent"] as const;
+
+/**
+ * The startup checklist of a Cloud Chat session, the one a local Chat start
+ * shows: "Setting up" while the project's Setup runs, and the failed start
+ * (the step that failed, the error, Retry) once the checkout, Setup or the
+ * agent's start failed. While a retry runs it reads as setting up again, with
+ * the failed step running, until the worker reports. Undefined when neither.
+ */
+export function cloudStartupChecklist(
+	session: WorkspaceSession,
+	events: readonly CloudCpClientEvent[],
+	failure: Extract<CloudStartupProblem, { phase: "failed" }> | undefined,
+	retrying: boolean,
+): Pick<WorkspaceSession, "provisionState" | "provisionSteps" | "provisionError"> | undefined {
+	if (!failure) {
+		const steps = cloudSetupStartupSteps(session, events);
+		return steps ? { provisionState: "provisioning", provisionSteps: steps } : undefined;
+	}
+	const failedStep = failure.code === "project_setup_failed" ? "setup" : failure.code === "agent_start_failed" ? "agent" : "worktree";
+	const failedIndex = startupStepOrder.indexOf(failedStep);
+	const setup = latestSetupRun(session, events);
+	const setupStartedAt = retrying && failedStep === "setup" && setup?.status === "running" ? setup.startedAt : undefined;
+	return {
+		provisionState: retrying ? "provisioning" : "failed",
+		provisionSteps: startupStepOrder.map((id, index): SessionProvisionStep => ({
+			id,
+			status: index < failedIndex ? "done" : index === failedIndex ? "running" : "pending",
+			...(id === "setup" && setupStartedAt ? { startedAt: setupStartedAt } : {}),
+		})),
+		provisionError: [failure.message, failure.detail && `Output: ${failure.detail}`].filter(Boolean).join(" "),
+	};
+}
+
+/** A Setup row's outcome and where its run started, for the Setup history rule. */
+function setupAttempt(item: ConversationItem): { passed: boolean; failed: boolean; order: number } | undefined {
+	if (item.kind !== "activity") return undefined;
+	if (item.detail?.event === "workspace.setup") {
+		const status = item.detail.setupStatus;
+		return { passed: status === "succeeded", failed: status !== "succeeded", order: item.sequence };
+	}
+	const run = item.detail?.event === "workspace.script.run" ? item.detail.scriptRun : undefined;
+	if (run?.phase !== "setup") return undefined;
+	return { passed: run.status === "succeeded", failed: run.status === "failed" || run.status === "interrupted", order: run.firstSequence };
+}
+
+/**
+ * The conversation without the Setup attempts that did not pass, as a local
+ * start keeps none: while the start is failed the checklist reports the
+ * failure, and once a retry passes only the Setup that passed stays. A failed
+ * Setup with no startup failure reporting it, and no later pass, still shows.
+ */
+export function withoutFailedSetupAttempts(items: ConversationItem[], startFailed: boolean): ConversationItem[] {
+	const lastPassed = Math.max(-1, ...items.map(setupAttempt).filter((attempt) => attempt?.passed).map((attempt) => attempt!.order));
+	return items.filter((item) => {
+		const attempt = setupAttempt(item);
+		return !attempt?.failed || (!startFailed && attempt.order > lastPassed);
+	});
 }
 
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
@@ -153,6 +322,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const turnPatches = new Map<string, (DiffFile & { patch: string })[]>();
 	const steerableTurns = new Set<string>();
 	const items: ConversationItem[] = [];
+	// Live Setup and Cleanup logs. A run with step events replaces the older
+	// one-line workspace.setup summary the worker still sends after it; workers
+	// that predate step events keep that summary row.
+	const scriptRuns = new Map(groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) }).map((run) => [run.runId, run]));
+	const placedRuns = new Set<string>();
+	const unclaimedSetupRuns = [...scriptRuns.values()].filter((run) => run.phase === "setup");
+	// The session's first prompt is recorded before its Setup runs, so the turn
+	// it opens is anchored ahead of Setup and Setup would read after the reply.
+	// A Setup that ran before any turn started sits just above that prompt.
+	const firstTurnStart = events.find((event) => event.type === "chat.turn_started")?.sequence ?? Infinity;
+	const firstPrompt = events.find((event) => event.type === "chat.user_message")?.sequence;
+	const runSequence = (run: ScriptRun) =>
+		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
+			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
@@ -245,7 +428,31 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			}
 			continue;
 		}
+		if (event.type === SCRIPT_STEP_EVENT) {
+			const runId = parseScriptStepPayload(event.payload)?.runId;
+			const run = runId ? scriptRuns.get(runId) : undefined;
+			if (run && !placedRuns.has(run.runId)) {
+				placedRuns.add(run.runId);
+				const activity: ConversationActivity = { ...scriptRunActivity(run, event.createdAt), sequence: runSequence(run) };
+				// Moved above the first prompt: insert it there too, so it leads a
+				// prompt with no turn id (both then share one turn-less timeline
+				// group, kept in item order) as well as one with a turn id.
+				const before = activity.sequence < run.firstSequence ? items.findIndex((item) => item.sequence > activity.sequence) : -1;
+				if (before >= 0) items.splice(before, 0, activity);
+				else items.push(activity);
+			}
+			continue;
+		}
 		if (event.type === "workspace.setup") {
+			// The newest setup run that began before this summary is the run it summarizes.
+			let covering = -1;
+			for (let index = 0; index < unclaimedSetupRuns.length; index++) {
+				if (unclaimedSetupRuns[index].firstSequence < event.sequence) covering = index;
+			}
+			if (covering >= 0) {
+				unclaimedSetupRuns.splice(covering, 1);
+				continue;
+			}
 			items.push(projectSetupActivity(event));
 			continue;
 		}
@@ -322,10 +529,19 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	}
 	const orderedTurns = [...turns.values()];
 	// The first durable send may wait briefly for the worker to claim it. It is
-	// the active request; only later messages should appear in the queue.
-	if (!orderedTurns.some((turn) => turn.state === "running")) {
+	// the active request; only later messages should appear in the queue. While
+	// the project's Setup runs, or after the checkout, Setup or the agent's start
+	// failed, it is not: nothing works on it until the workspace is ready, and
+	// the startup checklist (cloudStartupChecklist) shows that instead.
+	if (!orderedTurns.some((turn) => turn.state === "running") && !cloudSetupStartupSteps(session, events) && !workspaceStartupFailure(session)) {
 		const next = orderedTurns.find((turn) => turn.state === "queued");
-		if (next) next.state = "running";
+		if (next) {
+			next.state = "running";
+			// Its working time starts once a Setup it waited on ended, not when
+			// it was sent: Setup time is not agent time.
+			const setupEnd = [...scriptRuns.values()].filter((run) => run.phase === "setup" && run.status !== "running").at(-1)?.lastEventAt;
+			if (setupEnd && Date.parse(setupEnd) > Date.parse(next.requestedAt)) next.startedAt = setupEnd;
+		}
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
@@ -385,37 +601,35 @@ export function CloudSessionChatSurface({
 	// A failed checkout or Setup reads the way a failed local Chat start does: the
 	// setup checklist under the opening message, with Retry. Retry asks the running
 	// worker to prepare the workspace again; until it reports, the step runs again.
-	const startupProblem = cloudStartupProblem(session);
-	const workspaceFailure = startupProblem?.phase === "failed" && isWorkspaceStartupError(startupProblem.code) ? startupProblem : undefined;
+	const workspaceFailure = workspaceStartupFailure(session);
 	const [retriedFailureAt, setRetriedFailureAt] = useState<string>();
 	const rerunning = retriedFailureAt !== undefined && retriedFailureAt === workspaceFailure?.at;
+	// Ends a retry still waiting for an idle-paused workspace's worker when Chat goes away.
+	const retryAbort = useRef<AbortController | undefined>(undefined);
+	useEffect(() => () => retryAbort.current?.abort(), []);
 	const retryStart = useMutation({
-		mutationFn: () => client.requestWorkspaceCheckout(cloud?.orgId ?? "", session.id),
+		mutationFn: () => {
+			retryAbort.current?.abort();
+			const abort = new AbortController();
+			retryAbort.current = abort;
+			return requestWorkspaceRetry(client, cloud?.orgId ?? "", session.id, abort.signal);
+		},
 		onSuccess: () => {
 			setRetriedFailureAt(workspaceFailure?.at);
 			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 			void queryClient.invalidateQueries({ queryKey: ["cloud-session"] });
 		},
 	});
-	const setupFailed = workspaceFailure?.code === "project_setup_failed";
-	const chatSession: WorkspaceSession = workspaceFailure ? {
-		...session,
-		provisionState: rerunning ? "provisioning" : "failed",
-		provisionSteps: [
-			{ id: "worktree", status: setupFailed ? "done" : "running" },
-			{ id: "setup", status: setupFailed ? "running" : "pending" },
-			{ id: "agent", status: "pending" },
-		],
-		provisionError: [workspaceFailure.message, workspaceFailure.detail && `Output: ${workspaceFailure.detail}`].filter(Boolean).join(" "),
-	} : session;
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
 	const approvalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
+	// settings.approvalMode is only the user's pick; the composer shows this
+	// default when there is none.
+	const shownDefaultApprovalMode = defaultApprovalMode(session.provider, approvalModes, cloud?.permissionMode);
 	const readSettings = () => {
 		const saved = readCloudTurnSettings(settingsKey);
-		const remembered = readCloudTurnSettings(projectKey).approvalMode;
-		const selectedMode = saved.approvalMode ?? remembered;
-		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : approvalModes[0] };
+		const selectedMode = saved.approvalMode ?? readRememberedApprovalMode(projectKey);
+		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : undefined };
 	};
 	const [selected, setSelected] = useState<{ key: string; settings: CloudTurnSettings }>(() => ({ key: settingsKey, settings: readSettings() }));
 	const settings = selected.key === settingsKey ? selected.settings : readSettings();
@@ -428,14 +642,19 @@ export function CloudSessionChatSurface({
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
 		try {
-			localStorage.setItem(settingsKey, JSON.stringify(next));
+			writeCloudTurnSettings(settingsKey, next);
 		} catch {
 			// The choice still applies for this mounted session when storage is unavailable.
 		}
 	};
 	const modelsQuery = useQuery({
-		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready && (session.provider === "codex" || session.provider === "claude-code")),
+		// A deleted session has no worker and cannot be resumed (only restored),
+		// so it is not asked. Keying on the worker generation reloads the
+		// catalog for each new worker, including the one a restore starts,
+		// instead of keeping an answer from a worker that is gone.
+		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.terminalGeneration ?? ""],
+		enabled: Boolean(cloud && ready && session.isTerminated !== true &&
+			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",
@@ -475,7 +694,9 @@ export function CloudSessionChatSurface({
 		};
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
-		try { localStorage.setItem(settingsKey, JSON.stringify(next)); } catch { /* keep the mounted choice */ }
+		// The native model and effort are saved; the approval mode stays the one
+		// the user picked in this session, if any.
+		try { writeCloudTurnSettings(settingsKey, { ...next, approvalMode: readCloudTurnSettings(settingsKey).approvalMode }); } catch { /* keep the mounted choice */ }
 	}, [modelsQuery.dataUpdatedAt, settingsKey]);
 	const eventsQuery = useQuery({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
@@ -493,8 +714,10 @@ export function CloudSessionChatSurface({
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			// Without the user's pick the turn carries no approval mode: the
+			// worker derives it from the session's mode.
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
-				? selectedSettings.approvalMode : approvalModes[0];
+				? selectedSettings.approvalMode : undefined;
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
@@ -507,23 +730,28 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
+	// A pick the session no longer allows (its mode dropped while Chat was
+	// open) is neither sent nor shown.
+	const shownApprovalMode = settings.approvalMode && approvalModes.includes(settings.approvalMode)
+		? settings.approvalMode : shownDefaultApprovalMode;
 	const startFailed = Boolean(workspaceFailure);
 	const startStopped = startFailed && !rerunning;
 	const snapshot = useMemo(() => {
 		const projected = toSnapshot(session, eventsQuery.data ?? []);
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
-		const setupStatus = (item: ConversationItem) =>
-			item.kind === "activity" && item.detail?.event === "workspace.setup" ? item.detail.setupStatus : undefined;
-		const lastPassed = Math.max(-1, ...projected.items.filter((item) => setupStatus(item) === "succeeded").map((item) => item.sequence));
-		const items = projected.items.filter((item) => {
-			const status = setupStatus(item);
-			return !status || status === "succeeded" || (!startFailed && item.sequence > lastPassed);
-		});
+		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
-		return { ...projected, items, controller, settings };
-	}, [eventsQuery.data, session, settings, startFailed, startStopped]);
+		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
+	}, [eventsQuery.data, session, settings, shownApprovalMode, startFailed, startStopped]);
+	// While Setup runs, or once the checkout, Setup or the agent's start failed,
+	// the session reads as a local start does: the startup checklist in place of a
+	// working timer, and messages that send in order once the agent starts.
+	const chatSession = useMemo<WorkspaceSession>(() => {
+		const startup = cloudStartupChecklist(session, eventsQuery.data ?? [], workspaceFailure, rerunning);
+		return startup ? { ...session, ...startup } : session;
+	}, [eventsQuery.data, rerunning, session, workspaceFailure]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -604,11 +832,18 @@ export function CloudSessionChatSurface({
 					updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
 				}
 			} : undefined}
-			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
+			onChooseSettings={(next, picked) => {
+				const current = settingsRef.current.settings;
+				// The settings bar sends the shown settings back with every change,
+				// so only a pick from the approval menu changes the approval mode,
+				// even when it is the shown default.
+				const approvalMode = picked === "approvalMode" ? next.approvalMode : current.approvalMode;
+				updateSettings({ ...current, ...next, approvalMode });
+			}}
 			showApprovalMode={approvalModes.length > 0}
 			approvalModes={approvalModes}
 			onRememberPermissions={approvalModes.length > 0 ? (mode) => {
-				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode })); } catch { /* keep this session's choice */ }
+				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode, approvalModeChosen: true })); } catch { /* keep this session's choice */ }
 				updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
 			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
@@ -626,6 +861,9 @@ export function CloudSessionChatSurface({
 							? eventsQuery.error.message
 						: send.error instanceof Error
 							? send.error.message
+							: modelsQuery.error instanceof CloudCpError && modelsQuery.error.code === "SESSION_TERMINATED"
+								// The session was deleted under this view; its own words say how to recover.
+								? modelsQuery.error.message
 							: modelsQuery.error instanceof Error
 								? `Model choices unavailable: ${modelsQuery.error.message}`
 								: undefined

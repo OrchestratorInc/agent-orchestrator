@@ -7960,6 +7960,40 @@ func TestSpawn_RejectsFreshClaudeAuthInWorkspaceLaunchContext(t *testing.T) {
 	}
 }
 
+type preLaunchRecordingAgent struct {
+	*recordingAgent
+	preLaunch ports.LaunchConfig
+}
+
+func (a *preLaunchRecordingAgent) PreLaunch(_ context.Context, cfg ports.LaunchConfig) error {
+	a.preLaunch = cfg
+	a.preLaunch.Env = maps.Clone(cfg.Env)
+	return nil
+}
+
+// PreLaunch prepares the provider config the launched process will read, so
+// it gets the same launch environment (for example a project
+// CLAUDE_CONFIG_DIR) the runtime starts the agent with.
+func TestSpawn_PreLaunchReceivesTheLaunchEnvironment(t *testing.T) {
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.Config.Env = map[string]string{"CLAUDE_CONFIG_DIR": "/profiles/work"}
+	st.projects["mer"] = project
+	agent := &preLaunchRecordingAgent{recordingAgent: &recordingAgent{}}
+	m.agents = singleAgent{agent: agent}
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if agent.preLaunch.WorkspacePath != "/ws/mer-1" || agent.preLaunch.Env["CLAUDE_CONFIG_DIR"] != "/profiles/work" ||
+		agent.preLaunch.Env[EnvSessionID] != "mer-1" {
+		t.Fatalf("PreLaunch config = %#v, want the session workspace and launch environment", agent.preLaunch)
+	}
+}
+
 // pathPinManager builds a manager whose Executable dep is stubbed, plus a
 // buffer capturing its log output, for the hook PATH pin tests.
 func pathPinManager(executable func() (string, error)) (*Manager, *fakeStore, *fakeRuntime, *bytes.Buffer) {

@@ -25,6 +25,7 @@ type Store interface {
 	RollbackCoordinatedSessionInterface(ctx context.Context, owner, orgID, transitionID string) error
 	CompleteCoordinatedInterfaceTransition(ctx context.Context, owner, transitionID string) error
 	ReleaseCoordinatedInterfaceClaim(ctx context.Context, owner, transitionID string) error
+	FailTerminatedInterfaceTransition(ctx context.Context, owner, transitionID string, from domain.SessionInterfaceTransitionPhase, errorCode, errorDetail string) error
 }
 
 // WorkerDriver executes handoff steps on the worker that owns the agent process.
@@ -60,6 +61,20 @@ type Options struct {
 	// retried before the handoff fails. A worker that never completes a command
 	// is assumed to be unreachable rather than looping forever.
 	MaxPendingRetries int
+	// UnverifiedIdleLimit bounds a drain whose source cannot prove it is idle
+	// (a terminal agent that received input after its last turn ended) while
+	// the provider reports no turn in progress. Without it such a drain waits
+	// forever. Active work and pending decisions still wait without a limit.
+	UnverifiedIdleLimit time.Duration
+	// RecoveryRetryBase and RecoveryRetryMax bound how often a fenced
+	// recovery_required handoff asks its worker to prove a controller is live.
+	// Each failed attempt doubles the wait, from the base up to the max, so a
+	// session whose worker is gone (paused, or never coming back) is not asked
+	// on every tick. The max stays short: the handoff holds the session's
+	// prompts, and a worker that comes back with the same epoch (a resumed VM)
+	// waits out at most one interval.
+	RecoveryRetryBase time.Duration
+	RecoveryRetryMax  time.Duration
 	Logger            *slog.Logger
 }
 
@@ -69,7 +84,20 @@ const (
 	defaultMaxConcurrent = 4
 	defaultLease         = 30 * time.Second
 	defaultMaxRetries    = 10
+	// Long enough for a submitted prompt's provider hook to reach the control
+	// plane, so a turn that is just starting is never mistaken for idle.
+	defaultUnverifiedIdleLimit = 30 * time.Second
+	defaultRecoveryRetryBase   = 2 * time.Second
+	defaultRecoveryRetryMax    = 30 * time.Second
 )
+
+// SessionTerminatedCode fails a handoff whose session was deleted before it
+// finished: no worker will run its remaining steps.
+const SessionTerminatedCode = "SESSION_TERMINATED"
+
+// unverifiedDrainDetail starts every failure detail for a drain that could not
+// prove its source idle. The desktop recognizes this prefix.
+const unverifiedDrainDetail = "source controller activity cannot be verified;"
 
 type Coordinator struct {
 	store   Store
@@ -79,6 +107,21 @@ type Coordinator struct {
 	lease   time.Duration
 	log     *slog.Logger
 	retries map[string]int
+	// unverifiedSince records when this coordinator first saw a draining source
+	// that could not prove it is idle while its provider reported no turn.
+	unverifiedSince map[string]time.Time
+	// recoveryRetries holds the backoff for recovery_required handoffs whose
+	// last readiness or restore attempt failed.
+	recoveryRetries map[string]recoveryRetry
+	now             func() time.Time
+}
+
+// recoveryRetry is when a failed recovery may next be attempted, the wait
+// after the attempt that failed, and the session's live worker epoch then.
+type recoveryRetry struct {
+	next  time.Time
+	delay time.Duration
+	epoch int64
 }
 
 // New creates an interface handoff coordinator.
@@ -95,17 +138,29 @@ func New(store Store, driver WorkerDriver, options Options) *Coordinator {
 	if options.MaxPendingRetries <= 0 {
 		options.MaxPendingRetries = defaultMaxRetries
 	}
+	if options.UnverifiedIdleLimit <= 0 {
+		options.UnverifiedIdleLimit = defaultUnverifiedIdleLimit
+	}
+	if options.RecoveryRetryBase <= 0 {
+		options.RecoveryRetryBase = defaultRecoveryRetryBase
+	}
+	if options.RecoveryRetryMax < options.RecoveryRetryBase {
+		options.RecoveryRetryMax = max(defaultRecoveryRetryMax, options.RecoveryRetryBase)
+	}
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
 	return &Coordinator{
-		store:   store,
-		driver:  driver,
-		options: options,
-		owner:   uuid.NewString(),
-		lease:   defaultLease,
-		log:     options.Logger,
-		retries: make(map[string]int),
+		store:           store,
+		driver:          driver,
+		options:         options,
+		owner:           uuid.NewString(),
+		lease:           defaultLease,
+		log:             options.Logger,
+		retries:         make(map[string]int),
+		unverifiedSince: make(map[string]time.Time),
+		recoveryRetries: make(map[string]recoveryRetry),
+		now:             time.Now,
 	}
 }
 
@@ -131,7 +186,13 @@ func (c *Coordinator) Run(ctx context.Context) error {
 // ReconcileOnce performs a single pass of pending handoffs.
 func (c *Coordinator) ReconcileOnce(ctx context.Context) error {
 	seen := make(map[string]struct{}, c.options.MaxConcurrent)
-	for len(seen) < c.options.MaxConcurrent {
+	c.pruneRecoveryRetries(c.now())
+	// A recovery waiting out its backoff is released untouched and does not
+	// count against MaxConcurrent, so it never delays another session's
+	// handoff; the seen set still ends the pass once every claimable
+	// transition has had its turn.
+	processed := 0
+	for processed < c.options.MaxConcurrent {
 		// Claim only when ready to process this transition. A claim queued
 		// behind another worker operation would expire before renewal starts.
 		transitions, err := c.store.ClaimCoordinatedInterfaceTransitions(ctx, c.owner, 1, c.lease)
@@ -146,6 +207,13 @@ func (c *Coordinator) ReconcileOnce(ctx context.Context) error {
 			return c.store.ReleaseCoordinatedInterfaceClaim(ctx, c.owner, transition.ID)
 		}
 		seen[transition.ID] = struct{}{}
+		if c.waitingToRetryRecovery(transition) {
+			if err := c.store.ReleaseCoordinatedInterfaceClaim(ctx, c.owner, transition.ID); err != nil {
+				return err
+			}
+			continue
+		}
+		processed++
 		if err := c.reconcile(ctx, &transition); err != nil {
 			if errors.Is(err, errCoordinationLost) {
 				c.log.Warn("interface transition claim lost to another coordinator",
@@ -211,6 +279,9 @@ func (c *Coordinator) reconcile(ctx context.Context, transition *postgres.Coordi
 	// operation succeeds, so source stopping, native-id resolution, committing,
 	// and target start are never repeated once their following checkpoint is
 	// durable.
+	if transition.SessionTerminated {
+		return c.endTerminated(runCtx, *transition)
+	}
 	for {
 		if errors.Is(context.Cause(runCtx), errCoordinationLost) {
 			return errCoordinationLost
@@ -287,31 +358,133 @@ func (c *Coordinator) reconcile(ctx context.Context, transition *postgres.Coordi
 			transition.Phase = domain.SessionInterfaceTransitionCompleted
 			return nil
 		case domain.SessionInterfaceTransitionRecovery:
-			if transition.ErrorCode == "TARGET_START_FAILED" {
-				return c.restoreSource(runCtx, *transition)
-			}
-			if transition.ErrorCode == "SOURCE_STOP_FAILED" || transition.ErrorCode == "NATIVE_ID_RESOLUTION_FAILED" ||
-				transition.ErrorCode == "SESSION_COMMIT_FAILED" || transition.ErrorCode == "SESSION_NOT_FOUND" {
-				return c.restoreUncommittedSource(runCtx, *transition)
-			}
-			// Recovery is terminal until a replacement worker proves that the
-			// committed controller is live. Only then may the store atomically
-			// release prompts held by this transition.
-			if err := c.driver.VerifyControllerReady(runCtx, *transition); err != nil {
-				return err
-			}
-			if err := c.store.CompleteCoordinatedInterfaceTransition(runCtx, c.owner, transition.ID); err != nil {
-				if errors.Is(err, postgres.ErrTransitionStale) {
-					return errCoordinationLost
-				}
-				return fmt.Errorf("complete recovered interface transition: %w", err)
-			}
-			transition.Phase = domain.SessionInterfaceTransitionCompleted
-			return nil
+			return c.retryRecoveryLater(*transition, c.recoverController(runCtx, transition))
 		default:
 			return nil
 		}
 	}
+}
+
+// recoverController runs one recovery attempt for a recovery_required handoff.
+func (c *Coordinator) recoverController(ctx context.Context, transition *postgres.CoordinatedInterfaceTransition) error {
+	if transition.ErrorCode == "TARGET_START_FAILED" {
+		return c.restoreSource(ctx, *transition)
+	}
+	if uncommittedRecovery(transition.ErrorCode) {
+		return c.restoreUncommittedSource(ctx, *transition)
+	}
+	// Recovery is terminal until a replacement worker proves that the
+	// committed controller is live. Only then may the store atomically
+	// release prompts held by this transition.
+	if err := c.driver.VerifyControllerReady(ctx, *transition); err != nil {
+		return err
+	}
+	if err := c.store.CompleteCoordinatedInterfaceTransition(ctx, c.owner, transition.ID); err != nil {
+		if errors.Is(err, postgres.ErrTransitionStale) {
+			return errCoordinationLost
+		}
+		return fmt.Errorf("complete recovered interface transition: %w", err)
+	}
+	transition.Phase = domain.SessionInterfaceTransitionCompleted
+	return nil
+}
+
+// uncommittedRecovery reports a recovery whose failure came before the session
+// row was committed to the target interface, so the controller to restore and
+// verify is the source. A drain is one: the interrupt policy recovers a failed
+// source interrupt (the source may be stopped) before anything is committed.
+func uncommittedRecovery(errorCode string) bool {
+	switch errorCode {
+	case "SOURCE_DRAIN_FAILED", "SOURCE_STOP_FAILED", "NATIVE_ID_RESOLUTION_FAILED",
+		"SESSION_COMMIT_FAILED", "SESSION_NOT_FOUND":
+		return true
+	default:
+		return false
+	}
+}
+
+// retryRecoveryLater records the backoff after a failed recovery attempt (or
+// clears it after one that finished) and returns err with when the next
+// attempt is due. A lost claim is not the recovery's failure, so it is
+// returned as is and does not back off.
+func (c *Coordinator) retryRecoveryLater(transition postgres.CoordinatedInterfaceTransition, err error) error {
+	if err == nil {
+		delete(c.recoveryRetries, transition.ID)
+		return nil
+	}
+	if errors.Is(err, errCoordinationLost) {
+		return err
+	}
+	if errors.Is(err, errPendingWorkerCommand) {
+		// A worker answering slowly is there: try again on the next tick.
+		delete(c.recoveryRetries, transition.ID)
+		return err
+	}
+	delay := c.options.RecoveryRetryBase
+	if previous, ok := c.recoveryRetries[transition.ID]; ok && previous.epoch == transition.LiveWorkerEpoch {
+		delay = min(previous.delay*2, c.options.RecoveryRetryMax)
+	}
+	c.recoveryRetries[transition.ID] = recoveryRetry{next: c.now().Add(delay), delay: delay, epoch: transition.LiveWorkerEpoch}
+	return fmt.Errorf("recover controller (next attempt in %s): %w", delay, err)
+}
+
+// waitingToRetryRecovery reports a recovery whose next attempt is not due yet.
+// A session whose live worker epoch changed since the failed attempt (a new
+// worker connected, or the last one went away) is tried at once, starting its
+// backoff over.
+func (c *Coordinator) waitingToRetryRecovery(transition postgres.CoordinatedInterfaceTransition) bool {
+	if transition.Phase != domain.SessionInterfaceTransitionRecovery || transition.SessionTerminated {
+		delete(c.recoveryRetries, transition.ID)
+		return false
+	}
+	retry, ok := c.recoveryRetries[transition.ID]
+	if ok && retry.epoch != transition.LiveWorkerEpoch {
+		delete(c.recoveryRetries, transition.ID)
+		return false
+	}
+	return ok && c.now().Before(retry.next)
+}
+
+// pruneRecoveryRetries drops backoff for transitions this coordinator has not
+// attempted for a while (finished elsewhere, or claimed by another replica),
+// so the map cannot grow forever.
+func (c *Coordinator) pruneRecoveryRetries(now time.Time) {
+	for id, retry := range c.recoveryRetries {
+		if now.Sub(retry.next) > 2*c.options.RecoveryRetryMax {
+			delete(c.recoveryRetries, id)
+		}
+	}
+}
+
+// endTerminated fails a handoff whose session was deleted: its worker is gone
+// and a deleted session never gets another, so no step (and no recovery proof)
+// can run. Without this a recovery_required handoff on a deleted session asks
+// for a worker on every tick forever. Prompts it held become failed turns
+// that say they were not sent because the session was deleted
+// (postgres.TerminatedInterfaceMessageError): never lost silently, and never
+// run unasked once the session is restored.
+func (c *Coordinator) endTerminated(ctx context.Context, transition postgres.CoordinatedInterfaceTransition) error {
+	delete(c.recoveryRetries, transition.ID)
+	delete(c.unverifiedSince, transition.ID)
+	delete(c.retries, transition.ID)
+	detail := "The session was deleted before the interface switch finished, so the switch was abandoned."
+	if transition.ErrorDetail != "" {
+		detail += " Earlier failure (" + transition.ErrorCode + "): " + transition.ErrorDetail
+	}
+	stepCtx, cancel := context.WithTimeout(ctx, c.options.StepTimeout)
+	defer cancel()
+	err := c.store.FailTerminatedInterfaceTransition(stepCtx, c.owner, transition.ID, transition.Phase,
+		SessionTerminatedCode, detail)
+	if errors.Is(err, postgres.ErrTransitionStale) {
+		return errCoordinationLost
+	}
+	if err != nil {
+		return fmt.Errorf("end interface transition of a deleted session: %w", err)
+	}
+	c.log.Info("interface transition ended: session deleted",
+		"transition_id", transition.ID, "session_id", transition.SessionID,
+		"phase", transition.Phase, "previous_error_code", transition.ErrorCode)
+	return nil
 }
 
 // Before the session interface is committed, only the source may have run.
@@ -434,6 +607,32 @@ func (c *Coordinator) drain(ctx context.Context, transition postgres.Coordinated
 	if err != nil {
 		return err, false
 	}
+	now := c.now()
+	c.pruneUnverified(now)
+	if inspection.QuiescenceUnverified && !inspection.DecisionPending && !inspection.DraftPresent &&
+		providerReportsNoTurn(transition) {
+		// A terminal proves it is idle only by a Stop hook newer than its latest
+		// input. Input that never starts a turn (a message a dialog swallowed,
+		// an unsent draft, a scroll or protocol report) leaves that proof
+		// missing forever while the provider reports no work. Wait a bounded
+		// time for a turn to start and finish, then fail with the source left
+		// running, as the local daemon does (DRAIN_QUIESCENCE_UNVERIFIED).
+		since, seen := c.unverifiedSince[transition.ID]
+		if !seen {
+			since = now
+			c.unverifiedSince[transition.ID] = now
+		}
+		if now.Sub(since) >= c.options.UnverifiedIdleLimit {
+			delete(c.unverifiedSince, transition.ID)
+			return fmt.Errorf(
+				"%s the agent reported no running turn for %s, but the terminal could not prove it is idle "+
+					"since its latest input. The terminal was left running; switch with the interrupt policy to stop it now",
+				unverifiedDrainDetail, c.options.UnverifiedIdleLimit,
+			), true
+		}
+		return errSourceBusy, true
+	}
+	delete(c.unverifiedSince, transition.ID)
 	if inspection.DecisionPending || inspection.DraftPresent || inspection.QuiescenceUnverified {
 		return errSourceBusy, true
 	}
@@ -441,6 +640,30 @@ func (c *Coordinator) drain(ctx context.Context, transition postgres.Coordinated
 		return nil, true
 	}
 	return errSourceBusy, true
+}
+
+// providerReportsNoTurn reports that the session's provider hooks show no turn
+// in progress: the session is idle, or it is "active" only because AO typed a
+// message that no provider hook has confirmed as a submitted prompt.
+func providerReportsNoTurn(transition postgres.CoordinatedInterfaceTransition) bool {
+	switch transition.SessionActivityState {
+	case "idle":
+		return true
+	case "active":
+		return transition.SessionActivityUnconfirmed
+	default:
+		return false
+	}
+}
+
+// pruneUnverified drops clocks for transitions that left draining elsewhere
+// (cancelled, or claimed by another replica) so the map cannot grow forever.
+func (c *Coordinator) pruneUnverified(now time.Time) {
+	for id, since := range c.unverifiedSince {
+		if now.Sub(since) > 10*c.options.UnverifiedIdleLimit {
+			delete(c.unverifiedSince, id)
+		}
+	}
 }
 
 func (c *Coordinator) advance(

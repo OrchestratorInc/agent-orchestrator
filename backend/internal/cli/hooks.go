@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +70,7 @@ type setActivityAPIRequest struct {
 	TranscriptPath               string                              `json:"transcriptPath,omitempty"`
 	LaunchID                     string                              `json:"launchId,omitempty"`
 	Entrypoint                   string                              `json:"entrypoint,omitempty"`
+	ProcessID                    int                                 `json:"processId,omitempty"`
 	Usage                        *usageHookMetadata                  `json:"usage,omitempty"`
 }
 
@@ -708,6 +710,11 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// worktree, which inherits this session's env and launch id (#6454).
 		if entrypoint := strings.TrimSpace(os.Getenv("CLAUDE_CODE_ENTRYPOINT")); len(entrypoint) <= maxActivityMetaLen {
 			req.Entrypoint = entrypoint
+		}
+		// Claude names the process running the hook. The daemon drops hooks
+		// from a Claude process other than the session's terminal one.
+		if pid, err := strconv.Atoi(strings.TrimSpace(os.Getenv("CLAUDE_PID"))); err == nil && pid > 1 {
+			req.ProcessID = pid
 		}
 	}
 	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && event == "user-prompt-submit" &&

@@ -3471,6 +3471,14 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 }
 
+/* A button the Files view adds here (maximize) joins the pinned pair, so it
+   sits the same 4px from them as they sit from each other. */
+.session-inspector__files-actions:not(:empty) + .session-inspector-actions-spacer {
+	width: calc(
+		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-1)
+	);
+}
+
 @container workspace-topbar (max-width: 759px) {
 	.workspace-topbar-actions [data-priority="secondary"] [data-compact-label] {
 		inline-size: 0;
@@ -4931,7 +4939,8 @@ html.sidebar-reordering * {
    composition overrides for the browser never reach the files overlay. */
 .files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
+	/* Maximized files use the window's full width: no inset strip beside the frame. */
+	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -5052,8 +5061,9 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
 }
 
+/* Maximized files keep the full width on macOS too (see .files-popout-overlay). */
 .files-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
+	--browser-popout-inline-inset: 0px;
 }
 
 .browser-popout-overlay .browser-panel__toolbar,
@@ -5203,6 +5213,54 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	.files-popout-titlebar > label {
 		transition: none;
 	}
+}
+
+/* Maximized Files moves its header into the band: the pickers, the filter,
+   then the view controls and minimize, in one row. The filter's auto margins
+   split the free space evenly, so it sits the same distance from the pickers
+   as from the controls; when the row is tight the pickers truncate first. */
+.files-popout-titlebar:has(> .files-popout-titlebar__start) {
+	gap: var(--space-3);
+	padding-inline: 0;
+}
+
+/* In flow, but still the positioning box for the filter's search icon. It
+   keeps its width while focused: widening would push the pickers aside. */
+.files-popout-titlebar:has(> .files-popout-titlebar__start) > label,
+.files-popout-titlebar:has(> .files-popout-titlebar__start) > label:focus-within {
+	position: relative;
+	left: auto;
+	order: 1;
+	width: auto;
+	flex: 0 1 min(480px, calc(100vw - 32px));
+	margin-inline: auto;
+	transform: none;
+}
+
+.files-popout-titlebar__start {
+	display: flex;
+	min-width: 0;
+	flex: 0 1 auto;
+	order: 0;
+	overflow: hidden;
+	align-items: center;
+	/* The 12px gutter the frame's rows start on. */
+	padding-left: var(--space-3);
+}
+
+/* Only the native traffic lights share the band: the titlebar's own
+   navigation cluster sits below this overlay. */
+.files-popout-titlebar--mac-windowed > .files-popout-titlebar__start {
+	padding-left: var(--size-titlebar-cluster-left);
+}
+
+.files-popout-titlebar__end {
+	flex: none;
+	order: 2;
+}
+
+.files-popout-titlebar--mac-windowed > .files-popout-titlebar__end {
+	padding-right: calc(var(--space-3) + var(--space-2));
 }
 
 .browser-panel__topbar-host,

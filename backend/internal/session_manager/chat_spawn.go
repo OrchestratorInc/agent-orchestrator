@@ -427,23 +427,38 @@ type SessionModeDefaults interface {
 	DefaultSessionMode(ctx context.Context) domain.SessionMode
 }
 
-// resolveSessionMode applies the precedence for a spawn:
+// resolveSessionMode applies startSessionMode with the daemon-owned default,
+// read here, at spawn time, so changing the preference affects only sessions
+// created afterwards. An existing session changes only through an explicit,
+// capability-gated interface transition; it is never re-resolved from the
+// default.
+func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKind, requested domain.SessionMode) domain.SessionMode {
+	var defaultMode domain.SessionMode
+	if m.defaults != nil {
+		defaultMode = m.defaults.DefaultSessionMode(ctx)
+	}
+	return startSessionMode(kind, requested, defaultMode)
+}
+
+// startSessionMode is the precedence for a spawn's controller mode:
 //
 //  1. the mode the caller explicitly requested;
-//  2. the daemon-owned default;
-//  3. the compatibility default, TUI.
+//  2. Chat for an orchestrator;
+//  3. the daemon-owned default;
+//  4. the compatibility default, TUI.
 //
-// The default is read here, at spawn time, so changing the preference affects only
-// sessions created afterwards. An existing session changes only through an explicit,
-// capability-gated interface transition; it is never re-resolved from the default.
-func (m *Manager) resolveSessionMode(ctx context.Context, requested domain.SessionMode) domain.SessionMode {
+// Whether the harness can run the result is checked afterwards. The cloud
+// control plane resolves a cloud session's interface with the same precedence
+// (cloud/internal/domain.StartInterface); both are tested against
+// contracts/session-start-interface.json so they cannot drift.
+func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.SessionMode) domain.SessionMode {
 	if requested.Valid() {
 		return requested
 	}
-	if m.defaults == nil {
-		return domain.DefaultSessionMode
+	if kind == domain.KindOrchestrator {
+		return domain.SessionModeChat
 	}
-	return domain.NormalizeSessionMode(m.defaults.DefaultSessionMode(ctx))
+	return domain.NormalizeSessionMode(defaultMode)
 }
 
 // resumeChatController reattaches a chat session to its provider conversation

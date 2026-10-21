@@ -78,8 +78,9 @@ frontend/daemon/
 frontend/tmux/
 frontend/resources/acp-runtime/
 
-# pinned native browser automation binary copied during package preparation
+# pinned native binaries (browser automation, cloudflared) copied during package preparation
 frontend/agent-browser/
+frontend/cloudflared/
 
 # Locally-added agent skills (not for the team), except curated project skills
 .agents/

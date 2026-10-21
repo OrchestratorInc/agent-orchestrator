@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,8 @@ import (
 )
 
 type fakeSessionService struct {
+	workspaceSnapshotInput     sessionsvc.WorkspaceSelectionRevisionInput
+	workspaceSnapshotFilter    string
 	cleanupPending             bool
 	artifactsDeleted           []domain.SessionID
 	deleteArtifactsErr         error
@@ -72,7 +75,11 @@ type fakeSessionService struct {
 	workspaceRevisionSide      sessionsvc.WorkspaceFileBlobSide
 	workspaceRevisionVersion   string
 	workspaceExpectedRevision  string
-	workspaceRevisionCommitSHA string
+	workspaceSelectionRevision sessionsvc.WorkspaceSelectionRevisionInput
+	workspaceSelection         sessionsvc.WorkspaceCommitSelection
+	workspaceSelectionView     sessionsvc.WorkspaceView
+	workspaceSelectionSHAs     []string
+	workspaceSelectionVersion  string
 	prFiles                    sessionsvc.PRFiles
 	prFileCommitSHA            string
 	prRevisionCommitSHA        string
@@ -86,6 +93,9 @@ type fakeSessionService struct {
 	workspaceTreePath          string
 	workspacePaths             []string
 	workspaceReconciles        int
+	workspaceHistoryView       sessionsvc.WorkspaceView
+	workspaceViewHistory       *sessionsvc.WorkspaceHistory
+	workspaceBranches          sessionsvc.WorkspaceBranches
 	spawnErr                   error
 	lastSpawn                  ports.SpawnConfig
 	orchestratorMode           domain.SessionMode
@@ -706,15 +716,31 @@ func (f *fakeSessionService) ReconcileWorkspaceManifest(ctx context.Context, id 
 	return f.GetWorkspaceManifest(ctx, id)
 }
 
-func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error) {
+func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView) (sessionsvc.WorkspaceHistory, error) {
+	f.workspaceHistoryView = view
 	files, err := f.ListWorkspaceFiles(ctx, id)
 	if err != nil {
 		return sessionsvc.WorkspaceHistory{}, err
+	}
+	if f.workspaceViewHistory != nil {
+		return *f.workspaceViewHistory, nil
 	}
 	return sessionsvc.WorkspaceHistory{
 		SessionID: files.SessionID, Commits: files.Commits, CommitsTruncated: files.CommitsTruncated,
 		Ahead: files.Ahead, Behind: files.Behind,
 	}, nil
+}
+
+func (f *fakeSessionService) ListWorkspaceBranches(_ context.Context, id domain.SessionID) (sessionsvc.WorkspaceBranches, error) {
+	if f.workspaceErr != nil {
+		return sessionsvc.WorkspaceBranches{}, f.workspaceErr
+	}
+	if _, ok := f.sessions[id]; !ok {
+		return sessionsvc.WorkspaceBranches{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	branches := f.workspaceBranches
+	branches.SessionID = id
+	return branches, nil
 }
 
 func (f *fakeSessionService) ListPRFiles(_ context.Context, id domain.SessionID, _ int, _ string) (sessionsvc.PRFiles, error) {
@@ -837,9 +863,24 @@ func (f *fakeSessionService) GetPRFileRevisionAtCommit(ctx context.Context, id d
 	return f.GetPRFileRevision(ctx, id, number, sourceURL, path, side)
 }
 
-func (f *fakeSessionService) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
-	f.workspaceRevisionCommitSHA = commitSHA
-	return f.GetWorkspaceFileRevision(ctx, id, path, sessionsvc.WorkspaceDiffCommitted, side, workspaceVersion, expectedRevision)
+func (f *fakeSessionService) GetWorkspaceSelectionFileRevision(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileRevision, error) {
+	f.workspaceSelectionRevision = input
+	return f.GetWorkspaceFileRevision(ctx, id, input.Path, input.Scope, input.Side, input.WorkspaceVersion, input.ExpectedRevision)
+}
+
+func (f *fakeSessionService) GetWorkspaceCommitSelection(_ context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error) {
+	f.workspaceSelectionView = view
+	f.workspaceSelectionSHAs = commitSHAs
+	f.workspaceSelectionVersion = workspaceVersion
+	if f.workspaceErr != nil {
+		return sessionsvc.WorkspaceCommitSelection{}, f.workspaceErr
+	}
+	if _, ok := f.sessions[id]; !ok {
+		return sessionsvc.WorkspaceCommitSelection{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	selection := f.workspaceSelection
+	selection.SessionID = id
+	return selection, nil
 }
 
 func (f *fakeSessionService) ResolveWorkspacePath(_ context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error) {
@@ -4014,7 +4055,8 @@ func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 			{Path: "src/app.go", Status: sessionsvc.WorkspaceFileUnmodified},
 		},
 		Sections: sessionsvc.WorkspaceFileSections{
-			Unstaged: []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
+			Uncommitted: []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
+			Unstaged:    []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
 		},
 		Summary: sessionsvc.WorkspaceSummary{Files: 1, Additions: 2, Deletions: 1},
 	}
@@ -4033,6 +4075,114 @@ func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 	if len(got.Files) != 1 || got.Files[0].Path != "README.md" {
 		t.Fatalf("manifest files = %+v, want only changed README.md", got.Files)
 	}
+	if len(got.Sections.Uncommitted) != 1 || got.Sections.Uncommitted[0].Path != "README.md" {
+		t.Fatalf("manifest uncommitted section = %+v, want README.md", got.Sections.Uncommitted)
+	}
+	// Empty sections still serialize as arrays, so a missing uncommitted key
+	// can only mean an older daemon.
+	if !strings.Contains(string(body), `"staged":[]`) {
+		t.Fatalf("manifest body = %s, want empty sections as arrays", body)
+	}
+}
+
+func TestSessionsAPI_GetWorkspaceHistoryForBranchView(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceViewHistory = &sessionsvc.WorkspaceHistory{
+		SessionID: "ao-1",
+		View: sessionsvc.WorkspaceViewInfo{
+			Kind: sessionsvc.WorkspaceViewBranch, Name: "feature/login", TipSHA: "tip-sha", BaseSHA: "base-sha", BaseRef: "origin/main",
+			RangeMode: sessionsvc.WorkspaceRangeSinceBase,
+		},
+		Commits:      []sessionsvc.CommitSummary{{SHA: "tip-sha", Subject: "add login"}},
+		RangeSummary: &sessionsvc.WorkspaceSummary{Files: 2, Additions: 5, Deletions: 1},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?branch=feature%2Flogin", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET branch history = %d, want 200; body=%s", status, body)
+	}
+	if svc.workspaceHistoryView != (sessionsvc.WorkspaceView{Branch: "feature/login"}) {
+		t.Fatalf("view = %+v, want branch feature/login", svc.workspaceHistoryView)
+	}
+	var got controllers.WorkspaceHistoryResponse
+	mustJSON(t, body, &got)
+	want := controllers.WorkspaceViewResponse{Kind: "branch", Name: "feature/login", TipSHA: "tip-sha", BaseSHA: "base-sha", BaseRef: "origin/main", RangeMode: "since_base"}
+	if got.View != want {
+		t.Fatalf("view = %+v, want %+v", got.View, want)
+	}
+	if got.RangeSummary == nil || *got.RangeSummary != (controllers.WorkspaceSummary{Files: 2, Additions: 5, Deletions: 1}) {
+		t.Fatalf("rangeSummary = %+v", got.RangeSummary)
+	}
+	if len(got.Commits) != 1 || got.Commits[0].SHA != "tip-sha" || got.Ahead != nil || got.Behind != nil {
+		t.Fatalf("history = %+v, want one commit and no ahead/behind", got)
+	}
+
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?prNumber=42&sourceUrl=https%3A%2F%2Fgithub.com%2Facme%2Frepo%2Fpull%2F42", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET PR history = %d, want 200", status)
+	}
+	if svc.workspaceHistoryView != (sessionsvc.WorkspaceView{PRNumber: 42, SourceURL: "https://github.com/acme/repo/pull/42"}) {
+		t.Fatalf("view = %+v, want PR 42 with its source URL", svc.workspaceHistoryView)
+	}
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history", "")
+	if status != http.StatusOK || svc.workspaceHistoryView != (sessionsvc.WorkspaceView{}) {
+		t.Fatalf("GET history = %d with view %+v, want 200 and the checked-out view", status, svc.workspaceHistoryView)
+	}
+
+	for _, tc := range []struct{ query, code string }{
+		{"branch=", "INVALID_WORKSPACE_BRANCH"},
+		{"prNumber=abc", "INVALID_WORKSPACE_VIEW"},
+		{"prNumber=0", "INVALID_WORKSPACE_VIEW"},
+	} {
+		body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?"+tc.query, "")
+		assertErrorCode(t, body, status, http.StatusBadRequest, tc.code)
+	}
+}
+
+func TestSessionsAPI_ListWorkspaceBranches(t *testing.T) {
+	svc := newFakeSessionService()
+	updated := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	svc.workspaceBranches = sessionsvc.WorkspaceBranches{
+		Supported: true, DefaultBranch: "main", Truncated: true,
+		Branches: []sessionsvc.WorkspaceBranch{
+			{Kind: sessionsvc.WorkspaceBranchLocal, Name: "session", TipSHA: "tip-sha", UpdatedAt: updated, CheckedOut: true, PRNumber: 7, PRURL: "https://github.com/acme/repo/pull/7", PRTitle: "Add login"},
+			{Kind: sessionsvc.WorkspaceBranchLocal, Name: "main", TipSHA: "main-sha", IsDefault: true},
+			{Kind: sessionsvc.WorkspaceBranchPullRequest, Name: "fork-fix", TipSHA: "pr-sha", UpdatedAt: updated, PRNumber: 9, PRURL: "https://github.com/acme/repo/pull/9"},
+		},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/branches", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET branches = %d, want 200; body=%s", status, body)
+	}
+	var got controllers.WorkspaceBranchesResponse
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || !got.Supported || got.DefaultBranch != "main" || !got.Truncated || len(got.Branches) != 3 {
+		t.Fatalf("branches = %+v", got)
+	}
+	checkedOut := got.Branches[0]
+	if checkedOut.Kind != "local" || !checkedOut.CheckedOut || checkedOut.UpdatedAt == nil || !checkedOut.UpdatedAt.Equal(updated) || checkedOut.PRNumber != 7 || checkedOut.PRURL != "https://github.com/acme/repo/pull/7" || checkedOut.PRTitle != "Add login" {
+		t.Fatalf("checked-out row = %+v", checkedOut)
+	}
+	if main := got.Branches[1]; !main.IsDefault || main.UpdatedAt != nil || main.CheckedOut {
+		t.Fatalf("main row = %+v, want the default branch with no time", main)
+	}
+	if pr := got.Branches[2]; pr.Kind != "pull_request" || pr.Name != "fork-fix" || pr.PRNumber != 9 || pr.TipSHA != "pr-sha" {
+		t.Fatalf("pull request row = %+v", pr)
+	}
+
+	svc.workspaceBranches = sessionsvc.WorkspaceBranches{}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/branches", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"branches":[]`) || !strings.Contains(string(body), `"supported":false`) {
+		t.Fatalf("GET unsupported branches = %d %s, want supported false and an empty array", status, body)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/missing/workspace/branches", "")
+	assertErrorCode(t, body, status, http.StatusNotFound, "SESSION_NOT_FOUND")
 }
 
 func TestSessionsAPI_ListPRFiles(t *testing.T) {
@@ -4274,8 +4424,110 @@ func TestSessionsAPI_GetWorkspaceFileRevisionAtCommit(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("GET workspace commit revision = %d body=%s", status, body)
 	}
-	if svc.workspaceRevisionCommitSHA != "abc123" || svc.workspaceRevisionScope != sessionsvc.WorkspaceDiffCommitted {
-		t.Fatalf("commit revision args = sha:%q scope:%q", svc.workspaceRevisionCommitSHA, svc.workspaceRevisionScope)
+	if got := svc.workspaceSelectionRevision; got.CommitSHA != "abc123" || got.Scope != sessionsvc.WorkspaceDiffCommitted || got.CommitSHAs != nil {
+		t.Fatalf("commit revision input = %+v", got)
+	}
+}
+
+func TestSessionsAPI_RevisionParsesCommaSeparatedCommitShas(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&scope=committed&side=before&commitShas=aaa,%20bbb,,ccc&branch=feature%2Flogin&expectedTipSha=tip&expectedBaseSha=base&workspaceVersion=v1", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace selection revision = %d body=%s", status, body)
+	}
+	if headers.Get("Cache-Control") != "no-store" || headers.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("security headers = %#v", headers)
+	}
+	want := sessionsvc.WorkspaceSelectionRevisionInput{
+		Path: "README.md", Side: sessionsvc.WorkspaceBlobBefore, Scope: sessionsvc.WorkspaceDiffCommitted, WorkspaceVersion: "v1",
+		View:       sessionsvc.WorkspaceView{Branch: "feature/login", ExpectedTipSHA: "tip", ExpectedBaseSHA: "base"},
+		CommitSHAs: []string{"aaa", "bbb", "ccc"},
+	}
+	got := svc.workspaceSelectionRevision
+	if got.Path != want.Path || got.Side != want.Side || got.Scope != want.Scope || got.View != want.View || got.WorkspaceVersion != want.WorkspaceVersion || !slices.Equal(got.CommitSHAs, want.CommitSHAs) {
+		t.Fatalf("selection revision input = %+v, want %+v", got, want)
+	}
+
+	// A PR view alone, without commits, still reads the selection.
+	if _, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&scope=committed&prNumber=42", ""); status != http.StatusOK || svc.workspaceSelectionRevision.View.PRNumber != 42 {
+		t.Fatalf("GET PR view revision = %d, input %+v", status, svc.workspaceSelectionRevision)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&prNumber=abc", "")
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_WORKSPACE_VIEW")
+}
+
+func TestSessionsAPI_GetWorkspaceDiffsWithCommitShas(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/diffs", `{"scope":"committed","paths":["README.md"],"contextLines":3,"commitShas":["aaa","bbb"],"prNumber":42,"sourceUrl":" https://github.com/acme/repo/pull/42 ","expectedTipSha":"tip","expectedBaseSha":"base"}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST workspace selection diffs = %d body=%s", status, body)
+	}
+	in := svc.workspaceDiffInput
+	wantView := sessionsvc.WorkspaceView{PRNumber: 42, SourceURL: "https://github.com/acme/repo/pull/42", ExpectedTipSHA: "tip", ExpectedBaseSHA: "base"}
+	if in.Scope != sessionsvc.WorkspaceDiffCommitted || !slices.Equal(in.CommitSHAs, []string{"aaa", "bbb"}) || in.View != wantView || in.CommitSHA != "" {
+		t.Fatalf("selection diff input = %+v", in)
+	}
+
+	svc.workspaceErr = apierr.Conflict("WORKSPACE_COMMITS_NOT_COMBINABLE", "The selected commits cannot be combined", map[string]any{"commitSha": "bbb", "paths": []string{"README.md"}, "reason": "conflict"})
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/diffs", `{"scope":"committed","paths":["README.md"],"contextLines":3,"commitShas":["aaa","bbb"]}`)
+	assertErrorCode(t, body, status, http.StatusConflict, "WORKSPACE_COMMITS_NOT_COMBINABLE")
+}
+
+func TestSessionsAPI_GetWorkspaceCommitSelection(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceSelection = sessionsvc.WorkspaceCommitSelection{
+		View:       sessionsvc.WorkspaceViewInfo{Kind: sessionsvc.WorkspaceViewBranch, Name: "feature/login", TipSHA: "tip", BaseSHA: "base"},
+		Contiguous: false, Combinable: true,
+		Files:   []sessionsvc.WorkspaceFileSummary{{Path: "a.txt", Status: sessionsvc.WorkspaceFileAdded, Additions: 1, Size: 2}},
+		Summary: sessionsvc.WorkspaceSummary{Files: 1, Additions: 1},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"branch":"feature/login","expectedTipSha":"tip","commitShas":["aaa","bbb"],"workspaceVersion":"v1"}`)
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("POST commit selection = %d body=%s", status, body)
+	}
+	if svc.workspaceSelectionView != (sessionsvc.WorkspaceView{Branch: "feature/login", ExpectedTipSHA: "tip"}) || !slices.Equal(svc.workspaceSelectionSHAs, []string{"aaa", "bbb"}) || svc.workspaceSelectionVersion != "v1" {
+		t.Fatalf("service args = view %+v shas %v version %q", svc.workspaceSelectionView, svc.workspaceSelectionSHAs, svc.workspaceSelectionVersion)
+	}
+	var got controllers.WorkspaceCommitSelectionResponse
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || got.TipSHA != "tip" || got.BaseSHA != "base" || got.Contiguous || !got.Combinable || got.Conflict != nil || len(got.Files) != 1 || got.Files[0].Path != "a.txt" || got.Summary.Files != 1 {
+		t.Fatalf("response = %+v", got)
+	}
+
+	// Commits that cannot be combined are data, not an error.
+	svc.workspaceSelection = sessionsvc.WorkspaceCommitSelection{
+		View:     sessionsvc.WorkspaceViewInfo{TipSHA: "tip"},
+		Conflict: &sessionsvc.WorkspaceCommitSelectionConflict{CommitSHA: "bbb", Paths: []string{"a.txt"}, Reason: sessionsvc.WorkspaceCommitConflict},
+	}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"commitShas":["aaa","bbb"]}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST conflicting selection = %d body=%s", status, body)
+	}
+	for _, want := range []string{`"combinable":false`, `"files":[]`, `"conflict":{"commitSha":"bbb","paths":["a.txt"],"reason":"conflict"}`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("body = %s, want %s", body, want)
+		}
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"commitShas":`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{apierr.Invalid("INVALID_WORKSPACE_COMMIT_SHA", "Commit SHAs must be full object names", nil), http.StatusBadRequest, "INVALID_WORKSPACE_COMMIT_SHA"},
+		{apierr.NotFound("WORKSPACE_COMMIT_NOT_FOUND", "Commit is not available"), http.StatusNotFound, "WORKSPACE_COMMIT_NOT_FOUND"},
+		{apierr.Conflict("WORKSPACE_REF_MOVED", "The reviewed branch moved", map[string]any{"tipSha": "new"}), http.StatusConflict, "WORKSPACE_REF_MOVED"},
+	} {
+		svc.workspaceErr = tc.err
+		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"commitShas":["x"]}`)
+		assertErrorCode(t, body, status, tc.status, tc.code)
 	}
 }
 
@@ -5192,5 +5444,70 @@ func TestSessionsAPI_KillReportsAcceptedCleanup(t *testing.T) {
 	}
 	if status != http.StatusOK || !result.CleanupPending || result.Freed || !svc.sessions["ao-1"].IsTerminated {
 		t.Fatalf("accepted cleanup response = %d %s", status, body)
+	}
+}
+
+func (f *fakeSessionService) GetWorkspaceSnapshotFile(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileDetail, error) {
+	f.workspaceSnapshotInput = input
+	file, err := f.GetWorkspaceFile(ctx, id, input.Path, "")
+	file.Historical = true
+	return file, err
+}
+func (f *fakeSessionService) ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput, filter string) (sessionsvc.WorkspaceTree, error) {
+	f.workspaceSnapshotInput = input
+	f.workspaceSnapshotFilter = filter
+	tree, err := f.ListWorkspaceTree(ctx, id, input.Path)
+	tree.Snapshot = true
+	return tree, err
+}
+
+func (f *fakeSessionService) GetWorkspaceSnapshotBlob(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileBlob, error) {
+	f.workspaceSnapshotInput = input
+	return f.GetWorkspaceFileBlob(ctx, id, input.Path, input.Side)
+}
+
+func TestSessionsAPI_SnapshotReadsCarrySourceAndSelection(t *testing.T) {
+	for _, route := range []string{"file", "tree", "file/blob"} {
+		t.Run(route, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			sha := strings.Repeat("a", 40)
+			body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/"+route+"?snapshot=true&path=src&branch=feature&expectedTipSha="+sha+"&commitShas="+sha+"&filter=needle", "")
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			got := svc.workspaceSnapshotInput
+			if got.Path != "src" || got.View.Branch != "feature" || got.View.ExpectedTipSHA != sha || len(got.CommitSHAs) != 1 || got.CommitSHAs[0] != sha {
+				t.Fatalf("snapshot input=%+v", got)
+			}
+			if route == "tree" && (svc.workspaceSnapshotFilter != "needle" || !strings.Contains(string(body), `"snapshot":true`)) {
+				t.Fatalf("tree=%s filter=%s", body, svc.workspaceSnapshotFilter)
+			}
+			if route == "file" && !strings.Contains(string(body), `"historical":true`) {
+				t.Fatalf("snapshot file missing its marker: %s", body)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_SnapshotRejectsMalformedSource(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file?snapshot=true&path=src&prNumber=invalid", "")
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_WORKSPACE_VIEW") {
+		t.Fatalf("response=%d %s", status, body)
+	}
+}
+
+func TestSessionsAPI_SourceSelectorCannotFallBackToLiveFiles(t *testing.T) {
+	for _, route := range []string{"file", "tree", "file/blob"} {
+		t.Run(route, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/"+route+"?path=src&branch=feature", "")
+			if status != http.StatusOK || svc.workspaceSnapshotInput.View.Branch != "feature" {
+				t.Fatalf("source selector fell back to the worktree: %d %s input=%+v", status, body, svc.workspaceSnapshotInput)
+			}
+		})
 	}
 }

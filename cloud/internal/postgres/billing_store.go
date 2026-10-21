@@ -1150,6 +1150,40 @@ func (s *Store) ResetWeeklyUsage(ctx context.Context, principal domain.Principal
 	})
 }
 
+// CleanupResumeAllowed reports whether a billed sandbox being deleted may be
+// resumed to run its project's Cleanup: nil, or the plan refusal (see
+// IsPlanRefusal) of an organization over its plan's usage, whose billed
+// sandboxes the usage enforcer pauses (PauseOverLimit), so a paused one stays
+// paused. An unbilled sandbox, an organization not billed self-serve and
+// billing that is off always allow it.
+func (s *Store) CleanupResumeAllowed(ctx context.Context, orgID, sessionID string) error {
+	if !s.billing.enforced {
+		return nil
+	}
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var billed bool
+		err := tx.QueryRow(ctx,
+			`SELECT `+billedSandboxSQL+` FROM ao_sandboxes sb WHERE sb.org_id = $1 AND sb.session_id = $2`,
+			orgID, sessionID).Scan(&billed)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !billed) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		billing, err := orgBillingTx(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		// As PauseOverLimit: an organization whose billing no member's
+		// request recorded yet is left alone.
+		if billing.BillingMode == "" || s.billing.mode(billing) != domain.BillingModeSelfServe {
+			return nil
+		}
+		return s.billing.checkPlanTx(ctx, tx, billing, "", admitUsage, time.Now())
+	})
+}
+
 // WakeAllowed reports whether a paused session may be woken under the plan,
 // for anyone who may open the session (share grantees included). It is an
 // early answer that takes no lock: the transaction that wakes the session
@@ -1344,8 +1378,7 @@ func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]bi
 				SELECT 1 FROM ao_turns t
 				WHERE t.org_id = sb.org_id AND t.session_id = sb.session_id
 					AND t.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
-					-- A message queued behind a failed checkout or Setup waits for a retry.
-					AND NOT (t.state = 'queued' AND sb.startup_error_code = ANY($2))
+					AND NOT `+queuedBehindFailedStartupSQL("t", "sb")+`
 			)
 			OR EXISTS (
 				SELECT 1 FROM ao_review_runs r
@@ -1357,7 +1390,7 @@ func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]bi
 			AND sb.observed_state NOT IN ('deleted', 'deleting', 'terminated', 'failed')
 		ORDER BY (sb.startup_started_at IS NOT NULL) DESC, sb.startup_started_at DESC NULLS LAST,
 			se.created_at DESC, sb.session_id`,
-		orgID, domain.WorkspaceStartupErrorCodes())
+		orgID)
 	if err != nil {
 		return nil, err
 	}

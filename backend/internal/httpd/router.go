@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -81,6 +82,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountControl(r, control)
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)
+	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
 	mountAwake(r, &controllers.AwakeController{Svc: deps.Awake})
@@ -376,6 +378,62 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 			},
 		})
 		w.WriteHeader(http.StatusAccepted)
+	})
+}
+
+type telemetryIdentityRequest struct {
+	CloudUserID string `json:"cloudUserId"`
+	// Sequence orders hand-offs from one desktop. A request cannot be recalled
+	// once sent (a client timeout leaves it in flight), so the daemon, not the
+	// client, rejects one older than what it already applied. Zero means unordered.
+	Sequence int64 `json:"sequence,omitempty"`
+}
+
+// mountTelemetryIdentity lets the desktop app (Electron main, which sends no
+// Origin) tell the daemon which AO Cloud user is signed in; "" signs out. Only
+// the opaque user ID crosses: the email goes straight to PostHog from the
+// desktop at identify time and never touches the daemon.
+func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
+	if ident == nil {
+		return
+	}
+	var (
+		seqMu   sync.Mutex
+		lastSeq int64
+	)
+	r.Post("/internal/telemetry/identity", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{"status": "forbidden", "service": daemonmeta.ServiceName})
+			return
+		}
+		var body telemetryIdentityRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "request body must be valid JSON", nil)
+			return
+		}
+		// Check-and-apply is one critical section so a late older request cannot
+		// slip in after a newer one has committed. The newest sequence is recorded
+		// before applying: it is the user's latest intent even if saving fails.
+		seqMu.Lock()
+		defer seqMu.Unlock()
+		if body.Sequence > 0 {
+			if body.Sequence < lastSeq {
+				envelope.WriteAPIError(w, req, http.StatusConflict, "conflict", "STALE_TELEMETRY_IDENTITY", "a newer telemetry identity was already applied", map[string]any{"lastSequence": lastSeq})
+				return
+			}
+			lastSeq = body.Sequence
+		}
+		if err := ident.SetCloudUserID(req.Context(), body.CloudUserID); err != nil {
+			if errors.Is(err, ports.ErrInvalidCloudUserID) {
+				envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
+				return
+			}
+			envelope.WriteAPIError(w, req, http.StatusInternalServerError, "internal_error", "TELEMETRY_IDENTITY_NOT_PERSISTED", "telemetry identity could not be saved", nil)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

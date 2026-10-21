@@ -810,7 +810,7 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: "Full access" })).toBeInTheDocument();
 
 		await user.click(screen.getByRole("menuitemradio", { name: "Approve for me" }));
-		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" });
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" }, "approvalMode");
 	});
 
 	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {
@@ -931,7 +931,7 @@ describe("remember project permissions", () => {
 			settings={{ approvalMode: "auto" }} onChange={onChange} onRememberPermissions={remember} />);
 		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
 		await user.click(screen.getByRole("menuitemradio", { name: "Full access" }));
-		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" }, "approvalMode");
 		expect(remember).not.toHaveBeenCalled();
 		rerender(<TurnSettingsBar models={[]} harness="codex"
 			settings={{ approvalMode: "default" }} onChange={onChange} onRememberPermissions={remember} />);
@@ -1610,7 +1610,7 @@ describe("OpenCode-style execution modes", () => {
 		expect(approvals).toHaveTextContent("Accept edits");
 		await user.click(approvals);
 		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
-		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" }, "approvalMode");
 	});
 });
 

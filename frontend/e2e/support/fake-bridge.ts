@@ -157,6 +157,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -1031,6 +1036,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,

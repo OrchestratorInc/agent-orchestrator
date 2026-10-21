@@ -28,6 +28,35 @@ SELECT * FROM conversations WHERE current_session_id = ?
 ORDER BY scope = 'project' DESC, created_at DESC, id DESC
 LIMIT 1;
 
+-- Sessions in the batch whose latest Chat turn the person interrupted. The
+-- conversation is the one SelectConversationBySession picks. A cancelled turn is
+-- a queued prompt the user withdrew, so it never counts as the latest turn.
+-- name: ListInterruptedSessions :many
+WITH wanted_session AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+),
+session_conversation AS (
+    SELECT wanted_session.session_id, (
+        SELECT conversations.id FROM conversations
+        WHERE conversations.current_session_id = wanted_session.session_id
+        ORDER BY conversations.scope = 'project' DESC, conversations.created_at DESC, conversations.id DESC
+        LIMIT 1
+    ) AS conversation_id
+    FROM wanted_session
+)
+SELECT CAST(session_conversation.session_id AS TEXT) AS session_id
+FROM session_conversation
+WHERE (
+    SELECT conversation_turns.state FROM conversation_turns
+    WHERE conversation_turns.conversation_id = session_conversation.conversation_id
+      AND conversation_turns.promoted_to_turn_id IS NULL
+      AND conversation_turns.rolled_back_at IS NULL
+      AND conversation_turns.state <> 'cancelled'
+    ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+    LIMIT 1
+) = 'interrupted';
+
 -- The session-scoped rows a session is bound to besides the given conversation:
 -- where an orchestrator's provisioning-time prompts wait for its project row.
 -- name: SelectProvisioningConversationsForSession :many

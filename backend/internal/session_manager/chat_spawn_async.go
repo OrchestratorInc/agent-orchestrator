@@ -79,8 +79,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	}
 	in.record = rec
 	// Each Setup step has its own limit; the start budget leaves room for all of them.
-	budget := asyncChatSpawnBudget + time.Duration(len(in.project.Config.PostCreate))*setupStepTimeout
-	bg, cancel := context.WithTimeout(m.backgroundContext, budget)
+	bg, cancel := context.WithTimeout(m.backgroundContext, postCreateBudget(asyncChatSpawnBudget, in.project.Config.PostCreate))
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run
@@ -108,7 +107,9 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 
 // asyncChatSpawnBudget bounds a background start so a hung provider leaves a
 // failed session the user can act on rather than a permanent "starting". The
-// project's Setup steps get their own time on top (setupStepTimeout each).
+// project's Setup steps get their own time on top (postCreateBudget: each
+// step's time limit, domain.DefaultScriptStepTimeoutMinutes unless it sets
+// one), so a long Setup step is never cut short.
 const asyncChatSpawnBudget = 10 * time.Minute
 
 // completeAsyncChatSpawn keeps the visible session and queue on failure.

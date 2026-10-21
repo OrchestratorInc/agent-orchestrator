@@ -1,29 +1,32 @@
+import { branchKey } from "../lib/files-review-selection";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
-	Check,
-	Columns2,
 	FolderTree,
 	Folders,
 	GitCompareArrows,
 	Maximize2,
 	Minimize2,
-	Rows3,
+ Columns2,
+ Rows3,
+ ListChevronsDownUp,
+ ListChevronsUpDown,
 	Search,
 } from "lucide-react";
 import {
-	sessionSourceFilesQueryOptions,
 	sessionSourceFileQueryOptions,
-	sessionWorkspaceHistoryQueryOptions,
+	sessionWorkspaceFilesQueryOptions,
+	type FilesBranchTarget,
 	type FilesSource,
+	type WorkspaceFilesResponse,
 	useWorkspaceFileConnectionState,
 	workspaceFilesRefetchInterval,
 } from "../hooks/useSessionWorkspaceFiles";
-import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
+import { useFilesReviewSelection } from "../hooks/useFilesReviewSelection";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { buildChangedOnlyTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildChangedOnlyTree, buildWorkspaceFileTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -31,28 +34,34 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./ui/resizable";
-import { SettingsMenuTrigger } from "./settings/SettingsMenuTrigger";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuSeparator,
-	DropdownMenuSub,
-	DropdownMenuSubContent,
-	DropdownMenuSubTrigger,
-	DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
-import { useFilesTopbarHost } from "./files-topbar-host";
-import { FileTree } from "./FileTree";
-import { FileContentPane, type FileOpenOptions } from "./FileContentPane";
+
+import { useFilesActionsHost, useFilesTopbarHost } from "./files-topbar-host";
+import { FileTree, FileTreeSkeleton } from "./FileTree";
+import { FileContentPane, type FileOpenOptions, type FileViewMode } from "./FileContentPane";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
-import { WorkspaceReviewPane, type ReviewSourceMenu } from "./diffs/WorkspaceReviewPane";
-import { formatTimeTerse } from "../lib/format-time";
+import { WorkspaceReviewPane } from "./diffs/WorkspaceReviewPane";
+import { ReviewChangesMenu } from "./diffs/ReviewChangesMenu";
+import { ReviewBranchMenu } from "./diffs/ReviewBranchMenu";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { sessionUiKey } from "../lib/hosts";
 import { isSvgPath } from "../lib/image-files";
+import type { ProjectKind } from "../types/workspace";
 
 const WORKSPACE_SOURCE: FilesSource = { kind: "workspace" };
+
+// The agent reads which branch a comment is about from this.
+function annotationSource(branch: FilesBranchTarget): string {
+	if (branch.kind === "branch") return `Branch ${branch.name}`;
+	if (branch.kind === "pull_request") return `PR #${branch.number} (${branch.url})`;
+	return "Workspace";
+}
+
+function hasReviewableChanges(manifest: WorkspaceFilesResponse): boolean {
+	const { sections } = manifest;
+	return manifest.files.some((file) => file.status !== "unmodified")
+		|| [sections.uncommitted, sections.staged, sections.unstaged, sections.untracked, sections.committed].some((section) => (section?.length ?? 0) > 0);
+}
+
 // Mirrors the browser panel's tab strip (.browser-panel__tab): no container
 // box, 28px rounded tabs, filled only when active.
 const viewTabClass = "inline-flex h-control-md items-center rounded-md px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50";
@@ -64,6 +73,10 @@ type SessionFileExplorerProps = {
 	onOpenFile?: (path: string, options?: FileOpenOptions) => void;
 	onSplitChange?: (split: boolean) => void;
 	onToggleMaximized?: (next: boolean) => void;
+	/** Which Git scopes and branches the review offers; undefined while unknown. */
+	projectKind?: ProjectKind;
+	/** The session's branch, shown on the branch picker before its list loads. */
+	checkedOutBranch?: string;
 	split?: boolean;
 };
 
@@ -74,103 +87,74 @@ export function SessionFileExplorer({
 	onOpenFile,
 	onSplitChange,
 	onToggleMaximized,
+	projectKind,
+	checkedOutBranch,
 	split: controlledSplit,
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
 	const [filter, setFilter] = useState("");
+ const filtersBySource=useRef(new Map<string,string>());
 	const [internalSplit, setInternalSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
 	const split = controlledSplit ?? internalSplit;
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	// Maximized, the review pane's edit/preview actions open the file in this
 	// view's own preview (the center pane is hidden behind the overlay).
 	const [previewRequest, setPreviewRequest] = useState<(FileOpenOptions & { key: number }) | null>(null);
-	const [sourceNotice, setSourceNotice] = useState("");
-	const [reviewMenu, setReviewMenu] = useState<ReviewSourceMenu | null>(null);
-	// Keyed by PR URL so a commit picked in one PR never applies to another.
-	const [selectedPRCommit, setSelectedPRCommit] = useState<{ url: string; sha: string } | null>(null);
 	const filesTopbarHost = useFilesTopbarHost();
+	const filesActionsHost = useFilesActionsHost();
+	// The review owns collapsed paths; the toolbar requests a toggle-all action.
+	const [reviewAllCollapsed, setReviewAllCollapsed] = useState(false);
+	const [collapseRequest, setCollapseRequest] = useState<{ expand: boolean; key: number }>();
 	const [treeOpen, setTreeOpen] = useState(true);
 	const uiKey = sessionUiKey(sessionId, hostId);
-	const scmQuery = useSessionScmSummary(sessionId, true, undefined, false, hostId);
-	const prSummaries = scmQuery.data?.prs ?? [];
 	const queryClient = useQueryClient();
 	const connectionState = useWorkspaceFileConnectionState(sessionId, hostId);
 	useLayoutEffect(() => markFileViewerPerformance("files-shell-painted"), []);
 
 	const changedOnly = useUiStore((state) => state.inspectorSessions[uiKey]?.filesChangedOnly ?? true);
-	const storedSource = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSource);
-	// Artifacts have their own inspector view; a stale artifact source reads as the workspace.
-	const source = !storedSource || storedSource.kind === "artifact" ? WORKSPACE_SOURCE : storedSource;
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
-	const setFilesSource = useUiStore((state) => state.setFilesSource);
-	const annotation = useFileAnnotation(sessionId, {
-		hostId,
-		source: source.kind === "pull_request" ? `${source.label} (${source.url})` : "Workspace",
-	});
-	const snapshot = source.kind === "pull_request" ? prSummaries.find((pr) => pr.url === source.url)?.headSha ?? "" : "";
-	const querySource = useMemo<FilesSource>(
-		() => source.kind === "pull_request" ? { ...source, snapshot } : source,
-		[source, snapshot],
-	);
 
 	const filesQuery = useQuery({
-		...sessionSourceFilesQueryOptions(sessionId, querySource, t("files.error.loadWorkspace"), hostId),
+		...sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
 		refetchInterval: (query) => workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
 	});
 	useLayoutEffect(() => {
 		if (filesQuery.data) markFileViewerPerformance("manifest-ready");
 	}, [filesQuery.data?.workspaceVersion]);
-	// Commit history and ahead/behind are not part of the latency-sensitive
-	// manifest. Load the legacy enrichment only after the first useful Changes
-	// snapshot is already available, so it can never gate opening Files.
-	const historyQuery = useQuery({
-		...sessionWorkspaceHistoryQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
-		enabled: source.kind === "workspace" && Boolean(filesQuery.data),
+	const filesData = filesQuery.data;
+	const review = useFilesReviewSelection({
+		sessionId,
+		hostId,
+		manifest: filesData,
+		projectKind,
+		checkedOutBranch,
+		// A preview of the old branch's file would be stale.
+		onBranchChange: () => {
+			setPreviewRequest(null);
+			setSelectedPath(null);
+		},
 	});
-	const filesData = useMemo(
-		() => source.kind === "workspace" && filesQuery.data
-			? {
-				...filesQuery.data,
-				...(historyQuery.data ? {
-					ahead: historyQuery.data.ahead,
-					behind: historyQuery.data.behind,
-					commits: historyQuery.data.commits,
-					commitsTruncated: historyQuery.data.commitsTruncated,
-				} : {}),
-			}
-			: filesQuery.data,
-		[filesQuery.data, historyQuery.data, source.kind],
-	);
-	// A PR's own commits (the Workspace's live in its Changes review). Picking one
-	// narrows the tree and the preview to that commit.
-	const prCommits = source.kind === "pull_request" ? filesData?.commits ?? [] : [];
-	const prCommit = source.kind === "pull_request" && selectedPRCommit?.url === source.url
-		? prCommits.find((commit) => commit.sha === selectedPRCommit.sha)
-		: undefined;
-	const sourceFiles = prCommit?.files ?? filesData?.files;
+	const branch = review.target.branch;
+ const filterKey=`${uiKey}:${branchKey(branch)}`;
+ useEffect(()=>setFilter(filtersBySource.current.get(filterKey) ?? ""),[filterKey]);
+	// Browsing and file opening preserve this review source.
+	const onOtherBranch = branch.kind !== "checked_out";
+	const annotation = useFileAnnotation(sessionId, { hostId, source: annotationSource(branch) });
 	const changedOnlyData = useMemo(
-		() => (sourceFiles ? buildChangedOnlyTree(sourceFiles) : []),
-		[sourceFiles],
+		() => (filesData ? buildChangedOnlyTree(filesData.files) : []),
+		[filesData],
 	);
-	const hasChanges = filesData?.files.some((file) => file.status !== "unmodified") ?? false;
-	const showChanges = source.kind === "workspace" && changedOnly && (!filesData || hasChanges);
-	const splitView = !showChanges && (isMaximized || source.kind === "pull_request");
-	const sourceUnavailable = source.kind === "pull_request"
-		&& (filesQuery.isError || Boolean(scmQuery.data && !prSummaries.some((pr) => pr.url === source.url)));
+	const hasChanges = filesData ? hasReviewableChanges(filesData) : false;
+	const showChanges = changedOnly && (!filesData || hasChanges || onOtherBranch);
+ const source = review.target.source ?? WORKSPACE_SOURCE;
+	const splitView = !showChanges && isMaximized;
+	const showChangesTrigger = Boolean(filesData) && (hasChanges || onOtherBranch);
+	const branchMenu = review.branchMenu;
 
 	useEffect(() => {
 		setSelectedPath(null);
 		setFilter("");
-		setSourceNotice("");
-		setSelectedPRCommit(null);
 	}, [uiKey]);
-
-	useEffect(() => {
-		if (!sourceUnavailable) return;
-		setFilesSource(uiKey, WORKSPACE_SOURCE);
-		setSelectedPath(null);
-		setSourceNotice(t("files.explorer.sourceUnavailable"));
-	}, [uiKey, setFilesSource, sourceUnavailable, t]);
 
 	useEffect(() => subscribeWorkspaceFileChanges(sessionId, queryClient, hostId), [queryClient, sessionId, hostId]);
 	useEffect(() => {
@@ -183,25 +167,24 @@ export function SessionFileExplorer({
 	const prefetchBusy = useRef(false);
 	useEffect(() => () => {
 		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
-	}, [uiKey, querySource, prCommit?.sha]);
+	}, [uiKey]);
 	const prefetchPath = useCallback((node: TreeNode) => {
 		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
 		prefetchTimer.current = setTimeout(() => {
 			prefetchTimer.current = undefined;
 			if (prefetchBusy.current) return;
-			if (node.type === "dir" && querySource.kind !== "workspace") return;
 			prefetchBusy.current = true;
 			const request = node.type === "dir"
-				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId), staleTime: 5_000 })
-				: queryClient.prefetchQuery({ ...sessionSourceFileQueryOptions(sessionId, querySource, node.path, undefined, "combined", prCommit?.sha, sourceFiles?.find((file) => file.path === node.path)?.previousPath, hostId), staleTime: 5_000 });
+				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId,source), staleTime: 5_000 })
+				: queryClient.prefetchQuery({ ...sessionSourceFileQueryOptions(sessionId,source,node.path,undefined,"combined",undefined,"",hostId), staleTime: 5_000 });
 			void request.finally(() => { prefetchBusy.current = false; });
 		}, 100);
-	}, [queryClient, sessionId, hostId, querySource, prCommit?.sha, sourceFiles]);
+	}, [queryClient, sessionId, hostId,source]);
 
 	const handleSelectPath = (node: TreeNode) => {
 		setPreviewRequest(null);
 		setSelectedPath(node.path);
-		if (!isMaximized && source.kind === "workspace") onOpenFile?.(node.path, { mode: isSvgPath(node.path) ? "rendered" : "file" });
+		if (!isMaximized) onOpenFile?.(node.path, { ...(source.kind === "snapshot" ? {source}:{}), mode: isSvgPath(node.path) ? "rendered" : "file" });
 	};
 	const handleViewChange = (next: boolean) => {
 		setPreviewRequest(null);
@@ -213,56 +196,69 @@ export function SessionFileExplorer({
 		setSelectedPath(path);
 		setFilesChangedOnly(uiKey, false);
 	};
-	const treeSelectedPath = selectedPath;
-	const selectedPreviousPath = sourceFiles?.find((file) => file.path === selectedPath)?.previousPath;
-	const sourceValue = source.kind === "pull_request" ? source.url : "workspace";
-	const sourceOptions: { value: string; label: string }[] = [
-		{ value: "workspace", label: t("files.explorer.workspaceSource") },
-		...prSummaries.map((pr) => ({ value: pr.url, label: `PR #${pr.number} · ${pr.sourceBranch || pr.title}` })),
-	];
-	const selectPRCommit = (sha: string | null) => {
-		setPreviewRequest(null);
-		setSelectedPath(null);
-		setSelectedPRCommit(sha && source.kind === "pull_request" ? { url: source.url, sha } : null);
-	};
-	// A PR's menu mirrors the Workspace review's: Changes (the whole PR) on top,
-	// then its commits. Staged/unstaged scopes are local-only, so a PR has none.
-	const prSourceMenu: ReviewSourceMenu | null = prCommits.length > 0
-		? {
-			label: prCommit ? prCommit.sha.slice(0, 7) : t("files.reviewChanges"),
-			scopes: [{ key: "combined", label: t("files.reviewChanges"), selected: !prCommit, select: () => selectPRCommit(null) }],
-			commits: prCommits.map((commit) => ({ sha: commit.sha, subject: commit.subject, timestamp: commit.timestamp, selected: commit.sha === prCommit?.sha, select: () => selectPRCommit(commit.sha) })),
-		}
-		: null;
-	const sourceMenu = source.kind === "pull_request" ? prSourceMenu : reviewMenu;
-	// Branch › lists only PRs (Workspace is not a branch; it gets its own button
-	// before the picker), so it appears only when there is a PR to switch to.
-	const showBranchMenu = sourceOptions.length > 1;
-	// The picker is hidden until it has something to choose: no review scopes or
-	// commits (nothing changed) and no PR listed, e.g. while an active PR's
-	// summary is still loading — the Workspace button stays the way back.
-	const showSourcePicker = sourceMenu !== null || showBranchMenu;
-	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
-	const selectSource = (value: string) => {
-		setSourceNotice("");
-		setPreviewRequest(null);
-		setSelectedPath(null);
-		setSelectedPRCommit(null);
-		if (value === "workspace") {
-			setFilesSource(uiKey, WORKSPACE_SOURCE);
-			return;
-		}
-		const pr = prSummaries.find((candidate) => candidate.url === value);
-		if (pr) setFilesSource(uiKey, { kind: "pull_request", number: pr.number, url: pr.url, label: `PR #${pr.number} · ${pr.sourceBranch || pr.title}` });
+	const openPreviewInCenter = (mode: FileViewMode) => {
+		if (!selectedPath || !onOpenFile) return;
+		onToggleMaximized?.(false);
+		onOpenFile(selectedPath, {
+			...previewRequest,
+			source: previewRequest?.source ?? source,
+			previousPath: previewRequest?.previousPath ?? selectedPreviousPath,
+			mode,
+			editing: false,
+		});
 	};
 
-	// The Changes view only exists for the workspace; for a PR the switch would
-	// do nothing, so it is not shown.
-	const hasViewTabs = hasChanges && source.kind === "workspace";
-	// Docked with nothing to pick or review, the header would hold only the
-	// maximize button (the filter lives in the top bar), so it floats over the
-	// tree's top-right corner instead of reserving an empty row above it.
-	const floatingHeader = source.kind === "workspace" && !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
+	const treeSelectedPath = selectedPath;
+	const selectedPreviousPath = filesData?.files.find((file) => file.path === selectedPath)?.previousPath;
+
+	// Both live and historical sources support complete repository browsing.
+	const hasViewTabs = hasChanges || onOtherBranch;
+	const setLayout = (next: boolean) => {
+		if (controlledSplit === undefined) setInternalSplit(next);
+		onSplitChange?.(next);
+	};
+	// Unified/split applies wherever a diff shows: the Changes review and the
+	// preview beside the tree. A review with no files has nothing to lay out or
+	// collapse, so both go until it has some; while it loads they stay put.
+	const reviewHasFiles = review.target.state === "pending" || (review.target.files?.length ?? 0) > 0;
+	// Beside the tree only the maximized preview can show a diff, and only of a
+	// changed file (any file of another branch's snapshot may differ). Docked,
+	// the tree opens plain files in the centre, whose diffs keep the layout last
+	// picked in the Changes view.
+	const previewHasDiff = splitView && selectedPath !== null
+		&& (source.kind === "snapshot" || Boolean(filesData?.files.some((file) => file.path === selectedPath && file.status !== "unmodified")));
+	const showLayout = showChanges ? reviewHasFiles : previewHasDiff;
+	const showCollapse = showChanges && Boolean(filesData) && reviewHasFiles;
+	// With the filter and maximize in a top bar, the header holds only the
+	// pickers and the view controls. A session with nothing to review (no
+	// changes, no pull request, no other branch picked) drops the whole row and
+	// shows just the tree. Until the manifest and the branch list say so, the
+	// row is kept and a review never jumps.
+	const showHeader = !filesTopbarHost || !filesData || hasViewTabs || review.hasPullRequest !== false;
+	const showTreeToggle = showHeader && splitView && !hasViewTabs;
+	// Without the header nothing can reopen a hidden tree, so it always shows.
+	const treeShown = treeOpen || !showHeader;
+	// Maximized, the Changes review gets a rail of just its changed files, like
+	// the All files tree beside the preview; picking one scrolls to its diff.
+	const reviewFiles = review.target.files;
+	const reviewTreeData = useMemo(() => buildWorkspaceFileTree(reviewFiles ?? []), [reviewFiles]);
+	// With no files the rail would only say the folder is empty, so the review
+	// takes the whole width instead. A read in flight keeps the last answer, so
+	// moving between two empty picks doesn't flash the rail in and out.
+	const [reviewRailShown, setReviewRailShown] = useState(() => (reviewFiles?.length ?? 0) > 0);
+	useLayoutEffect(() => {
+		if (review.target.state !== "pending") setReviewRailShown((reviewFiles?.length ?? 0) > 0);
+	}, [review.target.state, reviewFiles]);
+	// A filter that matches none of the files empties the rail too; the review's
+	// own no-match message then takes the whole width. Matched as the review does.
+	const reviewFilter = filter.trim().toLowerCase();
+	const reviewFilterMatches = !reviewFilter || (reviewFiles ?? []).some((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(reviewFilter));
+	const [reviewTreePath, setReviewTreePath] = useState<string | null>(null);
+	const [reviewScrollRequest, setReviewScrollRequest] = useState<{ path: string; key: number }>();
+	const selectReviewTreePath = (node: TreeNode) => {
+		setReviewTreePath(node.path);
+		setReviewScrollRequest((current) => ({ path: node.path, key: (current?.key ?? 0) + 1 }));
+	};
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -273,207 +269,210 @@ export function SessionFileExplorer({
 			<Input
 				aria-label={t("files.explorer.filter")}
 				className="inspector-field-input pl-8"
-				onChange={(event) => setFilter(event.target.value)}
+				onChange={(event) => {setFilter(event.target.value);filtersBySource.current.set(filterKey,event.target.value);}}
 				placeholder={t("files.explorer.filterPlaceholder")}
 				value={filter}
 			/>
 		</label>
 	);
 
+	const viewMenu = (
+		<>
+			{showLayout ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")}
+							aria-pressed={split}
+							onClick={() => setLayout(!split)}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							{split ? <Columns2 aria-hidden="true" className="size-icon-base" /> : <Rows3 aria-hidden="true" className="size-icon-base" />}
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent>
+				</Tooltip>
+			) : null}
+			{showCollapse ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}
+							onClick={() => setCollapseRequest((current) => ({ expand: reviewAllCollapsed, key: (current?.key ?? 0) + 1 }))}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							{reviewAllCollapsed ? <ListChevronsUpDown aria-hidden="true" className="size-icon-base" /> : <ListChevronsDownUp aria-hidden="true" className="size-icon-base" />}
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}</TooltipContent>
+				</Tooltip>
+			) : null}
+		</>
+	);
+
+	const maximizeButton = onToggleMaximized ? (
+		<Tooltip>
+			{/* Closing the overlay hands focus back to this button, and a tooltip
+			    that opens on that focus stays up until the pointer comes back.
+			    Only keyboard focus (focus-visible) opens it; hover still does. */}
+			<TooltipTrigger asChild onFocus={(event) => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>
+				{/* Sized and toned like the pinned top-bar buttons beside it. */}
+				<Button
+					aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
+					className="shrink-0 text-muted-foreground hover:text-foreground"
+					onClick={() => onToggleMaximized(!isMaximized)}
+					size="icon-sm"
+					type="button"
+					variant="ghost"
+				>
+					{isMaximized ? (
+						<Minimize2 className="size-icon-md" aria-hidden="true" />
+					) : (
+						<Maximize2 className="size-icon-md" aria-hidden="true" />
+					)}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
+		</Tooltip>
+	) : null;
+
+	const reviewPane = (
+		<WorkspaceReviewPane
+			annotation={annotation}
+			target={review.target}
+			onRetry={review.retryTarget}
+			hostId={hostId}
+			filter={filter}
+			onBrowseAll={() => handleViewChange(false)}
+			canOpenInCenter={Boolean(onOpenFile)}
+			onOpenFile={(path,options)=>{
+    if(isMaximized && !options?.center) openInMaximizedPreview(path,options);
+    else {if(isMaximized) onToggleMaximized?.(false);onOpenFile?.(path,options);}
+   }}
+			onIncludeCommitsBetween={review.includeCommitsBetween}
+			onShowAllCommits={review.showAllCommits}
+			sessionId={sessionId}
+			split={split}
+			collapseRequest={collapseRequest}
+			onAllCollapsedChange={setReviewAllCollapsed}
+			scrollRequest={reviewScrollRequest}
+		/>
+	);
+
+	// Maximized, the overlay's titlebar band carries the header too: the
+	// pickers at its start, the filter centred, the view controls and minimize
+	// at its end, so the review needs no row of its own.
+	const headerInTitlebar = isMaximized && Boolean(filesTopbarHost) && !filesActionsHost;
+	const headerInFrame = showHeader && !headerInTitlebar;
+
+	// What to review, then which branch: the changes picker truncates last,
+	// the branch picker first. -ml-1.5 cancels the first trigger's own 6px
+	// inline padding so its label starts on the 12px gutter.
+	const pickers = showChangesTrigger || branchMenu ? (
+		<div className="-ml-1.5 flex min-w-0 shrink items-center gap-1">
+			{showChangesTrigger ? <ReviewChangesMenu {...review.changesMenu} /> : null}
+			{branchMenu ? <ReviewBranchMenu {...branchMenu} /> : null}
+		</div>
+	) : null;
+
+	const viewControls = (
+		<>
+			{viewMenu}
+			{hasViewTabs ? (
+				<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								aria-label={t("files.reviewChanges")}
+								aria-selected={showChanges}
+								className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+								onClick={() => handleViewChange(true)}
+								role="tab"
+								type="button"
+							>
+								<GitCompareArrows aria-hidden="true" className="size-icon-base" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
+					</Tooltip>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								aria-label={allFilesTabLabel}
+								aria-selected={!showChanges}
+								className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+								onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
+								role="tab"
+								type="button"
+							>
+								<Folders aria-hidden="true" className="size-icon-base" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
+					</Tooltip>
+				</div>
+			) : null}
+			{showTreeToggle ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
+							aria-pressed={treeOpen}
+							className="shrink-0"
+							onClick={() => setTreeOpen((open) => !open)}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<FolderTree className="size-icon-base" aria-hidden="true" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
+				</Tooltip>
+			) : null}
+		</>
+	);
+
 	return (
 		<section className="relative flex h-full min-h-0 flex-col bg-background text-foreground" aria-label={t("files.sessionFiles")}>
-			{/* The header keeps one geometry in every view (Changes, Files, the
-			    preview + tree split), so switching views never moves its controls;
-			    the split draws its divider on the content below instead.
-			    The trailing actions sit 4px from the right edge with 4px gaps, the same
-			    as the pinned top-bar buttons above them and the review rows below. */}
-			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2"}>
-				{/* One dropdown for "what am I reviewing", laid out like a VCS review
-				    picker: working scopes at the top, then Commits › and Branch ›
-				    flyouts (Branch = Workspace or a PR). */}
-				{/* -ml-2 cancels the trigger's own 8px inline padding so its label
-				    starts on the same 12px gutter as the context row's text below. */}
-				{/* While a PR is shown, Workspace sits before the picker as
-				    the way back; on the workspace itself the trigger already names it. It
-				    keys off the source alone, so it stays reachable while the PR list loads or fails. */}
-				{source.kind !== "workspace" ? (
-					<Button className="-ml-2 h-control-md shrink-0 text-xs" onClick={() => selectSource("workspace")} size="sm" type="button" variant="ghost">
-						{t("files.explorer.workspaceSource")}
-					</Button>
-				) : null}
-				{showSourcePicker ? (
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<SettingsMenuTrigger
-							aria-label={t("files.explorer.source")}
-							className={cn(source.kind === "workspace" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
-							title={currentSourceLabel}
-						>
-							<span className="min-w-0 truncate">{currentSourceLabel}</span>
-							{sourceMenu ? <span className="shrink-0 text-caption text-passive">{sourceMenu.label}</span> : null}
-						</SettingsMenuTrigger>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="start" className="w-max max-w-72">
-						{sourceMenu?.scopes.map((scope) => (
-							<DropdownMenuItem className="gap-1.5" key={scope.key} onSelect={scope.select}>
-								<span className="min-w-0 truncate">{scope.label}</span>
-								<span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-									{scope.selected ? <Check aria-hidden="true" className="text-logo-accent" /> : null}
-								</span>
-							</DropdownMenuItem>
-						))}
-						{sourceMenu && sourceMenu.scopes.length > 0 && (sourceMenu.commits.length > 0 || showBranchMenu) ? <DropdownMenuSeparator /> : null}
-						{sourceMenu && sourceMenu.commits.length > 0 ? (
-							<DropdownMenuSub>
-								<DropdownMenuSubTrigger className={cn(sourceMenu.commits.some((commit) => commit.selected) && "text-foreground")}>
-									{t("files.commits")}
-								</DropdownMenuSubTrigger>
-								<DropdownMenuSubContent className="w-max max-w-[min(28rem,calc(100vw_-_2rem))]">
-									<div className="board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto pr-0.5">
-										{sourceMenu.commits.map((commit) => (
-											<DropdownMenuItem className="gap-2" key={commit.sha} onSelect={commit.select}>
-												<span className="min-w-0 flex-1 truncate">{commit.subject}</span>
-												<span className="shrink-0 text-caption text-passive">{formatTimeTerse(commit.timestamp)}</span>
-												<span className="flex size-4 shrink-0 items-center justify-center">
-													{commit.selected ? <Check aria-hidden="true" className="text-logo-accent" /> : null}
-												</span>
-											</DropdownMenuItem>
-										))}
-									</div>
-								</DropdownMenuSubContent>
-							</DropdownMenuSub>
-						) : null}
-						{showBranchMenu ? <DropdownMenuSub>
-							<DropdownMenuSubTrigger>{t("files.branch")}</DropdownMenuSubTrigger>
-							<DropdownMenuSubContent className="w-max max-w-[min(28rem,calc(100vw_-_2rem))]">
-								{sourceOptions.filter((option) => option.value !== "workspace").map((option) => (
-									<DropdownMenuItem className="gap-2" key={option.value} onSelect={() => selectSource(option.value)}>
-										<span className="min-w-0 flex-1 truncate">{option.label}</span>
-										<span className="flex size-4 shrink-0 items-center justify-center">
-											{option.value === sourceValue ? <Check aria-hidden="true" className="text-logo-accent" /> : null}
-										</span>
-									</DropdownMenuItem>
-								))}
-							</DropdownMenuSubContent>
-						</DropdownMenuSub> : null}
-					</DropdownMenuContent>
-				</DropdownMenu>
-				) : null}
-				{/* The inspector top bar or the maximized overlay's titlebar hosts the
-				    filter; without a host it sits centred between the picker and the actions. */}
-				{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
-				{filesTopbarHost ? createPortal(filterField, filesTopbarHost) : filterField}
-				<span aria-hidden="true" className="flex-1" />
-				{/* Unified/split applies wherever a diff shows: the Changes review and
-				    the preview beside the tree. */}
-				{showChanges || splitView ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")}
-								aria-pressed={split}
-								className="shrink-0"
-								onClick={() => {
-									const next = !split;
-									if (controlledSplit === undefined) setInternalSplit(next);
-									onSplitChange?.(next);
-								}}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								{split ? (
-									<Columns2 className="size-icon-base" aria-hidden="true" />
-								) : (
-									<Rows3 className="size-icon-base" aria-hidden="true" />
-								)}
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent>
-					</Tooltip>
-				) : null}
-				{hasViewTabs ? (
-					<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									aria-label={t("files.reviewChanges")}
-									aria-selected={showChanges}
-									className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
-									onClick={() => handleViewChange(true)}
-									role="tab"
-									type="button"
-								>
-									<GitCompareArrows aria-hidden="true" className="size-icon-base" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
-						</Tooltip>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									aria-label={allFilesTabLabel}
-									aria-selected={!showChanges}
-									className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
-									onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
-									role="tab"
-									type="button"
-								>
-									<Folders aria-hidden="true" className="size-icon-base" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
-						</Tooltip>
-					</div>
-				) : null}
-				{splitView && !hasViewTabs ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
-								aria-pressed={treeOpen}
-								className="shrink-0"
-								onClick={() => setTreeOpen((open) => !open)}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								<FolderTree className="size-icon-base" aria-hidden="true" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
-					</Tooltip>
-				) : null}
-				{onToggleMaximized ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
-								className="shrink-0"
-								onClick={() => onToggleMaximized(!isMaximized)}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								{isMaximized ? (
-									<Minimize2 className="size-icon-base" aria-hidden="true" />
-								) : (
-									<Maximize2 className="size-icon-base" aria-hidden="true" />
-								)}
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
-					</Tooltip>
-				) : null}
-			</header>
-			{/* The source name already shows in the picker; this row only appears
-			    to explain an automatic fall back to Workspace. */}
-			{sourceNotice ? (
+			{/* The inspector top bar or the maximized overlay's titlebar hosts the
+			    filter, and maximize sits at the top bar's trailing edge; the
+			    overlay's titlebar also takes the pickers and view controls. Without
+			    hosts they all stay in this header. */}
+			{filesTopbarHost ? createPortal(filterField, filesTopbarHost) : null}
+			{headerInTitlebar && filesTopbarHost ? (
+				<>
+					{createPortal(<div className="files-popout-titlebar__start">{showHeader ? pickers : null}</div>, filesTopbarHost)}
+					{createPortal(<div className="files-popout-titlebar__end flex shrink-0 items-center gap-1 pr-2">{showHeader ? viewControls : null}{maximizeButton}</div>, filesTopbarHost)}
+				</>
+			) : filesActionsHost && maximizeButton ? createPortal(maximizeButton, filesActionsHost)
+				: filesTopbarHost && maximizeButton ? createPortal(<div className="ml-auto flex shrink-0 items-center pr-2">{maximizeButton}</div>, filesTopbarHost)
+				: null}
+			{headerInFrame ? (
+				/* The header is a size container so the pickers can drop their icons
+				   and stats as it narrows. Its trailing controls sit 4px from the right
+				   edge with 4px gaps, like the pinned top-bar buttons above them. */
+				<header className="@container/files-header flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2">
+					{pickers}
+					{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
+					{filesTopbarHost ? null : filterField}
+					<span aria-hidden="true" className="flex-1" />
+					{viewControls}
+					{filesActionsHost || filesTopbarHost ? null : maximizeButton}
+				</header>
+			) : null}
+			{/* The branch already shows in its picker; this row only appears to
+			    explain an automatic fall back to the checked-out branch. */}
+			{review.notice ? (
 				<p className="shrink-0 border-b border-border px-3 py-1 text-2xs text-muted-foreground" role="status">
-					{sourceNotice}
+					{review.notice}
 				</p>
 			) : null}
-			{showChanges ? (
+   {!showChanges && source.kind === "snapshot" && review.target.state === "pending" ? <PanelMessage>{t("files.loading")}</PanelMessage> : showChanges ? (
 				filesQuery.isPending ? (
 					<PanelMessage>{t("files.loading")}</PanelMessage>
 				) : filesQuery.isError ? (
@@ -481,35 +480,54 @@ export function SessionFileExplorer({
 						{filesQuery.error.message || t("files.error.loadWorkspace")}
 					</PanelMessage>
 				) : filesData ? (
-					<WorkspaceReviewPane
-						annotation={annotation}
-						data={filesData}
-						hostId={hostId}
-						filter={filter}
-						onBrowseAll={() => source.kind === "workspace" && handleViewChange(false)}
-						canOpenInCenter={!isMaximized && Boolean(onOpenFile)}
-						onOpenFile={isMaximized ? openInMaximizedPreview : onOpenFile}
-						onSourceMenuChange={setReviewMenu}
-						sessionId={sessionId}
-						split={split}
-					/>
+					isMaximized ? (
+						// The review keeps its panel whether or not the rail shows, so a
+						// filter that empties the rail doesn't remount it (and lose its
+						// collapsed and loaded files), as the tree beside the preview does.
+						<ResizablePanelGroup className={cn("min-h-0 flex-1", headerInFrame && "border-t border-border")}>
+							<ResizablePanel defaultSize="74%" id="files-review" minSize="40%">
+								{reviewPane}
+							</ResizablePanel>
+							{reviewRailShown && reviewFilterMatches ? (
+								<>
+									<ResizableHandle />
+									<ResizablePanel defaultSize="26%" id="files-review-rail" maxSize="50%" minSize="18%">
+										{reviewFiles ? (
+											<FileTree
+												changedOnly
+												changedOnlyData={reviewTreeData}
+												expandChanged
+												filterText={filter}
+												onSelectPath={selectReviewTreePath}
+												selectedPath={reviewTreePath}
+												sessionId={sessionId}
+											/>
+										) : review.target.state === "pending" ? (
+											<FileTreeSkeleton />
+										) : null}
+									</ResizablePanel>
+								</>
+							) : null}
+						</ResizablePanelGroup>
+					) : reviewPane
 				) : null
 			) : splitView ? (
 				// Preview on the left, tree on the right (collapsible from the header),
 				// like an editor's changed-files rail.
-				<ResizablePanelGroup className="min-h-0 flex-1 border-t border-border">
+				<ResizablePanelGroup className={cn("min-h-0 flex-1", headerInFrame && "border-t border-border")}>
 					<ResizablePanel defaultSize="74%" minSize="40%">
 						<ContentScrollArea>
-							<FileContentPane annotation={annotation} commitSha={prCommit?.sha ?? previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={querySource} split={split} toolbar="compact" />
+							<FileContentPane onOpenInCenter={onOpenFile && selectedPath ? openPreviewInCenter : undefined} annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={previewRequest?.source ?? source} split={split} toolbar="compact" />
 						</ContentScrollArea>
 					</ResizablePanel>
-					{treeOpen ? (
+					{treeShown ? (
 						<>
 							<ResizableHandle />
 							<ResizablePanel defaultSize="26%" minSize="18%" maxSize="50%">
 								<FileTree
+ source={source}
 									hostId={hostId}
-									changedOnly={source.kind === "pull_request"}
+									changedOnly={false}
 									changedOnlyData={changedOnlyData}
 									filterText={filter}
 									onSelectPath={handleSelectPath}
@@ -525,6 +543,7 @@ export function SessionFileExplorer({
 				// The right rail remains a persistent navigator. File contents open
 				// in center tabs so expanding folders and scrolling the tree survive.
 				<FileTree
+ source={source}
 					hostId={hostId}
 					changedOnly={false}
 					changedOnlyData={changedOnlyData}

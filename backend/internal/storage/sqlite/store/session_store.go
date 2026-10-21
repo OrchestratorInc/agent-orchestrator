@@ -884,6 +884,29 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 	return ids, nil
 }
 
+// ListTurnFailureCandidates returns the harness's live terminal sessions that
+// are in a turn and have a native transcript path, reading only the columns
+// the failed-turn observer needs.
+func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
+	rows, err := s.qr.ListTurnFailureCandidates(ctx, harness)
+	if err != nil {
+		return nil, fmt.Errorf("list turn failure candidates: %w", err)
+	}
+	out := make([]domain.TurnFailureCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.TurnFailureCandidate{
+			ID:                   r.ID,
+			Harness:              r.Harness,
+			Activity:             domain.Activity{State: r.ActivityState, LastActivityAt: r.ActivityLastAt},
+			LatestUserPromptAt:   nullTimeToTime(r.LatestUserPromptAt),
+			Revision:             r.Revision,
+			RuntimeLaunchID:      r.RuntimeLaunchID,
+			NativeTranscriptPath: r.NativeTranscriptPath,
+		})
+	}
+	return out, nil
+}
+
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {
 	out := make([]domain.SessionRecord, 0, len(rows))
 	for _, r := range rows {

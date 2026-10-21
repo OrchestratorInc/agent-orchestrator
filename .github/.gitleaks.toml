@@ -231,4 +231,17 @@ title = "gitleaks config"
         # these two PR commits still carry the literal.
         "d5dfe1adb5ce3c001390a81be010c5d2381517a1",
         "8a5cf736b15a22e163555a79d01db44e13de0067",
+        # Fake GitHub, Slack and private-key literals in the script-output
+        # redaction tests (cloud/internal/worker/script_*_test.go,
+        # cloud/cmd/ao-worker/workspace_startup_test.go), split so no
+        # literal remains in the tree; these PR commits still carry them.
+        "00079eb1eac4a48aa195ea2507c981662dc0b959",
+        "116633c167e3d408b3ed2ff5d6ac6a574ccc9bb1",
+        "225ca17bd1a7cc0e6dd178f22fd27ee4703d195e",
+        "2deecb5fe17f54fdd6f6d812f130f3b872240338",
+        "64d20115bb55229024887b9cd40595997bfe67b3",
+        "91ff3f9408e6d0d0e6899f4e071b53ba6ed337e1",
+        "949e3e8d8138ec35d0595597cdc41c82e87618b2",
+        "a4180fb84c7c16835eadfddbb1c12f17a8cc3a8e",
+        "cd08f63c2b567557abe59a4d2b53a1452d5aa49c",
     ]

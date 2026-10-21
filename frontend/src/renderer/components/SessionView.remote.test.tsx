@@ -487,7 +487,7 @@ it("opens a TUI host file in a shared center tab and renames on that host", asyn
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toHaveAttribute("aria-selected", "true");
 	expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("tab", { name: /Worker · Codex/ }));
-	expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+	expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
 	expect(screen.getByTestId("remote-terminal-base")).toBeVisible();
 	await userEvent.dblClick(screen.getByRole("tab", { name: /Worker · Codex/ }));
 	const rename = screen.getByRole("textbox", { name: /Rename/ });

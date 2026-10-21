@@ -973,6 +973,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
+	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancelBudget()
 	standalone := cfg.ProjectID == ""
 	projectKind := project.Kind.WithDefault()
 	if standalone {
@@ -1039,10 +1041,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// a worktree behind. Chat inherited from the daemon preference is best-effort:
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
-	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
-	if cfg.Kind == domain.KindOrchestrator && !modeExplicitlyRequested {
-		mode = domain.SessionModeChat
-	}
+	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -4525,7 +4524,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -4557,11 +4556,21 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
 	return ws, nil
+}
+
+// provisionRecreatedWorkspace runs the project's Setup for a restore whose
+// worktree was reclaimed. Only such a restore runs Setup, so only it extends
+// a REST restore's budget, from now, by the Setup steps' limits; any other
+// restore keeps the request's ordinary budget.
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancel()
+	return m.provisionWorkspace(ctx, project, workspacePath)
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -6341,19 +6350,35 @@ func safeRelPath(rel string) (string, error) {
 	return clean, nil
 }
 
-// setupStepTimeout bounds each project Setup (post-create) command.
-const setupStepTimeout = 30 * time.Minute
+// scriptStepMinute is the unit of a Setup or Cleanup step's time limit; tests
+// shorten it.
+var scriptStepMinute = time.Minute
+
+// scriptStepTimeout is the command a Setup or Cleanup step runs and its time
+// limit: the one its first line sets (domain.ScriptStepMinutes), else
+// fallbackMinutes (0 for none).
+func scriptStepTimeout(step string, fallbackMinutes int) (string, time.Duration) {
+	command, minutes := domain.ScriptStepMinutes(step)
+	if minutes == 0 {
+		minutes = fallbackMinutes
+	}
+	return command, time.Duration(minutes) * scriptStepMinute
+}
 
 // runPostCreate runs each post-create command in the workspace via the platform
-// shell (sh on Unix, cmd on Windows). Each step has its own setupStepTimeout
-// deadline. A non-zero exit aborts the spawn with bounded, redacted output.
+// shell (sh on Unix, cmd on Windows). Each step has its own deadline: the time
+// limit its first line sets (domain.ParseTimedScriptCommand; the marker line
+// itself never reaches the shell), else domain.DefaultScriptStepTimeoutMinutes.
+// A non-zero exit aborts the spawn with a SetupStepError carrying bounded,
+// redacted output.
 func runPostCreate(ctx context.Context, workspacePath, sourcePath string, commands []string, projectEnv map[string]string) error {
-	for index, command := range commands {
+	for index, step := range commands {
+		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
 		command = strings.TrimSpace(command)
 		if command == "" {
 			continue
 		}
-		stepCtx, cancel := context.WithTimeout(ctx, setupStepTimeout)
+		stepCtx, cancel := context.WithTimeout(ctx, timeout)
 		out := &setupOutput{}
 		env := agentlaunch.MergeEnv(projectEnv, map[string]string{
 			"AO_SOURCE_TREE_PATH": sourcePath,
@@ -6364,25 +6389,54 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		cancel()
 		if err != nil {
 			message := agentlaunch.RedactValues(strings.TrimSpace(out.String()), projectEnv)
-			return &SetupStepError{Step: index + 1, Err: err, TimedOut: timedOut, Output: message}
+			return &SetupStepError{Step: index + 1, Err: err, TimedOut: timedOut, Timeout: timeout, Output: message}
 		}
 	}
 	return nil
 }
 
+// stepMinutes says a step's time limit in minutes ("1 minute", "30 minutes").
+func stepMinutes(timeout time.Duration) string {
+	if minutes := int(timeout / scriptStepMinute); minutes != 1 {
+		return strconv.Itoa(minutes) + " minutes"
+	}
+	return "1 minute"
+}
+
+// SetupBudget is how long a start of the project may spend in its Setup
+// steps: the sum of their time limits.
+func SetupBudget(project domain.ProjectRecord) time.Duration {
+	return postCreateBudget(0, project.Config.PostCreate)
+}
+
+// postCreateBudget is how much longer than base a start that runs these Setup
+// steps may take: the sum of their time limits, so a long Setup is never cut
+// short by the start's own deadline.
+func postCreateBudget(base time.Duration, commands []string) time.Duration {
+	for _, step := range commands {
+		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
+		if strings.TrimSpace(command) != "" {
+			base += timeout
+		}
+	}
+	return base
+}
+
 // SetupStepError is a project Setup command that failed. Its message is the
 // one the user reads, so it names the step, the cause and where to fix it.
+// Timeout is the step's time limit, which a timed-out step names.
 type SetupStepError struct {
 	Step     int
 	Err      error
 	TimedOut bool
+	Timeout  time.Duration
 	Output   string
 }
 
 func (e *SetupStepError) Error() string {
 	cause := fmt.Sprintf("failed at step %d (%v)", e.Step, e.Err)
 	if e.TimedOut {
-		cause = fmt.Sprintf("stopped at step %d after %d minutes", e.Step, int(setupStepTimeout/time.Minute))
+		cause = fmt.Sprintf("stopped at step %d after %s", e.Step, stepMinutes(e.Timeout))
 	}
 	message := "The project's Setup script " + cause + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again."
 	if e.Output != "" {
@@ -6462,7 +6516,14 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		return fmt.Errorf("install hooks: %w", err)
 	}
 	if pl, ok := agent.(preLauncher); ok {
-		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath, Env: env}); err != nil {
+		if err := pl.PreLaunch(ctx, ports.LaunchConfig{
+			DataDir:       m.dataDir,
+			SessionID:     string(id),
+			WorkspacePath: workspacePath,
+			Config:        agentConfig,
+			Permissions:   agentConfig.Permissions,
+			Env:           env,
+		}); err != nil {
 			m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 			return fmt.Errorf("pre-launch: %w", err)
 		}

@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -143,12 +142,13 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 	if os.Getenv(worker.ReviewTerminalEnv) == "1" {
 		return nil
 	}
-	// A completed turn (Stop) is the event that drives durable-restore
-	// checkpointing: poke the worker's checkpoint bridge so it captures the
-	// transcript and any uncommitted work. Event-driven, best-effort, and
-	// fire-and-forget so a completed turn never waits on git or the network.
-	if args[1] == "stop" {
-		pokeCheckpoint(ctx)
+	// A turn end (Stop, or StopFailure when an API error ended it after it
+	// edited files) drives durable-restore checkpointing: poke the worker's
+	// checkpoint bridge so it captures the transcript and any uncommitted
+	// work. Event-driven, best-effort, and fire-and-forget so a turn end never
+	// waits on git or the network.
+	if args[1] == "stop" || args[1] == "stop-failure" {
+		worker.PokeCheckpoint(ctx, os.Getenv("AO_CHECKPOINT_SOCKET"))
 	}
 	payload, err := io.ReadAll(io.LimitReader(input, maxHookPayload+1))
 	if err != nil || len(payload) > maxHookPayload {
@@ -159,11 +159,20 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 		return nil
 	}
 	activity.SourceInterface = strings.TrimSpace(os.Getenv("AO_CLOUD_SOURCE_INTERFACE"))
-	if activity.SourceInterface == "tui" && activity.Event == "stop" && activity.State != "" {
+	if activity.SourceInterface == "tui" && activity.State == contract.ActivityIdle &&
+		(activity.Event == "stop" || activity.Event == "stop-failure" || activity.Event == "interrupt") {
 		// Keep the provider's native idle proof beside the worker. The durable
 		// control-plane projection can lag terminal input and is not a safe
 		// handoff fence on its own.
 		_ = worker.RecordTUIStop(strings.TrimSpace(os.Getenv("AO_DATA_DIR")), hookAt)
+	}
+	if activity.Harness == "claude-code" && activity.SourceInterface == "tui" && activity.AgentSessionID != "" {
+		// The worker follows the terminal Claude's transcript for interrupts.
+		// /clear or /resume moves that process to another conversation, and
+		// CLAUDE_PID tells the terminal's process from a headless claude the
+		// agent runs from a tool (it shares this environment and these hooks).
+		_ = worker.RecordClaudeConversation(strings.TrimSpace(os.Getenv("AO_DATA_DIR")),
+			strings.TrimSpace(os.Getenv("CLAUDE_PID")), activity.AgentSessionID, hookAt)
 	}
 	if activity.Harness == "codex" && activity.Event == "stop" && activity.LatestAssistantUpdate == "" {
 		activity.LatestAssistantUpdate = latestCodexAssistantMessage(
@@ -256,34 +265,6 @@ func notificationFromActivity(sessionID string, epoch int64, activity worker.Act
 func hookNotificationID(values ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	return hex.EncodeToString(hash[:16])
-}
-
-// pokeCheckpoint signals the worker's checkpoint bridge (a unix socket at
-// AO_CHECKPOINT_SOCKET) that a turn completed, so it captures a durable-restore
-// checkpoint. It is fire-and-forget: any failure (no socket, worker down) is
-// ignored so a completed turn is never delayed or broken by capture.
-func pokeCheckpoint(ctx context.Context) {
-	socket := os.Getenv("AO_CHECKPOINT_SOCKET")
-	if socket == "" {
-		return
-	}
-	httpClient := &http.Client{
-		Timeout: 2 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(dialCtx, "unix", socket)
-			},
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/checkpoint", nil)
-	if err != nil {
-		return
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return
-	}
-	_ = resp.Body.Close()
 }
 
 func runSpawn(ctx context.Context, c *client, args []string) error {

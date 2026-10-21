@@ -763,3 +763,113 @@ func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
 		}
 	}
 }
+
+// A Setup step runs with the time limit its first line sets, which never
+// reaches the shell, and a step over it fails saying so.
+func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
+	previous := scriptStepMinute
+	scriptStepMinute = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute = previous })
+	workspace := t.TempDir()
+	write := "echo ran > out.txt"
+	slow := "sleep 2"
+	if runtime.GOOS == "windows" {
+		write = "echo ran> out.txt"
+		slow = "ping -n 3 127.0.0.1 > NUL"
+	}
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil); err != nil {
+		t.Fatalf("a timed step failed: %v", err)
+	}
+	if output, err := os.ReadFile(filepath.Join(workspace, "out.txt")); err != nil || strings.TrimSpace(string(output)) != "ran" {
+		t.Fatalf("the timed step did not run: %q %v", output, err)
+	}
+	// One "minute" is 100ms here: the step stops at its own limit.
+	started := time.Now()
+	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil)
+	if err == nil || !strings.Contains(err.Error(), "The project's Setup script stopped at step 1 after 1 minute, so the agent did not start.") || time.Since(started) > 1500*time.Millisecond {
+		t.Fatalf("err = %v after %s, want the step stopped at its limit", err, time.Since(started))
+	}
+	// A long limit leaves the step running past the default one.
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil); err != nil {
+		t.Fatalf("a step under its own limit failed: %v", err)
+	}
+}
+
+// A start that runs Setup also gets its steps' time limits.
+func TestPostCreateBudgetCoversTheSetupSteps(t *testing.T) {
+	if got := postCreateBudget(10*time.Minute, nil); got != 10*time.Minute {
+		t.Fatalf("no setup = %s", got)
+	}
+	// A step without its own limit adds Setup's 30-minute default.
+	if got := postCreateBudget(10*time.Minute, []string{"npm ci", " ", "# ao-timeout: 90m\nmake"}); got != 130*time.Minute {
+		t.Fatalf("setup budget = %s", got)
+	}
+	// A typed limit, shorter than the default too, is the step's own.
+	if got := postCreateBudget(10*time.Minute, []string{"# ao-timeout: 5m\nnpm ci", "make"}); got != 45*time.Minute {
+		t.Fatalf("setup budget with a short step = %s", got)
+	}
+}
+
+type deadlineProbeWorkspace struct {
+	ports.Workspace
+	budget time.Duration
+}
+
+func (w *deadlineProbeWorkspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		w.budget = time.Until(deadline)
+	}
+	return w.Workspace.Create(ctx, cfg)
+}
+
+// A REST spawn is not cut at the request's flat deadline: it runs under its
+// budget plus its project's Setup step limits.
+func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
+	m, st, _, _ := newManager()
+	probe := &deadlineProbeWorkspace{Workspace: m.workspace}
+	m.workspace = probe
+	project := st.projects["mer"]
+	project.Config.PostCreate = []string{"# ao-timeout: 90m\nmake", "npm ci"}
+	st.projects["mer"] = project
+	var extended time.Duration
+	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
+	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+	if want := 121 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
+		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 30m)", probe.budget, want)
+	}
+	if extended != 121*time.Minute+time.Second {
+		t.Fatalf("request deadline extended to %s, want just past the spawn's own", extended)
+	}
+}
+
+// A restore extends the request's budget by its Setup only when it recreates
+// the worktree and so runs Setup; an ordinary restore that hangs keeps the
+// request's ordinary budget.
+func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recreated bool
+		want      time.Duration
+	}{
+		{"worktree kept", false, 0},
+		{"worktree recreated", true, 91*time.Minute + time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.PostCreate = []string{"# ao-timeout: 90m\ntrue"}
+			st.projects["mer"] = project
+			workspace := t.TempDir()
+			if tc.recreated {
+				workspace = filepath.Join(workspace, "reclaimed")
+			}
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: workspace, Branch: "ao/mer-1", AgentSessionID: "agent-x"})
+			var extended time.Duration
+			ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
+			_, _ = m.RestoreWithMode(ctx, "mer-1")
+			if extended != tc.want {
+				t.Fatalf("request budget extended to %s, want %s", extended, tc.want)
+			}
+		})
+	}
+}
