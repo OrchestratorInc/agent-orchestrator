@@ -3269,7 +3269,6 @@
 	"settings.defaultSandbox.single": "Where your cloud sessions run. Only one sandbox is available.",
 	"settings.defaultSandbox.adminOnly": "Only organization admins can change this.",
 	"settings.defaultSandbox.saveFailed": "Couldn't save the default sandbox. Try again.",
-	"settings.agentAccounts.cliLogin": "CLI login",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI login",
 	"settings.agentAccounts.oauthToken": "OAuth token",
 	"settings.agentAccounts.removedAccount": "a removed account",

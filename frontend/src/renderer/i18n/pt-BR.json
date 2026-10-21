@@ -3336,7 +3336,6 @@
 	"settings.defaultSandbox.single": "Onde suas sessões na nuvem são executadas. Só há um sandbox disponível.",
 	"settings.defaultSandbox.adminOnly": "Somente administradores da organização podem alterar isso.",
 	"settings.defaultSandbox.saveFailed": "Não foi possível salvar o sandbox padrão. Tente novamente.",
-	"settings.agentAccounts.cliLogin": "Login da CLI",
 	"settings.agentAccounts.cliLoginOf": "Login da CLI do {{provider}}",
 	"settings.agentAccounts.oauthToken": "Token OAuth",
 	"settings.agentAccounts.removedAccount": "uma conta removida",

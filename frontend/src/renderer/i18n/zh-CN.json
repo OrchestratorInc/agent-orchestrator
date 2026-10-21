@@ -3270,7 +3270,6 @@
 	"settings.defaultSandbox.single": "你的云会话运行的位置。只有一个沙盒可用。",
 	"settings.defaultSandbox.adminOnly": "只有组织管理员可以更改此设置。",
 	"settings.defaultSandbox.saveFailed": "无法保存默认沙盒。请重试。",
-	"settings.agentAccounts.cliLogin": "CLI 登录",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI 登录",
 	"settings.agentAccounts.oauthToken": "OAuth 令牌",
 	"settings.agentAccounts.removedAccount": "已删除的账号",

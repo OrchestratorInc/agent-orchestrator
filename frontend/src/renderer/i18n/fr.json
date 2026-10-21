@@ -3336,7 +3336,6 @@
 	"settings.defaultSandbox.single": "Où s'exécutent vos sessions cloud. Une seule sandbox est disponible.",
 	"settings.defaultSandbox.adminOnly": "Seuls les administrateurs de l'organisation peuvent modifier ce réglage.",
 	"settings.defaultSandbox.saveFailed": "Impossible d'enregistrer la sandbox par défaut. Réessayez.",
-	"settings.agentAccounts.cliLogin": "Connexion de la CLI",
 	"settings.agentAccounts.cliLoginOf": "Connexion de la CLI {{provider}}",
 	"settings.agentAccounts.oauthToken": "Jeton OAuth",
 	"settings.agentAccounts.removedAccount": "un compte supprimé",

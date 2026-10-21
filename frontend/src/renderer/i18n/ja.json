@@ -3288,7 +3288,6 @@
 	"settings.defaultSandbox.single": "クラウドセッションの実行場所です。利用できるサンドボックスは 1 つだけです。",
 	"settings.defaultSandbox.adminOnly": "これを変更できるのは組織の管理者だけです。",
 	"settings.defaultSandbox.saveFailed": "デフォルトのサンドボックスを保存できませんでした。もう一度お試しください。",
-	"settings.agentAccounts.cliLogin": "CLI のログイン",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI のログイン",
 	"settings.agentAccounts.oauthToken": "OAuth トークン",
 	"settings.agentAccounts.removedAccount": "削除済みのアカウント",

@@ -3288,7 +3288,6 @@
 	"settings.defaultSandbox.single": "Wo deine Cloud-Sitzungen laufen. Es ist nur eine Sandbox verfügbar.",
 	"settings.defaultSandbox.adminOnly": "Nur Organisationsadmins können das ändern.",
 	"settings.defaultSandbox.saveFailed": "Die Standard-Sandbox konnte nicht gespeichert werden. Versuche es erneut.",
-	"settings.agentAccounts.cliLogin": "CLI-Anmeldung",
 	"settings.agentAccounts.cliLoginOf": "{{provider}}-CLI-Anmeldung",
 	"settings.agentAccounts.oauthToken": "OAuth-Token",
 	"settings.agentAccounts.removedAccount": "ein entferntes Konto",
