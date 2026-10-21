@@ -19,10 +19,11 @@ func TestTriagePostFakeGH(t *testing.T) {
 	t.Cleanup(func() { stdinIsInteractive = old })
 	for _, tc := range []struct {
 		name, state, related, input, label, auth, fail, want string
-		tty, missing, wantErr, crlf                          bool
+		tty, missing, wantErr, crlf, emptyComment            bool
 		calls                                                int
 	}{
 		{name: "yes", state: "ready", input: "y\n", label: "present", auth: "ok", tty: true, want: "filed", calls: 2},
+		{name: "new issue empty comment", state: "ready", input: "y\n", auth: "ok", tty: true, emptyComment: true, want: "filed", calls: 2},
 		{name: "yes no label", state: "ready", input: "yes\n", label: "absent", auth: "ok", tty: true, want: "filed", calls: 2},
 		{name: "no", state: "ready", input: "N\n", label: "present", auth: "ok", tty: true, want: "skipped"},
 		{name: "empty answer", state: "ready", input: "\n", auth: "ok", tty: true, want: "skipped"},
@@ -58,6 +59,9 @@ else echo https://github.com/OrchestratorInc/agent-orchestrator/issues/12#issuec
 `)
 			human := "The view closed. It should have stayed open.\n\nSeen on dev, test OS, daemon stopped. Related: " + tc.related + "."
 			comment := "The view closed again today. I saw it after opening a session."
+			if tc.emptyComment {
+				comment = ""
+			}
 			evidence := triageEvidenceHeading + "\n- App: dev\n"
 			report := "status: " + tc.state + "\n\nTitle: View closes\n\n" + human + "\n\n## Comment\n" + comment + "\n\n" + evidence
 			if tc.crlf {

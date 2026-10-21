@@ -213,6 +213,9 @@ func TestTriageKeywords(t *testing.T) {
 		{"empty ready", "", []string{}},
 		{"short error", "ERROR connection failed", []string{}},
 		{"stopped", "INFO all good", []string{}},
+		{"info error field", `level=INFO msg="scm observer poll completed" error="no error"`, []string{}},
+		{"info on stderr", `2026-10-21T10:00:45.840Z [error] time=2026 level=INFO msg="scm observer poll completed"`, []string{}},
+		{"error detail", `level=ERROR msg="launch failed" error="executable missing"`, []string{"launch failed executable missing"}},
 		{"plain strips metadata", "2026-10-20 ERROR session_id=abc123 /Users/name/file 503 connection refused by remote peer", []string{"connection refused remote peer"}},
 		{"slog", `time=2026 level=WARN msg="terminal launch failed" id=42`, []string{"terminal launch failed"}},
 		{"json", `{"level":"ERROR","msg":"session stream disconnected","id":123}`, []string{"session stream disconnected"}},
@@ -223,6 +226,81 @@ func TestTriageKeywords(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := triageKeywords(tc.logs); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %#v want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTriageLogMessages(t *testing.T) {
+	for _, tc := range []struct {
+		name, logs string
+		want       []string
+	}{
+		{"info only", "INFO no errors\n" + `level=INFO msg="http request" error="request warning"` + "\n" + `{"level":"INFO","message":"error handler ready"}`, nil},
+		{"info on stderr", `2026-10-21T10:00:45.840Z [error] time=2026 level=INFO msg="http request"`, nil},
+		{"slog warning", `time=2026 level=WARN msg="terminal launch failed" error="executable not found"`, []string{"terminal launch failed: executable not found"}},
+		{"json error", `{"level":"ERROR","message":"session stream disconnected","error":"read \"socket\": EOF"}`, []string{`session stream disconnected: read "socket": EOF`}},
+		{"desktop warning", "2026-10-21T10:00:45.840Z [warn] terminal launch failed", []string{"terminal launch failed"}},
+		{"panic and fatal", "panic: runtime failed\nfatal error: concurrent map writes\nFATAL daemon stopped", []string{"daemon stopped", "error: concurrent map writes", "runtime failed"}},
+		{"deduplicated by message", "level=ERROR msg=\"launch failed\" error=old\nlevel=WARN msg=\"launch failed\" error=new", []string{"launch failed: new"}},
+		{"empty error", "level=WARN msg=\"launch failed\" error=\"\"", []string{"launch failed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := triageLogMessages(tc.logs); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v want %#v", got, tc.want)
+			}
+		})
+	}
+	var logs strings.Builder
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&logs, "ERROR failure %d\n", i)
+	}
+	if got := triageLogMessages(logs.String()); len(got) != 8 || got[0] != "failure 9" || got[7] != "failure 2" {
+		t.Fatal(got)
+	}
+}
+
+func TestTriageLogEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, logs string
+		want       []string
+		search     bool
+	}{
+		{"info only", "level=INFO msg=\"http request\" error=none\n2026-10-21T10:00:45.840Z [error] time=2026 level=INFO msg=\"scm observer poll completed\"\n", []string{"- Logs: no warnings or errors in the last 2 lines\n", "Duplicate pre-search skipped: no error lines to search for"}, false},
+		{"warnings and errors", "level=INFO msg=\"http request\"\nlevel=WARN msg=\"terminal launch failed\" error=\"executable not found\"\n{\"level\":\"ERROR\",\"msg\":\"session stream disconnected\",\"error\":\"socket closed\"}\n", []string{"- Log excerpt: terminal launch failed: executable not found\n", "- Log excerpt: session stream disconnected: socket closed\n"}, true},
+		{"no keywords", "ERROR failed\n", []string{"- Log excerpt: failed\n", "Duplicate pre-search skipped: no error lines to search for"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _, dir := triageTestDeps(t)
+			calls := filepath.Join(dir, "calls")
+			t.Setenv("GH_TEST_CALLS", calls)
+			path := fakeTriageGH(t, `printf '%s\n' "$*" >> "$GH_TEST_CALLS"; echo '[]'`)
+			deps.LookPath = func(name string) (string, error) {
+				if name == "gh" {
+					return path, nil
+				}
+				return "", exec.ErrNotFound
+			}
+			if err := os.WriteFile(filepath.Join(dir, "daemon.log"), []byte(tc.logs), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
+			for _, text := range []string{snapshot, draft} {
+				for _, want := range tc.want {
+					if !strings.Contains(text, want) {
+						t.Errorf("missing %q in %s", want, text)
+					}
+				}
+				if strings.Contains(text, "http request") || strings.Contains(text, "scm observer poll completed") {
+					t.Fatal(text)
+				}
+			}
+			commands, err := os.ReadFile(calls)
+			if err != nil || strings.Contains(string(commands), "issue list") != tc.search {
+				t.Fatal(err, string(commands))
+			}
+			if !tc.search && strings.Contains(draft, "Duplicate candidates") {
+				t.Fatal(draft)
 			}
 		})
 	}
@@ -351,7 +429,7 @@ func TestTriageSearchUsesRedactedLogs(t *testing.T) {
 }
 
 func TestTriageNoErrorSearch(t *testing.T) {
-	if got := triageDuplicates(context.Background(), "unused", []string{"connection failed"}); got != "none: no error lines to search from\n" {
+	if got := triageDuplicates(context.Background(), "unused", []string{"connection failed"}); got != "skipped: no error lines to search for\n" {
 		t.Fatal(got)
 	}
 }
