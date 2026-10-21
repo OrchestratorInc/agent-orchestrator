@@ -1,6 +1,7 @@
 // @vitest-environment node
 import os from "node:os";
 import path from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { launchTriageInTerminal } from "./triage-launch";
 import { terminalCommand } from "./terminal-command";
@@ -10,16 +11,34 @@ vi.mock("electron", () => ({ app: { isPackaged: true, getAppPath: () => "/app" }
 vi.mock("./terminal-command", () => ({ terminalCommand: vi.fn() }));
 vi.mock("./launch-command", () => ({ launchCommand: vi.fn() }));
 
-afterEach(() => vi.unstubAllGlobals());
+let binaryDir: string;
+afterEach(() => { rmSync(binaryDir, { recursive: true, force: true }); vi.unstubAllGlobals(); });
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	binaryDir = mkdtempSync(path.join(os.tmpdir(), "triage-launch-"));
 	vi.stubGlobal("process", { ...process, platform: "darwin", resourcesPath: "/bundled resources", env: { AO_DAEMON_COMMAND: "stale-ao", PATH: "/bin" } });
 	vi.mocked(terminalCommand).mockReturnValue({ command: "/usr/bin/osascript", args: ["-e", "script"] });
 	vi.mocked(launchCommand).mockResolvedValue(undefined);
 });
 
 describe("launchTriageInTerminal", () => {
+	it("uses a trimmed absolute executable override in the terminal", async () => {
+		const binary = path.join(binaryDir, "ao with spaces");
+		writeFileSync(binary, "", { mode: 0o755 });
+		const env = { AO_DAEMON_COMMAND: ` ${binary} ` };
+		expect(await launchTriageInTerminal(env)).toEqual({ ok: true });
+		expect(terminalCommand).toHaveBeenCalledWith([binary, "triage"], "darwin", env, expect.any(Function));
+	});
+
+	it.each(["shell expression", "missing file"])("ignores a %s override", async (kind) => {
+		const binary = path.join(binaryDir, "ao");
+		writeFileSync(binary, "", { mode: 0o755 });
+		const env = { AO_DAEMON_COMMAND: kind === "shell expression" ? `${binary} daemon` : path.join(binaryDir, "missing") };
+		expect(await launchTriageInTerminal(env)).toEqual({ ok: true });
+		expect(terminalCommand).toHaveBeenCalledWith(["/bundled resources/daemon/ao", "triage"], "darwin", env, expect.any(Function));
+	});
+
 	it("puts only state overrides and bundled triage in the terminal command", async () => {
 		const env = { PATH: "/login/bin", GH_TOKEN: "secret123", AO_DATA_DIR: "/data", AO_RUN_FILE: "/run.json" };
 		expect(await launchTriageInTerminal(env)).toEqual({ ok: true });
