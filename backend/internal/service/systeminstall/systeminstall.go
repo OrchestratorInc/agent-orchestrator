@@ -1309,6 +1309,11 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	}
 	if runErr != nil && !installConfirmed && !autohandCLIInstalled {
 		message := runErr.Error()
+		var managedErr *managedInstallError
+		if errors.As(runErr, &managedErr) {
+			// The notice stays short; diagnostics keep the paths and output.
+			_, _ = fmt.Fprintf(out, "\n%s\n%v\n", managedErr.summary, managedErr.err)
+		}
 		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
 			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&
 			strings.Contains(out.String(), "The existing installation was not changed.") {

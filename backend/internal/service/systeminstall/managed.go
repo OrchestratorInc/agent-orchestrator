@@ -194,6 +194,24 @@ func nextManagedDir(versionsDir string) string {
 	return "v" + strconv.Itoa(highest+1)
 }
 
+// switchFailed is the update notice's message when the new copy installed
+// but AO could not move sessions to it.
+const switchFailed = "AO installed the new copy but could not switch to it."
+
+// managedInstallError is a failed managed update. The update notice shows
+// summary; err, which names paths and command output, goes to diagnostics.
+type managedInstallError struct {
+	summary string
+	err     error
+}
+
+func (e *managedInstallError) Error() string { return e.summary }
+func (e *managedInstallError) Unwrap() error { return e.err }
+
+func managedFailure(summary string, err error) error {
+	return &managedInstallError{summary: summary, err: err}
+}
+
 // runManagedInstall installs the update into a new release directory,
 // verifies it, and switches the target's current release to it. Nothing a
 // running session uses is touched; on any failure the new directory is
@@ -217,12 +235,12 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	targetDir := s.managedTargetDir(plan.Target)
 	versionsDir := filepath.Join(targetDir, "versions")
 	if err := os.MkdirAll(versionsDir, 0o750); err != nil {
-		return fmt.Errorf("create managed install directory: %w", err)
+		return managedFailure("AO could not make a folder for the new copy.", fmt.Errorf("create managed install directory: %w", err))
 	}
 	name := nextManagedDir(versionsDir)
 	dir := filepath.Join(versionsDir, name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create release directory: %w", err)
+		return managedFailure("AO could not make a folder for the new copy.", fmt.Errorf("create release directory: %w", err))
 	}
 	keep := false
 	defer func() {
@@ -251,11 +269,11 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	binRel := managedBinRel(s.goos, plan.Method, cli)
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
-		return fmt.Errorf("the install finished but %s is missing", binary)
+		return managedFailure(fmt.Sprintf("The install finished, but AO could not find the new %s executable.", cli), fmt.Errorf("%s is missing", binary))
 	}
 	version, err := s.probeManagedVersion(ctx, plan.Target, binary)
 	if err != nil {
-		return err
+		return managedFailure(fmt.Sprintf("The new %s copy did not start or report its version.", cli), err)
 	}
 	scheme := versionSchemeFor(plan.Target)
 	if pin != "" {
@@ -279,7 +297,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	}
 	if s.releases != nil && !wasUnsettled {
 		if err := writeFileAtomic(marker, []byte(name)); err != nil {
-			return fmt.Errorf("prepare release switch: %w", err)
+			return managedFailure(switchFailed, fmt.Errorf("prepare release switch: %w", err))
 		}
 	}
 	if err := s.switchManagedCurrent(ctx, targetDir, name); err != nil {
@@ -290,7 +308,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			// Keep the intent and candidate so startup can repair the junction.
 			keep = true
 		}
-		return err
+		return managedFailure(switchFailed, err)
 	}
 	if s.releases != nil {
 		// Still under the harness lock: every launch from here on records this
@@ -306,20 +324,20 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 				// every release is kept until no session that may have
 				// launched meanwhile is left.
 				keep = true
-				return errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr))
+				return managedFailure(switchFailed, errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr)))
 			}
 			settle()
-			return recordErr
+			return managedFailure(switchFailed, recordErr)
 		}
 		settle()
 	}
 	keep = true
 	record := managedRecord{Method: plan.Method, Package: pkg, CLI: cli, Version: version, Dir: name, BinRel: binRel}
 	if err := s.ensureManagedLauncher(plan.Target, record); err != nil {
-		return err
+		return managedFailure(switchFailed, err)
 	}
 	if err := writeFileAtomic(filepath.Join(targetDir, "managed.json"), mustJSON(record)); err != nil {
-		return fmt.Errorf("record managed install: %w", err)
+		return managedFailure(switchFailed, fmt.Errorf("record managed install: %w", err))
 	}
 	_, _ = fmt.Fprintf(out, "AO now runs %s %s from %s\n", cli, version, dir)
 	s.mu.Lock()
