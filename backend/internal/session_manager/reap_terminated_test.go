@@ -137,6 +137,28 @@ func TestNotifyOrphanWorkersSkipsWithoutVictimsOrNotifier(t *testing.T) {
 	m.NotifyOrphanWorkers(context.Background())
 }
 
+// TestOrphanReapKillSwitch pins the AO_NO_ORPHANREAP gate: with the flag set,
+// the boot scan stays silent and the allow endpoint is a clean no-op —
+// victims may exist, nothing is reported or signalled.
+func TestOrphanReapKillSwitch(t *testing.T) {
+	t.Setenv("AO_NO_ORPHANREAP", "1")
+	m, notifier, signaled := orphanScenarioHarness(t)
+	m.NotifyOrphanWorkers(context.Background())
+	if len(notifier.intents) != 0 {
+		t.Fatalf("disabled scan notified %+v", notifier.intents)
+	}
+	sessions, err := m.ReapOrphanWorkers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions != nil {
+		t.Fatalf("disabled reap returned %v, want nil", sessions)
+	}
+	if len(*signaled) != 0 {
+		t.Fatalf("disabled reap signaled %v", *signaled)
+	}
+}
+
 func TestReapOrphanWorkersKillsPlannedVictimsOnly(t *testing.T) {
 	m, _, signaled := orphanScenarioHarness(t)
 	sessions, err := m.ReapOrphanWorkers(context.Background())

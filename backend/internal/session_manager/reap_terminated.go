@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,6 +14,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/orphanreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// orphanReapDisabled mirrors the #93 convention (AO_NO_PROCINVENTORY):
+// behavioral toggles are environment variables read at the point of behavior,
+// not UI settings. AO_NO_ORPHANREAP=1|true turns the orphan pass off entirely:
+// no boot scan, no bell report, and ReapOrphanWorkers answers an empty report.
+// The feature is on without it.
+func orphanReapDisabled() bool {
+	switch os.Getenv("AO_NO_ORPHANREAP") {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
+}
 
 // ReapTerminated destroys the stored runtime handles of sessions the database
 // already marks terminated — the handle-based destroy that covers tmux and
@@ -44,7 +59,7 @@ func (m *Manager) ReapTerminated(ctx context.Context) error {
 // only from the boot reconcile: a notification written during shutdown would
 // sit next to the next boot's duplicate.
 func (m *Manager) NotifyOrphanWorkers(ctx context.Context) {
-	if m.notifier == nil {
+	if m.notifier == nil || orphanReapDisabled() {
 		return
 	}
 	_, _, _, victims, err := m.orphanScan(ctx)
@@ -75,6 +90,9 @@ func (m *Manager) NotifyOrphanWorkers(ctx context.Context) {
 // same evidence stack, and the kill. Stored PIDs are never trusted — the scan
 // is re-run, so stale or reused pids cannot be signalled.
 func (m *Manager) ReapOrphanWorkers(ctx context.Context) ([]string, error) {
+	if orphanReapDisabled() {
+		return nil, nil
+	}
 	deps, tbl, at, victims, err := m.orphanScan(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reap orphans: %w", err)
