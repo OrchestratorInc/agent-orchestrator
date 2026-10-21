@@ -73,7 +73,7 @@ func TestTriageJSONAndDraft(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatal(info.Mode())
 	}
-	for _, want := range []string{"status: draft\n", "Title: <one line", "Seen on " + Version, runtime.GOOS, "daemon stopped", "Related: none", triageEvidenceHeading, "health:", "claude: unavailable", "codex: unavailable", "Duplicate candidates", "daemon connection failed", "desktop connection failed", "hooks connection failed"} {
+	for _, want := range []string{"status: draft\n", "Title: <one line", "Seen on " + Version, runtime.GOOS, "daemon stopped", "Related: none", triageEvidenceHeading, "- Daemon: stopped\n", "claude: unavailable", "codex: unavailable", "Duplicate candidates", "daemon connection failed", "desktop connection failed", "hooks connection failed"} {
 		if !strings.Contains(string(draft), want) {
 			t.Errorf("missing %q in %s", want, draft)
 		}
