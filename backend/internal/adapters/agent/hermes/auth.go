@@ -69,6 +69,13 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return ports.AgentAuthStatusConfigured, identity, steps, nil
 }
 
+// hermesKeylessProviders are `hermes status` labels for local routes that
+// Hermes runs without an inference credential (provider ids and display names).
+var hermesKeylessProviders = map[string]bool{
+	"lmstudio": true, "lm studio": true, "custom": true, "custom endpoint": true,
+	"ollama": true, "vllm": true, "llamacpp": true, "llama.cpp": true,
+}
+
 // providerFromStatus reads `hermes status`. Its "Provider:" row is a display
 // label that falls back to the requested provider even without credentials,
 // so only the "Providers:" row of connected credentials is evidence. A
@@ -86,8 +93,13 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 		case "Provider":
 			selected = value
 		case "Providers":
+			lower := strings.ToLower(value)
+			if lower == "unknown" {
+				// Hermes prints this when its provider inventory probe fails.
+				continue
+			}
 			sawConnected = true
-			if lower := strings.ToLower(value); value == "" || strings.HasPrefix(lower, "none") || lower == "(none)" {
+			if value == "" || strings.HasPrefix(lower, "none") || lower == "(none)" {
 				continue
 			}
 			for _, name := range strings.Split(value, ",") {
@@ -101,6 +113,12 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 		return "", ports.AgentAuthStatusUnknown
 	}
 	if len(connected) == 0 {
+		// A local OpenAI-compatible route runs without a credential: Hermes
+		// substitutes a placeholder key for LM Studio, and custom endpoints
+		// may need none, so an empty inventory proves nothing for them.
+		if hermesKeylessProviders[strings.ToLower(selected)] {
+			return "", ports.AgentAuthStatusUnknown
+		}
 		return "", ports.AgentAuthStatusUnauthorized
 	}
 	switch lower := strings.ToLower(selected); {

@@ -193,7 +193,8 @@ func installRevision() string {
 }
 
 // gitHead reads a checkout's HEAD commit without running git: a detached SHA,
-// or the branch ref from its loose file or packed-refs.
+// or the branch ref from its loose file or packed-refs. A linked worktree keeps
+// HEAD in its own git directory and branch refs in the one named by commondir.
 func gitHead(checkout string) string {
 	gitDir := filepath.Join(checkout, ".git")
 	if b, err := os.ReadFile(gitDir); err == nil {
@@ -213,10 +214,18 @@ func gitHead(checkout string) string {
 		return strings.TrimSpace(string(head))
 	}
 	ref = strings.TrimSpace(ref)
-	if b, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
-		return strings.TrimSpace(string(b))
+	refsDir := gitDir
+	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		if refsDir = strings.TrimSpace(string(b)); !filepath.IsAbs(refsDir) {
+			refsDir = filepath.Join(gitDir, refsDir)
+		}
 	}
-	packed, err := os.ReadFile(filepath.Join(gitDir, "packed-refs"))
+	for _, dir := range []string{gitDir, refsDir} {
+		if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ref))); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	packed, err := os.ReadFile(filepath.Join(refsDir, "packed-refs"))
 	if err != nil {
 		return ref
 	}
@@ -412,13 +421,12 @@ func sessionTitle(data, id string) (string, error) {
 // ResolveHome mirrors Hermes's own HERMES_HOME default: ~/.hermes on macOS and
 // Linux, %LOCALAPPDATA%\hermes on Windows. The launch env wins over the daemon's.
 func ResolveHome(env map[string]string) (string, error) {
-	lookup := func(key string) string {
-		if value, ok := env[key]; ok {
-			return value
-		}
-		return os.Getenv(key)
+	lookup := childEnvLookup(env)
+	get := func(name string) string {
+		value, _ := lookup(name)
+		return value
 	}
-	if dir := strings.TrimSpace(lookup("HERMES_HOME")); dir != "" {
+	if dir := strings.TrimSpace(get("HERMES_HOME")); dir != "" {
 		expanded, err := expandNativePath(dir, lookup)
 		if err != nil {
 			return "", err
@@ -426,7 +434,7 @@ func ResolveHome(env map[string]string) (string, error) {
 		return filepath.Clean(expanded), nil
 	}
 	if runtime.GOOS == "windows" {
-		local := strings.TrimSpace(lookup("LOCALAPPDATA"))
+		local := strings.TrimSpace(get("LOCALAPPDATA"))
 		if local == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -436,7 +444,7 @@ func ResolveHome(env map[string]string) (string, error) {
 		}
 		return filepath.Join(local, "hermes"), nil
 	}
-	home := strings.TrimSpace(lookup("HOME"))
+	home := strings.TrimSpace(get("HOME"))
 	if home == "" {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
@@ -450,7 +458,7 @@ func ResolveHome(env map[string]string) (string, error) {
 // os.path.expanduser(os.path.expandvars(value)), against the child
 // environment, so AO reads and records the directory Hermes writes to.
 // Undefined variables stay literal, as in Python.
-func expandNativePath(value string, lookup func(string) string) (string, error) {
+func expandNativePath(value string, lookup envLookup) (string, error) {
 	if runtime.GOOS == "windows" {
 		return expandWindowsUser(expandWindowsVars(value, lookup), lookup)
 	}
@@ -461,10 +469,10 @@ var posixVarReference = regexp.MustCompile(`\$(\w+|\{[^}]*\})`)
 
 // expandPOSIXVars mirrors posixpath.expandvars: $NAME and ${NAME}, with
 // unknown names left unchanged.
-func expandPOSIXVars(value string, lookup func(string) string) string {
+func expandPOSIXVars(value string, lookup envLookup) string {
 	return posixVarReference.ReplaceAllStringFunc(value, func(ref string) string {
 		name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(ref, "$"), "{"), "}")
-		if v, ok := lookupEnv(name, lookup); ok {
+		if v, ok := lookup(name); ok && name != "" {
 			return v
 		}
 		return ref
@@ -472,12 +480,14 @@ func expandPOSIXVars(value string, lookup func(string) string) string {
 }
 
 // expandPOSIXUser mirrors posixpath.expanduser for the current user's ~.
-func expandPOSIXUser(value string, lookup func(string) string) (string, error) {
+func expandPOSIXUser(value string, lookup envLookup) (string, error) {
 	if value != "~" && !strings.HasPrefix(value, "~/") {
 		return value, nil
 	}
-	home := strings.TrimSpace(lookup("HOME"))
-	if home == "" {
+	// posixpath.expanduser uses HOME whenever it is defined, else the
+	// password database.
+	home, ok := lookup("HOME")
+	if !ok {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
 			return "", err
@@ -488,7 +498,7 @@ func expandPOSIXUser(value string, lookup func(string) string) (string, error) {
 
 // expandWindowsVars mirrors ntpath.expandvars: %NAME%, $NAME and ${NAME},
 // '%%' and '$$' escapes, and single-quoted literal runs; unknown names stay.
-func expandWindowsVars(value string, lookup func(string) string) string {
+func expandWindowsVars(value string, lookup envLookup) string {
 	var b strings.Builder
 	for i := 0; i < len(value); {
 		switch c := value[i]; c {
@@ -512,7 +522,7 @@ func expandWindowsVars(value string, lookup func(string) string) string {
 				return b.String()
 			}
 			name := value[i+1 : i+1+end]
-			if v, ok := lookupEnv(name, lookup); ok {
+			if v, ok := lookup(name); ok && name != "" {
 				b.WriteString(v)
 			} else {
 				b.WriteString(value[i : i+end+2])
@@ -530,7 +540,7 @@ func expandWindowsVars(value string, lookup func(string) string) string {
 					return b.String()
 				}
 				name := value[i+2 : i+2+end]
-				if v, ok := lookupEnv(name, lookup); ok {
+				if v, ok := lookup(name); ok && name != "" {
 					b.WriteString(v)
 				} else {
 					b.WriteString(value[i : i+end+3])
@@ -541,7 +551,7 @@ func expandWindowsVars(value string, lookup func(string) string) string {
 				for j < len(value) && (value[j] == '_' || value[j] == '-' || unicode.IsLetter(rune(value[j])) || unicode.IsDigit(rune(value[j]))) {
 					j++
 				}
-				if v, ok := lookupEnv(value[i+1:j], lookup); ok && j > i+1 {
+				if v, ok := lookup(value[i+1 : j]); ok && j > i+1 {
 					b.WriteString(v)
 				} else {
 					b.WriteString(value[i:j])
@@ -558,41 +568,42 @@ func expandWindowsVars(value string, lookup func(string) string) string {
 
 // expandWindowsUser mirrors ntpath.expanduser for the current user's ~:
 // USERPROFILE, then HOMEDRIVE+HOMEPATH. HOME is not consulted.
-func expandWindowsUser(value string, lookup func(string) string) (string, error) {
+func expandWindowsUser(value string, lookup envLookup) (string, error) {
 	if value != "~" && !strings.HasPrefix(value, "~/") && !strings.HasPrefix(value, `~\`) {
 		return value, nil
 	}
-	home := strings.TrimSpace(lookup("USERPROFILE"))
-	if home == "" {
-		if path := lookup("HOMEPATH"); path != "" {
-			home = lookup("HOMEDRIVE") + path
+	home, ok := lookup("USERPROFILE")
+	if !ok {
+		path, ok := lookup("HOMEPATH")
+		if !ok {
+			return value, nil // ntpath.expanduser leaves ~ when neither is defined
 		}
-	}
-	if home == "" {
-		var err error
-		if home, err = os.UserHomeDir(); err != nil {
-			return "", err
-		}
+		drive, _ := lookup("HOMEDRIVE")
+		home = drive + path
 	}
 	return home + value[1:], nil
 }
 
-// lookupEnv reports whether name is defined in the child environment.
-// Windows variable names are case-insensitive.
-func lookupEnv(name string, lookup func(string) string) (string, bool) {
-	if name == "" {
-		return "", false
-	}
-	if v := lookup(name); v != "" {
-		return v, true
-	}
-	if runtime.GOOS == "windows" {
-		if v := lookup(strings.ToUpper(name)); v != "" {
-			return v, true
+// envLookup reports a variable's value and whether it is defined, so an
+// explicitly empty variable expands to empty, as in Python.
+type envLookup func(name string) (string, bool)
+
+// childEnvLookup reads the launch environment, then the daemon's. Windows
+// variable names are case-insensitive.
+func childEnvLookup(env map[string]string) envLookup {
+	return func(name string) (string, bool) {
+		if value, ok := env[name]; ok {
+			return value, true
 		}
+		if runtime.GOOS == "windows" {
+			for key, value := range env {
+				if strings.EqualFold(key, name) {
+					return value, true
+				}
+			}
+		}
+		return os.LookupEnv(name)
 	}
-	_, ok := os.LookupEnv(name)
-	return "", ok
 }
 
 // GetAgentHooks only supplies process-local additive native configuration. The

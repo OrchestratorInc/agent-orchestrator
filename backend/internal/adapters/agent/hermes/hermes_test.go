@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -574,6 +576,10 @@ func TestProviderFromStatusReadsActiveProvider(t *testing.T) {
 		{"auto without credentials", "  Provider:     Auto\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnauthorized},
 		{"selected provider not connected", "  Provider:     defunct-provider\n  Providers:    Anthropic\n", "", ports.AgentAuthStatusUnknown},
 		{"label only", "  Provider:     Auto\n", "", ports.AgentAuthStatusUnknown},
+		// Hermes prints "unknown" when its inventory probe fails.
+		{"failed inventory", "  Provider:     Auto\n  Providers:    unknown\n", "", ports.AgentAuthStatusUnknown},
+		// LM Studio and other local routes run without a credential.
+		{"keyless local route", "  Provider:     LM Studio\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"unrecognized output", "Hermes Agent Status\n", "", ports.AgentAuthStatusUnknown},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -645,6 +651,11 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			"export\t" + key + "=native\n",
 			"\xef\xbb\xbf" + key + "=native\n",
 			key + " = 'multi\nline'\n",
+			// Python's \s and str.strip are Unicode: NBSP is whitespace.
+			"export\u00a0" + key + "=native\n",
+			"\u00a0" + key + "=native\n",
+			// Hermes rewrites a UTF-16 (Notepad "Unicode") file as UTF-8 first.
+			utf16LE("\ufeff" + key + "=native\r\n"),
 		} {
 			if err := os.WriteFile(filepath.Join(home, ".env"), []byte(form), 0o600); err != nil {
 				t.Fatal(err)
@@ -661,6 +672,15 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := hooks(); err != nil {
 		t.Fatalf("harmless multiline value rejected: %v", err)
 	}
+}
+
+// utf16LE encodes s as UTF-16LE bytes in a string.
+func utf16LE(s string) string {
+	var b []byte
+	for _, unit := range utf16.Encode([]rune(s)) {
+		b = append(b, byte(unit), byte(unit>>8))
+	}
+	return string(b)
 }
 
 func TestResolveHomeExpandsLikeHermes(t *testing.T) {
@@ -686,10 +706,18 @@ func TestResolveHomeExpandsLikeHermes(t *testing.T) {
 	if err != nil || got != "/srv/$AO_REVIEW_UNDEFINED/custom" {
 		t.Fatalf("ResolveHome(undefined) = %q, %v", got, err)
 	}
+	// An explicitly empty child variable is defined and expands to empty.
+	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "${AO_REVIEW_EMPTY}/custom", "AO_REVIEW_EMPTY": ""})
+	if err != nil || got != "/custom" {
+		t.Fatalf("ResolveHome(empty child var) = %q, %v", got, err)
+	}
 }
 
 func TestExpandWindowsVarsMatchesNtpath(t *testing.T) {
-	lookup := func(name string) string { return map[string]string{"APPDATA": `C:\A`, "X": "x"}[name] }
+	lookup := func(name string) (string, bool) {
+		value, ok := map[string]string{"APPDATA": `C:\A`, "X": "x", "EMPTY": ""}[name]
+		return value, ok
+	}
 	for in, want := range map[string]string{
 		`%APPDATA%\hermes`: `C:\A\hermes`,
 		`$X\${X}`:          `x\x`,
@@ -697,6 +725,7 @@ func TestExpandWindowsVarsMatchesNtpath(t *testing.T) {
 		`%MISSING%\h`:      `%MISSING%\h`,
 		`'%APPDATA%'\h`:    `'%APPDATA%'\h`,
 		`100%%`:            "100%",
+		`%EMPTY%\h`:        `\h`,
 	} {
 		if got := expandWindowsVars(in, lookup); got != want {
 			t.Fatalf("expandWindowsVars(%q) = %q, want %q", in, got, want)
@@ -743,6 +772,39 @@ func TestConfirmedIdentityFollowsInstallRevision(t *testing.T) {
 	forgetIdentity(launcher)
 	if identityConfirmed(launcher) {
 		t.Fatal("a rejected probe left the launcher confirmed")
+	}
+}
+
+func TestConfirmedIdentityFollowsLinkedWorktreeRevision(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(repo, "init", "-q", "-b", "main")
+	git(repo, "commit", "-q", "--allow-empty", "-m", "one")
+	worktree := filepath.Join(home, "hermes-agent")
+	git(repo, "worktree", "add", "-q", "-b", "runtime", worktree, "main")
+	launcher := filepath.Join(home, "hermes")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rememberIdentity(launcher)
+	if !identityConfirmed(launcher) {
+		t.Fatal("fresh confirmation not reused")
+	}
+	// Branch refs of a linked worktree live in the shared git directory.
+	git(worktree, "commit", "-q", "--allow-empty", "-m", "two")
+	if identityConfirmed(launcher) {
+		t.Fatal("confirmation survived a commit in a linked worktree")
 	}
 }
 
