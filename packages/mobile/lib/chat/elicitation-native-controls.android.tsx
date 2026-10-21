@@ -2,6 +2,7 @@ import { Feather } from "../icons";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { haptics } from "../haptics";
 import { useTheme } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import type {
 	ElicitationActionProps,
 	ElicitationChoiceListProps,
@@ -50,7 +51,7 @@ export function ElicitationTextField({ value, label, autoFocus, numeric, maxLeng
 			onChangeText={(next) => onChange(numeric ? (next === "" ? "" : Number(next)) : next)}
 			placeholder={label}
 			placeholderTextColor={t.textFaint}
-			selectionColor={t.accent}
+			{...textSelectionColors(t)}
 			keyboardType={numeric ? "numeric" : "default"}
 			maxLength={maxLength}
 			style={[styles.input, { color: t.textPrimary, backgroundColor: t.bgSubtle, borderColor: t.borderDefault }]}

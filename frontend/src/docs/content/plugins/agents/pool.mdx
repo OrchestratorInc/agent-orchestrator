@@ -8,8 +8,8 @@ Pool is a Chat-only harness in this AO integration. AO uses your installed Pool 
 ## Install and configure
 
 1. Open **Settings → Harness → Poolside Pool** and follow the installation guide. Install Pool yourself using [Poolside's instructions](https://docs.poolside.ai/cli/install), including its license acceptance. AO does not install, update, or redistribute Pool.
-2. Complete [native login](https://docs.poolside.ai/get-started/log-in) in a terminal, then check `pool --version`. Keep the executable on the PATH visible to AO.
-3. Refresh harness status in Settings. A configured environment key is reported as **configured**, not verified authorization. An absent key stays **unknown**, because Pool may have a saved native login.
+2. Open Poolside Pool’s **Account** tab and choose **Set up** (or **Open setup**) to start [native login](https://docs.poolside.ai/get-started/log-in) in AO’s terminal. This action remains available when login status is unknown. Keep the executable on the PATH visible to AO. Standalone provider credentials use the environment settings below instead of Poolside login.
+3. Refresh harness status in Settings. Pool has no safe authorization-status probe wired in AO; completing native login does not make AO claim verified authorization. The Account tab also offers native logout; it does not remove standalone environment keys. A configured environment key is reported as **configured**, not verified authorization. An absent key stays **unknown**, because Pool may have a saved native login.
 4. Choose Pool and **Chat** in **New task**. Select a model offered by the native catalog, or retain Pool's native default.
 
 ```bash

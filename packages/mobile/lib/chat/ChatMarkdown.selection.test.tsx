@@ -5,7 +5,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 
 const { platform, theme } = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)" },
+	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
 }));
 
 vi.mock("react-native", () => ({
@@ -148,7 +148,7 @@ it("lets readers select response prose in every rendered Markdown block", () => 
 		expect(rangeSelectableText, `${response} should support native range selection on iOS`).toContain(response);
 	}
 	for (const node of renderer.root.findAll((node) => node.props.uiTextView === true)) {
-		expect(node.props.selectionColor).toBe(theme.accent);
+		expect(node.props.selectionColor).toBe(theme.highlight);
 	}
 
 	act(() => renderer.unmount());
@@ -161,11 +161,22 @@ it("uses the spawn prompt's translucent selection gray on Android", () => {
 		act(() => { renderer = create(<ChatMarkdown text={"Paragraph response\n\n```text\nCode response\n```"} />); });
 		const selectable = renderer.root.findAll((node) => node.props.uiTextView === true);
 		expect(selectable.map(textOf)).toEqual(["Paragraph response", "Code response"]);
-		for (const node of selectable) expect(node.props.selectionColor).toBe(theme.accentBorder);
+		for (const node of selectable) expect(node.props.selectionColor).toBe(theme.selection);
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
 	}
+});
+
+it.each([false, true])("colors Markdown links with the theme highlight, not the hue-less accent (pressable: %s)", (pressable) => {
+	let renderer!: ReactTestRenderer;
+	const markdown = <ChatMarkdown text="Read the [docs](https://example.com/docs) first." />;
+	act(() => { renderer = create(pressable ? <ChatLinkProvider onLinkOpen={vi.fn()}>{markdown}</ChatLinkProvider> : markdown); });
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && (node.props.style as { textDecorationLine?: string } | undefined)?.textDecorationLine === "underline");
+	expect(links.map(textOf)).toEqual(["docs"]);
+	expect(links[0].props.style.color).toBe(theme.highlight);
+	expect(links[0].props.style.color).not.toBe(theme.accent);
+	act(() => renderer.unmount());
 });
 
 it("keeps inline links accessible on iOS while plain prose remains range-selectable", () => {

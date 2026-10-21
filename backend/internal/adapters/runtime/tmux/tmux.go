@@ -808,6 +808,82 @@ func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.R
 	return false, nil
 }
 
+// RunningWorkloadCommands counts shell commands below the exact supervised
+// agent for ref (see ports.WorkloadCommandInspector).
+func (r *Runtime) RunningWorkloadCommands(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (int, error) {
+	if ref.SessionID == "" || strings.TrimSpace(ref.LaunchID) == "" {
+		return 0, errors.New("tmux runtime: exact supervisor session and launch are required")
+	}
+	entries, panePID, err := r.supervisedProcessTree(ctx, handle)
+	if err != nil {
+		return 0, err
+	}
+	return countWorkloadCommands(entries, panePID, string(ref.SessionID), ref.LaunchID)
+}
+
+// countWorkloadCommands finds the agent the exact supervisor launched and
+// counts the shells it spawned, with everything below them.
+func countWorkloadCommands(entries []processEntry, panePID int, sessionID, launchID string) (int, error) {
+	descendants := descendantPIDs(entries, panePID)
+	supervisor := 0
+	for _, entry := range entries {
+		if entry.pid != panePID && descendants[entry.pid] && isSupervisorCommand(entry.command, sessionID, launchID) {
+			supervisor = entry.pid
+			break
+		}
+	}
+	if supervisor == 0 {
+		return 0, errors.New("tmux runtime: exact supervisor is not running")
+	}
+	agents := 0
+	commands := 0
+	for _, agent := range entries {
+		if agent.ppid != supervisor {
+			continue
+		}
+		agents++
+		below := descendantPIDs(entries, agent.pid)
+		for _, entry := range entries {
+			if entry.pid == agent.pid || !below[entry.pid] || !isShellCommand(entry.command) {
+				continue
+			}
+			// Count each shell once, with its subtree, from its outermost shell.
+			if parent, ok := processByPID(entries, entry.ppid); ok && parent.pid != agent.pid && below[parent.pid] && isShellCommand(parent.command) {
+				continue
+			}
+			commands += len(descendantPIDs(entries, entry.pid))
+		}
+	}
+	if agents == 0 {
+		return 0, errors.New("tmux runtime: supervised agent is not running")
+	}
+	return commands, nil
+}
+
+func processByPID(entries []processEntry, pid int) (processEntry, bool) {
+	for _, entry := range entries {
+		if entry.pid == pid {
+			return entry, true
+		}
+	}
+	return processEntry{}, false
+}
+
+// isShellCommand reports a POSIX or common interactive shell, the way agents
+// run tool commands.
+func isShellCommand(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return false
+	}
+	name := strings.TrimPrefix(filepath.Base(fields[0]), "-")
+	switch name {
+	case "sh", "bash", "zsh", "dash", "fish", "ksh":
+		return true
+	}
+	return false
+}
+
 func (r *Runtime) supervisedProcessTree(ctx context.Context, handle ports.RuntimeHandle) ([]processEntry, int, error) {
 	id, err := handleID(handle)
 	if err != nil {

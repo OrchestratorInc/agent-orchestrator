@@ -5,27 +5,27 @@ import (
 	"testing"
 )
 
-// TestMigration0208AllowsPoolAndReversesBothHistoricalSchemas mirrors the
+// TestPoolMigrationAllowsPoolAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
 // legacy-qm schema, an unknown harness must still be rejected, and the down
 // migration must restore the exact prior constraint.
-func TestMigration0208AllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestPoolMigrationAllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 194)
+			db := openMigratedDatabaseCopy(t, 20261019220421514)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 0208 rewrites, so anchor
+				// 'codewhale' in every variant the Pool migration rewrites, so anchor
 				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 194)
+			upTo(t, db, 20261019220421514)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -36,20 +36,20 @@ func TestMigration0208AllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 208)
+			upTo(t, db, 20261021073338393)
 			if _, err := db.Exec(insert, "cc-session", 3, "pool"); err != nil {
 				t.Fatalf("insert pool session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 208 {
-				t.Fatalf("migration version = %d, err = %v; want 208", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261021073338393 {
+				t.Fatalf("migration version = %d, err = %v; want 20261021073338393", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'pool'`)
-			downTo(t, db, 194)
+			downTo(t, db, 20261019220421514)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -71,7 +71,7 @@ func TestMigration0208AllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
 // harness, otherwise the repair would silently skip it and a database that
 // missed an earlier harness migration could never accept this harness.
 func TestPoolRepairAnchorMatchesEveryHistoricalHarnessList(t *testing.T) {
-	for _, version := range []int64{26, 53, 54, 82, 95, 155, 163, 164, 165, 166, 167, 168, 174, 194} {
+	for _, version := range []int64{26, 53, 54, 82, 95, 155, 163, 164, 165, 166, 167, 168, 174, 20261019220421514} {
 		db := openMigratedDatabaseCopy(t, version)
 		var sql string
 		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&sql); err != nil {
@@ -97,7 +97,7 @@ func TestPoolRepairAnchorMatchesEveryHistoricalHarnessList(t *testing.T) {
 
 // TestReconcilePoolAfterBurnedMigration covers a database that never ran
 // an earlier harness migration: goose skips the burned number, the current-schema
-// rewrite in 0208 matches nothing, and the repair is the only thing that adds
+// rewrite in the Pool migration matches nothing, and the repair is the only thing that adds
 // Pool. It must also leave every earlier harness intact, which is the
 // failure mode when a migration widens a schema variant the repair also relies on.
 func TestReconcilePoolAfterBurnedMigration(t *testing.T) {

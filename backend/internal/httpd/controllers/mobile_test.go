@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -41,10 +42,35 @@ func (f *fakeBridge) SetKeepAwake(on bool) (MobileStatusResponse, error) {
 	r.KeepAwake.Enabled = on
 	return r, nil
 }
+func (f *fakeBridge) SetKeepAwakeLid(bool, bool) (MobileStatusResponse, error) {
+	return MobileStatusResponse{}, errors.New("closed-lid wakefulness unavailable")
+}
 func (f *fakeBridge) SetSecurePairing(on bool) (MobileStatusResponse, error) {
 	r := f.Status()
 	r.SecurePairing.Enabled = on
 	return r, nil
+}
+func (f *fakeBridge) SetBrowserRemoteAccess(on bool) (MobileStatusResponse, error) {
+	r := f.Status()
+	r.BrowserRemoteAccess = on
+	return r, nil
+}
+
+func TestMobileBrowserRemoteAccess(t *testing.T) {
+	c := &MobileController{Bridge: &fakeBridge{}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mobile/browser-control", strings.NewReader(`{"enabled":true}`))
+	rr := httptest.NewRecorder()
+	c.BrowserRemoteAccess(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var got MobileStatusResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.BrowserRemoteAccess {
+		t.Fatal("browser remote access was not enabled")
+	}
 }
 
 // fakeLAN is a minimal LANController for exercising BridgeService directly.

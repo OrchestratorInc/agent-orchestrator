@@ -1942,9 +1942,11 @@ func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
 
 // TestChatSpawnWritesCommandCodeSessionStartHook drives a fresh Chat spawn
 // through the real Command Code adapter and asserts the workspace actually
-// receives the SessionStart hook that injects the standing instructions. A
-// prompt file without this hook is the exact gap reported against fresh Chat
-// workers and orchestrators.
+// receives the managed hooks (SessionStart for the TUI lifecycle plus
+// PreToolUse/PostToolUse/Stop for activity). The SessionStart hook itself
+// never fires under `cmd acp` (issue #6784); Chat standing instructions ride
+// the first prompt preamble instead, so this asserts hook installation — not
+// Chat delivery.
 func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	dataDir := t.TempDir()
 	wsDir := t.TempDir()

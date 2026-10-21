@@ -41,6 +41,16 @@ import ExternalLink from "lucide-react-native/icons/external-link";
 import FeatherGlyph from "lucide-react-native/icons/feather";
 import File from "lucide-react-native/icons/file";
 import FileText from "lucide-react-native/icons/file-text";
+import FileDiff from "lucide-react-native/icons/file-diff";
+import FileMinus from "lucide-react-native/icons/file-minus";
+import FilePen from "lucide-react-native/icons/file-pen";
+import FilePlus from "lucide-react-native/icons/file-plus";
+import FileSymlink from "lucide-react-native/icons/file-symlink";
+import ListTree from "lucide-react-native/icons/list-tree";
+import MessageSquareText from "lucide-react-native/icons/message-square-text";
+import Sparkles from "lucide-react-native/icons/sparkles";
+import UnfoldVertical from "lucide-react-native/icons/unfold-vertical";
+import WrapText from "lucide-react-native/icons/text-wrap";
 import Folder from "lucide-react-native/icons/folder";
 import FolderOpen from "lucide-react-native/icons/folder-open";
 import Flag from "lucide-react-native/icons/flag";
@@ -80,6 +90,7 @@ import Timer from "lucide-react-native/icons/timer";
 import Unplug from "lucide-react-native/icons/unplug";
 import Moon from "lucide-react-native/icons/moon";
 import Ellipsis from "lucide-react-native/icons/ellipsis";
+import Palette from "lucide-react-native/icons/palette";
 import Paperclip from "lucide-react-native/icons/paperclip";
 import Pin from "lucide-react-native/icons/pin";
 import PinOff from "lucide-react-native/icons/pin-off";
@@ -165,6 +176,11 @@ export const glyphs = {
 	"feather": FeatherGlyph,
 	"file": File,
 	"file-text": FileText,
+	"file-diff": FileDiff,
+	"file-minus": FileMinus,
+	"file-pen": FilePen,
+	"file-plus": FilePlus,
+	"file-symlink": FileSymlink,
 	"folder": Folder,
 	"folder-open": FolderOpen,
 	"flag": Flag,
@@ -183,6 +199,7 @@ export const glyphs = {
 	"layers": Layers,
 	"link": Link,
 	"list": List,
+	"list-tree": ListTree,
 	"loader": LoaderCircle,
 	"log-out": LogOut,
 	"map": Map,
@@ -191,6 +208,7 @@ export const glyphs = {
 	"message-circle": MessageCircle,
 	"message-square": MessageSquare,
 	"message-square-plus": MessageSquarePlus,
+	"message-square-text": MessageSquareText,
 	"mic": Mic,
 	"mic-off": MicOff,
 	"minus": Minus,
@@ -201,6 +219,7 @@ export const glyphs = {
 	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
 	"more-horizontal": Ellipsis,
+	"palette": Palette,
 	"paperclip": Paperclip,
 	"pin": Pin,
 	"pin-off": PinOff,
@@ -223,6 +242,7 @@ export const glyphs = {
 	"shield-off": ShieldOff,
 	"shuffle": Shuffle,
 	"sliders": SlidersHorizontal,
+	"sparkles": Sparkles,
 	"smartphone": Smartphone,
 	"square": Square,
 	"star": Star,
@@ -235,9 +255,11 @@ export const glyphs = {
 	"trash-2": Trash,
 	"type": Type,
 	"underline": Underline,
+	"unfold-vertical": UnfoldVertical,
 	"unplug": Unplug,
 	"user": User,
 	"wifi-off": WifiOff,
+	"wrap-text": WrapText,
 	"x": X,
 	"x-circle": CircleX,
 	"x-octagon": OctagonX,

@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils";
 import type { SessionProvisionStep } from "../../types/workspace";
 import { Button } from "../ui/button";
 import { ResponseSpinner } from "./ChatTimelineItems";
+import { BranchNamingLabel } from "../BranchNamingLabel";
 
 type StepStatus = SessionProvisionStep["status"] | "failed";
 
@@ -19,6 +20,7 @@ export function SessionStartup({
 	error,
 	agentName,
 	branch,
+	namingBranch,
 	onRetry,
 	retrying,
 	retryError,
@@ -28,6 +30,7 @@ export function SessionStartup({
 	error?: string;
 	agentName: string;
 	branch?: string;
+	namingBranch?: boolean;
 	onRetry?: () => void;
 	retrying?: boolean;
 	retryError?: string;
@@ -65,7 +68,7 @@ export function SessionStartup({
 									? t("chat.startup.step.agent", { agent: agentName })
 									: t(`chat.startup.step.${step.id}`)}
 							</span>
-							{detail && status !== "pending" ? (
+							{step.id === "worktree" && namingBranch ? <BranchNamingLabel /> : detail && status !== "pending" ? (
 								<span className="min-w-0 truncate font-mono text-caption text-passive" title={detail}>
 									{detail}
 								</span>

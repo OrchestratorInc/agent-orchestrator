@@ -56,10 +56,13 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 	return actions;
 }
 
-/** Confirmation copy for every Archive entry point; see the module comment. */
-export function archiveSessionMessage(name: string): string {
-	return `This stops ${name} and moves it to Archive. Its worktree folder is deleted unless it has uncommitted changes. The conversation and committed work on its branch are kept, so you can restore it later.`;
-}
+/** Confirmation copy for every Archive entry point, word for word desktop's (SessionArchiveDialog). */
+export const ARCHIVE_SESSION_CONFIRM = {
+	title: "Are you sure you want to archive this session?",
+	message: "You can always restore it from the Archive section later.",
+	cancel: "No",
+	confirm: "Confirm",
+} as const;
 
 export const ARCHIVE_SESSION_HINT = "Stops the agent and moves it to Archive. Deletes the worktree folder unless it has uncommitted changes.";
 

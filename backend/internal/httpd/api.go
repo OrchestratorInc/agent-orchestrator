@@ -3,6 +3,7 @@ package httpd
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,10 +24,13 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
+	AgentAccounts      controllers.AgentAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
+	ArtifactVersions   controllers.ArtifactVersionService
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
@@ -55,6 +59,7 @@ type APIDeps struct {
 	Events                   cdcSubscriber
 	Telemetry                ports.EventSink
 	Mobile                   *controllers.MobileController
+	BrowserLive              *BrowserLiveHub
 	Browser                  controllers.BrowserService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
@@ -119,6 +124,7 @@ type API struct {
 	deps          APIDeps
 	agents        *controllers.AgentsController
 	codexAccounts *controllers.CodexAccountsController
+	agentAccounts *controllers.AgentAccountsController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
 	automations   *controllers.AutomationsController
@@ -164,6 +170,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Catalog: deps.Agents,
 		},
 		codexAccounts: &controllers.CodexAccountsController{Svc: deps.CodexAccounts},
+		agentAccounts: newAgentAccountsController(deps),
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
 		},
@@ -177,7 +184,10 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Attachments:              attachmentstore.New(cfg.DataDir),
 			PreviewServer:            deps.PreviewServer,
 			Capabilities:             deps.SessionCapabilities,
+			ArtifactVersions:         deps.ArtifactVersions,
 			ShellPreviewCapabilities: deps.ShellPreviewCapabilities,
+			AgentBrowser:             agentBrowserURL(cfg.AgentBrowserURL),
+			AgentBrowserToken:        cfg.AgentBrowserToken,
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
@@ -208,6 +218,30 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
+// setupRoute reports a request that may run the project's Setup steps.
+func setupRoute(req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		return false
+	}
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+		return true
+	}
+	return false
+}
+
+// serveWithSetupBudget serves a Setup route under budget, like
+// middleware.Timeout, except that the operation may extend the deadline
+// (ports.ExtendSpawnRequestBudget) once it knows its Setup steps.
+func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Request, budget time.Duration) {
+	ctx, timedOut, release := ports.NewSpawnRequestContext(req.Context(), budget)
+	defer release()
+	next.ServeHTTP(w, req.WithContext(ctx))
+	if timedOut() {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}
+}
+
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
 func (a *API) Register(root chi.Router) {
@@ -227,8 +261,28 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A spawn, an orchestrator start or a restore runs the project's
+					// Setup inside the request, and a Setup step may take far longer
+					// than one REST request: the operation extends this budget by its
+					// Setup steps' limits once it knows its project.
+					if setupRoute(req) {
+						budget := timeout
+						if attachmentUploadRoute(req) {
+							budget = max(timeout, 10*time.Minute)
+						}
+						serveWithSetupBudget(next, w, req, budget)
+						return
+					}
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
+						return
+					}
+					// A managed preview carries the dev server's HMR socket and event
+					// streams, and the agent browser its stream socket: both stay open
+					// as long as the page does.
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
+						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" {
+						next.ServeHTTP(w, req)
 						return
 					}
 					ordinary.ServeHTTP(w, req)
@@ -237,6 +291,7 @@ func (a *API) Register(root chi.Router) {
 			r.Use(presenceMiddleware(a.deps.Presence))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
+			a.agentAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
 			a.automations.Register(r)
@@ -322,4 +377,24 @@ func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPres
 		return p
 	}
 	return nil
+}
+
+// newAgentAccountsController moves sessions through the session service when
+// it can, so a move maps errors like every other session command.
+func newAgentAccountsController(deps APIDeps) *controllers.AgentAccountsController {
+	c := &controllers.AgentAccountsController{Svc: deps.AgentAccounts}
+	if mover, ok := deps.Sessions.(controllers.AgentAccountSessionMover); ok {
+		c.Sessions = mover
+	}
+	return c
+}
+
+// agentBrowserURL is the host's agent browser, or nil when it has none.
+// config.Load already accepted only a loopback http URL.
+func agentBrowserURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if raw == "" || err != nil {
+		return nil
+	}
+	return u
 }

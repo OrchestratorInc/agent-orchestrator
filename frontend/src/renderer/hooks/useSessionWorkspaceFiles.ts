@@ -5,6 +5,8 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { fileMediaKind } from "../lib/file-media";
+import { artifactContentUrl } from "../lib/artifact-content-url";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
@@ -39,6 +41,8 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	refreshing?: boolean;
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
+	/** HTTP validator for streamed artifacts, so an unchanged refetch keeps playing. */
+	mediaVersion?: string;
 	editable?: boolean;
 	previousPath?: string;
 	compareMode?: WorkspaceCompareMode;
@@ -52,7 +56,8 @@ export type WorkspaceFileSearchResponse = components["schemas"]["WorkspaceFileSe
 export type FilesSource =
 	| { kind: "workspace" }
 	| { kind: "pull_request"; number: number; url: string; label: string; snapshot?: string }
-	| { kind: "artifact"; rawUrl?: string };
+	/** `readOnly` hides the edit action, as for a cloud session's artifacts. */
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean };
 
 export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string) =>
 	hostId ? ["session-workspace-files", hostId, sessionId] as const : ["session-workspace-files", sessionId] as const;
@@ -146,15 +151,24 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
-// workspace-files endpoint. rawUrl (from the artifact list response) fetches
-// raw bytes on the artifact preview origin, a distinct host from the
-// workspace preview origin — unlike the legacy __ao_artifacts__/ path-prefix
-// form, a workspace-relative path of the same name can never resolve there.
+// workspace-files endpoint. Local preview hostnames can resolve to ::1, where
+// another app may own the daemon's port. Read through the trusted daemon API
+// instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
+// already identify their content endpoint and must keep their original routing.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	const response = await fetch(rawUrl);
+	const contentUrl = artifactContentUrl(sessionId, path, rawUrl);
+	if (!contentUrl) throw new Error(errorMessage);
+	const media = fileMediaKind(path);
+	// The artifact route only supports GET; media elements stream their own body.
+	const response = await fetch(contentUrl);
+	if (media) void response.body?.cancel();
 	if (!response.ok) throw new Error(errorMessage);
-	const { binary, content, size, truncated } = await readArtifactTextResponse(response);
+	const { binary, bytes, content, size, truncated } = media
+		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
+		: await readArtifactTextResponse(response);
+	// Only a complete text file can be edited: the save sends it back whole.
+	const editable = !binary && !truncated;
 	return {
 		additions: 0,
 		binary,
@@ -164,8 +178,10 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		deletions: 0,
 		diff: "",
 		diffTruncated: false,
-		editable: false,
-		fileFingerprint: "",
+		editable,
+		fileFingerprint: editable ? await artifactFingerprint(bytes) : "",
+		imageMediaType: media === "image" ? response.headers.get("content-type") ?? "image" : undefined,
+		mediaVersion: media ? response.headers.get("etag") ?? response.headers.get("last-modified") ?? undefined : undefined,
 		path,
 		sessionId,
 		size,
@@ -174,14 +190,20 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 	};
 }
 
-async function readArtifactTextResponse(response: Response): Promise<{ binary: boolean; content: string; size: number; truncated: boolean }> {
+async function readArtifactTextResponse(response: Response): Promise<{ binary: boolean; bytes: Uint8Array; content: string; size: number; truncated: boolean }> {
 	const headerSize = Number.parseInt(response.headers.get("content-length") ?? "", 10);
 	if (!response.body && Number.isFinite(headerSize) && headerSize > MAX_ARTIFACT_TEXT_BYTES) {
-		return { binary: false, content: "", size: headerSize, truncated: true };
+		return { binary: false, bytes: new Uint8Array(), content: "", size: headerSize, truncated: true };
 	}
 	const { bytes, size, truncated } = await readBoundedResponseBytes(response, MAX_ARTIFACT_TEXT_BYTES);
 	const decoded = decodeArtifactText(bytes, truncated);
-	return { ...decoded, size, truncated };
+	return { ...decoded, bytes, size, truncated };
+}
+
+/** The hex SHA-256 of an artifact's bytes, the fingerprint its write endpoint checks. */
+async function artifactFingerprint(bytes: Uint8Array): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function readBoundedResponseBytes(response: Response, limit: number): Promise<{ bytes: Uint8Array; size: number; truncated: boolean }> {
@@ -433,6 +455,32 @@ export async function updateSessionWorkspaceFile({
 	if (error) throw new Error(apiErrorMessage(error, "Unable to save workspace file"));
 	if (!data) throw new Error("Unable to save workspace file");
 	return data as WorkspaceFileDetail;
+}
+
+/**
+ * Replaces the content of one listed artifact file, provided it still holds
+ * the content the edit started from, and returns its new fingerprint.
+ */
+export async function updateSessionArtifactFile({
+	content,
+	expectedFileFingerprint,
+	path,
+	sessionId,
+	hostId,
+}: {
+	content: string;
+	expectedFileFingerprint: string;
+	path: string;
+	sessionId: string;
+	hostId?: string;
+}): Promise<components["schemas"]["ArtifactFileResponse"]> {
+	const { data, error } = await clientForSessionHost(hostId).PUT("/api/v1/sessions/{sessionId}/artifact-files", {
+		params: { path: { sessionId } },
+		body: { content, expectedFileFingerprint, path },
+	});
+	if (error) throw new Error(apiErrorMessage(error, "Unable to save artifact"));
+	if (!data) throw new Error("Unable to save artifact");
+	return data;
 }
 
 /** Deletes one listed file from the session's artifact directory. */

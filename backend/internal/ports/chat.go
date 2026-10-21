@@ -362,6 +362,10 @@ type ChatResumeConfig struct {
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string
+	// HasPriorTurns indicates whether the conversation already contains turns
+	// (durable or provider history), so reconnection/restore does not re-send
+	// standing instructions or session preamble intended only for the first turn.
+	HasPriorTurns bool
 	// ProviderScopeID identifies AO's provider ownership boundary. A fresh
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string
@@ -468,6 +472,9 @@ type ChatUserMessage struct {
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+	// Continuation marks the user's one-click "continue" after stopping a turn,
+	// so the timeline can show a marker instead of a message bubble.
+	Continuation bool
 }
 
 // MessageDeliveryOptions describes facts about the message independent of the
@@ -509,6 +516,7 @@ func (s ChatTurnSettings) IsZero() bool {
 // is wrong within a week: models are added, renamed, hidden per account, and
 // gated by entitlement the provider knows about and AO does not.
 type ChatModel struct {
+	Inputs      []string
 	ID          string
 	DisplayName string
 	Description string
@@ -1009,7 +1017,7 @@ type chatProviderFailure struct {
 
 // NewChatProviderFailure preserves provider prose as opaque display text. An
 // adapter may attach an existing sentinel (e.g. ErrChatAuthRequired) when native
-// metadata proves it; callers never infer recovery from the message.
+// metadata proves it; callers never infer authentication recovery from the message.
 func NewChatProviderFailure(title, detail string, cause error) error {
 	title = strings.TrimSpace(title)
 	detail = strings.TrimSpace(detail)

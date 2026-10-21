@@ -6,6 +6,7 @@ import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
 	$addUpdateTag,
+	$createRangeSelectionFromDom,
 	$getNodeByKey,
 	$getRoot,
 	$getSelection,
@@ -17,6 +18,7 @@ import {
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
 	DecoratorNode,
+	getDOMSelectionFromTarget,
 	HISTORY_PUSH_TAG,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
@@ -71,7 +73,10 @@ export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: (
 export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
-	setText(text: string): void;
+	/** Replaces the text with the caret at its end, or at its start when asked. */
+	setText(text: string, caret?: "start" | "end"): void;
+	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
+	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
@@ -291,7 +296,7 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 	return true;
 }
 
-function $replaceEditorText(text: string, attached: string[] = []): void {
+function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end"): void {
 	const root = $getRoot();
 	root.clear();
 	for (const line of text.split("\n")) {
@@ -307,7 +312,32 @@ function $replaceEditorText(text: string, attached: string[] = []): void {
 		}
 		root.append(paragraph);
 	}
-	root.selectEnd();
+	if (caret === "start") root.selectStart();
+	else root.selectEnd();
+}
+
+/** True when nothing precedes (or follows) the point in the whole document. */
+function $isAtDocumentEdge(point: RangeSelection["anchor"], edge: "start" | "end"): boolean {
+	let node: LexicalNode = point.getNode();
+	const size = $isTextNode(node) ? node.getTextContentSize() : $isElementNode(node) ? node.getChildrenSize() : 0;
+	if (point.offset !== (edge === "start" ? 0 : size)) return false;
+	for (let parent = node.getParent(); parent; node = parent, parent = node.getParent()) {
+		if ((edge === "start" ? node.getPreviousSibling() : node.getNextSibling()) !== null) return false;
+	}
+	return true;
+}
+
+/**
+ * Read from the DOM: Lexical adopts a native caret move on `selectionchange`, which
+ * can still be queued when the next arrow key arrives.
+ */
+function $caretBoundary(editor: LexicalEditor): { atStart: boolean; atEnd: boolean } | undefined {
+	const selection = $createRangeSelectionFromDom(getDOMSelectionFromTarget(editor.getRootElement()), editor) ?? $getSelection();
+	if (!$isRangeSelection(selection) || !selection.isCollapsed()) return undefined;
+	return {
+		atStart: $isAtDocumentEdge(selection.anchor, "start"),
+		atEnd: $isAtDocumentEdge(selection.anchor, "end"),
+	};
 }
 
 /** True when the character before the caret would run into an inserted chip's text. */
@@ -441,9 +471,9 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text) => {
+			setText: (text, caret) => {
 				editor.update(() => {
-					$replaceEditorText(text, attachedImages());
+					$replaceEditorText(text, attachedImages(), caret);
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
 					discrete: true,
@@ -477,6 +507,7 @@ const EditorBridge = forwardRef<
 				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate)), { discrete: true });
 			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
+			caretBoundary: () => editor.read(() => $caretBoundary(editor)),
 		}),
 		[attachedImages, editor],
 	);

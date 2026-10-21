@@ -42,6 +42,7 @@ import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
@@ -61,6 +62,7 @@ import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
+	refetchCloudProjectsForUnknownSessions,
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
 	useWorkspaceQuery,
@@ -68,8 +70,10 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { latestScriptRun } from "../lib/cloud-script-runs";
+import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
@@ -228,6 +232,11 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 
 function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
 	const { baseUrl, client } = useCloudCp();
+	const queryClient = useQueryClient();
+	// The project's Setup log, fed by this loader's own stream and poll below.
+	const scriptRuns = useCloudScriptRuns(orgId || undefined, sessionId, { fetch: false });
+	const latestSetup = terminalOnly ? undefined : latestScriptRun(scriptRuns, "setup");
+	const setupRun = latestSetup?.status === "running" || latestSetup?.status === "failed" ? latestSetup : undefined;
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
 	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
@@ -246,6 +255,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			after: 0,
 			signal: controller.signal,
 			onEvent: (event) => {
+				if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
 				const occurredAt = Date.parse(event.createdAt);
 				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 				// sandbox.provisioning only marks the start of workspace creation;
@@ -257,7 +267,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			},
 		});
 		return () => controller.abort();
-	}, [baseUrl, orgId, sessionId, terminalOnly]);
+	}, [baseUrl, orgId, queryClient, sessionId, terminalOnly]);
 	useEffect(() => {
 		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
 	}, [factIndex]);
@@ -269,6 +279,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			try {
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
+				refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [session]);
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
@@ -283,7 +294,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, sessionId, terminalOnly]);
+	}, [baseUrl, client, orgId, queryClient, sessionId, terminalOnly]);
 	useEffect(() => {
 		if (!orgId || terminalOnly) return;
 		const controller = new AbortController();
@@ -295,6 +306,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				for (;;) {
 					const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 }, { signal: controller.signal });
 					if (controller.signal.aborted) return;
+					recordCloudScriptStepEvents(queryClient, orgId, sessionId, page.events);
 					for (const event of page.events) {
 						// Complete the replay before painting a stage. Old epochs can
 						// contain agent.ready long before this workspace restart.
@@ -320,10 +332,10 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, sessionId, terminalOnly]);
+	}, [client, orgId, queryClient, sessionId, terminalOnly]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -392,6 +404,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudOrgId,
 		sessionId,
 		cloudLookupEnabled,
+		!listedSession,
 	);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||
@@ -418,6 +431,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
+	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget));
+	const accountSwitchingLabel = interfaceUi.accountMoveTarget
+		? t("settings.agentAccounts.switching", { email: accountLabel(interfaceUi.accountMoveTarget) })
+		: undefined;
 	// Reading a cloud session counts as using it, so it is not idle-paused
 	// under someone who is watching the agent work.
 	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
@@ -594,6 +611,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
 	const handoffDialogContainerRef = useRef<HTMLDivElement | null>(null);
 	const [handoffDialogContainer, setHandoffDialogContainer] = useState<HTMLDivElement | null>(null);
+	// One SessionView serves every local session, so session-scoped UI state must
+	// reset on a switch. Reset during render, not in an effect: children must never
+	// mount (or fetch) against the previous session's reviewer, popout, or dialog.
+	const [stateSessionId, setStateSessionId] = useState(sessionId);
+	if (stateSessionId !== sessionId) {
+		setStateSessionId(sessionId);
+		setTerminalTarget({ kind: "worker" });
+		setReviewerChatId(null);
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		setHandoffDialogOpen(false);
+	}
 	const bindHandoffDialogContainer = useCallback((node: HTMLDivElement | null) => {
 		handoffDialogContainerRef.current = node;
 		setHandoffDialogContainer(node);
@@ -634,7 +663,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// replaces the pane; while AO still retries, the loader carries the reason.
 	const startupProblem = cloudStartupProblem(session);
 	const startupFailure = startupProblem && startupProblem.phase !== "retrying" ? startupProblem : undefined;
-	const cloudReconnecting = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
+	// Set by a restore and cleared only by the session's terminal pane once the
+	// fresh worker's terminal exists, so it means anything only while that pane
+	// can mount: a Chat-mode session never mounts one, and would otherwise keep
+	// the "Connecting your terminal" loader up for good. Its own lifecycle stage
+	// still raises the loader while the restored workspace comes up.
+	const cloudReconnectRequested = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
 	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
 	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
 	const onSessionTerminalAttached = useCallback((attached: boolean) => {
@@ -654,6 +688,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the actual terminal attachment before dismissing the startup view.
 	// browserOnly limits the orchestrator's inspector tabs, not its terminal.
 	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
+	const cloudReconnecting = cloudReconnectRequested && expectsTerminal;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	useEffect(() => {
 		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
@@ -691,16 +726,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		return () => window.clearTimeout(timer);
 	}, [showCompletedLoader]);
 	const cloudResumeRef = useRef("");
-	const requestCloudResume = useCallback(async () => {
+	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
 		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
-		await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
 		if (!session?.cloud || cloudResumeRef.current === session.id) return;
 		cloudResumeRef.current = session.id;
-		void requestCloudResume().catch(() => {
+		// Opening the session asks the worker to prepare its workspace, which
+		// retries a failed checkout. A failed Setup is not re-run just because
+		// the session is viewed: its scripts can have side effects, so only the
+		// failure card's Retry runs it again.
+		const problem = cloudStartupProblem(session);
+		const setupFailed = problem?.phase === "failed" && problem.code === "project_setup_failed";
+		void requestCloudResume(!setupFailed).catch(() => {
 			// Keep the paused lifecycle projection visible. A later message, shell
 			// open, or route visit can issue a fresh explicit resume intent.
 		});
@@ -1300,6 +1341,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserView = useBrowserView({
 		sessionId: uiSessionId,
 		origin: hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
+		cloudAgentBrowser: session?.cloud && cloudCpReady ? { baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId: session.id } : undefined,
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
 		terminated: browserTerminated,
@@ -1349,16 +1391,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
 	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
 
-	useLayoutEffect(() => {
-		setTerminalTarget({ kind: "worker" });
-		setReviewerChatId(null);
-		setBrowserPopOutState({ sessionId, phase: "docked" });
-		setFilesPoppedOut(false);
-	}, [sessionId]);
-
-	// Route props change one render before the passive reset above. Reject the
-	// previous session's shell/reviewer synchronously so its handle can never be
-	// cached under the destination session.
+	// Keep rejecting another session's shell/reviewer handle here as well, so it
+	// can never be cached under the destination session.
 	const routedTerminalTarget = terminalTargetBelongsToSession(terminalTarget, sessionId)
 		? terminalTarget
 		: ({ kind: "worker" } satisfies TerminalTarget);
@@ -1921,8 +1955,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
-							{startupFailure && session?.cloud ? (
-								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
+							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
+							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
+								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} ended={terminated} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
 							{session && !session.cloud && handoffDialogContainer ? (
 								<SwitchAgentDialog
@@ -1998,6 +2033,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
+									accountMoving={Boolean(interfaceUi.accountMoveTarget)}
 									arriving={interfaceUi.optimisticTarget === "chat"}
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
@@ -2022,6 +2058,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
 									terminalBooting={interfaceUi.optimisticTarget === "tui"}
+									terminalSwitchingLabel={accountSwitchingLabel}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}

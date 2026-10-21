@@ -48,10 +48,17 @@ type Config struct {
 	Configure      Configure
 	SessionMode    func(ports.PermissionMode) string
 	SessionOptions func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	// LaunchSessionOptions, RequireAdvertisedOptions, and
+	// CloseSessionBeforeReload: see acpdriver.Config.
+	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
+	RequireAdvertisedOptions bool
+	CloseSessionBeforeReload bool
+	// ValidateInitialize optionally admits only the ACP agent and version the
+	// handshake identifies. See acpdriver.Config.ValidateInitialize.
+	ValidateInitialize func(acpsdk.InitializeResponse) error
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
-	ValidateInitialize           func(acpsdk.InitializeResponse) error
 	ValidateSessionReady         func(context.Context, acpdriver.LaunchConfig, string) error
 	PermissionPolicy             acpdriver.PermissionPolicy
 	ClientExtension              acpdriver.ClientExtensionHandler
@@ -154,6 +161,9 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		},
 		SessionMode:                  cfg.SessionMode,
 		SessionOptions:               cfg.SessionOptions,
+		LaunchSessionOptions:         cfg.LaunchSessionOptions,
+		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
+		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,

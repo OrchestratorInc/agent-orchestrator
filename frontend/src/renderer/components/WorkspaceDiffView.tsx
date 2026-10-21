@@ -21,6 +21,7 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useParsedDiff } from "../hooks/useParsedDiff";
 import { useDiffHighlight } from "../hooks/useDiffHighlight";
+import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import type { DiffRow, DiffRowKind } from "../lib/diff-parser";
@@ -61,7 +62,7 @@ export function cancelFileAnnotations(annotation: FileAnnotationModel, match: (t
 }
 
 export function fileAnnotationKey(target: ActiveFileAnnotationTarget): string {
-	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path].join("\u0000");
+	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path, target.quote ?? ""].join("\u0000");
 }
 
 // Split (old | new) view only means something when both sides have content to
@@ -737,9 +738,13 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	}, [fitHeight, target]);
 	const side = target.side === "file" ? "" : t(target.side === "old" ? "files.oldSide" : "files.newSide");
 	const targetLabel =
-		target.side === "file"
+		target.quote != null
+			? t("files.selectionFeedbackTarget", { file: target.path })
+			: target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
+	// The quoted page selection, unless the box has its own text selected.
+	const quoteToCopy = (box: HTMLTextAreaElement) => (box.selectionStart === box.selectionEnd ? target.quote : undefined);
 	const status = annotation.statusFor(target);
 	const sending = status === "sending";
 	const sent = status === "sent";
@@ -775,6 +780,15 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					)}
 					disabled={sending || sent}
 					onBlur={() => annotation.setDraft(target, text)}
+					// Focusing the box clears the page selection it was opened from, so
+					// Cmd/Ctrl+C (or Edit > Copy) with nothing selected in the box copies
+					// the quoted selection.
+					onCopy={(event) => {
+						const quote = quoteToCopy(event.currentTarget);
+						if (quote === undefined) return;
+						event.preventDefault();
+						event.clipboardData.setData("text/plain", quote);
+					}}
 					onChange={(event) => {
 						const next = event.target.value;
 						setText(next);
@@ -789,6 +803,11 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 						} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
 							event.preventDefault();
 							submitAll();
+						} else if (event.key.toLowerCase() === "c" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+							const quote = quoteToCopy(event.currentTarget);
+							if (quote === undefined) return;
+							event.preventDefault();
+							void aoBridge.clipboard.writeText(quote);
 						}
 					}}
 					placeholder={t("files.feedbackPlaceholder")}

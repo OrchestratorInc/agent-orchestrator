@@ -3,10 +3,13 @@ package httpd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,6 +24,42 @@ type timeoutProbeSessionService struct {
 	switchBudget  chan time.Duration
 	uploadBudget  chan time.Duration
 	sendBudget    chan time.Duration
+	previewBudget chan time.Duration
+	spawnSetup    time.Duration
+	spawnRuns     time.Duration
+	spawnLive     chan bool
+}
+
+// Spawn extends the request's budget by spawnSetup (none when negative), runs
+// past the ordinary budget, and reports whether its context was still live.
+func (s *timeoutProbeSessionService) Spawn(ctx context.Context, _ ports.SpawnConfig) (domain.Session, int, int, error) {
+	if s.spawnSetup >= 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = ports.ExtendSpawnRequestBudget(ctx, s.spawnSetup)
+		defer cancel()
+	}
+	time.Sleep(s.spawnRuns)
+	s.spawnLive <- ctx.Err() == nil
+	return domain.Session{}, 0, 0, errors.New("probe only")
+}
+
+func (s *timeoutProbeSessionService) GetRecord(ctx context.Context, _ domain.SessionID) (domain.SessionRecord, error) {
+	s.previewBudget <- remainingRequestBudget(ctx)
+	return domain.SessionRecord{}, errors.New("probe only")
+}
+
+// recordBudget is the deadline GetRecord saw. The route has run by the time it
+// is read, so a route that never reached GetRecord fails here instead of
+// blocking the test.
+func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case budget := <-s.previewBudget:
+		return budget
+	case <-time.After(time.Second):
+		t.Fatal("the route never read the session record")
+		return 0
+	}
 }
 
 func (s *timeoutProbeSessionService) List(ctx context.Context, _ sessionsvc.ListFilter) ([]domain.Session, error) {
@@ -129,6 +168,41 @@ func TestAttachmentUploadRouteUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
+// A managed preview carries the dev server's HMR socket and event streams; the
+// REST budget cut them at a minute (504) and reloaded the page.
+func TestManagedPreviewAppProxyHasNoRequestTimeout(t *testing.T) {
+	svc := &timeoutProbeSessionService{previewBudget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc, PreviewServer: struct {
+			controllers.ManagedPreviewServer
+		}{}},
+		ControlDeps{},
+	)
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/sessions/ao-1/preview/app/_next/webpack-hmr", nil))
+	if budget := svc.recordBudget(t); budget != 0 {
+		t.Fatalf("managed preview budget = %s, want no deadline", budget)
+	}
+}
+
+// The agent browser's stream socket stays open as long as its tab does.
+func TestAgentBrowserProxyHasNoRequestTimeout(t *testing.T) {
+	svc := &timeoutProbeSessionService{previewBudget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond, AgentBrowserURL: "http://127.0.0.1:9"},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc},
+		ControlDeps{},
+	)
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/sessions/ao-1/agent-browser/ws/cdp", nil))
+	if budget := svc.recordBudget(t); budget != 0 {
+		t.Fatalf("agent browser budget = %s, want no deadline", budget)
+	}
+}
+
 func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 	const configuredTimeout = 250 * time.Millisecond
 	svc := &timeoutProbeSessionService{sendBudget: make(chan time.Duration, 2)}
@@ -166,5 +240,57 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
+	}
+}
+
+// A spawn runs the project's Setup inside the request; a Setup step longer than
+// one REST request used to die at the flat deadline ("signal: killed"). The
+// request keeps the ordinary budget until the spawn extends it.
+func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
+	const configuredTimeout = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name  string
+		setup time.Duration
+		live  bool
+	}{
+		{"extended by its Setup", 400 * time.Millisecond, true},
+		{"never extended", -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &timeoutProbeSessionService{spawnSetup: tc.setup, spawnRuns: 350 * time.Millisecond, spawnLive: make(chan bool, 1)}
+			router := NewRouterWithControl(config.Config{RequestTimeout: configuredTimeout}, discardLogger(), nil, APIDeps{Sessions: svc}, ControlDeps{})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", bytes.NewBufferString(`{"projectId":"p1","kind":"worker","harness":"claude-code"}`))
+			req.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			select {
+			case live := <-svc.spawnLive:
+				if live != tc.live {
+					t.Fatalf("spawn context live past the ordinary budget = %v, want %v", live, tc.live)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("the route never reached Spawn: status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
+	router := chi.NewRouter()
+	seen := map[string]bool{}
+	record := func(w http.ResponseWriter, req *http.Request) { seen[req.Method+" "+req.URL.Path] = setupRoute(req) }
+	router.Post("/api/v1/sessions", record)
+	router.Post("/api/v1/orchestrators", record)
+	router.Post("/api/v1/sessions/{sessionId}/restore", record)
+	router.Post("/api/v1/sessions/{sessionId}/send", record)
+	router.Get("/api/v1/sessions", record)
+	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(call[0], call[1], nil))
+	}
+	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
+	for call, setup := range want {
+		if seen[call] != setup {
+			t.Errorf("setupRoute(%s) = %v, want %v", call, seen[call], setup)
+		}
 	}
 }

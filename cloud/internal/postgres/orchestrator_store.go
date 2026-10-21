@@ -120,14 +120,16 @@ func (s *Store) CreateOrchestratorChild(
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var projectID string
 		var createdByUserID *string
+		var parentDefault domain.SessionInterface
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id, created_by_user_id::text
+			`SELECT project_id, created_by_user_id::text,
+				COALESCE(agent_config->>'`+sessionDefaultInterfaceKey+`', '')
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2
 			  AND kind = 'orchestrator' AND is_terminated = false`,
 			orgID, orchestratorSessionID,
-		).Scan(&projectID, &createdByUserID)
+		).Scan(&projectID, &createdByUserID, &parentDefault)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
@@ -136,13 +138,19 @@ func (s *Store) CreateOrchestratorChild(
 		}
 		input.ProjectID = projectID
 		input.Kind = "worker"
+		// A spawned worker resolves its interface from the default session
+		// interface its orchestrator was created with, as a local spawn
+		// resolves from the daemon's default.
+		if input.DefaultInterface == "" {
+			input.DefaultInterface = parentDefault
+		}
 		creator := ""
 		if createdByUserID != nil {
 			creator = *createdByUserID
 		}
 		child, err = createSessionTx(
 			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing,
-			input, orchestratorSessionID, creator,
+			input, orchestratorSessionID, creator, s.coderReadableNames,
 		)
 		return err
 	})
@@ -174,7 +182,7 @@ func (s *Store) SendOrchestratorChildMessage(
 			return err
 		}
 		if !allowed {
-			return ErrForbidden
+			return ErrNotOrchestratorChild
 		}
 		// Waking a paused billed child is refused beyond the plan, so the
 		// orchestrator learns why its worker did not start.
@@ -297,8 +305,23 @@ func (s *Store) DeleteOrchestratorChild(
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrForbidden
+		if tag.RowsAffected() > 0 {
+			return nil
+		}
+		// No sandbox moved: either the session is not this orchestrator's
+		// child, or it is and has nothing left to delete.
+		var child bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM ao_sessions
+				WHERE org_id = $1 AND id = $2 AND project_id = $3 AND parent_session_id = $4
+			)`,
+			orgID, childSessionID, projectID, orchestratorSessionID,
+		).Scan(&child); err != nil {
+			return err
+		}
+		if !child {
+			return ErrNotOrchestratorChild
 		}
 		return nil
 	})

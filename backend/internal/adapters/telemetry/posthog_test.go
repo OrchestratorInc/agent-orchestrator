@@ -321,6 +321,32 @@ func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 	}
 }
 
+// The harness-update rollout dashboards read these keys; a key missing here
+// would export stripped.
+func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
+	want := map[string][]string{
+		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
+		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
+		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
+		"ao.harness.stale_sessions":   {"harness", "sessions"},
+	}
+	for name, keys := range want {
+		allowed, ok := remotePayloadAllowlist[name]
+		if !ok {
+			t.Errorf("%s has no allowlist entry", name)
+			continue
+		}
+		if len(allowed) != len(keys) {
+			t.Errorf("%s allowlist has %d keys, want %v", name, len(allowed), keys)
+		}
+		for _, key := range keys {
+			if _, ok := allowed[key]; !ok {
+				t.Errorf("%s is missing allowlisted key %q", name, key)
+			}
+		}
+	}
+}
+
 // properties is pure, so the person-property derivation is exercised directly
 // rather than through the HTTP fixture. When the sanitized payload carries the
 // operator's GitHub handle, the sink mirrors it into $set and flips this one

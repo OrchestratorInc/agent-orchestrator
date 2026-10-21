@@ -19,8 +19,14 @@ var redactions = []redaction{
 	{regexp.MustCompile(`(?i)\b((?:proxy-)?authorization|cookie|set-cookie)(\s*[:=]\s*)[^\n]*`), "${1}${2}" + redactedMarker},
 	// Bearer and basic credentials anywhere in text.
 	{regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}`), "${1} " + redactedMarker},
-	// key=value and "key": "value" pairs whose key names a secret.
-	{regexp.MustCompile(`(?i)("?(?:[a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|session[_-]?key|credential)[a-z0-9_-]*)"?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)`), "${1}" + redactedMarker},
+	// key=value and "key": "value" pairs whose key names a secret. A value
+	// already masked is matched exactly, so masking twice keeps what follows
+	// it ("password": [REDACTED]}). A double-quoted value is read past its
+	// backslash escapes, so a JSON string holding JSON (an AWS Secrets
+	// Manager SecretString, "{\"password\":\"x\"}") is masked whole rather
+	// than up to its first escaped quote; one whose escapes do not close it
+	// is masked up to its next quote.
+	{regexp.MustCompile(`(?i)("?(?:[a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|session[_-]?key|credential)[a-z0-9_-]*)"?\s*[:=]\s*)(\[REDACTED\]|"(?:[^"\\]|\\.)*"|"[^"]*"|'[^']*'|[^\s,;&"']+)`), "${1}" + redactedMarker},
 	// URL userinfo: scheme://user:password@host.
 	{regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`), "${1}" + redactedMarker + "@"},
 	// Well-known token shapes.
@@ -64,6 +70,15 @@ func Excerpt(text string, limit int) string {
 		tail = tail[1:]
 	}
 	return marker + tail
+}
+
+// StripControl returns text as valid UTF-8 without terminal escape sequences
+// or control characters other than newline and tab, and without redacting
+// it: for callers that redact with their own patterns first (Redact masks a
+// quoted value it cannot fully read, which can hide the rest of a pair from a
+// later pass).
+func StripControl(text string) string {
+	return cleanControl(text)
 }
 
 // Truncate returns text cut to at most limit bytes, keeping the beginning (for

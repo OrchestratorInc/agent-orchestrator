@@ -37,7 +37,7 @@ func NewVerifier(agents ports.AgentResolver, commands ports.CommandRunner) *Veri
 }
 
 // Resolve returns the executable selected by the harness adapter without
-// probing authentication or running the binary.
+// probing authentication. Adapters may run a non-authenticating identity check.
 func (v *Verifier) Resolve(ctx context.Context, target Target) (string, error) {
 	if !IsAgentTarget(target) {
 		return "", fmt.Errorf("systeminstall: %s is not a harness", target)
@@ -73,6 +73,9 @@ func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, err
 	defer cancel()
 	path, err := v.Resolve(probeCtx, target)
 	if err != nil {
+		if ctx.Err() == nil && errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			return VerifyResult{}, fmt.Errorf("%s binary identity check timed out after %s (a newly installed CLI can be slow on its first launch; choose Verify again): %w", target, v.timeout, context.DeadlineExceeded)
+		}
 		return VerifyResult{}, err
 	}
 	out := &capturedOutput{max: maxOutputBytes}

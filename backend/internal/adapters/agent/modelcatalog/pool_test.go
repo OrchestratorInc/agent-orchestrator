@@ -96,3 +96,34 @@ func TestPoolCatalogFingerprintTracksProviderModelAndSavedSettings(t *testing.T)
 		t.Fatal("explicit empty key must mask the inherited key in the fingerprint")
 	}
 }
+
+func TestPoolProviderComesFromNativeGroupNotModelNamespace(t *testing.T) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+		"pool": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return []ports.ChatConfigOption{{
+				ID: "model", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "vendor/model"},
+				Choices: []ports.ChatConfigOptionChoice{
+					{Value: "vendor/model", Name: "Custom model"},
+					{Value: "other/model", Name: "Grouped model", Group: "native-route"},
+				},
+			}}, nil
+		},
+	}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "pool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("models = %+v, want both native choices", got.Models)
+	}
+	for _, model := range got.Models {
+		want := ""
+		if model.ID == "other/model" {
+			want = "native-route"
+		}
+		if model.Provider != want {
+			t.Fatalf("model %q provider = %q, want %q", model.ID, model.Provider, want)
+		}
+	}
+}

@@ -174,6 +174,11 @@ func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	types, err := parseEventTypes(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -181,6 +186,7 @@ func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		after,
 		limit,
+		types,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -215,6 +221,11 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	types, err := parseEventTypes(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -222,6 +233,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		after,
 		eventPageLimit,
+		types,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -262,6 +274,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				sessionID,
 				after,
 				eventPageLimit,
+				types,
 			)
 			if err != nil {
 				s.logger.Warn("replay event stream", "error", err, "request_id", requestID(r))
@@ -283,6 +296,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				sessionID,
 				after,
 				eventPageLimit,
+				types,
 			)
 			if err != nil {
 				s.logger.Warn("poll event stream", "error", err, "request_id", requestID(r))
@@ -311,6 +325,33 @@ func parseEventSequence(value string) (int64, error) {
 		return 0, errors.New("after must be between 0 and 9007199254740991")
 	}
 	return sequence, nil
+}
+
+// maxEventTypes bounds the types filter.
+const maxEventTypes = 32
+
+// parseEventTypes reads the optional types filter: client event types,
+// comma separated (types=workspace.setup,workspace.script.step) or repeated.
+// nil means every client event type. A type the control plane does not serve
+// matches nothing, so a client may ask for one a newer control plane serves.
+func parseEventTypes(r *http.Request) ([]string, error) {
+	var types []string
+	for _, value := range r.URL.Query()["types"] {
+		for _, eventType := range strings.Split(value, ",") {
+			if eventType = strings.TrimSpace(eventType); eventType != "" {
+				types = append(types, eventType)
+			}
+		}
+	}
+	if len(types) > maxEventTypes {
+		return nil, fmt.Errorf("types may name at most %d event types", maxEventTypes)
+	}
+	for _, eventType := range types {
+		if len(eventType) > 64 {
+			return nil, errors.New("types must name event types")
+		}
+	}
+	return types, nil
 }
 
 func parseEventLimit(r *http.Request) (int, error) {

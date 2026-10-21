@@ -531,13 +531,16 @@ type ConversationTurn struct {
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
 	// HasRetryAttempt is a snapshot-only fact derived from every durable retry
 	// relation, including attempts outside the active provider branch.
-	HasRetryAttempt bool      `json:"hasRetryAttempt,omitempty"`
-	State           TurnState `json:"state"`
+	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
+	// HasHumanPrompt is a snapshot-only fact independent of timeline pagination.
+	HasHumanPrompt bool      `json:"hasHumanPrompt,omitempty"`
+	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
-	ErrorMessage string     `json:"errorMessage,omitempty"`
-	RequestedAt  time.Time  `json:"requestedAt"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	CompletedAt  *time.Time `json:"completedAt,omitempty"`
+	ErrorMessage string                  `json:"errorMessage,omitempty"`
+	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`
+	RequestedAt  time.Time               `json:"requestedAt"`
+	StartedAt    *time.Time              `json:"startedAt,omitempty"`
+	CompletedAt  *time.Time              `json:"completedAt,omitempty"`
 	// RolledBackAt is set when a rollback discarded this turn provider-side. The
 	// row survives because AO does not destroy durable facts, but the agent no
 	// longer remembers the exchange, so its messages and activities are left out
@@ -616,6 +619,7 @@ type QueuedTurn struct {
 // be dispatched again. Unlike QueuedTurn, its source was already sent and
 // settled; ActiveLineage says whether it still belongs to the visible branch.
 type RetryPrompt struct {
+	Continuation        bool
 	Text                string
 	Origin              MessageOrigin
 	DeliveryContentJSON string
@@ -636,6 +640,10 @@ type ConversationMessage struct {
 	Role     MessageRole   `json:"role"`
 	Origin   MessageOrigin `json:"origin"`
 	Text     string        `json:"text"`
+	// Continuation marks the user's one-click "continue" after stopping a turn.
+	// The agent receives Text like any message; the timeline shows a marker
+	// instead of a message bubble.
+	Continuation bool `json:"continuation,omitempty"`
 	// AuthoredByUser is an intake-only fact used to project user activity when
 	// AO delivered the message as automation. It is not part of the persisted
 	// delivery origin or the conversation API representation.
@@ -733,6 +741,9 @@ var ErrNoConversationTurn = errors.New("conversation turn not found")
 
 // ErrClientMessageConflict refuses reuse of a delivery ID for different content.
 var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
+
+// ErrConversationAutoResumeNotDue preserves consent when its deadline moved.
+var ErrConversationAutoResumeNotDue = errors.New("usage-limit reset time has not arrived")
 
 // ErrNoConversationBranch reports a branch id outside the named conversation.
 var ErrNoConversationBranch = errors.New("conversation branch not found")

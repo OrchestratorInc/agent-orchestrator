@@ -22,6 +22,7 @@ var plans = []Plan{
 	plan("opencode", ActionLogin, "Log in to OpenCode", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://github.com/anomalyco/opencode"),
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
+	documentationPlan("memcode", ActionSetup, "Set up memcode", "Configure a native endpoint and provider credentials before launching AO", "https://github.com/memcode-ai/memcode"),
 	documentationPlan("aider", ActionSetup, "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
@@ -57,6 +58,7 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
+	plan("pool", ActionSetup, "Log in to Poolside Pool", []string{"pool", "login"}, "Native Poolside login; standalone providers use the documented environment settings. Configured credentials are not verified authorization.", "https://docs.poolside.ai/get-started/log-in"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
@@ -152,7 +154,10 @@ var planByAgentID = func() map[string]Plan {
 }()
 
 func plan(agentID string, action Action, title string, command []string, guidance, docs string) Plan {
+	logout := logoutCommand(agentID)
 	return Plan{
+		LogoutCommand:    strings.Join(logout, " "),
+		logoutCommand:    logout,
 		AgentID:          agentID,
 		Action:           action,
 		LaunchMode:       LaunchTerminal,
@@ -161,5 +166,30 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 		DocumentationURL: docs,
 		command:          command,
 		title:            title,
+	}
+}
+
+// Only documented CLI subcommands belong here. An absent entry explicitly
+// means unsupported; do not infer logout from login or delete credential files.
+func logoutCommand(agentID string) []string {
+	switch agentID {
+	case "claude-code":
+		return []string{"claude", "auth", "logout"}
+	case "codex":
+		return []string{"codex", "logout"}
+	case "cursor":
+		return []string{"cursor-agent", "logout"}
+	case "opencode", "opencode-v2":
+		return []string{"opencode", "auth", "logout"}
+	case "pool":
+		return []string{"pool", "logout"}
+	case "amp":
+		return []string{"amp", "logout"}
+	case "auggie":
+		return []string{"auggie", "logout"}
+	case "devin":
+		return []string{"devin", "auth", "logout"}
+	default:
+		return nil
 	}
 }

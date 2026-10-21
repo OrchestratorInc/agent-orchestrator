@@ -46,6 +46,14 @@ This example uses `bypass-permissions`, which lets provider tools act without th
 
 The `--config-json` flag takes a JSON string, not a file, and `set-config` replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
 
+## Choose which models a harness offers
+
+Open **Settings → Harnesses**, choose a harness, and open **Models**. Turn a model's switch off to hide it from the model pickers for new tasks, project settings, reviewers, agent switching, and chat. **Enable all** and **Disable all** change every listed model at once; at least one model stays on. With every model on, the pickers offer the harness's full catalog, including models it reports later.
+
+The choice belongs to the selected computer. A model a project, task, or session already uses stays listed even when it is switched off. Cloud VM tasks use their own catalog.
+
+The Models tab also shows each model's context window in tokens when the harness catalog reports it.
+
 ## Start an orchestrator or worker
 
 The desktop provides dedicated new-session and orchestrator flows. From the CLI:

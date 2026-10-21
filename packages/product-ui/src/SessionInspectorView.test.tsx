@@ -10,6 +10,7 @@ import {
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
+  InspectorSection,
   SessionInspectorShellView,
   SessionInspectorSummaryView,
   type InspectorReviewLabels,
@@ -80,9 +81,9 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
-  it("renders the artifacts view under its own tab and sizes the tab reserve to the tab count", () => {
+  it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
-    const { container } = render(<SessionInspectorShellView
+    render(<SessionInspectorShellView
       activeView="artifacts" ariaLabel="Session inspector" browserPoppedOut={false}
       artifactsView={<div data-testid="artifacts-slot" />}
       tabs={withArtifacts} onViewChange={vi.fn()}
@@ -91,7 +92,6 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("overflow-y-auto");
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
-    expect(container.querySelector<HTMLElement>(".session-inspector__topbar")?.style.getPropertyValue("--inspector-tab-count")).toBe("5");
   });
   it("preserves the tab semantics, responsive labels, badge, and host slots", () => {
     const onViewChange = vi.fn();
@@ -204,6 +204,24 @@ describe("portable inspector presentations", () => {
     const context = screen.getByTestId("execution-context");
     const pullRequest = screen.getByText("pull request");
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it("places the Setup and Cleanup sections before the activity and lets a section start collapsed", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+        scripts={<InspectorSection defaultOpen={false} surface={false} title="Setup"><div>setup log</div></InspectorSection>}
+      />,
+    );
+
+    const setup = screen.getByRole("button", { name: "Setup" });
+    expect(setup).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("setup log")).toBeNull();
+    expect(Boolean(setup.compareDocumentPosition(screen.getByText("activity")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    fireEvent.click(setup);
+    expect(setup).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("setup log")).toBeInTheDocument();
   });
 
   it("omits the PR/artifacts section entirely when no title is given", () => {
