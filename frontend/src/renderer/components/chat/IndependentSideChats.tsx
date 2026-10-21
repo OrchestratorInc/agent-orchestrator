@@ -323,7 +323,7 @@ export function SideComposer({
 							aria-label={running && !canSend ? t("sideChat.stopTurn") : t("sideChat.sendMessage")}
 							onClick={running && !canSend ? onInterrupt : undefined}
 							disabled={running && !canSend ? false : !canSend}
-							className="size-7 rounded-full bg-foreground text-background hover:bg-foreground/90 hover:text-background"
+							className="size-7 rounded-full bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground"
 						>
 							{running && !canSend ? (
 								<Square aria-hidden="true" className="size-2.5 fill-current" />

@@ -6048,7 +6048,7 @@ describe("browser snapshot deltas", () => {
 		]);
 	});
 
-	it("forces full state after the agent switches frames", async () => {
+	it("forces full state after the browser switches frames", async () => {
 		const { host, snapshotCalls } = setupDeltaHost(() => full(1));
 
 		await host.execute("sess-1", "snapshot", { delta: true });
@@ -6058,7 +6058,7 @@ describe("browser snapshot deltas", () => {
 		expect(snapshotCalls()[1]).toEqual({ interactive: false, delta: true, full: true });
 	});
 
-	it("forces full state after the agent switches tabs", async () => {
+	it("forces full state after the browser switches tabs", async () => {
 		const { host, snapshotCalls } = setupDeltaHost(() => full(1));
 
 		await host.execute("sess-1", "snapshot", { delta: true });

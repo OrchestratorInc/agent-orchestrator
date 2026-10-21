@@ -2379,6 +2379,17 @@ describe("XtermTerminal", () => {
 		expect(sendInputs[index]).not.toHaveBeenCalled();
 	});
 
+	it("does not forward colour replies xterm makes while parsing a replayed scrollback", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(handle) => { terminal = handle; handle.onUserInput(onInput); }} />);
+		// The replay is still being parsed: its write has not called back yet.
+		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
+		terminal!.write(new TextEncoder().encode("old output\x1b]11;?\x07"), undefined, "replay");
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b]11;rgb:f5f5/f5f5/f4f4\x07"));
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
 	it("does not forward an unsolicited cursor-position-shaped input", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
