@@ -697,7 +697,8 @@ func discoverACPOptionCatalog(
 				label = id
 			}
 			provider := strings.TrimSpace(choice.Group)
-			if provider == "" {
+			// Docker Agent values name native config entries, not providers.
+			if provider == "" && request.AgentID != "docker-agent" {
 				if prefix, _, ok := strings.Cut(id, "/"); ok {
 					provider = prefix
 				}

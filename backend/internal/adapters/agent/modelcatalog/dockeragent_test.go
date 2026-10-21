@@ -1,13 +1,47 @@
 package modelcatalog
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestDockerAgentCatalogPreservesNativeChoicesWithoutInventingProviders(t *testing.T) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+		"docker-agent": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return []ports.ChatConfigOption{{
+				ID: "model", Category: "model", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "default"},
+				Choices: []ports.ChatConfigOptionChoice{
+					{Value: "default", Name: "Agent default"},
+					{Value: "model:team/coding", Name: "team/coding"},
+					{Value: "model:hosted", Name: "Hosted", Group: "native-provider"},
+				},
+			}}, nil
+		},
+	}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "docker-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "default", Label: "Agent default", IsDefault: true},
+		{ID: "model:hosted", Label: "Hosted", Provider: "native-provider"},
+		{ID: "model:team/coding", Label: "team/coding"},
+	}
+	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
+		t.Fatalf("catalog = %#v, want native choices %#v", got, want)
+	}
+	if got.AllowCustom || got.CustomModelEntry != ports.CustomModelEntryConfigured {
+		t.Fatalf("native configured choices became arbitrary model entry: %#v", got)
+	}
+}
 
 // Docker Agent's catalog follows the provider keys AO's default config can use
 // or the user's selected config, so either changing must refresh it.

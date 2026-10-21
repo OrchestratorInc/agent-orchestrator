@@ -84,7 +84,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 		) : null;
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
-		: details.needsLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
+		: details.needsLogin || (details.isDocumentationAction && authPlan?.available && details.authStatus === "unknown") ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
 		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={ACTION_CLASS} disabled={authWorkflowActive} onClick={onLogin}>
