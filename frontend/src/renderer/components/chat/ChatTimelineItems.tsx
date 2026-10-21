@@ -16,11 +16,19 @@ import {
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { agentLabel } from "../../lib/agent-options";
+import { agentModelDisplayLabel, splitClaudeModels } from "../../lib/agent-model-choices";
+import { collapseModelVariants, listsModelVariants } from "../../lib/model-variants";
+import { formatEffortLabel } from "../settings/EffortPicker";
+import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	ArrowRight,
 	Brain,
 	ChevronDown,
 	ChevronRight,
@@ -336,6 +344,87 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 			message="The conversation history was compacted"
 			detail={[detail, fullness].filter(Boolean).join(" · ") || undefined}
 		/>
+	);
+}
+
+/** A recorded model id by its name in the agent's list, however that agent's chat spells the id. */
+function handoffModelName(harness: string, model: string, models: Array<{ id: string; label: string }>): string {
+	const id = model.replace(/\[.*$/, "");
+	const label = models.find((entry) => entry.id === id)?.label
+		// Cursor's chat names a model once; its list has an entry per setting.
+		?? (listsModelVariants(harness) ? collapseModelVariants(models).find((family) => family.id === id)?.label : undefined)
+		// Claude Code's "opus" is the newest model of that family.
+		?? (harness === "claude-code" ? splitClaudeModels(models).current.find((entry) => entry.id.includes(`-${id}-`))?.label : undefined);
+	return agentModelDisplayLabel(harness, label ?? id);
+}
+
+/** The remote host a chat's session runs on, whose catalogs name its models. */
+export const ChatHostId = createContext<string | undefined>(undefined);
+
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
+	const { t } = useTranslation();
+	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
+	const hostId = useContext(ChatHostId);
+	const catalog = useQuery({ ...agentModelsQueryOptions(harness, "", hostId), enabled: Boolean(model) }).data;
+	const name = model ? handoffModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
+	return (
+		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
+			<ProviderMark provider={harness} />
+			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
+			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
+			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
+		</span>
+	);
+}
+
+/** Where one agent handed the conversation to another. */
+export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const detail = activity.detail;
+	const switching = Boolean(detail?.switching);
+	const named = Boolean(detail?.sourceHarness && detail.targetHarness);
+	// A switched row only seconds old is the one just made, so it opens from closed; older ones start open.
+	const [open, setOpen] = useState(() => switching || !(Date.now() - Date.parse(activity.createdAt) < 8000));
+	useEffect(() => {
+		if (switching || open) return;
+		let inner = 0;
+		const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setOpen(true)); });
+		return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+	}, [switching, open]);
+	const revealed = !switching && open;
+	const label = switching
+		? t("agentSwitch.switching")
+		: named
+			? t("agentSwitch.switchedFromTo", { from: agentLabel(detail?.sourceHarness ?? ""), to: agentLabel(detail?.targetHarness ?? "") })
+			: t("agentSwitch.switched");
+	return (
+		<div role="separator" aria-label={label} aria-busy={switching || undefined} className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+			<div className="flex min-w-0 items-center">
+				<span className={cn("inline-block shrink-0", switching ? "chat-working-shimmer" : undefined)}>
+					{switching ? t("agentSwitch.switching") : t("agentSwitch.switched")}
+				</span>
+				{named ? (
+					// Closed while the switch runs, then its width grows from 0 to its own.
+					<div
+						className={cn(
+							"grid min-w-0 transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",
+							revealed ? "grid-cols-[1fr]" : "grid-cols-[0fr]",
+						)}
+					>
+						<div className="min-w-0 overflow-hidden">
+							<span className="flex w-max shrink-0 items-center gap-3 whitespace-nowrap pl-3">
+								<HandoffSide harness={detail?.sourceHarness ?? ""} model={detail?.sourceModel} />
+								<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+								<HandoffSide harness={detail?.targetHarness ?? ""} model={detail?.targetModel} effort={detail?.targetEffort} compactWindow={detail?.targetAutoCompactWindow} bright />
+							</span>
+						</div>
+					</div>
+				) : null}
+			</div>
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+		</div>
 	);
 }
 

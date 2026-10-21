@@ -1412,6 +1412,29 @@ func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
 	}
 }
 
+// The session's launch settings and the dialog guard go in one --settings
+// flag, so neither is dropped for the other.
+func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
+	p := &Plugin{resolvedBinary: "claude"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeBypassPermissions,
+		Config:      ports.AgentConfig{Launch: domain.AgentLaunchOptions{Ultracode: true, AutoCompactWindow: "1m"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := 0
+	for _, arg := range cmd {
+		if arg == "--settings" {
+			flags++
+		}
+	}
+	want := `{"autoCompactEnabled":true,"autoCompactWindow":1000000,"permissions":{"defaultMode":"bypassPermissions"},"ultracode":true}`
+	if flags != 1 || !containsSubsequence(cmd, []string{"--settings", want}) {
+		t.Fatalf("launch %#v: want one --settings %s", cmd, want)
+	}
+}
+
 // PreLaunch marks the dialog seen in the global config only for a launch in
 // AO's default mode whose user settings would make Claude offer it, and never
 // touches the user's settings or permission mode.

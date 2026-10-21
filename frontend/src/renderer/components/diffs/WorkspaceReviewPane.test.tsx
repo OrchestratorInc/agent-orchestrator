@@ -300,11 +300,11 @@ describe("WorkspaceReviewPane", () => {
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
-		// Checked styling comes from theme tokens (foreground box, background
-		// check), not hardcoded colours, so it follows light and dark mode.
+		// Checked styling uses theme tokens with opaque ink, so the check follows
+		// light and dark mode without disappearing on transparent window surfaces.
 		const viewedBox = screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" });
 		expect(viewedBox).toHaveAttribute("data-state", "checked");
-		expect(viewedBox).toHaveClass("data-[state=checked]:bg-foreground", "data-[state=checked]:text-background");
+		expect(viewedBox).toHaveClass("data-[state=checked]:bg-foreground", "data-[state=checked]:text-on-foreground");
 		expect(viewedBox.getAttribute("style") ?? "").not.toMatch(/#fff|#000/);
 	});
 

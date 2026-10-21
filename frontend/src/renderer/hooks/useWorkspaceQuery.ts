@@ -10,7 +10,6 @@ import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
-import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
@@ -18,7 +17,6 @@ import { requestRemoteHostsRefresh } from "./useRemoteHosts";
 import { applyOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
 import {
-	type AgentSwitchSummary,
 	type PRState,
 	type PullRequestFacts,
 	type SessionArtifact,
@@ -44,18 +42,6 @@ function placeStandaloneWorkspaceLast(workspaces: WorkspaceSummary[]): Workspace
 	const standalone = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID);
 	if (!standalone) return workspaces;
 	return [...workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID), standalone];
-}
-
-function toAgentSwitchSummary(agentSwitch: components["schemas"]["AgentSwitch"]): AgentSwitchSummary {
-	return {
-		agentHandoffStatus: agentSwitch.agentHandoffStatus,
-		errorCode: agentSwitch.errorCode,
-		fromHarness: agentSwitch.fromHarness,
-		id: agentSwitch.id,
-		state: agentSwitch.state,
-		targetHarness: agentSwitch.targetHarness,
-		updatedAt: agentSwitch.updatedAt,
-	};
 }
 
 function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRequestFacts {
@@ -144,7 +130,6 @@ export function toWorkspaceSession(
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
 		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
-		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
 		isPinned: session.isPinned ?? false,
@@ -248,7 +233,6 @@ function toLocalWorkspaceSession(
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
 		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
-		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
 		isPinned: session.isPinned ?? false,
@@ -290,12 +274,8 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions")]);
 
 	if (projectsError || sessionsError) {
-		agentSwitchVisibility.setQueryHealthy("active", false, "workspaces");
-		agentSwitchVisibility.setQueryHealthy("history", false, "workspaces");
 		throw projectsError ?? sessionsError;
 	}
-	agentSwitchVisibility.setQueryHealthy("active", true, "workspaces");
-	agentSwitchVisibility.setQueryHealthy("history", true, "workspaces");
 
 	const sessions = sessionsData?.sessions ?? [];
 	const standaloneName = standaloneWorkspaceName();

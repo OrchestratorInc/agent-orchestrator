@@ -57,6 +57,8 @@ type Store interface {
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
 	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
+	CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error
+	ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]domain.HandoffTurn, error)
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
@@ -1746,6 +1748,8 @@ func (c *Controller) turnSettings() ports.ChatTurnSettings {
 		Model:    current.Model,
 		Effort:   current.ReasoningEffort,
 		Approval: current.ApprovalMode,
+		Fast:     current.FastMode,
+		Plan:     current.PlanMode,
 	}
 }
 

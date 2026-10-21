@@ -78,8 +78,7 @@ type APIDeps struct {
 	Installer controllers.Installer
 	AgentAuth controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
-	GitHub            controllers.GitHubPATService
-	AgentSwitchPolicy AgentSwitchPolicyControl
+	GitHub controllers.GitHubPATService
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
@@ -350,6 +349,7 @@ func attachmentUploadRoute(req *http.Request) bool {
 		"/api/v1/orchestrators/delegate",
 		"/api/v1/sessions/{sessionId}/send",
 		"/api/v1/sessions/{sessionId}/conversation/messages",
+		"/api/v1/sessions/{sessionId}/provider-switch",
 		"/api/v1/sessions/{sessionId}/conversation/steer",
 		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",

@@ -314,6 +314,22 @@ func TestClaudeSessionOptionsUseACPConfigIDs(t *testing.T) {
 	}
 }
 
+func TestClaudeSessionOptionsNeverSwapAFullIDForAnAlias(t *testing.T) {
+	got := claudeSessionOptions(ports.ChatTurnSettings{Model: "claude-haiku-5-5"})
+	want := []acpdriver.SessionOption{{ID: "model", Value: "claude-haiku-5-5", Optional: true, Name: "Haiku 5.5"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeModelNameReadsTheVersion(t *testing.T) {
+	for id, want := range map[string]string{"claude-opus-5-5": "Opus 5.5", "claude-sonnet-5": "Sonnet 5", "claude-opus-4-5-20251101": "Opus 4.5", "opus": ""} {
+		if got := claudeModelName(id); got != want {
+			t.Errorf("claudeModelName(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestValidateClaudeACPExecutableRejectsWindowsCommandShims(t *testing.T) {
 	tests := []struct {
 		name    string

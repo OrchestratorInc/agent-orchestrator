@@ -9,7 +9,6 @@ const {
 	hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrlMock,
 	unsubscribeBaseUrlMock,
-	setTransportHealthyMock,
 	connectedHostsMock,
 	baseUrlForHostMock,
 	subscribeConnectedHostsMock,
@@ -22,7 +21,6 @@ const {
 	hasTrustedApiBaseUrlMock: vi.fn(() => true),
 	subscribeApiBaseUrlMock: vi.fn(),
 	unsubscribeBaseUrlMock: vi.fn(),
-	setTransportHealthyMock: vi.fn(),
 	connectedHostsMock: vi.fn(() => [] as string[]),
 	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
 	subscribeConnectedHostsMock: vi.fn(),
@@ -41,7 +39,6 @@ vi.mock("./api-client", () => ({
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
 }));
-vi.mock("./agent-switch-visibility", () => ({ agentSwitchVisibility: { setTransportHealthy: setTransportHealthyMock } }));
 vi.mock("./host-clients", () => ({
 	connectedHosts: connectedHostsMock,
 	baseUrlForHost: baseUrlForHostMock,
@@ -105,7 +102,6 @@ beforeEach(() => {
 	hasTrustedApiBaseUrlMock.mockReset().mockReturnValue(true);
 	subscribeApiBaseUrlMock.mockReset().mockReturnValue(unsubscribeBaseUrlMock);
 	unsubscribeBaseUrlMock.mockReset();
-	setTransportHealthyMock.mockReset();
 	connectedHostsMock.mockReset().mockReturnValue([]);
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
 	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
@@ -170,7 +166,6 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-session-agent-switches", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-a"] }, { cancelRefetch: false });
 		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", {
 			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200 } },
@@ -181,7 +176,6 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-b", "review-1"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-session-agent-switches", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-b"] }, { cancelRefetch: false });
 		remoteA.emit("cursor", "0");
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
@@ -275,7 +269,6 @@ describe("createEventTransport", () => {
 			expect(client.invalidateQueries).not.toHaveBeenCalled();
 			expect(client.refetchQueries).not.toHaveBeenCalled();
 			expect(client.setQueryData).not.toHaveBeenCalled();
-			expect(setTransportHealthyMock).not.toHaveBeenCalled();
 			expect(getEventsConnectionState()).toBe("idle");
 			expect(EventSourceStub.instances).toHaveLength(2);
 		} finally { vi.useRealTimers(); }
@@ -398,8 +391,6 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(getEventsConnectionState()).toBe("disconnected");
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", false);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", false);
 	});
 
 	it("flushes workspace and session invalidation immediately on the leading edge after a status change", () => {
@@ -413,7 +404,6 @@ describe("createEventTransport", () => {
 			// The first refresh after a quiet period does not wait out the window:
 			// it flushes on the leading edge so a reconnect recovers immediately.
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-agent-switches"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff"] }, { cancelRefetch: false });
@@ -759,10 +749,7 @@ describe("createEventTransport", () => {
 		createEventTransport(queryClient as never).connect();
 		const source = cdcSources()[0];
 		source.onerror?.();
-		expect(setTransportHealthyMock).not.toHaveBeenCalledWith("active", false);
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", false);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", false);
 	});
 
 	it("heals transport when the post-disconnect full refresh succeeds", async () => {
@@ -771,8 +758,6 @@ describe("createEventTransport", () => {
 		createEventTransport(queryClient as never).connect();
 		cdcSources()[0].onerror?.();
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", true);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", true);
 	});
 
 	it("ignores a stale failed refresh after the SSE source reconnects", async () => {
@@ -783,10 +768,8 @@ describe("createEventTransport", () => {
 		const source = cdcSources()[0];
 		source.onerror?.();
 		source.onopen?.();
-		setTransportHealthyMock.mockClear();
 		rejectRefresh(new Error("late failure"));
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).not.toHaveBeenCalledWith("active", false);
 	});
 
 	it("rebuilds a source the browser abandoned after the retry delay", () => {

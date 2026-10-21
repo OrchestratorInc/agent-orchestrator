@@ -1380,3 +1380,13 @@ func TestMemcodeCatalogFingerprintInvalidatesFormerEmptyCatalog(t *testing.T) {
 		t.Fatal("Memcode catalog fingerprint matches the old executable-only cache key")
 	}
 }
+
+func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
+	// As cursor-agent prints a missing module.
+	output := "node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module 'tree-sitter'\n" +
+		"Require stack:\n- /opt/cursor-agent/index.js\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)\n" +
+		"    at Module.require (node:internal/modules/cjs/loader:1311:19)\n"
+	if detail := discoveryErrorDetail([]byte(output)); detail != "Error: Cannot find module 'tree-sitter'" {
+		t.Fatalf("detail = %q, want the error line", detail)
+	}
+}

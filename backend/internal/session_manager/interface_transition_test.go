@@ -638,24 +638,6 @@ func (l *sqliteTransitionLifecycle) RestoreControllerEpoch(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
 }
-func (l *sqliteTransitionLifecycle) ConfirmAgentSwitchSourceStopped(
-	ctx context.Context,
-	confirmation domain.AgentSwitchSourceStopConfirmation,
-) (bool, error) {
-	return l.store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *sqliteTransitionLifecycle) ActivateAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchTargetActivation,
-) (bool, error) {
-	return l.store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *sqliteTransitionLifecycle) ActivateChatAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchChatTargetActivation,
-) (bool, error) {
-	return l.store.ActivateChatAgentSwitchTarget(ctx, activation)
-}
 func (l *sqliteTransitionLifecycle) MarkTerminated(
 	ctx context.Context,
 	id domain.SessionID,

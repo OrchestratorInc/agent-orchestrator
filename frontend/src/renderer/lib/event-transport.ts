@@ -10,10 +10,8 @@ import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
 } from "../hooks/useReviewerConversation";
-import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
-import { agentSwitchVisibility } from "./agent-switch-visibility";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
 import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
@@ -150,7 +148,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["session-reviews", hostId]);
 				invalidate(["session-usage", hostId]);
 				invalidate(["session-usage", "detail", hostId]);
-				invalidate(["remote-session-agent-switches", hostId]);
 				invalidate(["session-interface-transition", hostId]);
 				invalidate(["agent-readiness", hostId]);
 				invalidate(["agent-models", hostId]);
@@ -232,7 +229,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
-					invalidate(agentSwitchesQueryRoot);
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
@@ -425,8 +421,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					sourceBaseUrl = undefined;
 					accountSourceBaseUrl = undefined;
 					setEventsConnectionState("disconnected");
-					agentSwitchVisibility.setTransportHealthy("active", false);
-					agentSwitchVisibility.setTransportHealthy("history", false);
 					return;
 				}
 				const baseUrl = getApiBaseUrl();
@@ -473,8 +467,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						healthAttempt += 1;
 						retries = 0;
 						setEventsConnectionState("connected");
-						agentSwitchVisibility.setTransportHealthy("active", true);
-						agentSwitchVisibility.setTransportHealthy("history", true);
 						// Events emitted during the gap were lost; refetch once on (re)open.
 						refreshWorkspaces();
 					};
@@ -496,13 +488,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						).then(
 							() => {
 								if (attempt !== healthAttempt || source !== connectedSource) return;
-								agentSwitchVisibility.setTransportHealthy("active", true);
-								agentSwitchVisibility.setTransportHealthy("history", true);
 							},
 							() => {
 								if (attempt !== healthAttempt || source !== connectedSource) return;
-								agentSwitchVisibility.setTransportHealthy("active", false);
-								agentSwitchVisibility.setTransportHealthy("history", false);
 							},
 						);
 					};

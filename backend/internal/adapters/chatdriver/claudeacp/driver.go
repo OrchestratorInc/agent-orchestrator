@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -363,6 +364,7 @@ func validateClaudeACPExecutable(binary, goos string) error {
 }
 
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
+	meta := map[string]any{}
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
@@ -370,17 +372,24 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		}
 		standing += claudePlanGuidance
 	}
-	if standing == "" {
+	if standing != "" {
+		// Append AO's standing instructions to Claude Code's own prompt. Replacing
+		// the preset would discard Claude's native coding/tool instructions.
+		meta["systemPrompt"] = map[string]any{
+			"type": "preset", "preset": "claude_code", "append": standing,
+		}
+	}
+	// Also per session, so a choice made after the adapter started still applies.
+	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
+		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
+	}
+	if len(meta) == 0 {
 		return nil
 	}
-	// Append AO's standing instructions to Claude Code's own prompt. Replacing
-	// the preset would discard Claude's native coding/tool instructions.
-	return map[string]any{
-		"systemPrompt": map[string]any{
-			"type": "preset", "preset": "claude_code", "append": standing,
-		},
-	}
+	return meta
 }
+
+const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 func claudeSessionMode(permission ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permission) {
@@ -395,9 +404,31 @@ func claudeSessionMode(permission ports.PermissionMode) string {
 	}
 }
 
+// claudeModelFamily matches a full Claude model id such as "claude-haiku-5-5"
+// or "claude-opus-4-5-20251101", capturing its family and version.
+var claudeModelFamily = regexp.MustCompile(`^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$`)
+
+// claudeModelName is the name Claude Code shows a model under: "Opus 5.5".
+func claudeModelName(id string) string {
+	match := claudeModelFamily.FindStringSubmatch(id)
+	if match == nil {
+		return ""
+	}
+	name := strings.ToUpper(match[1][:1]) + match[1][1:] + " " + match[2]
+	if match[3] != "" {
+		name += "." + match[3]
+	}
+	return name
+}
+
 func claudeSessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
-	options := make([]acpdriver.SessionOption, 0, 2)
-	if settings.Model != "" {
+	options := make([]acpdriver.SessionOption, 0, 3)
+	if claudeModelFamily.MatchString(settings.Model) {
+		// Claude Code's chat lists a family's newest model by alias, so a full id
+		// (as a terminal switch saves) is matched by name, never by family alias
+		// ("haiku" is Haiku 4.5). One not offered keeps Claude Code's own model.
+		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model, Optional: true, Name: claudeModelName(settings.Model)})
+	} else if settings.Model != "" {
 		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model})
 	}
 	if settings.Effort != "" {
