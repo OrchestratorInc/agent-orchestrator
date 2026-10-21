@@ -214,6 +214,11 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	if plan.Target == TargetOpencodeV2 {
 		cli = "opencode"
 	}
+	// The Copilot resolver follows the npm loader to its platform binary
+	// (copilot-darwin-arm64), but packages and sessions use bin/copilot.
+	if plan.Target == TargetCopilot {
+		cli = "copilot"
+	}
 	if cli == "" {
 		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")
 	}

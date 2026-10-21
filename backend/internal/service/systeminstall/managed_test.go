@@ -740,3 +740,36 @@ func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedCopilotInstallsTheLauncherNotThePlatformBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX release fixtures")
+	}
+	s := newTestService("darwin", "npm")
+	s.managedRoot = t.TempDir()
+	s.releases = &releaseStoreStub{}
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		bin := filepath.Join(prefix, "bin", "copilot")
+		if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(bin, []byte("#!/bin/sh\necho 1.0.101\n"), 0755)
+	})
+	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Stdout = out
+		cmd.Stderr = stderr
+		return cmd.Run()
+	})
+	// The resolver returns the native binary behind the npm loader.
+	native := "/opt/homebrew/lib/node_modules/@github/copilot/node_modules/.bin/copilot-darwin-arm64"
+	plan := Plan{Target: TargetCopilot, Method: "npm", Package: "@github/copilot"}
+	if err := s.runManagedInstall(context.Background(), plan, &installedBaseline{path: native, expected: "1.0.101"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(filepath.Join(s.ManagedBinDir(), "copilot"), "--version").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "1.0.101" {
+		t.Fatalf("copilot launcher=%q,%v; want 1.0.101", out, err)
+	}
+}
