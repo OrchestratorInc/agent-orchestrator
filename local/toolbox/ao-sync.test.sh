@@ -44,4 +44,21 @@ grep -q 'fork-дельты' "$sync" || {
 	exit 1
 }
 
+# 4. Классификатор fixes-only (политика 2026-10-21 «из апстрима только
+#    багфиксы»): типизированные fix — take, остальное — skip; леджер на месте.
+grep -q 'fixes-only' "$sync" || { echo "!! ao-sync.sh не содержит режим fixes-only" >&2; exit 1; }
+grep -q 'ao-upstream-ledger.txt' "$sync" || { echo "!! ao-sync.sh не работает с леджером ao-upstream-ledger.txt" >&2; exit 1; }
+sed -n '/^classify_upstream_subject()/,/^}/p' "$sync" > "$tmp/cls.sh"
+[ -s "$tmp/cls.sh" ] || { echo "!! classify_upstream_subject не извлекается из ao-sync.sh" >&2; exit 1; }
+(
+	# shellcheck disable=SC1090
+	source "$tmp/cls.sh"
+	[ "$(classify_upstream_subject "fix(cloud): wait for the user (#6961)")" = "take" ] || exit 1
+	[ "$(classify_upstream_subject "fix: plain polish (#6980)")" = "take" ] || exit 1
+	[ "$(classify_upstream_subject "feat(mobile): files screen (#6922)")" = "skip" ] || exit 1
+	[ "$(classify_upstream_subject "chore(sync): merge origin/main 2026-10-21")" = "skip" ] || exit 1
+	[ "$(classify_upstream_subject "fixup: not a typed fix")" = "skip" ] || exit 1
+	[ "$(classify_upstream_subject "perf(api): speed up list")" = "skip" ] || exit 1
+) || { echo "!! classify_upstream_subject классифицирует неверно" >&2; exit 1; }
+
 echo "ao-sync.test.sh: OK"

@@ -1,30 +1,53 @@
 #!/bin/bash
-# ao-sync.sh — синхронизировать fork/main с upstream origin/main: fetch → backup-тег →
-# merge origin/main в дельту форка → быстрые проверки-ловушки → быстрые гейты.
+# ao-sync.sh — синхронизировать fork/main с upstream origin/main.
 #
-# Модель синка — MERGE, не rebase (переход 2026-09-04): дельта форка живёт как
-# один squash-коммит (+ новые форковые коммиты) поверх origin/main, каждый синк
-# добавляет merge-коммит. История fork/main не переписывается: конфликты
-# разрешаются один раз в merge-коммите и не воспроизводятся в следующих синках,
-# force-push не нужен. (Сжатие дельты обратно в 1 коммит — отдельный ручной
-# squash-пасс «время от времени», не часть синка.)
+# ДВА РЕЖИМА (политика 2026-10-21: «из апстрима только багфиксы, фичи не нужны
+# совсем»):
+#
+#   fixes-only (дефолт, без аргументов):
+#     fetch → backup-тег → классификация fork/main..origin/main по ЛЕДЖЕРУ
+#     (local/toolbox/ao-upstream-ledger.txt) → cherry-pick -x только
+#     типизированных fix-коммитов → остальное в леджер как skipped →
+#     быстрые проверки-ловушки → гейты. Леджер — строка
+#     «<sha> <taken|skipped> <subject>» на каждый разобранный апстрим-коммит,
+#     единственная память о разборе (устойчива к сквошам и конфликтным
+#     резолюциям, в отличие от patch-id). Пограничные «фиксы» (полировка,
+#     зависимость от скипнутой фичи) пре-сидируются в леджер строкой skipped
+#     с причиной ДО прогона — скрипт содержимое коммитов не судит.
+#     Дельта форка растёт cherry-pick-ами; авто-сквош (шаг 7b) в этом режиме
+#     НЕ выполняется — он сломал бы провенанс пиков.
+#
+#   --merge-all (прежнее поведение до 2026-10-21):
+#     merge origin/main целиком. Модель синка — MERGE, не rebase (переход
+#     2026-09-04): дельта форка живёт как один squash-коммит (+ новые форковые
+#     коммиты) поверх origin/main, каждый синк добавляет merge-коммит. История
+#     fork/main не переписывается, force-push не нужен. (Сжатие дельты обратно
+#     в 1 коммит — отдельный ручной squash-пасс, не часть синка.)
 #
 # Цель: ловить типичные отказы (коллизия номера миграции, забытый `npm install`
 # после новой зависимости, рассинхрон regen-артефактов) ЗА СЕКУНДЫ, до того как
 # они всплывут через 5 минут `npm run package` или после запуска демона.
 #
 # НЕ делает: push в fork (обычный fast-forward — решение пользователя),
-# пересборку .app (это ~/bin/rebuild-ao.sh). Конфликты: миграционные (дубль
-# номера) — авто-фиксер; остальные — стоп и ручное решение по каждому
-# (для «апстрим удалил фичу» — подсказка git rm по политике «апстрим всегда
-# прав»; rerere на время merge выключен, авто-повтор старых резолюций
-# исключён).
+# пересборку .app (это ~/bin/rebuild-ao.sh). Конфликты (и cherry-pick-, и
+# merge-): миграционные (дубль номера) — авто-фиксер; остальные — стоп и
+# ручное решение по каждому, UU — решение за владельцем (для «апстрим удалил
+# фичу» в merge-режиме — подсказка git rm; rerere на время merge выключен,
+# авто-повтор старых резолюций исключён).
 #
 # Запускать из корня репо agent-orchestrator (или откуда угодно — REPO_ROOT
 # ищется по .git+frontend+backend, см. rebuild-ao.sh).
 
 set -e
 # NB: без `set -u` — та же причина, что в rebuild-ao.sh (macOS /bin/bash 3.2).
+
+# Режим синка (см. шапку): fixes-only — дефолт с 2026-10-21, --merge-all — старый.
+MODE="fixes-only"
+case "${1:-}" in
+  --merge-all) MODE="merge-all" ;;
+  "") ;;
+  *) echo "!! неизвестный аргумент '$1' (допустимо: --merge-all)" >&2; exit 1 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 REPO_ROOT=""
@@ -47,6 +70,17 @@ echo "==> репо: $REPO_ROOT (ветка: $(git rev-parse --abbrev-ref HEAD))"
 if [ -n "$(git status --porcelain)" ]; then
   echo "!! Рабочее дерево не чистое. Закоммить/застэшь изменения и запусти снова." >&2
   git status --short >&2
+  exit 1
+fi
+
+# 1b. Гварды резюме: незавершённый cherry-pick (fixes-only) сначала заверши или
+#     отмени — иначе классификация и запись в леджер уедут (дерево при
+#     неразрешённом конфликте и так нечистое, гвард ловит «resolved, но не
+#     --continue»).
+GIT_DIR_SYNC="$(git rev-parse --git-dir)"
+if [ -e "$GIT_DIR_SYNC/CHERRY_PICK_HEAD" ]; then
+  echo "!! Висит незавершённый cherry-pick: реши конфликт, git add <файлы>," >&2
+  echo "   затем git cherry-pick --continue (или git cherry-pick --abort) — и запусти снова." >&2
   exit 1
 fi
 
@@ -81,19 +115,105 @@ else
   echo "==> backup-тег: $BACKUP_TAG (на случай отката: git reset --hard $BACKUP_TAG)"
 fi
 
-if git rev-parse --verify -q origin/main >/dev/null && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
-  echo "==> уже на уровне origin/main, синкать нечего."
-  rm -f "$BACKUP_MARKER"
-  exit 0
+LEDGER="$REPO_ROOT/local/toolbox/ao-upstream-ledger.txt"
+touch "$LEDGER"
+if [ "$MODE" = "merge-all" ]; then
+  if git rev-parse --verify -q origin/main >/dev/null && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+    echo "==> уже на уровне origin/main, синкать нечего."
+    rm -f "$BACKUP_MARKER"
+    exit 0
+  fi
+else
+  # fixes-only: «синкать нечего» = в fork/main..origin/main нет коммитов,
+  # которых ещё нет в леджере (сравнение по полным sha, не по patch-id).
+  awk '{print $1}' "$LEDGER" > "$GIT_DIR_SYNC/ao-sync-ledger-shas"
+  NEW_COMMITS="$(git rev-list --no-merges fork/main..origin/main | grep -vxF -f "$GIT_DIR_SYNC/ao-sync-ledger-shas" || true)"
+  rm -f "$GIT_DIR_SYNC/ao-sync-ledger-shas"
+  if [ -z "$NEW_COMMITS" ]; then
+    echo "==> неклассифицированных апстрим-коммитов нет, синкать нечего."
+    rm -f "$BACKUP_MARKER"
+    exit 0
+  fi
 fi
 
-# 3. merge origin/main в дельту форка.
-#    Миграционные конфликты (дубль номера дельты: наш коммит и upstream меняли
-#    одну строку shippedMigrations в migrate_burned_versions_test.go)
-#    авто-разрешаем фиксером. Остальные — стоп: список файлов с типом каждого,
-#    решение по каждому вручную.
+# 3. Разбор дельты апстрима. fixes-only — классификация по леджеру и cherry-pick
+#    багфиксов (политика 2026-10-21); merge-all — merge origin/main целиком
+#    (миграционные конфликты — дубль номера дельты: наш коммит и upstream меняли
+#    одну строку shippedMigrations в migrate_burned_versions_test.go —
+#    авто-разрешаем фиксером; остальные — стоп: список файлов с типом каждого,
+#    решение по каждому вручную).
 FIXER="$HOME/bin/ao-fix-migration-collision.sh"
 export GIT_EDITOR=true   # чтобы merge-коммит не открывал редактор
+
+# Классификация subject'а апстрим-коммита: take — типизированный fix(...)/fix:,
+# skip — всё остальное (feat/perf/chore/...). Пограничные «фиксы» (полировка,
+# зависимость от скипнутой фичи) скрипт не судит: их пре-сидируют в леджер
+# строкой «<sha> skipped <причина>» ДО прогона — grep по ша их отсекает.
+classify_upstream_subject() {
+  case "$1" in
+    fix\(*\)\:*|fix\:\ *) echo take ;;
+    *) echo skip ;;
+  esac
+}
+
+# Список конфликтующих файлов текущего cherry-pick со сторонами (UU/AA):
+# сторона форка = merge-base..HEAD, сторона фикса = merge-base..<sha>.
+print_pick_conflicts() {
+  local sha="$1" base code path ours theirs
+  base="$(git merge-base "$sha" HEAD)"
+  echo "   конфликтующие файлы:" >&2
+  git status --porcelain | grep -E '^(DD|AU|UD|UA|DU|AA|UU) ' | while read -r code path; do
+    echo "     $code $path" >&2
+    case "$code" in
+      UU|AA)
+        ours="$(git diff --numstat "$base" HEAD -- "$path" | awk '{printf "+%s -%s", $1, $2}')"
+        theirs="$(git diff --numstat "$base" "$sha" -- "$path" | awk '{printf "+%s -%s", $1, $2}')"
+        echo "        сторона форка: ${ours:-(нет)} | сторона фикса: ${theirs:-(нет)}" >&2
+        ;;
+    esac
+  done
+}
+
+if [ "$MODE" = "fixes-only" ]; then
+  echo "==> классификация fork/main..origin/main (режим fixes-only)..."
+  while IFS=$'\t' read -r sha subject; do
+    [ -n "$sha" ] || continue
+    if grep -q "^$sha " "$LEDGER"; then continue; fi
+    if [ "$(classify_upstream_subject "$subject")" = "take" ]; then
+      echo "==> cherry-pick $sha $subject"
+      if git cherry-pick -x "$sha"; then
+        echo "$sha taken $subject" >> "$LEDGER"
+        echo "   taken"
+      elif ! git diff --name-only --diff-filter=U | grep -q .; then
+        # «is now empty»: содержимое уже в форке (пик разрешили руками и
+        # закоммитили --continue, либо эквивалент уже есть). Автоматом
+        # закрываем: skip + леджер, иначе повторный прогон циклился бы.
+        git cherry-pick --skip
+        echo "$sha taken $subject" >> "$LEDGER"
+        echo "   taken (пустой пик — содержимое уже в форке)"
+      else
+        cat >&2 <<EOF
+
+!! cherry-pick $sha ($subject) остановился на конфликте. Решение за владельцем:
+   покажи конфликтующие файлы, предложи свод, жди «ок». Стороны — см. список
+   ниже; отдельно: git show $sha -- <файл> (фикс) и git diff HEAD -- <файл>
+   (форк). После сведения: git add <файлы> && git cherry-pick --continue, затем
+   запусти этот скрипт снова — продолжит со следующего неклассифицированного
+   коммита (уже взятые не повторятся: закрытый вручную пик на повторе уйдёт
+   как пустой и закроется автоматически).
+   Откат одного пика: git cherry-pick --abort (взятые до него останутся).
+EOF
+        print_pick_conflicts "$sha"
+        exit 1
+      fi
+    else
+      echo "$sha skipped $subject" >> "$LEDGER"
+      echo "   skip: $sha $subject"
+    fi
+  done < <(git log --reverse --no-merges --format='%H%x09%s' fork/main..origin/main)
+  echo "==> дельта апстрима разобрана."
+else
+  echo "==> git merge origin/main..."
 
 # Признак «миграционный конфликт»: среди конфликтующих файлов есть migrations/
 # или migrate_.
@@ -204,7 +324,6 @@ print_conflicts() {
   done
 }
 
-echo "==> git merge origin/main..."
 # NB: rerere отключён ТОЛЬКО на время merge (-c): его авто-повтор старых
 # резолюций подменял содержимое молча (инцидент «rerere ревертит
 # апстрим-тексты»). Каждая не-миграционная резолюция проходит через руки.
@@ -298,6 +417,7 @@ EOF
     fi
   fi
 fi
+fi  # MODE=merge-all
 
 # 3b. Settle: привести миграции дельты к политике нумерации (канонические 9000+
 #     для fork-local, byte-identical дубли апстрима — удалить, ledger пересобрать
@@ -584,7 +704,9 @@ echo "   OK"
 #     AO_SQUASH_AFTER=999999 ~/bin/ao-sync.sh
 DELTA_N="$(git rev-list --count --no-merges origin/main..HEAD)"
 SQUASH_AFTER="${AO_SQUASH_AFTER:-8}"
-if [ "$DELTA_N" -ge "$SQUASH_AFTER" ]; then
+# fixes-only сквош запрещён: он слил бы cherry-pick-и в один коммит и стёр бы
+# провенанс (леджер по sha это переживёт, но история теряет читаемость).
+if [ "$MODE" = "merge-all" ] && [ "$DELTA_N" -ge "$SQUASH_AFTER" ]; then
   echo "==> дельта $DELTA_N коммитов >= $SQUASH_AFTER — авто-сквош..."
   "$REPO_ROOT/local/toolbox/ao-squash-delta.sh"
   git push --force-with-lease fork main
