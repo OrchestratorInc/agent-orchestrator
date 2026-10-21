@@ -38,11 +38,21 @@ function conversation(id: string, resumed: boolean) {
 	};
 }
 
-async function installStoppedChats(page: Page, failures: Record<string, ResumeFailure[]>) {
+async function installStoppedChats(page: Page, failures: Record<string, ResumeFailure[]>, beforeFirstFailure?: Promise<void>) {
 	const ids = [...Object.keys(failures), untouchedId];
 	const attempts: Record<string, number[]> = Object.fromEntries(ids.map((id) => [id, []]));
 	const resumed = new Set<string>();
 	const submittedMessages: string[] = [];
+	const failureResponses: Record<string, number[]> = Object.fromEntries(ids.map((id) => [id, []]));
+	const apiEvents: string[] = [];
+	const recordApiEvent = (event: string, url: string) => {
+		const parsed = new URL(url);
+		if (parsed.pathname.startsWith("/api/v1/")) apiEvents.push(`${Date.now()} ${event} ${parsed.origin}${parsed.pathname}`);
+	};
+	page.on("request", (request) => recordApiEvent(`request ${request.method()}`, request.url()));
+	page.on("response", (response) => recordApiEvent(`response ${response.status()}`, response.url()));
+	page.on("requestfailed", (request) => recordApiEvent(`failed ${request.failure()?.errorText}`, request.url()));
+	page.on("pageerror", (error) => apiEvents.push(`${Date.now()} pageerror ${error.message}`));
 	await installFakeAgent(page);
 	await page.route("**/src/renderer/lib/preview-mode.ts*", (route) => route.fulfill({
 		contentType: "text/javascript", body: "export const usesPreviewWorkspaceData = false;",
@@ -68,9 +78,13 @@ async function installStoppedChats(page: Page, failures: Record<string, ResumeFa
 			if (path.endsWith("/resume-agent") && request.method() === "POST") {
 				attempts[id].push(Date.now());
 				const failure = failures[id]?.[attempts[id].length - 1];
-				if (failure) return route.fulfill({ status: failure.status, json: {
-					error: "resume failed", code: failure.code, message: failure.message, requestId: "resume-regression",
-				} });
+				if (failure) {
+					if (attempts[id].length === 1) await beforeFirstFailure;
+					failureResponses[id].push(Date.now());
+					return route.fulfill({ status: failure.status, json: {
+						error: "resume failed", code: failure.code, message: failure.message, requestId: "resume-regression",
+					} });
+				}
 				resumed.add(id);
 				return route.fulfill({ json: { ok: true, resumeMode: "native", sessionId: id, session: session(id, true) } });
 			}
@@ -88,7 +102,7 @@ async function installStoppedChats(page: Page, failures: Record<string, ResumeFa
 		}
 		return route.fulfill({ status: 404, json: { code: "NOT_FOUND", message: "Not part of the renderer fixture" } });
 	});
-	return { attempts, submittedMessages };
+	return { attempts, submittedMessages, failureResponses, apiEvents };
 }
 
 async function openChat(page: Page, id: string) {
@@ -104,17 +118,27 @@ async function capture(page: Page, name: string) {
 
 test("renderer: opening stopped Chat recovers from one startup timeout without a click @T0", async ({ page }) => {
 	const id = "transient-startup";
-	const { attempts, submittedMessages } = await installStoppedChats(page, {
+	let releaseFailure!: () => void;
+	const firstFailure = new Promise<void>((resolve) => { releaseFailure = resolve; });
+	const { attempts, submittedMessages, failureResponses, apiEvents } = await installStoppedChats(page, {
 		[id]: [{ status: 503, code: "SERVICE_UNAVAILABLE", message: "Codex initialization timed out" }],
-	});
-	await openChat(page, id);
-	await expect.poll(() => attempts[id].length).toBe(1);
-	await expect(page.getByText("The agent controller stopped", { exact: true })).toHaveCount(0);
-	await expect(page.getByRole("button", { name: "Resume agent", exact: true })).toHaveCount(0);
-	await capture(page, "resume-transient-pending");
+	}, firstFailure);
+	try {
+		await openChat(page, id);
+		await expect.poll(() => attempts[id].length).toBe(1);
+		await expect(page.getByText("The agent controller stopped", { exact: true })).toHaveCount(0);
+		await expect(page.getByRole("button", { name: "Resume agent", exact: true })).toHaveCount(0);
+		await capture(page, "resume-transient-pending");
+	} catch (error) {
+		console.error("Resume fixture readiness:", JSON.stringify({ attempts, failureResponses, apiEvents }));
+		throw error;
+	} finally {
+		// Keep startup rendering outside the retry clock: only now return the 503.
+		releaseFailure();
+	}
 
 	await expect.poll(() => attempts[id].length, { timeout: 8000 }).toBe(2);
-	expect(attempts[id][1] - attempts[id][0]).toBeGreaterThanOrEqual(1800);
+	expect(attempts[id][1] - failureResponses[id][0]).toBeGreaterThanOrEqual(1800);
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeEditable();
 	await composer.fill("A draft after automatic recovery");
