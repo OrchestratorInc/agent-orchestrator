@@ -19,8 +19,18 @@ type GitHubPATService interface {
 	StorePAT(ctx context.Context, token string) error
 	StoreOAuthToken(ctx context.Context, token, refreshToken string, expiresAt, refreshTokenExpiresAt time.Time) error
 	HasPAT(ctx context.Context) bool
+	// Login is the GitHub username AO is signed in as (a stored token or the
+	// gh CLI), or "" when unknown.
+	Login(ctx context.Context) string
 	DeletePAT(ctx context.Context) error
 	ListRepos(ctx context.Context) ([]githubpat.Repo, error)
+}
+
+// GitHubStatusResponse reports whether a token is stored and whom AO is signed
+// in to GitHub as.
+type GitHubStatusResponse struct {
+	Connected bool   `json:"connected"`
+	Login     string `json:"login,omitempty" description:"GitHub username AO is signed in as, from a stored token or the gh CLI; absent when it could not be resolved."`
 }
 
 // GitHubController owns the local GitHub PAT + repos routes.
@@ -97,7 +107,7 @@ func (c *GitHubController) status(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/github/status")
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]bool{"connected": c.Svc.HasPAT(r.Context())})
+	envelope.WriteJSON(w, http.StatusOK, GitHubStatusResponse{Connected: c.Svc.HasPAT(r.Context()), Login: c.Svc.Login(r.Context())})
 }
 
 func (c *GitHubController) listRepos(w http.ResponseWriter, r *http.Request) {

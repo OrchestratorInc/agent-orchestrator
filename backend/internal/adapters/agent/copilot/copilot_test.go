@@ -36,7 +36,7 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"copilot", "--allow-all", "--interactive", "-fix this"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all", "--interactive", "-fix this"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -57,7 +57,7 @@ func TestGetLaunchCommandUsesSessionCustomAgentForSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"copilot", "--allow-all", "--agent=ao-mer-1", "--interactive", "-fix this"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all", "--agent=ao-mer-1", "--interactive", "-fix this"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -236,7 +236,7 @@ func TestGetLaunchCommandAppendsModelFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot", "--model", "claude-sonnet-4.5"}
+	want := []string{"copilot", "--no-auto-update", "--model", "claude-sonnet-4.5"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -277,7 +277,7 @@ func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v (model override must not be forwarded on restore)", cmd, want)
 	}
@@ -506,7 +506,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--allow-all-tools", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--allow-all-tools", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -532,7 +532,7 @@ func TestGetRestoreCommandSelectsSessionCustomAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"copilot", "--agent=ao-mer-1", "--resume", "uuid-123"}
+	want := []string{"copilot", "--no-auto-update", "--agent=ao-mer-1", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -1051,4 +1051,23 @@ func countCopilotHookCommand(entries []copilotHookEntry, command string) int {
 		}
 	}
 	return count
+}
+
+func TestManagedCopilotLaunchAndResumeDisableVendorAutoUpdate(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	launch, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "original-native-id"},
+	}})
+	if err != nil || !ok {
+		t.Fatalf("native resume unavailable: ok=%v error=%v", ok, err)
+	}
+	for name, argv := range map[string][]string{"launch": launch, "resume": resume} {
+		if !contains(argv, "--no-auto-update") {
+			t.Errorf("%s can replace its release outside AO: %q", name, argv)
+		}
+	}
 }

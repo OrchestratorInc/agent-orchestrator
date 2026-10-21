@@ -25,6 +25,7 @@ export function ConversationActionsSheet({ entry, snapshot, onAction }: { entry:
 
 	const details = (action: ConversationMenuAction) => {
 		switch (action) {
+			case "files": return { icon: "file-diff" as const, label: "Review changes", run: entry.onFiles };
 			case "shell": return { icon: "terminal" as const, label: entry.openingShell ? "Opening shell…" : "Open worktree shell", disabled: entry.openingShell, run: entry.onOpenShell };
 			case "preview": return { icon: "globe" as const, label: "Open preview", run: entry.onPreview };
 			case "pull_requests": return { icon: "git-pull-request" as const, label: "PR Review", run: entry.onPullRequests };

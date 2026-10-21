@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { SessionFileTabs } from "../SessionFileTabs";
-import { DropdownMenu, DropdownMenuTrigger } from "./dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "./dropdown-menu";
 import { TooltipProvider } from "./tooltip";
 
 const triggerNames = [
@@ -58,4 +58,27 @@ it("keeps existing menu anchors attached while a full file and its delayed toolt
 	for (const [index, triggerRef] of triggerRefs.entries()) {
 		expect(triggerRef.mock.calls).toEqual([[triggers[index]]]);
 	}
+});
+
+it("keeps a submenu anchor attached across parent renders and allows selecting its item", async () => {
+	const subTriggerRef = vi.fn<(element: HTMLDivElement | null) => void>();
+	function ModelMenu({ revision }: { revision: number }) {
+		return <DropdownMenu defaultOpen modal={false}>
+			<DropdownMenuTrigger>Settings {revision}</DropdownMenuTrigger>
+			<DropdownMenuContent>
+				<DropdownMenuSub>
+					<DropdownMenuSubTrigger ref={subTriggerRef}>Model</DropdownMenuSubTrigger>
+					<DropdownMenuSubContent><DropdownMenuItem>Opus</DropdownMenuItem></DropdownMenuSubContent>
+				</DropdownMenuSub>
+			</DropdownMenuContent>
+		</DropdownMenu>;
+	}
+	const view = render(<ModelMenu revision={0} />);
+	const trigger = screen.getByRole("menuitem", { name: "Model" });
+	view.rerender(<ModelMenu revision={1} />);
+	view.rerender(<ModelMenu revision={2} />);
+	expect(subTriggerRef.mock.calls).toEqual([[trigger]]);
+	await userEvent.click(trigger);
+	await userEvent.click(await screen.findByRole("menuitem", { name: "Opus" }));
+	expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 });

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -44,20 +46,27 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	for _, name := range aiderAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
-	}
-
+	// Aider's own config and .env files decide first; a key in the
+	// environment is the fallback. A file read error only surfaces when no
+	// key is set either.
+	var fileErr error
 	for _, path := range aiderConfigPaths() {
 		status, ok, err := aiderAuthStatusFromFile(path)
 		if err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
+			fileErr = err
+			break
 		}
 		if ok {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 			return status, true, nil
 		}
+	}
+
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, aiderAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	if fileErr != nil {
+		return ports.AgentAuthStatusUnknown, false, fileErr
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }

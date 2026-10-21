@@ -645,7 +645,7 @@ func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command,
 		return c.resumeSessionAgent(ctx, cmd, id, sessionOptions{})
 	}
 	var res restoreSessionResponse
-	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/restore", struct{}{}, &res); err != nil {
+	if err := c.postSetupJSON(ctx, "sessions/"+url.PathEscape(id)+"/restore", struct{}{}, &res); err != nil {
 		return err
 	}
 	out := cmd.OutOrStdout()

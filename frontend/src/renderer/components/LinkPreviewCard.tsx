@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Globe } from "lucide-react";
 import { cn } from "../lib/utils";
+import { openLinkInSystemBrowser } from "../lib/external-link-policy";
 import type { LinkPreview } from "../hooks/useLinkPreview";
 import { Skeleton } from "./ui/skeleton";
 
@@ -41,9 +42,21 @@ export function LinkPreviewCardLoading() {
 	);
 }
 
-export function LinkPreviewCard({ url, preview }: { url: string; preview: LinkPreview }) {
+export function LinkPreviewCard({ url, preview, onBrowserOpen }: {
+	url: string;
+	preview: LinkPreview;
+	onBrowserOpen?: (url: string) => void;
+}) {
 	const domain = linkDomain(preview.url || url);
 	const siteLabel = preview.siteName || domain;
+	const linkProps = {
+		href: url,
+		onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+			event.preventDefault();
+			if (onBrowserOpen && !event.ctrlKey && !event.metaKey && !event.altKey) onBrowserOpen(url);
+			else void openLinkInSystemBrowser(url);
+		},
+	};
 	return (
 		<div data-testid="link-preview-card" className="flex flex-col">
 			{preview.imageUrl && (
@@ -63,14 +76,14 @@ export function LinkPreviewCard({ url, preview }: { url: string; preview: LinkPr
 					<span className="truncate">{siteLabel}</span>
 				</div>
 				{preview.title && (
-					<div className={cn("line-clamp-2 text-sm font-medium leading-snug text-popover-foreground")}>
+					<a {...linkProps} className={cn("line-clamp-2 text-sm font-medium leading-snug text-popover-foreground hover:underline focus-visible:underline")}>
 						{preview.title}
-					</div>
+					</a>
 				)}
 				{preview.description && (
 					<div className="line-clamp-2 text-xs text-muted-foreground">{preview.description}</div>
 				)}
-				<div className="truncate text-[11px] text-muted-foreground/70">{domain}</div>
+				<a {...linkProps} className="block truncate text-[11px] text-muted-foreground/70 hover:underline focus-visible:underline">{domain}</a>
 			</div>
 		</div>
 	);

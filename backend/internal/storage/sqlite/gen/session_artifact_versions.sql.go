@@ -77,21 +77,24 @@ func (q *Queries) DeleteSessionArtifactVersionsBelow(ctx context.Context, arg De
 
 const insertSessionArtifactVersion = `-- name: InsertSessionArtifactVersion :one
 INSERT INTO session_artifact_versions (
-    session_id, path, version, sha256, size, content_type, mtime, created_at
+    session_id, path, version, sha256, size, content_type, mtime, created_at, source, harness, restored_from
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING session_id, path, version, sha256, size, content_type, mtime, created_at
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING session_id, path, version, sha256, size, content_type, mtime, created_at, source, harness, restored_from
 `
 
 type InsertSessionArtifactVersionParams struct {
-	SessionID   domain.SessionID
-	Path        string
-	Version     int64
-	Sha256      string
-	Size        int64
-	ContentType string
-	Mtime       int64
-	CreatedAt   time.Time
+	SessionID    domain.SessionID
+	Path         string
+	Version      int64
+	Sha256       string
+	Size         int64
+	ContentType  string
+	Mtime        int64
+	CreatedAt    time.Time
+	Source       string
+	Harness      string
+	RestoredFrom int64
 }
 
 func (q *Queries) InsertSessionArtifactVersion(ctx context.Context, arg InsertSessionArtifactVersionParams) (SessionArtifactVersion, error) {
@@ -104,6 +107,9 @@ func (q *Queries) InsertSessionArtifactVersion(ctx context.Context, arg InsertSe
 		arg.ContentType,
 		arg.Mtime,
 		arg.CreatedAt,
+		arg.Source,
+		arg.Harness,
+		arg.RestoredFrom,
 	)
 	var i SessionArtifactVersion
 	err := row.Scan(
@@ -115,12 +121,15 @@ func (q *Queries) InsertSessionArtifactVersion(ctx context.Context, arg InsertSe
 		&i.ContentType,
 		&i.Mtime,
 		&i.CreatedAt,
+		&i.Source,
+		&i.Harness,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
 
 const listLatestSessionArtifactVersions = `-- name: ListLatestSessionArtifactVersions :many
-SELECT v.session_id, v.path, v.version, v.sha256, v.size, v.content_type, v.mtime, v.created_at FROM session_artifact_versions AS v
+SELECT v.session_id, v.path, v.version, v.sha256, v.size, v.content_type, v.mtime, v.created_at, v.source, v.harness, v.restored_from FROM session_artifact_versions AS v
 WHERE v.session_id = ?1
   AND v.version = (
       SELECT MAX(m.version) FROM session_artifact_versions AS m
@@ -147,6 +156,9 @@ func (q *Queries) ListLatestSessionArtifactVersions(ctx context.Context, session
 			&i.ContentType,
 			&i.Mtime,
 			&i.CreatedAt,
+			&i.Source,
+			&i.Harness,
+			&i.RestoredFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -162,7 +174,7 @@ func (q *Queries) ListLatestSessionArtifactVersions(ctx context.Context, session
 }
 
 const listSessionArtifactVersions = `-- name: ListSessionArtifactVersions :many
-SELECT session_id, path, version, sha256, size, content_type, mtime, created_at FROM session_artifact_versions
+SELECT session_id, path, version, sha256, size, content_type, mtime, created_at, source, harness, restored_from FROM session_artifact_versions
 WHERE session_id = ?1 AND path = ?2
 ORDER BY version DESC
 `
@@ -190,6 +202,9 @@ func (q *Queries) ListSessionArtifactVersions(ctx context.Context, arg ListSessi
 			&i.ContentType,
 			&i.Mtime,
 			&i.CreatedAt,
+			&i.Source,
+			&i.Harness,
+			&i.RestoredFrom,
 		); err != nil {
 			return nil, err
 		}

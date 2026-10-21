@@ -659,9 +659,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			callbacksRef.current.onChangeFontSize?.(delta);
 		});
 		const activateLink = (event: MouseEvent, uri: string) => {
+			// Open on a plain click even while the pane tracks the mouse, like web
+			// links: tmux (mouse on) and fullscreen TUIs keep tracking on, so a
+			// modifier gate here made plain clicks do nothing.
 			if (uri.startsWith("ao:")) {
-				const modifierPressed = isMacPlatform() ? event.metaKey : event.ctrlKey;
-				if (term.modes.mouseTrackingMode !== "none" && !modifierPressed) return;
 				callbacksRef.current.onSessionLinkOpen?.(uri);
 				return;
 			}
@@ -2078,7 +2079,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						onPointerLeave={() => linkPreviewControlsRef.current.hide()}
 					>
 						{linkPreviewQuery.data ? (
-							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} />
+							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} onBrowserOpen={props.onLinkOpen} />
 						) : (
 							<LinkPreviewCardLoading />
 						)}

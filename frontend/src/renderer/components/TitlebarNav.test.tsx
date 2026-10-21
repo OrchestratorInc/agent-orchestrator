@@ -38,9 +38,15 @@ describe("TitlebarNav", () => {
 		useUiStore.setState({ isSidebarOpen: open });
 		const { container, rerender } = render(<TitlebarNav />);
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("top-px", "h-traffic-light-clearance", "left-titlebar-cluster-left");
+		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
-		expect(nav).toHaveClass("top-px", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
-		expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
+		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		// The brand and the history arrows trade places; the hidden one is inert and
+		// aria-hidden (it collapses to width 0 rather than unmounting).
+		const brand = container.querySelector('[data-slot="titlebar-brand"]');
+		const history = container.querySelector('[data-slot="titlebar-history"]');
+		expect(brand?.hasAttribute("aria-hidden")).toBe(!open);
+		expect(history?.hasAttribute("aria-hidden")).toBe(open);
+		if (!open) expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
 	});
 });
