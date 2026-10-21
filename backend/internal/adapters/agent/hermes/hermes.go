@@ -426,17 +426,21 @@ func ResolveHome(env map[string]string) (string, error) {
 		value, _ := lookup(name)
 		return value
 	}
+	home, err := nativeHomeFrom(lookup, get)
+	if err != nil {
+		return "", err
+	}
+	// Hermes resolves a relative home against its own working directory, the
+	// session workspace, so AO would inspect a different directory.
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("hermes: native home %q must be an absolute path; set HERMES_HOME or HOME to an absolute directory", home)
+	}
+	return filepath.Clean(home), nil
+}
+
+func nativeHomeFrom(lookup envLookup, get func(string) string) (string, error) {
 	if dir := strings.TrimSpace(get("HERMES_HOME")); dir != "" {
-		expanded, err := expandNativePath(dir, lookup)
-		if err != nil {
-			return "", err
-		}
-		// Hermes resolves a relative home against its own working directory,
-		// the session workspace, so AO would inspect a different directory.
-		if !filepath.IsAbs(expanded) {
-			return "", fmt.Errorf("hermes: HERMES_HOME %q must be an absolute path", expanded)
-		}
-		return filepath.Clean(expanded), nil
+		return expandNativePath(dir, lookup)
 	}
 	if runtime.GOOS == "windows" {
 		local := strings.TrimSpace(get("LOCALAPPDATA"))
@@ -639,17 +643,21 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 	}
 	// Hermes loads <HERMES_HOME>/.env with override before reading these, so a
-	// value there would silently replace AO's instructions or chrome language.
-	bindings, err := dotenvBindings(filepath.Join(home, ".env"))
+	// value there would silently replace AO's instructions or chrome language,
+	// or move Hermes to a home AO has not checked.
+	envFile := filepath.Join(home, ".env")
+	bindings, err := dotenvBindings(envFile)
 	if err != nil {
 		return err
 	}
 	for _, binding := range bindings {
-		switch key := binding.key; key {
+		switch key := nativeEnvName(binding.key); key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
-			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, filepath.Join(home, ".env"))
+			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
 		case "HERMES_LANGUAGE":
-			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, filepath.Join(home, ".env"))
+			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, envFile)
+		case "HERMES_HOME":
+			return fmt.Errorf("hermes: %s in %s would move Hermes away from the home AO checked; set HERMES_HOME in AO's environment instead", key, envFile)
 		}
 	}
 	cfg.Env["HERMES_HOME"] = home

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -106,7 +107,9 @@ func hermesDotenvText(raw []byte) (string, bool) {
 				i++
 			}
 		}
-		text = string(utf16.Decode(units))
+		// Hermes rewrites the decoded text as UTF-8 and its loader then reads
+		// it as utf-8-sig, which drops a U+FEFF that survived the decode.
+		text = strings.TrimPrefix(string(utf16.Decode(units)), "\ufeff")
 	default:
 		raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 		if !utf8.Valid(raw) {
@@ -128,6 +131,28 @@ func hermesDotenvText(raw []byte) (string, bool) {
 		b.WriteByte('\n')
 	}
 	return b.String(), true
+}
+
+// dotenvEnvironment is the environment the bindings leave behind: the last
+// assignment of each name wins, as when Hermes applies them with override.
+// Names are keyed by nativeEnvName.
+func dotenvEnvironment(bindings []dotenvBinding) map[string]string {
+	env := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		env[nativeEnvName(binding.key)] = binding.value
+	}
+	return env
+}
+
+// nativeEnvName is the variable a dotenv key sets in Hermes's process. A
+// leading U+FEFF can be dropped by a later utf-8-sig read once Hermes rewrites
+// the file, and Windows os.environ upper-cases names.
+func nativeEnvName(key string) string {
+	key = strings.TrimLeft(key, "\ufeff")
+	if runtime.GOOS == "windows" {
+		key = strings.ToUpper(key)
+	}
+	return key
 }
 
 // pyIsSpace is Python's str.isspace: Unicode White_Space plus the ASCII

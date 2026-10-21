@@ -610,6 +610,11 @@ func TestCredentialStoreIdentityReadsNativeStores(t *testing.T) {
 		{"quoted key", ".env", "'ANTHROPIC_API_KEY'=sk-ant\n", true, domain.AgentAccountMethodAPIKey},
 		{"oauth store", "auth.json", `{"providers":{"nous":{"access_token":"x"}}}`, true, domain.AgentAccountMethodAccount},
 		{"empty oauth store", "auth.json", `{"providers":{}}`, false, ""},
+		// Hermes keeps an empty pool list after removing the last credential.
+		{"pool credential", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openai-api":[{"id":"a","access_token":"x"}]}}`, true, domain.AgentAccountMethodAccount},
+		{"removed final pool credential", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openai-api":[]}}`, false, ""},
+		// The last assignment is the one Hermes keeps.
+		{"superseded env key", ".env", "OPENROUTER_API_KEY=review-dummy-key\nOPENROUTER_API_KEY=\n", false, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -648,7 +653,7 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	}
 	for _, key := range []string{"HERMES_EPHEMERAL_SYSTEM_PROMPT", "HERMES_LANGUAGE"} {
 		// Every assignment form python-dotenv accepts must be caught.
-		for _, form := range []string{
+		forms := []string{
 			"OPENROUTER_API_KEY=x\nexport " + key + "=native\n",
 			"'" + key + "'=native\n",
 			"export\t" + key + "=native\n",
@@ -657,9 +662,17 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			// Python's \s and str.strip are Unicode: NBSP is whitespace.
 			"export\u00a0" + key + "=native\n",
 			"\u00a0" + key + "=native\n",
-			// Hermes rewrites a UTF-16 (Notepad "Unicode") file as UTF-8 first.
+			// Hermes rewrites a UTF-16 (Notepad "Unicode") file as UTF-8 first,
+			// and a U+FEFF surviving either decode is dropped by utf-8-sig.
 			utf16LE("\ufeff" + key + "=native\r\n"),
-		} {
+			utf16LE("\ufeff\ufeff" + key + "=native\n"),
+			"\xef\xbb\xbf\ufeff" + key + "=native\n",
+		}
+		if runtime.GOOS == "windows" {
+			// Windows os.environ upper-cases names.
+			forms = append(forms, strings.ToLower(key)+"=native\n")
+		}
+		for _, form := range forms {
 			if err := os.WriteFile(filepath.Join(home, ".env"), []byte(form), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -667,6 +680,13 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 				t.Fatalf("%q in .env accepted: %v", form, err)
 			}
 		}
+	}
+	// A home redirect would load another, unchecked .env.
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_HOME="+t.TempDir()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := hooks(); err == nil || !strings.Contains(err.Error(), "HERMES_HOME") {
+		t.Fatalf("HERMES_HOME in .env accepted: %v", err)
 	}
 	// Malformed encodings are refused: Hermes's replacement-character and
 	// latin-1 fallbacks can still apply assignments.
@@ -734,6 +754,10 @@ func TestResolveHomeExpandsLikeHermes(t *testing.T) {
 	// daemon's directory, so it is refused rather than inspected elsewhere.
 	if got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": ".ao-review-relative-hermes"}); err == nil {
 		t.Fatalf("ResolveHome(relative) = %q, want error", got)
+	}
+	// The default derived from a relative HOME is just as relative.
+	if got, err = ResolveHome(map[string]string{"HERMES_HOME": "", "HOME": ".ao-review-relative-user"}); err == nil {
+		t.Fatalf("ResolveHome(relative HOME) = %q, want error", got)
 	}
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", WorkspacePath: t.TempDir(), Env: map[string]string{"HERMES_HOME": ".ao-review-relative-hermes"}, SystemPrompt: "AO"}
 	if err := New().GetAgentHooks(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "absolute") {

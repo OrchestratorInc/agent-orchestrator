@@ -130,16 +130,23 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 	return domain.AgentAccountIdentity{}, false
 }
 
+// envFileHasCredential reads the value Hermes ends up with: a later empty
+// assignment clears an earlier key.
 func envFileHasCredential(path string) bool {
 	bindings, _ := dotenvBindings(path)
-	for _, binding := range bindings {
-		if binding.value != "" && slices.Contains(hermesCredentialEnv, binding.key) {
+	env := dotenvEnvironment(bindings)
+	for _, name := range hermesCredentialEnv {
+		if env[nativeEnvName(name)] != "" {
 			return true
 		}
 	}
 	return false
 }
 
+// authFileHasCredential looks for an actual credential in Hermes's auth store:
+// a non-empty provider state or a credential-pool entry. Hermes keeps a
+// provider's empty pool list after its last credential is removed, and older
+// stores held provider states at the top level.
 func authFileHasCredential(path string) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -149,14 +156,20 @@ func authFileHasCredential(path string) bool {
 	if json.Unmarshal(b, &store) != nil {
 		return false
 	}
-	for _, value := range store {
-		switch v := value.(type) {
-		case map[string]any:
-			if len(v) > 0 {
-				return true
-			}
-		case []any:
-			if len(v) > 0 {
+	providers, hasProviders := store["providers"].(map[string]any)
+	pool, hasPool := store["credential_pool"].(map[string]any)
+	if !hasProviders && !hasPool {
+		providers = store
+	}
+	for _, state := range providers {
+		if state, ok := state.(map[string]any); ok && len(state) > 0 {
+			return true
+		}
+	}
+	for _, entries := range pool {
+		entries, _ := entries.([]any)
+		for _, entry := range entries {
+			if entry, ok := entry.(map[string]any); ok && len(entry) > 0 {
 				return true
 			}
 		}
