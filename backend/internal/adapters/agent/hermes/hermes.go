@@ -61,7 +61,7 @@ var (
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 	// A tagless clean checkout; a ".dirty" suffix never matches.
 	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
-	stableReleaseTag        = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	stableReleaseTag        = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 )
 
 // New creates the native TUI adapter.
@@ -237,7 +237,7 @@ func wrapperTarget(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	b := make([]byte, 4096)
 	n, _ := f.Read(b)
 	text := string(b[:n])
@@ -407,12 +407,12 @@ func looseTagTarget(commonDir, sha string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	r, err := zlib.NewReader(f)
 	if err != nil {
 		return ""
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	b, _ := io.ReadAll(io.LimitReader(r, 512))
 	header, body, ok := bytes.Cut(b, []byte{0})
 	if !ok || !bytes.HasPrefix(header, []byte("tag ")) {
