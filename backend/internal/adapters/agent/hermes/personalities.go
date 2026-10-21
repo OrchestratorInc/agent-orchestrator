@@ -2,6 +2,14 @@
 // v0.21.6 (MIT); a user's config.yaml personalities override them.
 // AO preserves the exact text only for a native personality selected in the
 // user's configuration; this adapter does not select a personality itself.
+//
+// The text is vendored rather than read at launch: AO's ephemeral prompt
+// replaces the native overlay, so it must rebuild the selected personality,
+// and Hermes has no command that prints its built-ins. Reading them would mean
+// importing or parsing the installed Python source on every launch, which
+// would put whatever text is on disk into the system prompt unreviewed. A
+// pinned copy keeps the prompt deterministic and reviewed with each release
+// line AO qualifies.
 package hermes
 
 var builtinPersonalities = map[string]string{
