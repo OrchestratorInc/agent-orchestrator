@@ -1,0 +1,57 @@
+-- name: FindImportedSession :one
+-- Matches the sessions_import_identity expressions, so this is an index search.
+SELECT id FROM sessions
+WHERE import_source <> ''
+  AND CAST(json_extract(NULLIF(import_source, ''), '$.configDir') AS TEXT) = CAST(sqlc.arg(config_dir) AS TEXT)
+  AND CAST(json_extract(NULLIF(import_source, ''), '$.nativeId') AS TEXT) = CAST(sqlc.arg(native_id) AS TEXT)
+LIMIT 1;
+
+-- name: InsertSessionImportMessage :exec
+INSERT INTO session_import_messages (session_id, sequence, role, text, created_at)
+VALUES (
+    sqlc.arg(session_id), sqlc.arg(sequence), sqlc.arg(role), sqlc.arg(text), sqlc.arg(created_at)
+);
+
+-- name: ListSessionImportMessages :many
+SELECT sequence, role, text, created_at FROM session_import_messages
+WHERE session_id = sqlc.arg(session_id) AND sequence < sqlc.arg(before_sequence)
+ORDER BY sequence DESC LIMIT sqlc.arg(page_limit);
+
+-- name: GetSessionImportSource :one
+SELECT import_source FROM sessions WHERE id = sqlc.arg(id);
+
+-- The caller compares the stored source with its expectation in the same transaction.
+-- name: SetSessionImportWorkspace :execrows
+UPDATE sessions SET branch = sqlc.arg(branch), workspace_path = sqlc.arg(workspace_path),
+    workspace_repo_path = sqlc.arg(workspace_repo_path), diff_base_sha = sqlc.arg(diff_base_sha),
+    diff_base_ref = sqlc.arg(diff_base_ref), import_source = sqlc.arg(new_source),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND is_terminated = 0
+    AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0
+    AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path));
+
+-- Adoption is the one import fact a full session write records; the rest move
+-- only through SetSessionImportWorkspace, so an older snapshot cannot undo them.
+-- name: AdoptSessionImport :exec
+UPDATE sessions SET import_source = sqlc.arg(import_source)
+WHERE id = sqlc.arg(id) AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0;
+
+-- name: ListSessionImportArchive :many
+SELECT role, text, created_at FROM session_import_messages
+WHERE session_id = sqlc.arg(session_id) ORDER BY sequence;
+
+-- name: MaxSessionImportSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM session_import_messages
+WHERE session_id = sqlc.arg(session_id);
+
+-- name: DeleteSessionImportMessages :exec
+DELETE FROM session_import_messages WHERE session_id = sqlc.arg(session_id);
+
+-- The archive owns sequences 1..N of an imported session; live rows follow it.
+-- name: SeedImportedConversationSequence :one
+UPDATE conversations SET latest_sequence = (
+    SELECT CAST(COALESCE(MAX(m.sequence), 0) AS INTEGER) FROM session_import_messages AS m
+    WHERE m.session_id = sqlc.arg(session_id)
+)
+WHERE id = sqlc.arg(id)
+RETURNING latest_sequence;

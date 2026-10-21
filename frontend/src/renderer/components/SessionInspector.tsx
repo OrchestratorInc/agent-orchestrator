@@ -227,8 +227,9 @@ export const SessionInspector = memo(function SessionInspector({
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
+	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		onlyBrowser || session?.cloud || session?.needsResume ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -1076,7 +1077,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
 		staleTime: Infinity,
 		placeholderData: (previous) => previous,
-		enabled: !session.cloud && session.kind !== "orchestrator",
+		enabled: !session.cloud && session.kind !== "orchestrator" && !session.needsResume,
 	});
 	const events: SortableTimelineEvent[] = [];
 	const pushEvent = (event: InspectorTimelineEvent, timestamp?: string | null) => {

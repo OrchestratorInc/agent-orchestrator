@@ -344,6 +344,7 @@ type Store interface {
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -365,6 +366,7 @@ type Manager struct {
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness ports.AgentReadinessProvider
+	importArchive  ImportArchiveRefresher
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -1873,6 +1875,12 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 }
 
 func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
+	return m.createSessionWorkspaceAt(ctx, project, cfg, id, branch, baseRefs, "")
+}
+
+// createSessionWorkspaceAt starts a workspace project's root at startRef when
+// set; session import uses it to continue from the original commit.
+func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string, startRef string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
 	projectKind := project.Kind.WithDefault()
 	if cfg.ProjectID == "" {
 		projectKind = domain.ProjectKindScratch
@@ -1944,6 +1952,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		RootRepoPath:  project.Path,
 		BaseBranch:    project.Config.WorktreeBaseBranch(),
 		BaseRef:       baseRefs[filepath.Clean(project.Path)],
+		StartRef:      startRef,
 		Repos:         childRepos,
 		Assets:        assets,
 	})
@@ -2927,6 +2936,23 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
+	if rec.NeedsImportResume() {
+		// Restore pending imports to idle; opening the chat performs native adoption.
+		if meta.WorkspacePath != "" {
+			release := m.acquireWorkspaceGate(rec.ProjectID)
+			defer release()
+			ws, err := m.restoreSessionWorkspace(ctx, project, rec)
+			if err != nil {
+				return RestoreResult{}, fmt.Errorf("restore %s: workspace: %w", id, err)
+			}
+			meta.WorkspacePath, meta.WorkspaceRepoPath, meta.Branch = ws.Path, ws.RepoPath, ws.Branch
+		}
+		if err := m.lcm.MarkSpawned(ctx, id, meta); err != nil {
+			return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+		}
+		current, err := m.getRecord(ctx, id)
+		return RestoreResult{Session: current, Mode: RestoreModeNative}, err
+	}
 	// Mirror Kill's incomplete-handle guard: a session whose spawn failed before
 	// the workspace landed has neither WorkspacePath nor Branch, and there is
 	// nothing meaningful to restore from. Surface this as a typed 409 instead of
@@ -3387,6 +3413,17 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
+	if rec.NeedsImportResume() {
+		rec, err = m.prepareImportedWorkspace(ctx, rec, project)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+		m.refreshImportArchive(ctx, rec)
+		requireNativeHistory = true
+	} else if adoptedOwnedElsewhere(ctx, rec) {
+		return RestoreResult{}, ErrSessionOpenElsewhere
+	}
+
 	meta := rec.Metadata
 	if meta.WorkspacePath == "" ||
 		(meta.Branch == "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindScratch) {
@@ -3394,6 +3431,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 	}
 	ws := ports.WorkspaceInfo{
 		Path:      meta.WorkspacePath,
+		RepoPath:  meta.WorkspaceRepoPath,
 		Branch:    meta.Branch,
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
@@ -3899,7 +3937,7 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 // worktree, preserving conversation identity when recovery fails. Startup uses
 // checkSessionHealth instead so missing agents stay stopped.
 func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) error {
-	if rec.HibernatedAt != nil {
+	if rec.NeedsImportResume() || rec.HibernatedAt != nil {
 		return nil
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)

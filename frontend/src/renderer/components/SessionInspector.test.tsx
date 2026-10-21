@@ -503,6 +503,18 @@ describe("SessionInspector tabs", () => {
     ).toBe(false);
   });
 
+  it("does not query workspace endpoints for an imported chat that has not been opened", async () => {
+    renderWithQuery(<SessionInspector session={session([], { id: "import-1", needsResume: true })} />);
+
+    await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(0));
+
+    expect(
+      getMock.mock.calls
+        .map(([path]) => String(path))
+        .filter((path) => path.startsWith("/api/v1/sessions/{sessionId}/workspace/")),
+    ).toEqual([]);
+  });
+
   it("shows a live changed-file count on the Files tab once the shared cache is populated", () => {
     renderWithQuery(
       <SessionInspector session={session([])} />,

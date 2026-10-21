@@ -4,8 +4,23 @@ package nativeconfig
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// codexRollout is how Codex names a thread's rollout: `rollout-<time>-<thread>`,
+// compressed to .jsonl.zst once inactive, and continued in `_<segment>` files.
+var codexRollout = regexp.MustCompile(`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F-]{36})?\.jsonl(?:\.zst)?$`)
+
+// CodexRolloutThread is the thread a Codex rollout file belongs to, or "" when
+// the name is not a rollout. Resume probes and history imports share it, so
+// they always agree on which files make up a thread.
+func CodexRolloutThread(path string) string {
+	if m := codexRollout.FindStringSubmatch(filepath.Base(path)); m != nil {
+		return strings.ToLower(m[1])
+	}
+	return ""
+}
 
 // Resolve returns the directory selected for a provider invocation. An entry
 // in env, including an explicitly empty one, takes precedence over the daemon
