@@ -44,7 +44,8 @@ it("keeps same-ID notifications and unread counts separate by host, then drops d
 	await connect("B", 4102);
 
 	const { result } = renderHook(() => useRemoteNotificationHosts("unread"), { wrapper });
-	await waitFor(() => expect(result.current.totalUnreadCount).toBe(5));
+	await waitFor(() => expect(result.current.hosts[1]?.data?.unreadCount).toBe(3));
+	expect(result.current.hosts[0]?.data?.unreadCount).toBe(2);
 	expect(result.current.hosts.map(({ hostId, label, data }) => [hostId, label, data?.notifications[0]?.title])).toEqual([
 		["A", "Host A", "From A"],
 		["B", "Host B", "From B"],
@@ -57,7 +58,7 @@ it("keeps same-ID notifications and unread counts separate by host, then drops d
 
 	await act(async () => { await disconnectHost("B"); });
 	await waitFor(() => expect(result.current.hosts.map((host) => host.hostId)).toEqual(["A"]));
-	expect(result.current.totalUnreadCount).toBe(2);
+	expect(result.current.hosts[0]?.data?.unreadCount).toBe(2);
 });
 
 it("does not fetch while disabled and reports a failed host without masking healthy hosts", async () => {
@@ -76,12 +77,11 @@ it("does not fetch while disabled and reports a failed host without masking heal
 		initialProps: { enabled: false }, wrapper,
 	});
 	expect(fetchMock).not.toHaveBeenCalled();
-	expect(result.current.totalUnreadCount).toBe(0);
+	expect(result.current.hosts[0]?.data).toBeUndefined();
 	rerender({ enabled: true });
 	await waitFor(() => expect(result.current.hosts[1]?.isError).toBe(true), { timeout: 3_000 });
 	expect(result.current.hosts[0]?.data?.unreadCount).toBe(4);
 	expect(result.current.hosts[1]?.data).toBeUndefined();
-	expect(result.current.totalUnreadCount).toBe(0);
 	expect(remoteNotificationsQueryKey("A", "all")).not.toEqual(remoteNotificationsQueryKey("A", "unread"));
 });
 
@@ -96,11 +96,10 @@ it("does not count stale unread data after a host goes offline", async () => {
 	const { result } = renderHook(() => useRemoteNotificationHosts("unread"), {
 		wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
 	});
-	await waitFor(() => expect(result.current.totalUnreadCount).toBe(4));
+	await waitFor(() => expect(result.current.hosts[0]?.data?.unreadCount).toBe(4));
 
 	offline = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey("A", "unread") }); });
 	await waitFor(() => expect(result.current.hosts[0]?.isError).toBe(true), { timeout: 3_000 });
 	expect(result.current.hosts[0]?.data).toBeUndefined();
-	expect(result.current.totalUnreadCount).toBe(0);
 });

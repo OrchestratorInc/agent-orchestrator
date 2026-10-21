@@ -38,8 +38,10 @@ if (import.meta.env.DEV) {
 	const w = window as never as Record<string, unknown>;
 	w.__qc = queryClient;
 	// __testNotif("needs_input") — simulates a real notification:
-	//   bell count + dock badge update immediately; dock bounces after 3s
-	//   (gives you time to click away from AO so the bounce is visible)
+	//   signal types (needs_input, review_changes_requested) ring: bell count +
+	//   dock badge update immediately; dock bounces after 3s
+	//   (gives you time to click away from AO so the bounce is visible).
+	//   Routine types (ready_to_merge, pr_merged) stay in the feed quietly.
 	const testNotifTitles: Record<string, string> = {
 		needs_input: "Agent needs your input",
 		ready_to_merge: "Ready to merge",

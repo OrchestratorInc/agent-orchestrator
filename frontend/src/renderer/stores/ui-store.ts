@@ -81,8 +81,6 @@ export type InspectorSessionState = {
 	view: InspectorView;
 	/** The current non-empty browser content lifecycle has already been revealed. */
 	browserContentRevealed?: boolean;
-	/** Real browser activity occurred while Browser was not visible. */
-	browserUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
 	/** Files tab: source shared by the docked and maximized explorers. */
@@ -222,7 +220,6 @@ export type UiState = {
 	 */
 	initializeInspectorSession: (sessionId: string, hasBrowserContent: boolean, hasInspector: boolean) => void;
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
-	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSource: (sessionId: string, source: FilesSource) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
@@ -487,11 +484,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setInspectorView: (sessionId, view) =>
 		set((state) => {
 			const current = inspectorState(state.inspectorSessions, sessionId);
-			const browserUnseen = view === "browser" ? false : current.browserUnseen;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, view, browserUnseen },
+					[sessionId]: { ...current, view },
 				},
 			};
 		}),
@@ -522,22 +518,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: {
-						...current,
-						browserContentRevealed,
-						browserUnseen: browserContentRevealed ? current.browserUnseen : false,
-					},
-				},
-			};
-		}),
-	setBrowserUnseen: (sessionId, browserUnseen) =>
-		set((state) => {
-			const current = inspectorState(state.inspectorSessions, sessionId);
-			if (Boolean(current.browserUnseen) === browserUnseen) return state;
-			return {
-				inspectorSessions: {
-					...state.inspectorSessions,
-					[sessionId]: { ...current, browserUnseen },
+					[sessionId]: { ...current, browserContentRevealed },
 				},
 			};
 		}),

@@ -35,7 +35,6 @@ import { LOCAL_HOST, parseRefKey, refKey, sessionUiKey, type HostId } from "../l
 import {
 	createNotificationsTransport,
 	getCachedNotifications,
-	getCachedUnreadCount,
 	isNotificationsCacheFromClear,
 	keepLatestNotificationsPage,
 	type NotificationDTO,
@@ -54,6 +53,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
+import { bellUnreadCount } from "../../shared/notification-signals";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
@@ -181,12 +181,33 @@ function NotificationWorkspaceState({
 	return <>{children({ retryWorkspace, loadedRemoteSessionIds, sessionMeta, sessionsReady, terminatedIds, workspaceError: workspaceError || remoteWorkspaces.failedHostIds.length > 0 })}</>;
 }
 
+/**
+ * The notification mode main signals with (`AO_NO_QUIET_NOTIFICATIONS` opts
+ * back into upstream loud). Read once; the sandboxed renderer cannot see the
+ * env itself. Quiet until main answers, then the counts catch up in one tick.
+ */
+function useLoudNotifications(): boolean {
+	const [loud, setLoud] = useState(false);
+	useEffect(() => {
+		let cancelled = false;
+		void aoBridge.notifications.mode().then((value) => {
+			if (!cancelled) setLoud(value);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	return loud;
+}
+
 export function NotificationRuntime() {
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
+	const loud = useLoudNotifications();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	const unreadCount = bellUnreadCount(getCachedNotifications(unreadQuery.data), loud) +
+		remoteUnread.hosts.reduce((count, host) => count + bellUnreadCount(host.data?.notifications ?? [], loud), 0);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
@@ -352,7 +373,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			hostId: host.hostId, label: host.label, notification,
 		}))),
 	].sort((a, b) => b.notification.createdAt.localeCompare(a.notification.createdAt)), [notifications, remoteItems]);
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	// Quiet by default: only human-feedback events ring the bell and badge the
+	// launcher. The feed itself still lists every notification. Loud mode
+	// (AO_NO_QUIET_NOTIFICATIONS) counts every unread row, like upstream.
+	const loud = useLoudNotifications();
+	const unreadCount = bellUnreadCount(getCachedNotifications(unreadQuery.data), loud) +
+		remoteUnread.hosts.reduce((count, host) => count + bellUnreadCount(host.data?.notifications ?? [], loud), 0) +
+		bellUnreadCount(cloudItems, loud);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();

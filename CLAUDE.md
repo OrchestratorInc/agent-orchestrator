@@ -30,6 +30,7 @@ session so the change renders in the desktop browser panel (the inspector rail's
 Browser tab); do not just describe it. A new `ao preview` target, `ao browser open`,
 or `ao browser tab new` reveals Browser for the session being viewed. Revealing
 opens the inspector and selects Browser without changing the routed session,
-project, or OS window focus. Passive browser activity (`snapshot`, `click`,
-`fill`, `errors`, etc.) only badges a hidden Browser tab as unseen. Mention
-"check the Browser tab" when passive activity is the only update.
+project, or OS window focus. Quiet by default: passive browser activity
+(`snapshot`, `click`, `fill`, etc.) neither notifies nor badges a hidden
+Browser tab; only human-feedback events (an agent blocked on input, a
+changes-requested review, daemon/agent failures) ring, toast, or badge.

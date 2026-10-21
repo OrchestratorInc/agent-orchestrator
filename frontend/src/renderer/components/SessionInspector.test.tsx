@@ -426,26 +426,6 @@ describe("SessionInspector tabs", () => {
 		expect(summaryTab).toHaveAttribute("title", "Summary");
 	});
 
-  it("shows the glow only while real browser activity is unseen", () => {
-    const currentSession = session([]);
-    const view = renderWithQuery(<SessionInspector session={currentSession} />);
-    expect(
-      screen.queryByTestId("browser-unseen-indicator"),
-    ).not.toBeInTheDocument();
-    view.unmount();
-
-    useUiStore.getState().setBrowserUnseen(currentSession.id, true);
-    renderWithQuery(<SessionInspector session={currentSession} />);
-    expect(screen.getByTestId("browser-unseen-indicator")).toBeInTheDocument();
-
-    act(() =>
-      useUiStore.getState().setInspectorView(currentSession.id, "browser"),
-    );
-    expect(
-      screen.queryByTestId("browser-unseen-indicator"),
-    ).not.toBeInTheDocument();
-  });
-
   it("renders the supplied files view when the Files tab opens", async () => {
     const onOpenFiles = vi.fn();
     renderWithQuery(

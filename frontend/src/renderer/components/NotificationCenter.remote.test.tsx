@@ -77,7 +77,6 @@ vi.mock("../hooks/useRemoteNotifications", async (importOriginal) => ({
 			{ hostId: "host-a", label: "Host A", data: { ...remotePage(status === "unread" ? [...remoteA, ...unreadOnlyA] : remoteA), nextCursor: status === "all" ? nextCursorA : undefined }, isError: false, isLoading: false },
 			{ hostId: "host-b", label: "Host B", data: remoteErrorB ? undefined : remotePage(remoteB), isError: remoteErrorB, isLoading: false },
 		],
-		totalUnreadCount: status === "unread" ? remoteA.length + unreadOnlyA.length + remoteB.length : 0,
 	}),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -226,7 +225,7 @@ it("warns when one remote inbox fails without hiding healthy rows", async () => 
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const invalidate = vi.spyOn(client, "invalidateQueries");
 	render(<QueryClientProvider client={client}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
-	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
+	await userEvent.click(screen.getByRole("button", { name: "2 unread notifications" }));
 	expect(screen.getByText("A ping")).toBeInTheDocument();
 	expect(screen.getByText("Could not load notifications.")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Retry" }));

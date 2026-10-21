@@ -441,7 +441,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	previewStarted = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" }));
-	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]).toMatchObject({ view: "browser", isOpen: true, browserUnseen: false });
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]).toMatchObject({ view: "browser", isOpen: true });
 	expect(useUiStore.getState().inspectorSessions["session-1"]).toBeUndefined();
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));

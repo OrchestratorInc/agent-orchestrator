@@ -452,12 +452,6 @@ export function getCachedNotifications(cache: NotificationsCache | undefined): N
 	return sortNotifications([...byID.values()]);
 }
 
-export function getCachedUnreadCount(cache: NotificationsCache | undefined): number {
-	return (
-		cache?.pages[0]?.unreadCount ?? getCachedNotifications(cache).filter((item) => item.status === "unread").length
-	);
-}
-
 export function keepLatestNotificationsPage(
 	queryClient: QueryClient,
 	queryKey: NotificationsQueryKey = unreadNotificationsQueryKey,

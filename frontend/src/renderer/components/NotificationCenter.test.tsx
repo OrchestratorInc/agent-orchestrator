@@ -545,8 +545,8 @@ describe("NotificationCenter", () => {
 				},
 			];
 		});
-		// Unread cache only has the first page; unreadCount still includes the
-		// later row that will arrive through the all list.
+		// The unread cache only holds the first page; the later row arrives
+		// through the all list and is acknowledged as soon as it renders.
 		const unreadPage = {
 			notifications: unreadNotifications,
 			nextCursor: "older-unread",
@@ -560,10 +560,10 @@ describe("NotificationCenter", () => {
 				pages: [unreadPage],
 			},
 		};
-		// Mirror mutation onSuccess: decrement the badge from updatedCount even
-		// when the acknowledged id is absent from the unread cache.
+		// The mocked hook renders this static fixture, so mirror what
+		// markAllCachedNotificationsRead really does — flip acknowledged rows to
+		// read — instead of decrementing a server tally.
 		markAllMock.mockImplementation(async (ids: string[]) => {
-			unreadPage.unreadCount = Math.max(0, unreadPage.unreadCount - ids.length);
 			unreadPage.notifications = unreadPage.notifications.map((item) =>
 				ids.includes(item.id) && item.status === "unread" ? { ...item, status: "read" as const } : item,
 			);
@@ -597,7 +597,9 @@ describe("NotificationCenter", () => {
 		await clickOpen();
 		expect(markAllMock.mock.calls[0][0]).toEqual(expect.arrayContaining(["ntf_1", "ntf_2"]));
 		expect(markAllMock.mock.calls[0][0]).toHaveLength(2);
-		await waitFor(() => expect(screen.getByRole("button", { name: "1 unread notifications" })).toBeInTheDocument());
+		// Both acknowledged rows and the routine ntf_2 go quiet: the bell (which
+		// now counts rows, not a server tally) shows no unread count.
+		await waitFor(() => expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument());
 		markAllMock.mockClear();
 
 		const list = screen.getByRole("list");
@@ -756,9 +758,11 @@ describe("NotificationCenter", () => {
 				],
 			},
 		}));
+		// A legacy ready_to_merge row is routine: the bell stays quiet (no unread
+		// count), but the row still renders in the feed, normalized.
 		renderNotificationCenter();
-		await clickOpen();
-
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByRole("dialog", { name: "Notifications" });
 		expect(screen.getByLabelText("PR #67 is ready to merge")).toBeInTheDocument();
 		expect(
 			screen.getByText(
@@ -1027,10 +1031,21 @@ describe("NotificationCenter cloud rows", () => {
 		expect(cloudMarkAllReadMock).not.toHaveBeenCalled();
 	});
 
-	it("counts cloud unread notifications in the bell badge", () => {
+	it("rings the bell only for signal-class unread rows", () => {
 		renderNotificationCenter();
 
-		expect(screen.getByRole("button", { name: `${unreadNotifications.length + 1} unread notifications` })).toBeInTheDocument();
+		// ntf_2 (ready_to_merge) and the cloud ready row are routine: they stay in
+		// the feed without ringing. Only the needs_input row counts.
+		expect(screen.getByRole("button", { name: "1 unread notifications" })).toBeInTheDocument();
+	});
+
+	it("rings the bell for every unread row in loud mode", async () => {
+		vi.spyOn(aoBridge.notifications, "mode").mockResolvedValue(true);
+		renderNotificationCenter();
+
+		// AO_NO_QUIET_NOTIFICATIONS restores the upstream behavior: the routine
+		// local ready_to_merge row and the unread cloud row count too.
+		await waitFor(() => expect(screen.getByRole("button", { name: "3 unread notifications" })).toBeInTheDocument());
 	});
 
 	it("still clears local history when it failed to load", async () => {
