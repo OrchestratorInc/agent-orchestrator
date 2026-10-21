@@ -77,11 +77,6 @@ export function bellUnreadCount(items: readonly { type?: string; status?: string
 	return items.filter((item) => item.status === "unread" && (loud || needsHumanFeedback(item.type))).length;
 }
 
-/** Unread rows of the signal classes — the quiet default of bellUnreadCount. */
-export function signalUnreadCount(items: readonly { type?: string; status?: string }[]): number {
-	return bellUnreadCount(items, false);
-}
-
 /**
  * Whether a new macOS dock bounce should replace the pending one. A pending
  * "critical" bounce (agent blocked on the user) is never replaced: a later

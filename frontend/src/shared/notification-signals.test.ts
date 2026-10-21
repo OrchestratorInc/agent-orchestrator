@@ -9,7 +9,6 @@ import {
 	shouldReplaceBounce,
 	shouldSignalAttention,
 	shouldToast,
-	signalUnreadCount,
 	toastSilent,
 	type NotificationType,
 } from "./notification-signals";
@@ -115,27 +114,6 @@ describe("bellUnreadCount", () => {
 		expect(
 			bellUnreadCount([{ type: "ready_to_merge", status: "unread" }], false),
 		).toBe(0);
-	});
-});
-
-describe("signalUnreadCount", () => {
-	it("counts only unread rows of the human-feedback types", () => {
-		expect(
-			signalUnreadCount([
-				{ type: "needs_input", status: "unread" },
-				{ type: "review_changes_requested", status: "unread" },
-				{ type: "ready_to_merge", status: "unread" },
-				{ type: "pr_merged", status: "unread" },
-				{ type: "needs_input", status: "read" },
-				{ type: "review_feedback", status: "unread" },
-			]),
-		).toBe(3);
-	});
-
-	it("is zero for an empty or all-quiet feed", () => {
-		expect(signalUnreadCount([])).toBe(0);
-		expect(signalUnreadCount([{ type: "ready_to_merge", status: "unread" }])).toBe(0);
-		expect(signalUnreadCount([{ type: "needs_input", status: "read" }])).toBe(0);
 	});
 });
 
