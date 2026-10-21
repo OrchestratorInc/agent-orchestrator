@@ -6,6 +6,7 @@ import { localePath } from "@/i18n/paths";
 import { savedLocaleScript } from "@/i18n/saved-locale-script";
 import { COMPANY } from "@/lib/constants";
 import { docsTree } from "@/lib/docs-tree";
+import { OG_IMAGE_SIZE, ogImagePath } from "@/lib/seo";
 import { source } from "@/lib/source";
 import { translations } from "@/lib/translations";
 import { LocalizedDocsLayout } from "./docs-layout";
@@ -14,6 +15,13 @@ import "../app/global.css";
 
 export const siteMetadata: Metadata = {
   metadataBase: new URL(COMPANY.DOCS_URL),
+  robots: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1 },
+  openGraph: {
+    type: "website",
+    siteName: `${COMPANY.NAME} Docs`,
+    images: [{ url: ogImagePath([]), ...OG_IMAGE_SIZE }],
+  },
+  twitter: { card: "summary_large_image" },
   icons: {
     icon: [{ url: `${COMPANY.MARKETING_URL}/favicon.svg`, type: "image/svg+xml" }],
   },

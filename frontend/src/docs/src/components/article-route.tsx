@@ -9,7 +9,9 @@ import { CATALOGS } from "@/i18n/catalogs";
 import { DEFAULT_LOCALE, type SupportedLocale } from "@/i18n/locales";
 import { localePath } from "@/i18n/paths";
 import { visibleProductName } from "@/lib/branding";
+import { COMPANY } from "@/lib/constants";
 import { markdownPath, sourceUrl } from "@/lib/llms";
+import { articleStructuredData, OG_IMAGE_SIZE, OG_LOCALES, ogImagePath } from "@/lib/seo";
 import { source } from "@/lib/source";
 import { articleLocales, articlePath, localizeHref } from "@/lib/translations";
 import { Card, getMDXComponents } from "./mdx";
@@ -17,6 +19,11 @@ import { PageActions } from "./page-actions";
 import { EnglishArticleNotice, LocalizedTitle } from "./page-locale";
 
 type Props = { params: Promise<{ slug?: string[] }> };
+
+// Escapes `<` so the JSON cannot close the script element.
+function JsonLd({ data }: { data: object }) {
+  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replace(/</g, "\\u003c") }} />;
+}
 
 function getArticle(slug: string[] | undefined, locale: SupportedLocale) {
   const page = source.getPage(slug ?? [], locale);
@@ -52,6 +59,7 @@ export function articleRoute(locale: SupportedLocale) {
             })}
           />
         </DocsBody>
+        <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale })} />
       </DocsPage>
     );
   }
@@ -67,12 +75,29 @@ export function articleRoute(locale: SupportedLocale) {
     const locales = articleLocales(page.slugs);
     const i18n = setupI18n({ locale, messages: { [locale]: CATALOGS[locale] } });
     const title = page.data.title;
+    const name = COMPANY.NAME;
+    const url = localePath(englishPath, locale);
+    // Link previews show the product name the way the page does.
+    const preview = {
+      title: visibleProductName(title),
+      description: page.data.description && visibleProductName(page.data.description),
+      images: [{ url: ogImagePath(page.slugs), ...OG_IMAGE_SIZE, alt: visibleProductName(title) }],
+    };
 
     return {
       title: i18n._(msg`${title} | Agent Orchestrator Docs`),
       description: page.data.description,
+      openGraph: {
+        type: "article",
+        siteName: i18n._(msg`${name} Docs`),
+        url,
+        locale: OG_LOCALES[locale],
+        alternateLocale: locales.filter((language) => language !== locale).map((language) => OG_LOCALES[language]),
+        ...preview,
+      },
+      twitter: { card: "summary_large_image", ...preview },
       alternates: {
-        canonical: localePath(englishPath, locale),
+        canonical: url,
         // Only articles that exist in more than one language have alternates.
         languages:
           locales.length > 1
