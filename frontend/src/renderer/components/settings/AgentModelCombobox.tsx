@@ -185,6 +185,20 @@ export function AgentModelCombobox({
 			).size > 1,
 		[concreteModels],
 	);
+	// A compact row shows the model label alone, and a label carries no
+	// provider: OpenCode lists the same model twice, once under openrouter/ and
+	// once under console-openrouter/, so the rows are indistinguishable without
+	// the provider named. The grouped menu names it in its group header; the
+	// compact one has to name it on the row.
+	const showProviderOnRow = useMemo(
+		() =>
+			new Set(
+				searchIndex.models
+					.map((item) => item.provider)
+					.filter((provider) => provider && provider !== "Other"),
+			).size > 1,
+		[searchIndex],
+	);
 
 	const claude = useMemo(
 		() => (agentId === "claude-code" ? splitClaudeModels(searchIndex.models) : undefined),
@@ -429,7 +443,12 @@ export function AgentModelCombobox({
 											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
 											<span className="truncate text-settings-label">{item.label}</span>
-											{tuning && item.id === shownModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+											<span className="ml-auto flex shrink-0 items-center gap-2">
+												{showProviderOnRow ? (
+													<span className="text-xs text-settings-muted">{item.provider}</span>
+												) : null}
+												{tuning && item.id === shownModel && <Check className="size-icon-sm shrink-0" aria-hidden="true" />}
+											</span>
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
@@ -503,7 +522,7 @@ export function AgentModelCombobox({
 								</div>
 							</>
 						)}
-						{showSearch && !compact && (
+						{showSearch && (
 							<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">
 								{t("settings.models.matchingCount", {
 									visible: visibleModels.length.toLocaleString(),
