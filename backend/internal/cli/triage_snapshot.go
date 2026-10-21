@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -48,9 +49,27 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 		fmt.Fprintf(&b, "Daemon: unavailable: %s\n", triageErrorReason(err))
 		st.State = "unavailable"
 	} else {
-		fmt.Fprintf(&b, "Daemon: %s\nPID: %d\nPort: %d\nDaemon executable: %s\nHealth: %s\nReady: %s\nDaemon error: %s\n", st.State, st.PID, st.Port, st.ExecutablePath, st.Health, st.Ready, st.Error)
+		fmt.Fprintf(&b, "Daemon: %s\nPID: %d\nPort: %d\n", st.State, st.PID, st.Port)
+		if st.ExecutablePath != "" {
+			fmt.Fprintf(&b, "Daemon executable: %s\n", st.ExecutablePath)
+		}
 	}
-	fmt.Fprintf(&evidence, "- Daemon: %s, health: %q, ready: %q\n", st.State, st.Health, st.Ready)
+	fmt.Fprintf(&evidence, "- Daemon: %s", st.State)
+	for _, field := range []struct{ name, value string }{{"Health", st.Health}, {"Ready", st.Ready}} {
+		if field.value == "" {
+			continue
+		}
+		value := field.value
+		if strings.IndexFunc(value, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) >= 0 {
+			value = fmt.Sprintf("%q", value)
+		}
+		fmt.Fprintf(&b, "%s: %s\n", field.name, value)
+		fmt.Fprintf(&evidence, ", %s: %s", strings.ToLower(field.name), value)
+	}
+	evidence.WriteByte('\n')
+	if st.Error != "" {
+		fmt.Fprintf(&b, "Daemon error: %s\n", st.Error)
+	}
 	if err != nil {
 		fmt.Fprintf(&evidence, "- Daemon check unavailable: %s\n", triageErrorReason(err))
 	}

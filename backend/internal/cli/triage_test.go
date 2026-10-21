@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
+	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
@@ -306,6 +309,64 @@ func TestTriageMalformedDaemonConfigDoesNotAbortSnapshot(t *testing.T) {
 	got, _, _ := c.triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
 	if !strings.Contains(got, "Daemon: unavailable: invalid AO_PORT") {
 		t.Fatal(got)
+	}
+}
+
+func TestTriageDaemonFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, health, ready, wantHealth, wantReady string
+		state                                      daemonState
+	}{
+		{name: "stopped", state: stateStopped},
+		{name: "ready", health: "ok", ready: "ready", wantHealth: "ok", wantReady: "ready", state: stateReady},
+		{name: "spaces", health: "not ok", wantHealth: `"not ok"`, state: stateUnhealthy},
+		{name: "punctuation", health: "not-ok", wantHealth: `"not-ok"`, state: stateUnhealthy},
+		{name: "health newline", health: "bad\nhealth", wantHealth: `"bad\nhealth"`, state: stateUnhealthy},
+		{name: "ready newline", health: "ok", ready: "not\r\nready", wantHealth: "ok", wantReady: `"not\r\nready"`, state: stateNotReady},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _, dir := triageTestDeps(t)
+			run := filepath.Join(dir, "running.json")
+			deps.ProcessAlive = func(int) bool { return true }
+			deps.HTTPClient = &http.Client{Transport: triageRoundTrip(func(r *http.Request) (*http.Response, error) {
+				var body []byte
+				switch r.URL.Path {
+				case "/healthz", "/readyz":
+					status := tc.health
+					if r.URL.Path == "/readyz" {
+						status = tc.ready
+					}
+					body, _ = json.Marshal(probeResult{Status: status, Service: daemonmeta.ServiceName, PID: 1234})
+				case "/api/v1/sessions":
+					body = []byte(`{"sessions":[]}`)
+				default:
+					t.Fatalf("unexpected request: %s", r.URL)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+			})}
+			if tc.state != stateStopped {
+				if err := runfile.Write(run, runfile.Info{PID: 1234, Port: 12345}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, run)
+			wantEvidence := "- Daemon: " + string(tc.state)
+			for _, field := range []struct{ name, value string }{{"Health", tc.wantHealth}, {"Ready", tc.wantReady}} {
+				if field.value == "" {
+					if strings.Contains(snapshot, "\n"+field.name+":") {
+						t.Errorf("empty %s in context: %s", field.name, snapshot)
+					}
+					continue
+				}
+				if !strings.Contains(snapshot, "\n"+field.name+": "+field.value+"\n") {
+					t.Errorf("missing %s in context: %s", field.name, snapshot)
+				}
+				wantEvidence += ", " + strings.ToLower(field.name) + ": " + field.value
+			}
+			if !strings.Contains(draft, wantEvidence+"\n") {
+				t.Errorf("want evidence %q in draft: %s", wantEvidence, draft)
+			}
+		})
 	}
 }
 
