@@ -1477,6 +1477,16 @@ func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
 	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_PLUGINS": "review-plugins"}); err == nil {
 		t.Error("relative HERMES_BUNDLED_PLUGINS accepted")
 	}
+	// link/.. resolves through the symlink natively, not lexically.
+	workspace, external := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(external, "target"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link(pack("en"), filepath.Join(external, "bundled", "review-pack"))
+	link(filepath.Join(external, "target"), filepath.Join(workspace, "link"))
+	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_PLUGINS": "link/../bundled"}); err == nil {
+		t.Error("HERMES_BUNDLED_PLUGINS through link/.. accepted")
+	}
 	// Unset (t.Setenv above restores it), so a secret source cannot gap-fill it.
 	if err := os.Unsetenv("HERMES_BUNDLED_PLUGINS"); err != nil {
 		t.Fatal(err)
@@ -1538,7 +1548,12 @@ func TestDefaultHomeThatMovesWhenPinnedIsRefused(t *testing.T) {
 	}
 	t.Setenv("HERMES_BUNDLED_LOCALES", "")
 	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
-	for suffix, refused := range map[string]bool{"-dev": false, "-dev ": true, "-$USER": true} {
+	// A reference to a variable AO sets later still expands in the child.
+	t.Setenv("HERMES_LANGUAGE", "")
+	if err := os.Unsetenv("HERMES_LANGUAGE"); err != nil {
+		t.Fatal(err)
+	}
+	for suffix, refused := range map[string]bool{"-dev": false, "-dev ": true, "-$USER": true, "$HERMES_LANGUAGE": true, "${HERMES_LANGUAGE}": true} {
 		env := map[string]string{"HERMES_HOME": "", "HOME": t.TempDir(), "HERMES_DATA_DIR_SUFFIX": suffix}
 		err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"})
 		if (err != nil) != refused {
@@ -1597,5 +1612,38 @@ func TestSourceCleanlinessIgnoresInheritedGitContextAndCache(t *testing.T) {
 	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
 	if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
 		t.Fatal("inherited GIT_WORK_TREE made a modified checkout look clean")
+	}
+}
+
+func TestStructuredPersonalityRendersLikeNative(t *testing.T) {
+	t.Setenv("HERMES_BUNDLED_LOCALES", "")
+	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
+	const prefix = "display:\n  personality: mine\npersonalities:\n  mine:\n"
+	for fields, want := range map[string]string{
+		// str() of a list or map is Python repr, which AO refuses to guess.
+		"    system_prompt: [First, Second]\n":                     "",
+		"    system_prompt: []\n":                                  "",
+		"    system_prompt: Text\n    tone: [Precise, Short]\n":    "",
+		"    system_prompt: null\n":                                "None\n\nAO",
+		"    system_prompt: Text\n":                                "Text\n\nAO",
+		"    system_prompt: Text\n    tone: ''\n    style: null\n": "Text\n\nAO",
+		"    system_prompt: Text\n    tone: '  Precise  '\n":       "Text\nTone:   Precise\n\nAO",
+		"    tone: Precise\n":                                      "Tone: Precise\n\nAO",
+	} {
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(prefix+fields), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := map[string]string{"HERMES_HOME": home}
+		err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"})
+		if want == "" {
+			if err == nil {
+				t.Errorf("%q accepted with overlay %q", fields, env["HERMES_EPHEMERAL_SYSTEM_PROMPT"])
+			}
+			continue
+		}
+		if err != nil || env["HERMES_EPHEMERAL_SYSTEM_PROMPT"] != want {
+			t.Errorf("%q: overlay %q, %v; want %q", fields, env["HERMES_EPHEMERAL_SYSTEM_PROMPT"], err, want)
+		}
 	}
 }

@@ -917,10 +917,16 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	// AO pins the home it checks as an explicit HERMES_HOME, which Hermes strips
 	// and expands, unlike the default home's literal data-dir suffix. Refuse a
-	// home that pinning would move.
+	// home that pinning would move. A remaining variable reference would expand
+	// against the final child environment, including variables AO sets below
+	// (HERMES_LANGUAGE), so it is refused outright.
 	pinned := maps.Clone(cfg.Env)
 	pinned["HERMES_HOME"] = home
-	if again, err := ResolveHome(pinned); err != nil || again != home {
+	reference := "$"
+	if runtime.GOOS == "windows" {
+		reference = "$%"
+	}
+	if again, err := ResolveHome(pinned); err != nil || again != home || strings.ContainsAny(home, reference) {
 		return fmt.Errorf("hermes: native home %q changes when set as HERMES_HOME (Hermes strips and expands it); remove surrounding whitespace or $ from HERMES_DATA_DIR_SUFFIX", home)
 	}
 	if filepath.Base(filepath.Dir(home)) == "profiles" {
@@ -1117,7 +1123,9 @@ func localeDirs(dir string, depth int) ([]string, error) {
 	}
 	var dirs []string
 	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
+		// Not filepath.Join: lexical cleaning would fold a "link/.." in the
+		// root where the filesystem follows the symlink first.
+		path := dir + string(filepath.Separator) + entry.Name()
 		if st, err := os.Stat(path); err != nil || !st.IsDir() {
 			continue
 		}
@@ -1241,15 +1249,36 @@ func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool)
 		}
 		if v, ok := definitions[name]; ok {
 			if m, ok := v.(map[string]any); ok {
-				parts := []string{promptText(m["system_prompt"])}
-				consume(m["system_prompt"])
-				for _, k := range []string{"tone", "style"} {
-					consume(m[k])
-					if s := promptText(m[k]); s != "" {
-						parts = append(parts, strings.ToUpper(k[:1])+k[1:]+": "+s)
+				// render_personality_prompt: str() of each part, stripped,
+				// non-empty parts joined. An explicit null prompt renders as
+				// "None"; tone and style appear only when truthy. AO
+				// reproduces str() only for text, not for lists or maps.
+				consumeStr := func(v any) string {
+					consume(v)
+					s, isString := v.(string)
+					untyped = untyped || !isString
+					return s
+				}
+				var parts []string
+				if prompt, present := m["system_prompt"]; present {
+					if prompt == nil {
+						parts = append(parts, "None")
+					} else {
+						parts = append(parts, consumeStr(prompt))
 					}
 				}
-				return pyStrip(strings.Join(parts, "\n")), envRef, untyped
+				for _, k := range []string{"tone", "style"} {
+					if pyTruthy(m[k]) {
+						parts = append(parts, strings.ToUpper(k[:1])+k[1:]+": "+consumeStr(m[k]))
+					}
+				}
+				var rendered []string
+				for _, part := range parts {
+					if part = pyStrip(part); part != "" {
+						rendered = append(rendered, part)
+					}
+				}
+				return strings.Join(rendered, "\n"), envRef, untyped
 			}
 			consume(v)
 			return promptText(v), envRef, untyped
