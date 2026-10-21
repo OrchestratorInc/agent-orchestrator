@@ -111,8 +111,5 @@ export function useRemoteNotificationHosts(status: NotificationListStatus, enabl
 			isError: queries[index]?.isError ?? false,
 			isLoading: queries[index]?.isLoading ?? false,
 		})),
-		totalUnreadCount: status === "unread"
-			? queries.reduce((count, query) => count + (query.isError ? 0 : query.data?.unreadCount ?? 0), 0)
-			: 0,
 	};
 }

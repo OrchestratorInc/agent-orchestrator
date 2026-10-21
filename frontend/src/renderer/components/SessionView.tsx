@@ -1735,9 +1735,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
 			setBrowserContentRevealed(uiSessionId, true);
 			setInspectorOpenForSession(uiSessionId, true);
-			return;
 		}
-		if (!browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
+		// Quiet by default: passive agent activity no longer badges a hidden
+		// Browser tab. The unseen state is reserved for human-feedback signals,
+		// which agent browsing is not.
 	}, [
 		browserPoppedOut,
 		browserView.agentBrowserActive,
@@ -1747,7 +1748,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		inspectorView,
 		isInspectorOpen,
 		uiSessionId,
-		setBrowserUnseen,
 		terminated,
 		browserOnly,
 		setBrowserContentRevealed,

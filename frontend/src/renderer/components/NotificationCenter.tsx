@@ -35,7 +35,6 @@ import { LOCAL_HOST, parseRefKey, refKey, sessionUiKey, type HostId } from "../l
 import {
 	createNotificationsTransport,
 	getCachedNotifications,
-	getCachedUnreadCount,
 	isNotificationsCacheFromClear,
 	keepLatestNotificationsPage,
 	type NotificationDTO,
@@ -54,6 +53,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
+import { signalUnreadCount } from "../../shared/notification-signals";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
@@ -186,7 +186,8 @@ export function NotificationRuntime() {
 	const { openPrimary } = useNotificationTargetNavigation();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	const unreadCount = signalUnreadCount(getCachedNotifications(unreadQuery.data)) +
+		remoteUnread.hosts.reduce((count, host) => count + signalUnreadCount(host.data?.notifications ?? []), 0);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
@@ -352,7 +353,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			hostId: host.hostId, label: host.label, notification,
 		}))),
 	].sort((a, b) => b.notification.createdAt.localeCompare(a.notification.createdAt)), [notifications, remoteItems]);
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	// Quiet by default: only human-feedback events ring the bell and badge the
+	// launcher. The feed itself still lists every notification.
+	const unreadCount = signalUnreadCount(getCachedNotifications(unreadQuery.data)) +
+		remoteUnread.hosts.reduce((count, host) => count + signalUnreadCount(host.data?.notifications ?? []), 0) +
+		signalUnreadCount(cloudItems);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();
