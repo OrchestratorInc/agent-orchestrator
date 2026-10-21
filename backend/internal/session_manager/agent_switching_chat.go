@@ -39,7 +39,8 @@ func (m *Manager) executeChatAgentSwitch(
 	targetOwnershipAmbiguous := false
 	skipTerminalization := false
 	var panicCause *agentSwitchPanicCause
-	targetSetupEnv := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
+	targetSetupEnv := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, mergeEnv(project.Config.Env, baseAgentConfig.Env))
 	m.augmentAgentRuntimeEnv(targetAgent, targetSetupEnv)
 
 	defer func() {
@@ -171,7 +172,6 @@ func (m *Manager) executeChatAgentSwitch(
 	if !ok {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ErrInterfaceHandoffUnsupported)
 	}
-	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
 	agentConfig, err := m.resolveAgentConfig(ctx, ports.SpawnConfig{
 		ProjectID: rec.ProjectID,
 		Kind:      rec.Kind,
@@ -365,7 +365,7 @@ func (m *Manager) executeChatAgentSwitch(
 		credentialRecord.Activity.State != domain.ActivityExited {
 		return result, fmt.Errorf("switch Chat agent %s: source ownership changed before browser capability rotation", id)
 	}
-	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, project.Config.Env)
+	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, mergeEnv(project.Config.Env, baseAgentConfig.Env))
 	m.applyRoleProviderPin(ctx, targetLaunchEnv, string(project.ID), rec.Kind, project.Config)
 	m.augmentAgentRuntimeEnv(targetAgent, targetLaunchEnv)
 	releaseCodexAdmission, admissionErr := m.acquireCodexControllerAdmission(ctx, cfg.TargetHarness)
@@ -400,7 +400,7 @@ func (m *Manager) executeChatAgentSwitch(
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, credentialRecord, project.Config.Env, expected,
+				launchCtx, credentialRecord, mergeEnv(project.Config.Env, baseAgentConfig.Env), expected,
 			)
 			if prepareErr != nil {
 				return nil, prepareErr
@@ -629,7 +629,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 		return err
 	}
 	agentConfig := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config)
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, mergeEnv(project.Config.Env, agentConfig.Env))
 	m.augmentAgentRuntimeEnv(sourceAgent, env)
 	if err := m.prepareWorkspace(
 		ctx, sourceAgent, rec.ID, rec.Metadata.WorkspacePath,

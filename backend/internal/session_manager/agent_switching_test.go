@@ -1278,6 +1278,63 @@ func TestSwitchAgentChatForwardsResolvedCodexEffort(t *testing.T) {
 	}
 }
 
+// TestSwitchAgentChatAppliesRoleEnvToTargetController: the chat controller's
+// process env comes from PrepareControllerEnv (a fresh persistent-host start
+// replaces the StartChat Env with it), so the role merge must reach the
+// prepare callback — role Env overlays the project's and AO-internal names
+// stay reserved.
+func TestSwitchAgentChatAppliesRoleEnvToTargetController(t *testing.T) {
+	manager, store, _ := newSwitchTestManager(t, &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}})
+	rec := store.sessions["proj-1"]
+	rec.Mode = domain.SessionModeChat
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now().UTC()}
+	rec.Metadata.RuntimeHandleID = ""
+	rec.Metadata.RuntimeLaunchID = ""
+	rec.Metadata.AgentSessionID = ""
+	rec.Metadata.ProviderConversationID = "source-chat-native"
+	rec.Metadata.ControllerGeneration = "source-chat-generation"
+	store.sessions[rec.ID] = rec
+	project := store.projects[string(rec.ProjectID)]
+	project.Config.Env = map[string]string{
+		"ANTHROPIC_BASE_URL":  "https://project.example",
+		"SWITCH_PROJECT_ONLY": "project",
+	}
+	project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{
+		Env: map[string]string{
+			"ANTHROPIC_BASE_URL": "https://role.example",
+			"AO_SESSION_ID":      "role-injected",
+		},
+	}}
+	store.projects[string(rec.ProjectID)] = project
+	launcher := &switchAgentChatLauncher{
+		recordingLauncher: &recordingLauncher{},
+		store:             store,
+		live:              true,
+	}
+	manager.chat = launcher
+	manager.executable = func() (string, error) { return "/opt/ao/bin/ao", nil }
+	manager.runFilePath = "/ao-test/running.json"
+
+	if _, err := switchAgentSynchronously(context.Background(), manager, rec.ID, SwitchAgentConfig{
+		TargetHarness: domain.HarnessCodex, IdempotencyKey: "chat-role-env-target",
+	}); err != nil {
+		t.Fatalf("SwitchAgent: %v", err)
+	}
+	if len(launcher.started) != 1 {
+		t.Fatalf("Chat starts = %d, want 1", len(launcher.started))
+	}
+	env := launcher.started[0].Env
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://role.example" {
+		t.Fatalf("controller env ANTHROPIC_BASE_URL = %q, want role value overlaying the project value", got)
+	}
+	if got := env["SWITCH_PROJECT_ONLY"]; got != "project" {
+		t.Fatalf("controller env dropped project-only var: %#v", env)
+	}
+	if got := env[EnvSessionID]; got != string(rec.ID) {
+		t.Fatalf("controller env AO_SESSION_ID = %q, want the AO-owned value (role env must not bypass the reserved namespace)", got)
+	}
+}
+
 func TestSwitchAgentChatRejectsUnsupportedCodexEffortBeforeStoppingSource(t *testing.T) {
 	manager, store, _ := newSwitchTestManager(t, &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}})
 	rec := store.sessions["proj-1"]
@@ -3476,6 +3533,44 @@ func TestSwitchAgentTreatsGlobalClaudeUnauthorizedAsAdvisoryForProjectGateway(t 
 	}
 	if runtime.lastCfg.Env["ANTHROPIC_BASE_URL"] != "https://gateway.example" {
 		t.Fatalf("target environment omitted project gateway: %#v", runtime.lastCfg.Env)
+	}
+}
+
+// TestSwitchAgentAppliesRoleEnvToTarget: a switch relaunches the target with
+// the same environment a fresh spawn builds — role-level Env overlays the
+// project's (role wins on collision), while AO-internal names stay reserved:
+// role env must not bypass the built-in AO_ namespace guard.
+func TestSwitchAgentAppliesRoleEnvToTarget(t *testing.T) {
+	runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
+	manager, store, _ := newSwitchTestManager(t, runtime)
+	project := store.projects["proj"]
+	project.Config.Env = map[string]string{
+		"ANTHROPIC_BASE_URL":  "https://project.example",
+		"SWITCH_PROJECT_ONLY": "project",
+	}
+	project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{
+		Env: map[string]string{
+			"ANTHROPIC_BASE_URL": "https://role.example",
+			"AO_SESSION_ID":      "role-injected",
+		},
+	}}
+	store.projects[project.ID] = project
+
+	sw, err := switchAgentSynchronously(context.Background(), manager, "proj-1", SwitchAgentConfig{TargetHarness: domain.HarnessCodex, IdempotencyKey: "role-env-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sw.State != domain.AgentSwitchCompleted || runtime.created != 1 {
+		t.Fatalf("switch=%+v runtime creates=%d, want completed target launch", sw, runtime.created)
+	}
+	if got := runtime.lastCfg.Env["ANTHROPIC_BASE_URL"]; got != "https://role.example" {
+		t.Fatalf("target env ANTHROPIC_BASE_URL = %q, want role value overlaying the project value", got)
+	}
+	if got := runtime.lastCfg.Env["SWITCH_PROJECT_ONLY"]; got != "project" {
+		t.Fatalf("target env dropped project-only var: %#v", runtime.lastCfg.Env)
+	}
+	if got := runtime.lastCfg.Env[EnvSessionID]; got != "proj-1" {
+		t.Fatalf("target env AO_SESSION_ID = %q, want the AO-owned value (role env must not bypass the reserved namespace)", got)
 	}
 }
 
