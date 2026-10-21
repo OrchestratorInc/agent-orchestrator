@@ -311,7 +311,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
-						<p role="alert" className="break-words text-caption text-error">{error}</p>
+						<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
 						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 					</div> : null}
 					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}

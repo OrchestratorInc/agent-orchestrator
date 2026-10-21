@@ -259,24 +259,29 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	after, afterOK := baseline.scheme.find(result.Output)
 	before, beforeOK := baseline.scheme.parse(baseline.version)
 	if !afterOK {
-		return "the update finished, but AO could not verify the installed version", note
+		return "The update finished, but AO could not read the new version.", note
 	}
 	if baseline.expected != "" {
 		expected, ok := baseline.scheme.parse(baseline.expected)
 		comparison, canCompare := baseline.scheme.compare(after, expected)
 		if !ok || !canCompare || comparison < 0 {
-			return fmt.Sprintf("the update finished, but the installed version %s did not reach the requested version %s", after.display, baseline.expected), note
+			return fmt.Sprintf("The update finished, but it reports %s, not the requested version %s.", after.display, baseline.expected), note
 		}
 	}
 	latest, latestOK := baseline.scheme.parse(baseline.latest)
 	if baseline.latest != "" && !latestOK {
-		return "the update finished, but AO could not verify the target version", note
+		return "The update finished, but AO could not read the target version.", note
 	}
 	if comparison, versionsComparable := baseline.scheme.compare(after, latest); latestOK && versionsComparable && comparison < 0 {
-		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after.display, latest.display), note
+		// The path stays in diagnostics; the notice only needs the versions.
+		hint := "The update may have changed a different installation."
+		if result.ResolvedPath != "" {
+			hint = fmt.Sprintf("The update may have changed a different installation than %s.", result.ResolvedPath)
+		}
+		return fmt.Sprintf("The update finished, but it still reports %s (latest is %s).", after.display, latest.display), strings.TrimSpace(note + " " + hint)
 	}
 	if _, canCompare := baseline.scheme.compare(after, latest); latestOK && !canCompare {
-		return "the update finished, but the installed version does not match the expected release channel", note
+		return "The update finished, but on a different release channel.", note
 	}
 	if !beforeOK {
 		return "", strings.TrimSpace(fmt.Sprintf("Verified version %s. %s", after.display, note))
@@ -288,7 +293,7 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
 	if !canCompare || comparison < 0 {
-		return "the update finished, but the installed version regressed or changed release channel", note
+		return "The update finished, but the version went back or changed release channel.", note
 	}
 	if comparison > 0 {
 		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))

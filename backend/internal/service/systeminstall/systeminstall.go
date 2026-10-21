@@ -1308,7 +1308,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		_, _ = io.WriteString(out, "\nAutohand CLI install will be verified. Computer control needs a separate repair: autohand computer install\n")
 	}
 	if runErr != nil && !installConfirmed && !autohandCLIInstalled {
-		message := runErr.Error()
+		message := failureSummary(runErr, out)
 		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
 			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&
 			strings.Contains(out.String(), "The existing installation was not changed.") {
@@ -1329,8 +1329,33 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
 }
 
-// maxUpdaterReportRunes bounds the updater line quoted in a failed update.
-const maxUpdaterReportRunes = 200
+// maxUpdaterReportRunes keeps the updater line quoted in a failed update
+// short enough for the update notice.
+const maxUpdaterReportRunes = 80
+
+// installFailure is a failed operation with a short summary for the update
+// notice. err, which may name paths or quote output, goes to diagnostics.
+type installFailure struct {
+	summary string
+	err     error
+}
+
+func (e *installFailure) Error() string { return e.summary }
+func (e *installFailure) Unwrap() error { return e.err }
+
+func installFailed(summary string, err error) error {
+	return &installFailure{summary: summary, err: err}
+}
+
+// failureSummary is the job error for err. An installFailure's detail is
+// written to out, the job's diagnostics, so the notice keeps only the summary.
+func failureSummary(err error, out io.Writer) string {
+	var failure *installFailure
+	if errors.As(err, &failure) && failure.err != nil {
+		_, _ = fmt.Fprintf(out, "\n%s\n%v\n", failure.summary, failure.err)
+	}
+	return err.Error()
+}
 
 // terminalEscape matches ANSI CSI and OSC sequences that colour or retitle
 // terminal output.
@@ -1388,7 +1413,7 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	}
 	if failure != "" {
 		if updaterReport != "" {
-			failure = fmt.Sprintf("%s; the update command reported: %q", failure, updaterReport)
+			failure = fmt.Sprintf("%s The updater said: %q", failure, updaterReport)
 		}
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
