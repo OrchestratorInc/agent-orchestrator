@@ -2,9 +2,13 @@ package sessionmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/freebuff"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -114,6 +118,92 @@ func TestSend_TerminalEncodingPreservesEmptyNudgesAndOtherAgents(t *testing.T) {
 			}
 			if len(messenger.msgs) != 1 || messenger.msgs[0] != tc.message {
 				t.Fatal("encoding changed an Enter-only nudge or an adapter without this protocol")
+			}
+		})
+	}
+}
+
+func TestConfirmAfterStartSubmit_FreebuffPendingAttachmentRequiresNativeUserAcceptance(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	afterStartSubmitTimeout = 250 * time.Millisecond
+	data, err := os.ReadFile(filepath.Join("..", "adapters", "agent", "freebuff", "testdata", "pending-text-attachment.ansi.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	const prefix = "Runtime paste transport validation only."
+	prompt := prefix + strings.Repeat("x", 3131-len(prefix))
+	for _, tc := range []struct {
+		name       string
+		viewport   string
+		savedRole  string
+		wantEnters int
+		wantError  string
+	}{
+		{"matching attachment saved as native user turn", output, "user", 1, ""},
+		{"assistant echo does not acknowledge submission", output, "assistant", afterStartSubmitMaxRetries, "first turn stayed unsent"},
+		{"different attachment receives no Enter", strings.Replace(output, "Runtime paste", "Another paste", 1), "", 0, "acceptance could not be confirmed"},
+		{"native dialog receives no Enter", "Model request failed. Enter retry · Esc back.", "", 0, "acceptance could not be confirmed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			plugin := freebuff.New()
+			cfg := ports.LaunchConfig{
+				SessionID:     "s1",
+				WorkspacePath: t.TempDir(),
+				Env:           map[string]string{"FREEBUFF_CONFIG_DIR": t.TempDir()},
+			}
+			release, err := plugin.BeginStartup(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			st := newFakeStore()
+			st.sessions["s1"] = domain.SessionRecord{
+				ID: "s1", Harness: domain.HarnessFreebuff, Mode: domain.SessionModeTUI,
+				Activity: domain.Activity{State: domain.ActivityIdle},
+			}
+			messenger := &fakeMessenger{}
+			messenger.onSend = func(id domain.SessionID, message string) {
+				if id != "s1" || message != "" {
+					t.Fatalf("submission retry wrote session=%q message=%q, want one Enter-only input", id, message)
+				}
+				if tc.savedRole == "" || len(messenger.msgs) != 1 {
+					return
+				}
+				// Freebuff acknowledges a long paste by saving the entire native
+				// attachment as a user message in this workspace's own config.
+				state := map[string]any{"sessionState": map[string]any{
+					"fileContext": map[string]string{"projectRoot": cfg.WorkspacePath},
+					"mainAgentState": map[string]any{"messageHistory": []map[string]any{{
+						"role": tc.savedRole, "sentAt": time.Now().UnixMilli(),
+						"content": []map[string]string{{"type": "text", "text": "[Pasted Text]\n" + prompt}},
+					}}},
+				}}
+				saved, err := json.Marshal(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(cfg.Env["FREEBUFF_CONFIG_DIR"], "projects", filepath.Base(cfg.WorkspacePath), "chats", "2026-10-21T00-00-00.000Z")
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "run-state.json"), saved, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m := newSendTestManager(t, plugin, messenger, st)
+			m.runtime = &selectingRuntime{viewport: tc.viewport}
+			err = m.confirmAfterStartSubmit(ctx, plugin, cfg, ports.RuntimeHandle{}, "s1", prompt)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("native first-turn confirmation = %v, want %q", err, tc.wantError)
+			}
+			if len(messenger.msgs) != tc.wantEnters {
+				t.Fatalf("submission sent %d Enter retries, want %d", len(messenger.msgs), tc.wantEnters)
 			}
 		})
 	}

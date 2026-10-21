@@ -8,7 +8,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -187,7 +191,7 @@ func TestFirstTurnDraftRequiresCurrentCompleteComposer(t *testing.T) {
 		"empty input without saved turn":       {startupComposer("GLM 5.3 Flash", "high"), ports.AfterStartSubmitUnknown},
 		"active input without saved turn":      {freebuffTerminalScreen("working... 2s ■ Esc", "\x1b[1m▍\x1b[0m"+activePlaceholder), ports.AfterStartSubmitUnknown},
 		"native admission dialog":              {"Starting your model session… Your message is saved.\n" + tail + "\n" + startupPickerFooter, ports.AfterStartSubmitUnknown},
-		"native error":                         {"Model request failed. Enter retry · Esc back.\n" + startupPickerFooter, ports.AfterStartSubmitUnknown},
+		"historical native error":              {"Model request failed. Enter retry · Esc back.\n" + startupPickerFooter, ports.AfterStartSubmitUnknown},
 		"partial composer":                     {"│ " + tail + " │\n╰────────────────╯\n" + startupPickerFooter, ports.AfterStartSubmitUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -216,5 +220,85 @@ func TestFirstTurnAcceptanceRequiresActiveStartupIdentity(t *testing.T) {
 	got, err := p.AfterStartSubmitState(context.Background(), cfg, startupComposer("GLM 5.3 Flash", "high"), prompt)
 	if err == nil || got != ports.AfterStartSubmitUnknown || !strings.Contains(err.Error(), "active startup guard") {
 		t.Fatalf("state=%q err=%v", got, err)
+	}
+}
+
+// This is a sanitized Freebuff 0.2.32 capture after a harmless 3,131-character
+// bracketed paste and before Enter. The native editor remains empty because
+// the paste became one text attachment below the composer.
+func TestFirstTurnPendingNativeTextAttachment(t *testing.T) {
+	data, err := os.ReadFile("testdata/pending-text-attachment.ansi.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	withInput := func(value string, focused bool) string {
+		lines := terminalui.PlainTerminalLines(output)
+		for i, line := range lines {
+			if !strings.Contains(line, idlePlaceholder) {
+				continue
+			}
+			if focused {
+				value = "\x1b[1m▍\x1b[0m" + value
+			}
+			width := ansi.StringWidth(line)
+			lines[i] = "│  " + value + strings.Repeat(" ", width-4-ansi.StringWidth(value)) + "│"
+			break
+		}
+		return strings.Join(lines, "\n")
+	}
+	const prefix = "Runtime paste transport validation only."
+	prompt := prefix + strings.Repeat("x", 3131-len(prefix))
+	for name, tc := range map[string]struct {
+		output string
+		prompt string
+		want   ports.AfterStartSubmitState
+	}{
+		"one complete pending attachment":            {output, prompt, ports.AfterStartDraftPending},
+		"matching UTF16 count":                       {output, prefix + strings.Repeat("x", 3131-len(prefix)-2) + "🚀", ports.AfterStartDraftPending},
+		"wrong UTF16 count":                          {output, prefix + strings.Repeat("x", 3131-len(prefix)-1) + "🚀", ports.AfterStartSubmitUnknown},
+		"wrong count":                                {strings.ReplaceAll(output, "3,131", "3,132"), prompt, ports.AfterStartSubmitUnknown},
+		"wrong preview":                              {strings.Replace(output, "Runtime paste", "Another paste", 1), prompt, ports.AfterStartSubmitUnknown},
+		"missing toast":                              {strings.Replace(output, "📋 Pasted text (3,131 chars)", "", 1), prompt, ports.AfterStartSubmitUnknown},
+		"different toast count":                      {strings.Replace(output, "📋 Pasted text (3,131 chars)", "📋 Pasted text (3,130 chars)", 1), prompt, ports.AfterStartSubmitUnknown},
+		"editable input":                             {withInput("A different human draft", true), prompt, ports.AfterStartSubmitUnknown},
+		"unfocused input":                            {strings.Replace(output, ";1m▍", "m▍", 1), prompt, ports.AfterStartSubmitUnknown},
+		"active placeholder":                         {withInput(activePlaceholder, true), prompt, ports.AfterStartSubmitUnknown},
+		"current admission modal":                    {withInput("Starting your model session… Your message is saved.", false), prompt, ports.AfterStartSubmitUnknown},
+		"current spending confirmation":              {withInput("Pro model · Use credits for this model. · Use model", false), prompt, ports.AfterStartSubmitUnknown},
+		"current error modal":                        {withInput("Model request failed. Enter retry · Esc back.", false), prompt, ports.AfterStartSubmitUnknown},
+		"current active status":                      {strings.Replace(output, "📋 Pasted text (3,131 chars)", "working... 2s ■ Esc", 1), prompt, ports.AfterStartSubmitUnknown},
+		"historical admission notice":                {"Starting your model session… Your message is saved.\n" + output, prompt, ports.AfterStartDraftPending},
+		"historical quota denial":                    {"Not enough hours for this model.\n" + output, prompt, ports.AfterStartDraftPending},
+		"historical active state":                    {"working... 2s ■ Esc\n" + output, prompt, ports.AfterStartDraftPending},
+		"historical native error":                    {"Model request failed. Enter retry · Esc back.\n" + output, prompt, ports.AfterStartDraftPending},
+		"card no longer removable":                   {strings.Replace(output, "┐\x1b[38;2;172;179;191mX", "┐\x1b[38;2;172;179;191m ", 1), prompt, ports.AfterStartSubmitUnknown},
+		"image card":                                 {strings.Replace(output, "📄", "🖼", 1), prompt, ports.AfterStartSubmitUnknown},
+		"incomplete card":                            {strings.Replace(output, "└──────────────────────┘", "                       ", 1), prompt, ports.AfterStartSubmitUnknown},
+		"truncated preview":                          {strings.Replace(output, "validation only.…", "validation only. ", 1), prompt, ports.AfterStartSubmitUnknown},
+		"missing native help":                        {strings.Replace(output, " for history · ", " for something else · ", 1), prompt, ports.AfterStartSubmitUnknown},
+		"short paste does not become attachment":     {output, prefix, ports.AfterStartSubmitUnknown},
+		"old transcript card above current composer": {output + startupComposer("MiMo v2.6 Flash Fast", ""), prompt, ports.AfterStartSubmitUnknown},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, cfg := submissionFixture(t)
+			got, err := p.AfterStartSubmitState(context.Background(), cfg, tc.output, tc.prompt)
+			if err != nil || got != tc.want {
+				t.Fatalf("state=%q err=%v want=%q", got, err, tc.want)
+			}
+		})
+	}
+	// Make the entire banner appear twice: a second attachment must not be
+	// mistaken for one matching paste, including when both have the same size.
+	lines := strings.Split(output, "\n")
+	extra := append([]string(nil), lines[:14]...)
+	extra = append(extra, lines[7:]...)
+	p, cfg := submissionFixture(t)
+	got, err := p.AfterStartSubmitState(context.Background(), cfg, strings.Join(extra, "\n"), prompt)
+	if err != nil || got != ports.AfterStartSubmitUnknown {
+		t.Fatalf("multiple attachment banners: state=%q err=%v", got, err)
+	}
+	if len(utf16.Encode([]rune(prefix))) != 40 {
+		t.Fatal("native fixture must identify all 40 visible UTF16 preview characters")
 	}
 }

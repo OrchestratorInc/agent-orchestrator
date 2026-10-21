@@ -10,7 +10,11 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -51,6 +55,9 @@ func (p *Plugin) AfterStartSubmitState(ctx context.Context, cfg ports.LaunchConf
 	if accepted {
 		return ports.AfterStartSubmitted, nil
 	}
+	if pendingNativeTextAttachment(output, prompt) {
+		return ports.AfterStartDraftPending, nil
+	}
 	composer, ok := currentComposer(output)
 	if !ok || (composer.placeholder != "" && composer.placeholderCursor) {
 		return ports.AfterStartSubmitUnknown, nil
@@ -59,6 +66,93 @@ func (p *Plugin) AfterStartSubmitState(ctx context.Context, cfg ports.LaunchConf
 		return ports.AfterStartDraftPending, nil
 	}
 	return ports.AfterStartSubmitUnknown, nil
+}
+
+// A long native paste leaves an empty editor and a removable text card below
+// it. Its fresh paste toast, complete card, UTF16 size and entire visible
+// preview acknowledge a pending paste, never submission. Require all of that
+// chrome together before allowing the manager's bounded Enter-only retry.
+func pendingNativeTextAttachment(output, prompt string) bool {
+	units := utf16.Encode([]rune(prompt))
+	if len(units) <= 2000 || (units[39] >= 0xd800 && units[39] <= 0xdbff) {
+		return false
+	}
+	preview := strings.ReplaceAll(string(utf16.Decode(units[:40])), "\n", " ")
+	if strings.TrimSpace(preview) == "" || strings.ContainsFunc(preview, unicode.IsControl) {
+		return false
+	}
+	compact := func(value string) string { return strings.Join(strings.Fields(value), "") }
+	expectedPreview := compact(preview + "…")
+	count := fmt.Sprint(len(units))
+	for i := len(count) - 3; i > 0; i -= 3 {
+		count = count[:i] + "," + count[i:]
+	}
+	toast := "📋 Pasted text (" + count + " chars)"
+	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
+	lines := terminalui.PlainTerminalLines(output)
+	if len(raw) != len(lines) {
+		return false
+	}
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	if last < 9 || strings.TrimSpace(lines[last]) != "← for history · ? for help" {
+		return false
+	}
+	for bottom := last - 2; bottom >= 7 && bottom >= last-12; bottom-- {
+		width := composerBorderWidth(lines[bottom], '╰', '╯')
+		if width == 0 {
+			continue
+		}
+		if !nativeFooter(lines[bottom+1 : last]) {
+			return false
+		}
+		// The 0.2.32 card has three preview rows, one count row and square
+		// borders, inside a bottom-only rounded banner. Nothing else may
+		// share it: another text/image/file card is an ambiguous pending turn.
+		start := bottom - 6
+		composerWidth := composerBorderWidth(lines[start-1], '╰', '╯')
+		if composerWidth != width && composerWidth != width+2 {
+			return false
+		}
+		inside := make([]string, 6)
+		for i := range inside {
+			row := []rune(strings.TrimSpace(lines[start+i]))
+			if len(row) < 2 || row[0] != '│' || row[len(row)-1] != '│' || ansi.StringWidth(string(row)) != width {
+				return false
+			}
+			inside[i] = strings.TrimSpace(string(row[1 : len(row)-1]))
+		}
+		if inside[0] != "┌──────────────────────┐X" || inside[5] != "└──────────────────────┘" {
+			return false
+		}
+		var visible strings.Builder
+		for i := 1; i <= 4; i++ {
+			row := []rune(inside[i])
+			if len(row) < 2 || row[0] != '│' || row[len(row)-1] != '│' ||
+				strings.Count(inside[i], "│") != 2 || ansi.StringWidth(inside[i]) != 24 {
+				return false
+			}
+			content := strings.TrimSpace(string(row[1 : len(row)-1]))
+			if i == 4 {
+				if content != "📄 "+count+" chars" {
+					return false
+				}
+			} else {
+				visible.WriteString(content)
+			}
+		}
+		if compact(visible.String()) != expectedPreview {
+			return false
+		}
+		// Keep the general activity parser unchanged: remove only this proven
+		// attachment banner, then require its current, focused idle composer.
+		withoutBanner := append(append([]string(nil), raw[:start]...), raw[bottom+1:]...)
+		composer, ok := currentComposer(strings.Join(withoutBanner, "\n"))
+		return ok && composer.placeholder == idlePlaceholder && composer.placeholderCursor && composer.status == toast
+	}
+	return false
 }
 
 func nativePromptAccepted(ctx context.Context, cfg ports.LaunchConfig, startedAt time.Time, prompt string) (bool, error) {
