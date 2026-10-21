@@ -17001,7 +17001,8 @@ components:
           type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
-            to the last ~4000 bytes.
+            to the last ~4000 bytes. While the command runs, the output it has printed
+            so far.
           type: string
         startedAt:
           format: date-time

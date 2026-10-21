@@ -278,7 +278,7 @@ func (s *Service) CancelAgentOperation(ctx context.Context, target Target) (Job,
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
-		snapshot := *job
+		snapshot := job.snapshot()
 		s.mu.Unlock()
 		if snapshot.Status != StatusWaitingForIdle {
 			return snapshot, nil
@@ -287,7 +287,7 @@ func (s *Service) CancelAgentOperation(ctx context.Context, target Target) (Job,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return *job, nil
+	return job.snapshot(), nil
 }
 
 func (s *Service) setHarnessChanging(target Target, changing bool) {

@@ -318,7 +318,7 @@ type Job struct {
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
 	ExpectedDestination string `json:"expectedDestination,omitempty" description:"Expected or adapter-resolved executable destination."`
-	Output              string `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes."`
+	Output              string `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. While the command runs, the output it has printed so far."`
 	Error               string `json:"error,omitempty" description:"Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message."`
 	Notice              string `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
 	// Pointers, not time.Time: omitempty has no effect on a struct, so a bare
@@ -331,6 +331,27 @@ type Job struct {
 	StartedAt  *time.Time           `json:"startedAt,omitempty"`
 	FinishedAt *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
 	UpdatedAt  *time.Time           `json:"updatedAt,omitempty"`
+	// live is the running command's output, read into Output by snapshot
+	// so a long install shows what it has printed so far. Guarded by s.mu.
+	live *capturedOutput
+}
+
+// snapshot copies job for a reader, with the running command's output so
+// far. The caller holds s.mu.
+func (job *Job) snapshot() Job {
+	snapshot := *job
+	snapshot.live = nil
+	if job.live != nil {
+		snapshot.Output = combineOutput(job.Output, job.live.String())
+	}
+	return snapshot
+}
+
+// setLiveOutput attaches or (with nil) detaches the running command's output.
+func (s *Service) setLiveOutput(job *Job, out *capturedOutput) {
+	s.mu.Lock()
+	job.live = out
+	s.mu.Unlock()
 }
 
 // HarnessVerifier performs post-install binary verification without probing
@@ -651,7 +672,7 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 	defer s.mu.Unlock()
 
 	if job, ok := s.jobs[target]; ok && job.Status == StatusRunning {
-		return *job, nil
+		return job.snapshot(), nil
 	}
 
 	plan := s.resolvePlan(target)
@@ -996,7 +1017,7 @@ func (s *Service) Status(ctx context.Context, target Target) (Job, error) {
 	s.mu.Lock()
 	inMemory, ok := s.jobs[target]
 	if ok {
-		snapshot := *inMemory
+		snapshot := inMemory.snapshot()
 		s.mu.Unlock()
 		return snapshot, nil
 	}
@@ -1053,10 +1074,10 @@ func (s *Service) AgentJobs(ctx context.Context) ([]Job, error) {
 		for target, job := range s.jobs {
 			if IsAgentTarget(target) {
 				if index, ok := indexes[target]; ok {
-					jobs[index] = *job
+					jobs[index] = job.snapshot()
 				} else {
 					indexes[target] = len(jobs)
-					jobs = append(jobs, *job)
+					jobs = append(jobs, job.snapshot())
 				}
 			}
 		}
@@ -1068,7 +1089,7 @@ func (s *Service) AgentJobs(ctx context.Context) ([]Job, error) {
 	jobs := make([]Job, 0, len(s.jobs))
 	for target, job := range s.jobs {
 		if IsAgentTarget(target) {
-			jobs = append(jobs, *job)
+			jobs = append(jobs, job.snapshot())
 		}
 	}
 	return jobs, nil
@@ -1186,6 +1207,7 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	defer cancel()
 
 	out := &capturedOutput{max: maxOutputBytes}
+	s.setLiveOutput(job, out)
 	var runErr error
 	if s.installCommands != nil {
 		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
@@ -1204,6 +1226,7 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	now := time.Now()
 
 	s.mu.Lock()
+	job.live = nil
 	job.Output = out.String()
 	job.FinishedAt = &now
 	if ctx.Err() == context.DeadlineExceeded {
@@ -1245,6 +1268,8 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
+	// transitionAgentJob or finishAgentJob records out and detaches it.
+	s.setLiveOutput(job, out)
 	outputWriter := io.Writer(out)
 	var devinOutput *devinInstallOutput
 	if plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil {
@@ -1437,6 +1462,7 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessage, resolvedPath string) error {
 	now := time.Now().UTC()
 	s.mu.Lock()
+	job.live = nil
 	job.Status = status
 	job.Output = combineOutput(job.Output, output)
 	job.Error = errorMessage
@@ -1452,6 +1478,7 @@ func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessa
 func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, resolvedPath string) {
 	now := time.Now().UTC()
 	s.mu.Lock()
+	job.live = nil
 	job.Status = status
 	job.Output = combineOutput(job.Output, output)
 	job.Error = errorMessage

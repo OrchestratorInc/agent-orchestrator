@@ -2036,3 +2036,52 @@ func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
 		t.Fatalf("output %q does not note the failed refresh", final.Output)
 	}
 }
+
+func TestRunningAgentJobShowsOutputSoFar(t *testing.T) {
+	release := make(chan struct{})
+	printed := make(chan struct{})
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "downloading codex 40%\n")
+		close(printed)
+		<-release
+		return nil
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 2.0.0"}, nil
+	})
+
+	if _, err := s.StartAgent(context.Background(), TargetCodex, "npm"); err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	<-printed
+	job, err := s.Status(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !activeStatus(job.Status) || !strings.Contains(job.Output, "downloading codex 40%") {
+		t.Fatalf("running job = %q with output %q, want the output printed so far", job.Status, job.Output)
+	}
+	jobs, err := s.AgentJobs(context.Background())
+	if err != nil {
+		t.Fatalf("AgentJobs: %v", err)
+	}
+	if len(jobs) != 1 || !strings.Contains(jobs[0].Output, "downloading codex 40%") {
+		t.Fatalf("AgentJobs = %+v, want the running job's output so far", jobs)
+	}
+	if jobs[0].live != nil || job.live != nil {
+		t.Fatal("a job snapshot kept the live output writer")
+	}
+
+	close(release)
+	s.workers.Wait()
+	waitForStatus(t, s, TargetCodex, StatusSucceeded)
+	finished, err := s.Status(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if count := strings.Count(finished.Output, "downloading codex 40%"); count != 1 {
+		t.Fatalf("finished output repeats the command output %d times: %q", count, finished.Output)
+	}
+}

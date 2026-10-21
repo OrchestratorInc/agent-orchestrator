@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { appI18n } from "../../i18n";
@@ -970,6 +970,9 @@ describe("HarnessSettingsSection", () => {
 	});
 
 	it("uses the detected manager rather than a stale saved method", async () => {
+		// The fixture job started at 12:00; keep it just started.
+		vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-09-27T12:00:05Z") });
+		onTestFinished(() => { vi.useRealTimers(); });
 		mockInstalledOperations("unsupported-old-method");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
@@ -1036,6 +1039,9 @@ describe("HarnessSettingsSection", () => {
 	});
 
 	it("shows update progress on the page and in the list while it runs", async () => {
+		// The fixture job started at 12:00; keep it just started.
+		vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-09-27T12:00:05Z") });
+		onTestFinished(() => { vi.useRealTimers(); });
 		mockInstalledOperations("npm");
 		renderSection();
 		const row = await findAgentRow("codex");
@@ -1046,6 +1052,23 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 		backToList();
 		expect(within(await findListRow("codex")).getByRole("status")).toHaveTextContent("Updating…");
+	});
+
+	it("shows how long an update has run and, once it is slow, its output", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", method: "npm", status: "installing", startedAt: new Date(Date.now() - 161_000).toISOString(), output: "npm http fetch GET 200 @openai/codex" }] } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const row = await findAgentRow("codex");
+		expect(await within(row).findByRole("button", { name: "Working…" })).toHaveTextContent(/Working…2:4\d/);
+		expect(within(row).getByText("Still downloading. This can take a few minutes on slow networks.")).toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "Show output" }));
+		expect(within(row).getByLabelText("Installer output")).toHaveTextContent("npm http fetch GET 200 @openai/codex");
+		backToList();
+		expect(await findListRow("codex")).toHaveTextContent(/2:4\d/);
 	});
 
 	it("explains a harness with no installable method instead of questioning its ownership", async () => {

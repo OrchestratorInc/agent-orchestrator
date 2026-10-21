@@ -13,6 +13,7 @@ import { AgentAccountsPanel } from "../AgentAccountsSection";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
+import { HarnessJobSlowDetail, JobElapsed } from "./HarnessJobProgress";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harness-ui";
 
 const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring";
@@ -52,7 +53,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 	const accountsPreview = useUiStore((state) => state.developerMode);
 	const accountProvider = (accountsPreview || followsSavedAccount(details.readinessAgent)) && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// Progress reads as a solid state, not a greyed-out action.
-	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
+	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}<JobElapsed job={job} /></Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
 		{rowAuthWorkflow && !["running", "verifying", "closing"].includes(rowAuthWorkflow.phase) ? null : <LoaderCircle className="animate-spin" aria-hidden="true" />}
 		{rowAuthWorkflow?.phase === "verifying" ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin") : rowAuthWorkflow?.action === "logout" ? t("settings.harness.logout") : details.isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
@@ -108,6 +109,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				<span className="text-xs text-settings-label"><HarnessTimestamp value={details.updatedAt} /></span>
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup>
+		{details.busy ? <HarnessJobSlowDetail job={job} className="-mt-3" /> : null}
 		{job && isWaitingForIdleJob(job) ? <div className="-mt-3"><IdleUpdateStatus agentId={details.agentId} job={job} hostId={hostId} onViewSessions={(waiting) => onViewSessions?.(waiting)} /></div> : null}
 		{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
