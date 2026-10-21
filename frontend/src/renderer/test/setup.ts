@@ -351,6 +351,7 @@ if (typeof window !== "undefined") {
 		},
 		notifications: {
 			show: async () => undefined,
+			mode: async () => false,
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,
 			onClick: () => () => undefined,

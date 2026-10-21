@@ -1039,6 +1039,15 @@ describe("NotificationCenter cloud rows", () => {
 		expect(screen.getByRole("button", { name: "1 unread notifications" })).toBeInTheDocument();
 	});
 
+	it("rings the bell for every unread row in loud mode", async () => {
+		vi.spyOn(aoBridge.notifications, "mode").mockResolvedValue(true);
+		renderNotificationCenter();
+
+		// AO_NO_QUIET_NOTIFICATIONS restores the upstream behavior: the routine
+		// local ready_to_merge row and the unread cloud row count too.
+		await waitFor(() => expect(screen.getByRole("button", { name: "3 unread notifications" })).toBeInTheDocument());
+	});
+
 	it("still clears local history when it failed to load", async () => {
 		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
 			status === "all"

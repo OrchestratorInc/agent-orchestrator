@@ -46,9 +46,40 @@ export function needsHumanFeedback(type: string | undefined): boolean {
 	return type !== undefined && HUMAN_FEEDBACK_TYPES.has(type);
 }
 
-/** Unread rows of the signal classes — the only ones the bell counts. */
+/**
+ * Whether `AO_NO_QUIET_NOTIFICATIONS` opts this install back into the upstream
+ * loud behavior (fork convention: `1`/`true` enables the opt-out, any other
+ * value — including unset — keeps quiet-by-default). Main reads the env once;
+ * the renderer receives the verdict over IPC, so the sandboxed renderer never
+ * touches the environment itself.
+ */
+export function loudNotificationsEnabled(value: string | undefined): boolean {
+	const normalized = value?.trim().toLowerCase();
+	return normalized === "1" || normalized === "true";
+}
+
+/**
+ * Whether this notification type should play the sound and flash the
+ * Windows/Linux taskbar. Quiet mode signals for every human-feedback type;
+ * loud mode restores the narrower upstream actionable set.
+ */
+export function shouldSignalAttention(type: string | undefined, loud: boolean): boolean {
+	if (loud) return type === "needs_input" || type === "ready_to_merge";
+	return needsHumanFeedback(type);
+}
+
+/**
+ * Unread rows that the bell and the launcher badge count: quiet mode counts
+ * only the human-feedback classes, loud mode counts every unread row like
+ * upstream.
+ */
+export function bellUnreadCount(items: readonly { type?: string; status?: string }[], loud: boolean): number {
+	return items.filter((item) => item.status === "unread" && (loud || needsHumanFeedback(item.type))).length;
+}
+
+/** Unread rows of the signal classes — the quiet default of bellUnreadCount. */
 export function signalUnreadCount(items: readonly { type?: string; status?: string }[]): number {
-	return items.filter((item) => item.status === "unread" && needsHumanFeedback(item.type)).length;
+	return bellUnreadCount(items, false);
 }
 
 /**
@@ -62,10 +93,16 @@ export function shouldReplaceBounce(pending: { critical: boolean } | null): bool
 }
 
 /**
- * Whether to fire an OS toast. Gated by the quiet-by-default policy: only
- * human-feedback types toast, so a routine notification never interrupts.
+ * Whether to fire an OS toast. Quiet mode (the default) gates on the
+ * human-feedback classes; loud mode (`AO_NO_QUIET_NOTIFICATIONS`) restores the
+ * upstream behavior of toasting every backend type.
  */
-export function shouldToast(notification: { title?: string; type?: string }, isSupported: boolean): boolean {
+export function shouldToast(
+	notification: { title?: string; type?: string },
+	isSupported: boolean,
+	loud = false,
+): boolean {
+	if (loud) return Boolean(notification.title) && isSupported;
 	return needsHumanFeedback(notification.type) && Boolean(notification.title) && isSupported;
 }
 

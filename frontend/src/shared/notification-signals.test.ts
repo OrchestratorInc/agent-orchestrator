@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+	bellUnreadCount,
 	dockBounceType,
+	loudNotificationsEnabled,
 	needsHumanFeedback,
 	osToastChimeControllable,
 	shouldReplaceBounce,
+	shouldSignalAttention,
 	shouldToast,
 	signalUnreadCount,
 	toastSilent,
@@ -40,6 +43,16 @@ describe("needsHumanFeedback", () => {
 	});
 });
 
+describe("loudNotificationsEnabled", () => {
+	it.each(["1", "true", " 1 ", "TRUE"])("opts back into the upstream behavior for %s", (value) => {
+		expect(loudNotificationsEnabled(value)).toBe(true);
+	});
+
+	it.each([undefined, "", "0", "false", "loud", "yes"])("stays quiet for %s", (value) => {
+		expect(loudNotificationsEnabled(value)).toBe(false);
+	});
+});
+
 describe("shouldToast", () => {
 	it("toasts only the human-feedback types", () => {
 		for (const type of SIGNAL_TYPES) {
@@ -53,10 +66,55 @@ describe("shouldToast", () => {
 		}
 	});
 
+	it("in loud mode toasts every backend type, like upstream", () => {
+		for (const type of [...SIGNAL_TYPES, ...SILENT_TYPES]) {
+			expect(shouldToast({ title: `${type} title`, type }, true, true)).toBe(true);
+		}
+	});
+
 	it("does not toast without a title or when notifications are unsupported", () => {
 		expect(shouldToast({ title: "", type: "needs_input" }, true)).toBe(false);
 		expect(shouldToast({ type: "needs_input" }, true)).toBe(false);
 		expect(shouldToast({ title: "needs input", type: "needs_input" }, false)).toBe(false);
+	});
+});
+
+describe("shouldSignalAttention", () => {
+	it("in quiet mode signals for every human-feedback type", () => {
+		for (const type of ["needs_input", "review_changes_requested"] as const) {
+			expect(shouldSignalAttention(type, false)).toBe(true);
+		}
+		expect(shouldSignalAttention("ready_to_merge", false)).toBe(false);
+	});
+
+	it("in loud mode restores the upstream actionable set", () => {
+		expect(shouldSignalAttention("needs_input", true)).toBe(true);
+		expect(shouldSignalAttention("ready_to_merge", true)).toBe(true);
+		expect(shouldSignalAttention("review_changes_requested", true)).toBe(false);
+		expect(shouldSignalAttention("pr_merged", true)).toBe(false);
+		expect(shouldSignalAttention(undefined, true)).toBe(false);
+	});
+});
+
+describe("bellUnreadCount", () => {
+	it("counts every unread row in loud mode, like upstream", () => {
+		expect(
+			bellUnreadCount(
+				[
+					{ type: "needs_input", status: "unread" },
+					{ type: "ready_to_merge", status: "unread" },
+					{ type: "pr_merged", status: "unread" },
+					{ type: "needs_input", status: "read" },
+				],
+				true,
+			),
+		).toBe(3);
+	});
+
+	it("is quiet by default", () => {
+		expect(
+			bellUnreadCount([{ type: "ready_to_merge", status: "unread" }], false),
+		).toBe(0);
 	});
 });
 

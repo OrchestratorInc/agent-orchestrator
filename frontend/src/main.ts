@@ -194,8 +194,10 @@ import { readMigrationState, updateMigration, writeAppStateMarker, type Migratio
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
 	dockBounceType,
+	loudNotificationsEnabled,
 	needsHumanFeedback,
 	shouldReplaceBounce,
+	shouldSignalAttention,
 	shouldToast,
 	toastSilent,
 } from "./shared/notification-signals";
@@ -402,6 +404,10 @@ let pendingBounce: { id: number; critical: boolean } | null = null;
 // Live mirror of the persisted `soundNotificationsEnabled` UI setting, kept in sync by the
 // uiSettings:set handler so a toggle flip takes effect without an app restart.
 let soundNotificationsEnabled = DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
+// Quiet-by-default notifications (fork); AO_NO_QUIET_NOTIFICATIONS=1 opts back
+// into the upstream loud behavior. Read once at startup, shared with the
+// renderer over IPC (the sandboxed renderer cannot read the env itself).
+const notificationsLoud = loudNotificationsEnabled(process.env.AO_NO_QUIET_NOTIFICATIONS);
 
 // Plays the bundled notification sound through the renderer (main has no
 // audio output). `shell.beep()` is only the fallback for when no shell is
@@ -2994,7 +3000,8 @@ ipcMain.handle(
 		if (!notification.id || !mainWindow) return;
 		// Quiet by default: only human-feedback events may signal at all. Routine
 		// notifications stay in the renderer's feed; no toast, sound, or bounce.
-		if (!needsHumanFeedback(notification.type)) return;
+		// Loud mode (AO_NO_QUIET_NOTIFICATIONS) restores the upstream behavior.
+		if (!notificationsLoud && !needsHumanFeedback(notification.type)) return;
 		// "Already looking" = the window has focus, or the renderer reports the
 		// prompt itself is on screen (`watched`). Visual signals are skipped then.
 		const looking = mainWindow.isFocused() || notification.watched === true;
@@ -3003,14 +3010,16 @@ ipcMain.handle(
 		// focused/visible and would otherwise stay silent. macOS and Windows
 		// report focus accurately and keep the quieter behaviour.
 		const playsSound =
+			shouldSignalAttention(notification.type, notificationsLoud) &&
 			soundNotificationsEnabled &&
 			(process.platform === "linux" || !looking);
 		if (playsSound) playNotificationSound();
 		if (looking) return;
 		// OS toast: a native banner the user can click to jump straight back to the
-		// session. Only human-feedback types reach this point (see the early
-		// return above), and shouldToast keeps the title and support guards.
-		if (shouldToast(notification, ElectronNotification.isSupported())) {
+		// session. Quiet mode lets only human-feedback types reach this point (see
+		// the early return above); loud mode toasts every type, and shouldToast
+		// keeps the title and support guards.
+		if (shouldToast(notification, ElectronNotification.isSupported(), notificationsLoud)) {
 			const toast = new ElectronNotification({
 				title: notification.title,
 				body: notification.body,
@@ -3055,7 +3064,7 @@ ipcMain.handle(
 					if (!hadPendingBounce) mainWindow.once("focus", cancelDockBounce);
 				}
 			}
-		} else if ((process.platform === "win32" || process.platform === "linux") && needsHumanFeedback(notification.type)) {
+		} else if ((process.platform === "win32" || process.platform === "linux") && shouldSignalAttention(notification.type, notificationsLoud)) {
 			if (!isFlashing) {
 				isFlashing = true;
 				mainWindow.flashFrame(true);
@@ -3067,6 +3076,9 @@ ipcMain.handle(
 		}
 	},
 );
+
+// The renderer counts bell/badge rows in the same mode as main signals with.
+ipcMain.handle("notifications:mode", () => notificationsLoud);
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.
