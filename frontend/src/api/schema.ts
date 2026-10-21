@@ -3937,6 +3937,23 @@ export interface paths {
         patch: operations["updateVersionRefresh"];
         trace?: never;
     };
+    "/api/v1/settings/scm-proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set or clear the explicit outbound proxy for the daemon's SCM clients */
+        patch: operations["updateScmProxy"];
+        trace?: never;
+    };
     "/api/v1/shell-terminals": {
         parameters: {
             query?: never;
@@ -7088,6 +7105,8 @@ export interface components {
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
+            /** @description Outbound proxy URL (http/https/socks5/socks5h) for the daemon's GitHub and GitLab clients. Empty uses the standard proxy environment variables; a set value wins over them. */
+            scmProxyUrl: string;
         };
         ShellTerminalEnvelope: {
             shellTerminal: components["schemas"]["ShellTerminalResponse"];
@@ -7574,6 +7593,10 @@ export interface components {
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
+        };
+        UpdateScmProxyURLRequest: {
+            /** @description Proxy URL (http/https/socks5/socks5h) for the daemon's SCM clients. An empty string clears the override. */
+            url: string;
         };
         UpdateWorkspaceFileRequest: {
             content: string;
@@ -22218,6 +22241,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateVersionRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateScmProxy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateScmProxyURLRequest"];
             };
         };
         responses: {

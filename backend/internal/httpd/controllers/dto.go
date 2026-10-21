@@ -3351,6 +3351,9 @@ type SettingsResponse struct {
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
+	// ScmProxyURL is the explicit outbound proxy for the daemon's SCM clients.
+	// Empty keeps the standard environment behavior; a set value wins over it.
+	ScmProxyURL string `json:"scmProxyUrl" description:"Outbound proxy URL (http/https/socks5/socks5h) for the daemon's GitHub and GitLab clients. Empty uses the standard proxy environment variables."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3388,6 +3391,12 @@ type UpdateCloudOfferingRequest struct {
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
 type UpdateVersionRefreshRequest struct {
 	Enabled *bool `json:"enabled"`
+}
+
+// UpdateScmProxyURLRequest sets or clears the explicit outbound proxy for the
+// daemon's SCM clients. An empty string clears the override.
+type UpdateScmProxyURLRequest struct {
+	URL string `json:"url" example:"socks5h://127.0.0.1:10808"`
 }
 
 // UpdateChatHibernationRequest flips the daemon-owned idle Chat gate.

@@ -172,6 +172,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ProcessInventory   int64
+	ScmProxyURL        string
 }
 
 type Automation struct {

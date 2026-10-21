@@ -9,7 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,7 @@ type Store interface {
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
+	SetScmProxyURL(ctx context.Context, url string, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -39,7 +42,11 @@ type Snapshot struct {
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran (Settings, General). On by default.
 	VersionRefresh bool
-	UpdatedAt      time.Time
+	// ScmProxyURL is the user's explicit outbound proxy for the daemon's SCM
+	// clients (Settings, General). Empty keeps the standard environment
+	// behavior; a set value wins over the environment.
+	ScmProxyURL string
+	UpdatedAt   time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -98,6 +105,9 @@ type Service struct {
 	chatHibernation atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
+	// scmProxyURL caches the durable proxy URL: nil unread, otherwise the
+	// (possibly empty) stored value. Consulted per dial by the SCM transport.
+	scmProxyURL atomic.Pointer[string]
 }
 
 // New builds the service.
@@ -119,6 +129,7 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
 	if err == nil {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
+		s.cacheScmProxyURL(snapshot.ScmProxyURL)
 	}
 	return snapshot, err
 }
@@ -156,6 +167,54 @@ func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot
 	}
 	s.cacheVersionRefresh(enabled)
 	return s.Get(ctx)
+}
+
+// scmProxySchemes are the proxy schemes Go's http.Transport natively dials.
+var scmProxySchemes = []string{"http", "https", "socks5", "socks5h"}
+
+// ErrInvalidScmProxyURL marks a proxy URL the SCM transport cannot dial.
+var ErrInvalidScmProxyURL = errors.New("invalid scm proxy url")
+
+func (s *Service) cacheScmProxyURL(url string) {
+	s.scmProxyURL.Store(&url)
+}
+
+// ScmProxyURL reports the user's explicit SCM proxy, or "" when unset. It
+// reads the store once and then serves the cached value; an unreadable store
+// counts as unset so the transport falls back to the environment.
+func (s *Service) ScmProxyURL(ctx context.Context) string {
+	if cached := s.scmProxyURL.Load(); cached != nil {
+		return *cached
+	}
+	snapshot, err := s.store.GetAppSettings(ctx)
+	if err != nil {
+		return ""
+	}
+	s.cacheScmProxyURL(snapshot.ScmProxyURL)
+	return snapshot.ScmProxyURL
+}
+
+// SetScmProxyURL changes the explicit outbound proxy for the daemon's SCM
+// clients. Empty clears it; a set value wins over the environment.
+func (s *Service) SetScmProxyURL(ctx context.Context, raw string) (Snapshot, error) {
+	proxy := strings.TrimSpace(raw)
+	if proxy != "" {
+		parsed, err := url.Parse(proxy)
+		portInvalid := err == nil && parsed.Port() != "" && !validPort(parsed.Port())
+		if err != nil || portInvalid || !slices.Contains(scmProxySchemes, strings.ToLower(parsed.Scheme)) || parsed.Host == "" {
+			return Snapshot{}, fmt.Errorf("%w: %q (want http/https/socks5/socks5h URL with a host)", ErrInvalidScmProxyURL, raw)
+		}
+	}
+	if err := s.store.SetScmProxyURL(ctx, proxy, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	s.cacheScmProxyURL(proxy)
+	return s.Get(ctx)
+}
+
+func validPort(port string) bool {
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // DefaultSessionMode resolves the default for a spawn that named no mode. A read

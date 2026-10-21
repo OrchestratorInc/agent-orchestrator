@@ -33,6 +33,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		HarnessDefaults:    row.HarnessDefaults,
 		CloudOffering:      row.CloudOffering,
 		VersionRefresh:     row.VersionRefresh,
+		ScmProxyURL:        row.ScmProxyURL,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -51,6 +52,10 @@ func (s settingsStore) SetCloudOffering(ctx context.Context, enabled bool, now t
 
 func (s settingsStore) SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error {
 	return s.store.SetVersionRefresh(ctx, enabled, now)
+}
+
+func (s settingsStore) SetScmProxyURL(ctx context.Context, url string, now time.Time) error {
+	return s.store.SetScmProxyURL(ctx, url, now)
 }
 
 func (s settingsStore) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {

@@ -30,7 +30,10 @@ type AppSettings struct {
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran.
 	VersionRefresh bool
-	UpdatedAt      time.Time
+	// ScmProxyURL is the explicit outbound proxy for the daemon's SCM clients.
+	// Empty keeps the standard ProxyFromEnvironment behavior.
+	ScmProxyURL string
+	UpdatedAt   time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -50,6 +53,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
 		CloudOffering:      row.CloudOffering,
 		VersionRefresh:     row.VersionRefresh,
+		ScmProxyURL:        row.ScmProxyURL,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -92,6 +96,19 @@ func (s *Store) SetVersionRefresh(ctx context.Context, enabled bool, now time.Ti
 		UpdatedAt:      now,
 	}); err != nil {
 		return fmt.Errorf("set version refresh: %w", err)
+	}
+	return nil
+}
+
+// SetScmProxyURL persists the explicit outbound proxy for SCM clients.
+func (s *Store) SetScmProxyURL(ctx context.Context, url string, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetScmProxyURL(ctx, gen.SetScmProxyURLParams{
+		ScmProxyURL: url,
+		UpdatedAt:   now,
+	}); err != nil {
+		return fmt.Errorf("set scm proxy url: %w", err)
 	}
 	return nil
 }

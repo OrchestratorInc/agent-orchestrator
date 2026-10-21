@@ -17,7 +17,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCloudOffering, useUpdateScmProxyURL, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -146,6 +146,45 @@ function TerminalShellRows() {
 
 const COLOR_THEME_OPTIONS = THEMES.map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
 
+/**
+ * Explicit outbound proxy for the daemon's SCM clients (GitHub/GitLab): the
+ * observer, PR merges, claims, and review publishing all dial through it.
+ * Desktop apps launched from Dock/Finder never inherit shell proxy variables,
+ * so this persisted setting — not the launch environment — is the reliable way
+ * to route provider traffic. Applied per dial: no restart needed.
+ */
+function ScmProxyRow() {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const { update, error } = useUpdateScmProxyURL();
+	const stored = settings?.scmProxyUrl ?? "";
+	const [value, setValue] = useState(stored);
+
+	useEffect(() => {
+		setValue(stored);
+	}, [stored]);
+
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsInputRow
+				id="scm-proxy-url"
+				label={t("settings.scmProxy.label")}
+				value={value}
+				onChange={setValue}
+				onCommit={(next) => update(next.trim())}
+				onCancel={() => setValue(stored)}
+				placeholder={t("settings.scmProxy.placeholder")}
+			/>
+			<p className="px-3 pb-2 text-caption leading-4 text-muted-foreground">{t("settings.scmProxy.description")}</p>
+			{error ? (
+				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
+					{error}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
 export function GeneralSettingsSection({
 	titleHidden,
 }: {
@@ -262,6 +301,11 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
+			</SettingsSection>
+
+			{/* Network */}
+			<SettingsSection title={t("settings.scmProxy.title")} grouped>
+				<ScmProxyRow />
 			</SettingsSection>
 
 			<DefaultCloudSandboxSection />

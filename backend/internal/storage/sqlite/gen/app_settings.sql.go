@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, process_inventory FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, process_inventory, scm_proxy_url FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -30,6 +30,7 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.HarnessDefaults,
 		&i.VersionRefresh,
 		&i.ProcessInventory,
+		&i.ScmProxyURL,
 	)
 	return i, err
 }
@@ -94,6 +95,20 @@ type SetHarnessDefaultParams struct {
 
 func (q *Queries) SetHarnessDefault(ctx context.Context, arg SetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setHarnessDefault, arg.HarnessPath, arg.Config, arg.UpdatedAt)
+	return err
+}
+
+const setScmProxyURL = `-- name: SetScmProxyURL :exec
+UPDATE app_settings SET scm_proxy_url = ?, updated_at = ? WHERE id = 1
+`
+
+type SetScmProxyURLParams struct {
+	ScmProxyURL string
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) SetScmProxyURL(ctx context.Context, arg SetScmProxyURLParams) error {
+	_, err := q.db.ExecContext(ctx, setScmProxyURL, arg.ScmProxyURL, arg.UpdatedAt)
 	return err
 }
 

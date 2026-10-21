@@ -11636,6 +11636,7 @@ paths:
   /api/v1/settings/version-refresh:
     patch:
       operationId: updateVersionRefresh
+      summary: Choose whether idle open sessions move to newly installed harness releases
       requestBody:
         content:
           application/json:
@@ -11667,7 +11668,43 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Choose whether idle open sessions move to newly installed harness releases
+      tags:
+      - settings
+  /api/v1/settings/scm-proxy:
+    patch:
+      operationId: updateScmProxy
+      summary: Set or clear the explicit outbound proxy for the daemon's SCM clients
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateScmProxyURLRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
       tags:
       - settings
   /api/v1/shell-terminals:
@@ -19830,6 +19867,11 @@ components:
           description: After a harness update, idle open sessions restart on the new
             release instead of running the old one until they happen to restart.
           type: boolean
+        scmProxyUrl:
+          description: Outbound proxy URL (http/https/socks5/socks5h) for the daemon's
+            GitHub and GitLab clients. Empty uses the standard proxy environment
+            variables; a set value wins over them.
+          type: string
       required:
       - defaultSessionMode
       - chatHarnesses
@@ -19838,6 +19880,7 @@ components:
       - cloudOffering
       - chatHibernationEnabled
       - versionRefresh
+      - scmProxyUrl
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -21091,6 +21134,15 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    UpdateScmProxyURLRequest:
+      properties:
+        url:
+          description: Proxy URL (http/https/socks5/socks5h) for the daemon's SCM
+            clients. An empty string clears the override.
+          type: string
+      required:
+      - url
       type: object
     UpdateWorkspaceFileRequest:
       properties:

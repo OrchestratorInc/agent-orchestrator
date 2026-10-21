@@ -23,6 +23,7 @@ type SettingsService interface {
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (settingssvc.Snapshot, error)
 	SetChatHibernationEnabled(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetVersionRefresh(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetScmProxyURL(ctx context.Context, url string) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
 	Offering() settingssvc.Offering
 }
@@ -56,6 +57,7 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Put("/settings/gateway", c.setGateway)
 	r.Post("/settings/gateway/probe", c.probeGateway)
 	r.Patch("/settings/version-refresh", c.setVersionRefresh)
+	r.Patch("/settings/scm-proxy", c.setScmProxy)
 	r.Patch("/settings/harness-defaults/{agent}", c.setHarnessDefault)
 }
 
@@ -230,6 +232,30 @@ func (c *SettingsController) setVersionRefresh(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
 }
 
+// setScmProxy applies the explicit outbound proxy for the daemon's SCM clients.
+// Empty clears it; a set value wins over the environment.
+func (c *SettingsController) setScmProxy(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/scm-proxy")
+		return
+	}
+	var req UpdateScmProxyURLRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	snapshot, err := c.Svc.SetScmProxyURL(r.Context(), req.URL)
+	if errors.Is(err, settingssvc.ErrInvalidScmProxyURL) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"SCM_PROXY_INVALID", err.Error(), nil)
+		return
+	}
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
 func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsResponse {
 	// Reported so the client can warn that choosing chat narrows which agents are
 	// available, instead of letting the user discover it at spawn time.
@@ -248,6 +274,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		CloudOffering:          snapshot.CloudOffering,
 		ChatHibernationEnabled: snapshot.ChatHibernationEnabled,
 		VersionRefresh:         snapshot.VersionRefresh,
+		ScmProxyURL:            snapshot.ScmProxyURL,
 		CloudEnabled:           offering.CloudEnabled(snapshot),
 		CloudControlPlaneURL:   offering.CloudControlPlaneURL,
 		TrackerIntakeEnabled:   offering.TrackerIntakeEnabled,

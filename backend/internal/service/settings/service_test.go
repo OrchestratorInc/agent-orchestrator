@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +114,10 @@ func (*hibernationSettingsStore) SetHarnessDefault(context.Context, domain.Agent
 	return nil
 }
 
+func (*hibernationSettingsStore) SetScmProxyURL(context.Context, string, time.Time) error {
+	return nil
+}
+
 type versionRefreshStore struct {
 	hibernationSettingsStore
 	refresh bool
@@ -140,5 +145,89 @@ func TestVersionRefreshToggleIsReadOnceAndCached(t *testing.T) {
 	snapshot, err := svc.SetVersionRefresh(ctx, false)
 	if err != nil || snapshot.VersionRefresh || svc.VersionRefreshEnabled(ctx) {
 		t.Fatalf("turn off: snapshot=%+v err=%v enabled=%t", snapshot, err, svc.VersionRefreshEnabled(ctx))
+	}
+}
+
+// scmProxyStore persists whatever was last set so Set/Get round-trips behave.
+type scmProxyStore struct {
+	hibernationSettingsStore
+	url   string
+	reads int
+}
+
+func (s *scmProxyStore) GetAppSettings(context.Context) (Snapshot, error) {
+	s.reads++
+	return Snapshot{ScmProxyURL: s.url}, nil
+}
+
+func (s *scmProxyStore) SetScmProxyURL(_ context.Context, url string, _ time.Time) error {
+	s.url = url
+	return nil
+}
+
+func TestSetScmProxyURLValidationMatrix(t *testing.T) {
+	ctx := context.Background()
+	valid := []string{
+		"socks5h://127.0.0.1:10808",
+		"socks5://proxy.internal:1080",
+		"http://127.0.0.1:10809",
+		"https://proxy.corp.example:3128",
+		"  socks5h://127.0.0.1:10808  ",
+	}
+	invalid := []string{
+		"ftp://127.0.0.1:21",
+		"socks5h://",      // no host
+		"127.0.0.1:10808", // no scheme
+		"://no-scheme",
+		"socks5h://host:99999", // parsed, but the port overflows on dial
+	}
+
+	for _, raw := range valid {
+		store := &scmProxyStore{}
+		svc := New(store, nil, Offering{}, nil)
+		snapshot, err := svc.SetScmProxyURL(ctx, raw)
+		if err != nil {
+			t.Fatalf("SetScmProxyURL(%q): %v", raw, err)
+		}
+		if snapshot.ScmProxyURL != strings.TrimSpace(raw) {
+			t.Fatalf("stored %q, want trimmed %q", snapshot.ScmProxyURL, raw)
+		}
+		if svc.ScmProxyURL(ctx) != strings.TrimSpace(raw) {
+			t.Fatalf("accessor %q after set, want %q", svc.ScmProxyURL(ctx), raw)
+		}
+	}
+	for _, raw := range invalid {
+		store := &scmProxyStore{}
+		svc := New(store, nil, Offering{}, nil)
+		if _, err := svc.SetScmProxyURL(ctx, raw); !errors.Is(err, ErrInvalidScmProxyURL) {
+			t.Fatalf("SetScmProxyURL(%q) err=%v, want ErrInvalidScmProxyURL", raw, err)
+		}
+		if store.url != "" {
+			t.Fatalf("invalid value %q leaked to the store as %q", raw, store.url)
+		}
+	}
+}
+
+func TestSetScmProxyURLEmptyClearsAndAccessorCaches(t *testing.T) {
+	ctx := context.Background()
+	store := &scmProxyStore{url: "socks5h://127.0.0.1:10808"}
+	svc := New(store, nil, Offering{}, nil)
+	if svc.ScmProxyURL(ctx) != "socks5h://127.0.0.1:10808" {
+		t.Fatalf("pre-set accessor %q", svc.ScmProxyURL(ctx))
+	}
+	if svc.ScmProxyURL(ctx) != "socks5h://127.0.0.1:10808" || store.reads != 1 {
+		t.Fatalf("accessor reads = %d, want one cached read", store.reads)
+	}
+	snapshot, err := svc.SetScmProxyURL(ctx, "")
+	if err != nil || snapshot.ScmProxyURL != "" || svc.ScmProxyURL(ctx) != "" {
+		t.Fatalf("clear: snapshot=%+v err=%v accessor=%q", snapshot, err, svc.ScmProxyURL(ctx))
+	}
+}
+
+func TestScmProxyURLUnreadableStoreCountsAsUnset(t *testing.T) {
+	ctx := context.Background()
+	svc := New(&hibernationSettingsStore{err: errors.New("db gone")}, nil, Offering{}, nil)
+	if got := svc.ScmProxyURL(ctx); got != "" {
+		t.Fatalf("accessor on broken store = %q, want empty", got)
 	}
 }

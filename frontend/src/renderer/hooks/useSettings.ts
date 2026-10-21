@@ -37,6 +37,8 @@ export interface Settings {
 	trackerIntakeEnabled: boolean;
 	/** Idle open sessions move to a harness release installed while they ran. */
 	versionRefresh?: boolean;
+	/** Explicit outbound proxy for the daemon's SCM clients; empty = environment default. */
+	scmProxyUrl?: string;
 }
 
 export function useSettings(hostId?: string, enabled = true) {
@@ -67,6 +69,8 @@ export function useSettings(hostId?: string, enabled = true) {
 				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
 				// A daemon that predates the setting never moves sessions.
 				versionRefresh: data?.versionRefresh ?? false,
+				// A daemon that predates the setting has no SCM proxy override.
+				scmProxyUrl: data?.scmProxyUrl ?? "",
 			};
 		},
 	});
@@ -159,6 +163,28 @@ export function useUpdateVersionRefresh() {
 
 	return {
 		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateScmProxyURL() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (url: string) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/scm-proxy", {
+				body: { url },
+			});
+			if (error) throw error;
+			return data;
+		},
+		// Refetch rather than writing the value in locally: the daemon is the source
+		// of truth, and the control must not claim a change it did not persist.
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (url: string) => mutation.mutate(url),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};

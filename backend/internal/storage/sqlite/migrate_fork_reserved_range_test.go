@@ -54,6 +54,10 @@ var forkLocalMigrations = []string{
 	"gateway_entries",
 	"app_settings_process_inventory",
 	"preview_poll_sessions",
+	"app_settings_scm_proxy_url",
+	// "app_settings_scm_proxy_url" first shipped as 9014 in open PR #116; PR
+	// #113 claimed the same number in flight, so the file renumbered to 9015
+	// before merge (neither number reached an install).
 }
 
 func TestForkMigrationsUseReservedRange(t *testing.T) {
