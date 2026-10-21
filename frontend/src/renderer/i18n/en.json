@@ -2550,6 +2550,7 @@
 	"displayStatus.blocked": "Blocked",
 	"displayStatus.exited": "Exited",
 	"displayStatus.noSignal": "No signal",
+	"displayStatus.interrupted": "Interrupted",
 	"displayStatus.awaitingPr": "Awaiting PR",
 	"displayStatus.fixingCiFailures": "Fixing CI failures",
 	"displayStatus.addressingComments": "Addressing comments",

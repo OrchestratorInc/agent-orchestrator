@@ -2244,6 +2244,7 @@
 	"displayStatus.blocked": "Bloqué",
 	"displayStatus.exited": "Terminé",
 	"displayStatus.noSignal": "Aucun signal",
+	"displayStatus.interrupted": "Interrompu",
 	"displayStatus.awaitingPr": "En attente de PR",
 	"displayStatus.fixingCiFailures": "Correction des échecs CI",
 	"displayStatus.addressingComments": "Traitement des commentaires",

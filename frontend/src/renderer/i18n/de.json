@@ -2207,6 +2207,7 @@
 	"displayStatus.blocked": "Blockiert",
 	"displayStatus.exited": "Beendet",
 	"displayStatus.noSignal": "Kein Signal",
+	"displayStatus.interrupted": "Unterbrochen",
 	"displayStatus.awaitingPr": "Wartet auf PR",
 	"displayStatus.fixingCiFailures": "CI-Fehler werden behoben",
 	"displayStatus.addressingComments": "Kommentare werden bearbeitet",

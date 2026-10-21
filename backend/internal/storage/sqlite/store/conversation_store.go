@@ -1070,6 +1070,28 @@ func (s *Store) ConversationForSession(
 	return conversationToDomain(row), nil
 }
 
+// ListInterruptedSessions reports which of the given sessions had their latest
+// Chat turn interrupted by the person. Sessions without a Chat conversation are
+// absent from the result.
+func (s *Store) ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
+	out := make(map[domain.SessionID]bool)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session ids: %w", err)
+	}
+	rows, err := s.qr.ListInterruptedSessions(ctx, string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("list interrupted sessions: %w", err)
+	}
+	for _, id := range rows {
+		out[domain.SessionID(id)] = true
+	}
+	return out, nil
+}
+
 // ConversationForReview looks up the durable conversation owned by a reviewer
 // row rather than by its parent worker session.
 func (s *Store) ConversationForReview(ctx context.Context, reviewID string) (domain.ConversationRecord, error) {

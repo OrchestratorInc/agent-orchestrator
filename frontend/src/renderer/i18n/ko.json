@@ -2207,6 +2207,7 @@
 	"displayStatus.blocked": "차단됨",
 	"displayStatus.exited": "종료됨",
 	"displayStatus.noSignal": "신호 없음",
+	"displayStatus.interrupted": "중단됨",
 	"displayStatus.awaitingPr": "PR 대기 중",
 	"displayStatus.fixingCiFailures": "CI 오류 수정 중",
 	"displayStatus.addressingComments": "코멘트 처리 중",

@@ -2207,6 +2207,7 @@
 	"displayStatus.blocked": "ブロック中",
 	"displayStatus.exited": "終了済み",
 	"displayStatus.noSignal": "シグナルなし",
+	"displayStatus.interrupted": "中断",
 	"displayStatus.awaitingPr": "PR待ち",
 	"displayStatus.fixingCiFailures": "CIエラーを修正中",
 	"displayStatus.addressingComments": "コメント対応中",
