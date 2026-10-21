@@ -2010,7 +2010,7 @@ export const ChatComposer = memo(function ChatComposer({
 										className={cn(
 											"size-7 rounded-full border-transparent focus-visible:ring-ring/40",
 											canStopTurn || canContinueTurn || sendActionEnabled
-												? "bg-foreground text-background hover:bg-foreground/90 hover:text-background dark:hover:bg-foreground/90 dark:hover:text-background"
+												? "bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground"
 												: "bg-primary text-primary-foreground",
 										)}
 									>

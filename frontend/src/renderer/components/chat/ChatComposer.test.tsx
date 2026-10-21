@@ -236,7 +236,7 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("bg-foreground", "text-background");
+		expect(send).toHaveClass("bg-foreground", "text-on-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {

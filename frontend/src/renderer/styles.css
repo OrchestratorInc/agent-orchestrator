@@ -113,6 +113,8 @@
 	/* Surfaces */
 	--color-background: var(--color-bg-primary);
 	--color-foreground: var(--color-text-primary);
+	/* Ink on foreground fills must stay opaque when window surfaces become clear. */
+	--color-on-foreground: var(--background);
 	--color-surface: var(--color-bg-secondary);
 	--color-card: var(--color-bg-secondary);
 	--color-card-foreground: var(--color-text-primary);
