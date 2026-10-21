@@ -52,6 +52,7 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
+	disableNetwork  bool
 	// launchMode is the permission mode the thread started or resumed with;
 	// a turn without its own approval setting runs under it.
 	launchMode ports.PermissionMode
@@ -166,12 +167,15 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		now := time.Now()
+		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
 		// envelope so child-thread recovery cannot settle the root's retry.
 		var scope struct {
@@ -183,7 +187,8 @@ func (c *conversation) pump() {
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
-		for _, ev := range normalizeNotification(n, time.Now()) {
+		for _, ev := range normalizeNotification(n, now) {
+			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
@@ -322,7 +327,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings, c.readOnly)
+	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
 
 	var resp struct {
 		Turn struct {
@@ -345,7 +350,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly bool) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly, disableNetwork bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -365,13 +370,11 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
-		// A reviewer must not write the workspace, but it does need the network:
-		// it reads the PR through gh and reports its verdict to the local daemon
-		// with `ao review submit`. With approvals off it cannot ask for that access
-		// mid-turn, so the read-only policy grants it up front.
+		// Reviewers need gh and ao review submit; text-only background calls
+		// explicitly disable that tool network access.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
-		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": true}
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": !disableNetwork}
 	}
 }
 
@@ -416,13 +419,14 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {
 	type modelListResponse struct {
 		Data []struct {
-			ID          string `json:"id"`
-			Model       string `json:"model"`
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			IsDefault   bool   `json:"isDefault"`
-			Hidden      bool   `json:"hidden"`
-			DefaultEff  string `json:"defaultReasoningEffort"`
+			ID          string   `json:"id"`
+			Model       string   `json:"model"`
+			DisplayName string   `json:"displayName"`
+			Description string   `json:"description"`
+			IsDefault   bool     `json:"isDefault"`
+			Hidden      bool     `json:"hidden"`
+			DefaultEff  string   `json:"defaultReasoningEffort"`
+			Inputs      []string `json:"inputModalities"`
 			Efforts     []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
@@ -467,6 +471,7 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			models = append(models, ports.ChatModel{
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
+				Inputs: entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {
@@ -739,6 +744,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	if !known {
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
+	}
+	if c.disableNetwork {
+		return nil, errors.New("background task does not permit approval or input requests")
 	}
 
 	requestID := rawID(req.ID)

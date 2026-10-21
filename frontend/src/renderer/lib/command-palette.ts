@@ -1,3 +1,4 @@
+import { sessionBranchPresentation } from "./session-branch";
 import type { TFunction } from "i18next";
 import {
 	attentionZone,
@@ -192,8 +193,8 @@ export function buildFileSessionCommands(
 		id: `file-session:${workspace.hostId ?? "local"}:${session.id}`,
 		group: "sessions",
 		title: session.title,
-		subtitle: `${session.branch || workspace.name} · ${session.displayStatus || session.status}`,
-		keywords: [session.branch ?? "", workspace.name, session.displayStatus ?? "", session.status],
+		subtitle: `${sessionBranchPresentation(session).branch || workspace.name} · ${session.displayStatus || session.status}`,
+		keywords: [sessionBranchPresentation(session).branch ?? "", workspace.name, session.displayStatus ?? "", session.status],
 		action: {
 			kind: "open-file-search",
 			projectId: workspace.id,
@@ -237,7 +238,7 @@ function sessionCommand(
 		title: session.title,
 		subtitle: workspace.name,
 		zone: attentionZone(session),
-		keywords: [workspace.name, session.branch ?? "", session.issueId ?? ""],
+		keywords: [workspace.name, sessionBranchPresentation(session).branch ?? "", session.issueId ?? ""],
 		action: { kind: "open-session-actions", sessionId: session.id },
 	};
 }
@@ -248,6 +249,7 @@ export function buildSessionActions(
 	t: TFunction = appI18n.t,
 ): CommandItem[] {
 	const items: CommandItem[] = [];
+	const branch = sessionBranchPresentation(session).branch;
 
 	items.push({
 		id: `session-action:jump:${session.id}`,
@@ -268,14 +270,14 @@ export function buildSessionActions(
 		});
 	}
 
-	if (session.branch && !isOrchestratorSession(session) && !isSyntheticBranch(session)) {
+	if (branch && !isOrchestratorSession(session) && !isSyntheticBranch(session)) {
 		items.push({
 			id: `session-action:copy-branch:${session.id}`,
 			group: "current",
 			title: t("command.copyBranch"),
-			subtitle: session.branch,
-			keywords: ["branch", "git", session.branch, session.title],
-			action: { kind: "copy-branch", branch: session.branch },
+			subtitle: branch,
+			keywords: ["branch", "git", branch, session.title],
+			action: { kind: "copy-branch", branch },
 		});
 	}
 
@@ -366,7 +368,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		});
 	}
 
-	const currentBranch = currentSession?.branch;
+	const currentBranch = sessionBranchPresentation(currentSession).branch;
 	if (currentSession && currentBranch && !isOrchestratorSession(currentSession) && !isSyntheticBranch(currentSession)) {
 		items.push({
 			id: "current-copy-branch",
@@ -430,7 +432,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 					String(pr.number),
 					pr.url,
 					session.title,
-					session.branch ?? "",
+					sessionBranchPresentation(session).branch ?? "",
 					workspace.name,
 					pr.state,
 				];

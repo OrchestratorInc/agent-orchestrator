@@ -1,11 +1,11 @@
-import { renderHook, waitFor } from "@testing-library/react";
-import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { onlineManager, QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
 
-const { captureRendererEventMock, cloudState, getMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, remoteGetMock, setQueryHealthyMock } = vi.hoisted(
+const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, refetchCloudOrgMock, remoteGetMock, setQueryHealthyMock } = vi.hoisted(
 	() => ({
 		captureRendererEventMock: vi.fn().mockResolvedValue(undefined),
 		cloudState: {
@@ -15,9 +15,11 @@ const { captureRendererEventMock, cloudState, getMock, hasTrustedApiBaseUrlMock,
 			org: undefined as { id: string } | undefined,
 		},
 		getMock: vi.fn(),
+		getSessionMock: vi.fn(),
 		hasTrustedApiBaseUrlMock: vi.fn(() => true),
 		listProjectsMock: vi.fn(),
 		listSessionsMock: vi.fn(),
+		refetchCloudOrgMock: vi.fn(),
 		remoteGetMock: vi.fn(),
 		setQueryHealthyMock: vi.fn(),
 	}),
@@ -34,17 +36,18 @@ vi.mock("../lib/host-clients", () => ({ clientForHost: () => ({ GET: remoteGetMo
 
 vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { listProjects: listProjectsMock, listSessions: listSessionsMock },
+		client: { getSession: getSessionMock, listProjects: listProjectsMock, listSessions: listSessionsMock },
 		ready: cloudState.ready,
 		baseUrl: "https://cp.example.com",
 	}),
 }));
 
 vi.mock("./useCloudOrg", () => ({
-	useCloudOrg: () => ({ org: cloudState.org, isLoading: cloudState.loading, error: cloudState.error, ready: cloudState.ready }),
+	useCloudOrg: () => ({ org: cloudState.org, isLoading: cloudState.loading, error: cloudState.error, ready: cloudState.ready, refetch: refetchCloudOrgMock }),
 }));
 
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { CloudCpError } from "../lib/cloud-cp";
+import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -79,6 +82,7 @@ beforeEach(() => {
 	cloudState.org = undefined;
 	listProjectsMock.mockReset();
 	listSessionsMock.mockReset().mockResolvedValue({ items: [] });
+	refetchCloudOrgMock.mockReset().mockResolvedValue({});
 	remoteGetMock.mockReset();
 	setQueryHealthyMock.mockReset();
 });
@@ -129,6 +133,24 @@ describe("useWorkspaceQuery", () => {
 		await waitFor(() => expect(result.current.isError).toBe(true));
 		expect(result.current.error).toEqual(new Error("AO daemon API is not ready"));
 		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("fetches as soon as the daemon is ready instead of waiting out a retry backoff", async () => {
+		hasTrustedApiBaseUrlMock.mockReturnValue(false);
+		respondWith({ projects: { data: { projects: [{ id: "p1", name: "Project", path: "/p" }] } } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 60_000 } } });
+		const slowRetryWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper: slowRetryWrapper });
+		await waitFor(() => expect(result.current.failureCount).toBe(1));
+
+		hasTrustedApiBaseUrlMock.mockReturnValue(true);
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 1_000 });
+		expect(result.current.data?.[0]).toMatchObject({ id: "p1" });
 	});
 
 	it("maps projects and their sessions, applying provider/status/title fallbacks", async () => {
@@ -722,6 +744,74 @@ describe("useWorkspaceQuery", () => {
 });
 
 describe("useWorkspaceScope board presentation", () => {
+	it("retries only the initial Cloud org lookup when it fails", async () => {
+		cloudState.ready = true;
+		cloudState.error = new Error("org unavailable");
+		respondWith({});
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+		await waitFor(() => expect(result.current.isSnapshotError).toBe(true));
+		const localReads = getMock.mock.calls.length;
+
+		await act(() => result.current.refetchSnapshot());
+
+		expect(refetchCloudOrgMock).toHaveBeenCalledTimes(1);
+		expect(listProjectsMock).not.toHaveBeenCalled();
+		expect(listSessionsMock).not.toHaveBeenCalled();
+		expect(getMock).toHaveBeenCalledTimes(localReads);
+	});
+
+	it.each(["projects", "sessions"])("retries only the failed initial Cloud %s snapshot", async (failed) => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockResolvedValue({ items: [{ id: "cloud-1", displayName: "Cloud project" }] });
+		const failedQuery = failed === "projects" ? listProjectsMock : listSessionsMock;
+		failedQuery.mockRejectedValue(new Error("unavailable"));
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+		await waitFor(() => expect(result.current.isSnapshotError).toBe(true));
+		const localReads = getMock.mock.calls.length;
+		const projectReads = listProjectsMock.mock.calls.length;
+		const sessionReads = listSessionsMock.mock.calls.length;
+		failedQuery.mockResolvedValue({ items: failed === "projects" ? [{ id: "cloud-1", displayName: "Cloud project" }] : [] });
+
+		await act(() => result.current.refetchSnapshot());
+		await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+
+		expect(refetchCloudOrgMock).not.toHaveBeenCalled();
+		expect(getMock).toHaveBeenCalledTimes(localReads);
+		expect(listProjectsMock).toHaveBeenCalledTimes(projectReads + (failed === "projects" ? 1 : 0));
+		expect(listSessionsMock).toHaveBeenCalledTimes(sessionReads + (failed === "sessions" ? 1 : 0));
+	});
+
+	it("hides the prior Cloud snapshot on sign-out and waits for the next organization's snapshot", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockResolvedValue({ items: [{ id: "cloud-1", displayName: "Old project" }] });
+		listSessionsMock.mockResolvedValue({ items: [{ id: "old-worker", projectId: "cloud-1", kind: "worker", status: "working" }] });
+		const { result, rerender } = renderHook(() => ({
+			board: useWorkspaceQuery({ projectId: "cloud-1" }),
+			scope: useWorkspaceScope("cloud-1"),
+		}), { wrapper });
+		await waitFor(() => expect(result.current.scope.data?.hasWorkerSessions).toBe(true));
+		expect(result.current.board.data?.some((workspace) => workspace.id === "cloud-1")).toBe(true);
+
+		cloudState.ready = false;
+		rerender();
+		expect(result.current.board.data?.some((workspace) => workspace.id === "cloud-1")).toBe(false);
+		expect(result.current.scope.data?.project).toBeUndefined();
+
+		cloudState.ready = true;
+		cloudState.org = { id: "org-2" };
+		listProjectsMock.mockReturnValue(new Promise(() => undefined));
+		listSessionsMock.mockReturnValue(new Promise(() => undefined));
+		rerender();
+		expect(result.current.board.isSnapshotSuccess).toBe(false);
+		expect(result.current.scope.isSnapshotSuccess).toBe(false);
+		expect(result.current.board.data?.some((workspace) => workspace.id === "cloud-1")).toBe(false);
+		expect(result.current.scope.data?.project).toBeUndefined();
+	});
+
 	it("keeps a routed Cloud board pending while Cloud readiness and its first snapshot start", async () => {
 		cloudState.loading = true;
 		respondWith({});
@@ -1055,5 +1145,184 @@ describe("useWorkspacePolling", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("cloud projects made elsewhere", () => {
+	const cloudProject = (id: string, displayName: string) => ({
+		id, orgId: "org-1", displayName, repositoryUrl: `https://github.com/acme/${displayName}`, defaultBranch: "main",
+		config: {}, createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+	});
+	const cloudSession = (id: string, projectId: string) => ({
+		id, orgId: "org-1", projectId, kind: "worker", harness: "claude-code", displayName: id, status: "working",
+		activityState: "active", isTerminated: false, prs: [], createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+	});
+
+	function clientWrapper() {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		return { queryClient, Wrapper };
+	}
+
+	beforeEach(() => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+	});
+
+	it("refetches the project list once when the session list has a session of an unknown project", async () => {
+		// The project was made through the API after the list was fetched: the
+		// list is refetched so the project and its session show up.
+		listProjectsMock
+			.mockResolvedValueOnce({ items: [cloudProject("cp-1", "known")], page: { hasMore: false } })
+			.mockResolvedValue({ items: [cloudProject("cp-1", "known"), cloudProject("cp-new", "made-elsewhere")], page: { hasMore: false } });
+		listSessionsMock.mockResolvedValue({ items: [cloudSession("s-new", "cp-new")], page: { hasMore: false } });
+		const { queryClient, Wrapper } = clientWrapper();
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper: Wrapper });
+
+		await waitFor(() => expect(result.current.data?.find((workspace) => workspace.id === "cp-new")?.sessions.map((session) => session.id)).toEqual(["s-new"]), { timeout: 3000 });
+		expect(listProjectsMock).toHaveBeenCalledTimes(2);
+
+		// Seen again (the next poll), it is not asked for again.
+		await queryClient.refetchQueries({ queryKey: cloudSessionsQueryKey });
+		await new Promise((resolve) => setTimeout(resolve, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS + 100));
+		expect(listProjectsMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("refetches the project list when a session lookup finds a session of an unknown project", async () => {
+		// A session opened straight from a link or right after the API made it.
+		listProjectsMock.mockResolvedValue({ items: [cloudProject("cp-1", "known")], page: { hasMore: false } });
+		getSessionMock.mockResolvedValue({ session: cloudSession("s-new", "cp-new") });
+		const { Wrapper } = clientWrapper();
+
+		const { result } = renderHook(() => ({ board: useWorkspaceQuery(), lookup: useCloudSessionQuery("org-1", "s-new") }), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.board.data?.some((workspace) => workspace.id === "cp-1")).toBe(true));
+		await waitFor(() => expect(result.current.lookup.data?.projectId).toBe("cp-new"));
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+	});
+
+	describe("polling a session lookup", () => {
+		// The view polls the direct lookup while the list does not have the
+		// session. It stops once the session is gone (404), the lookup fails, or
+		// the session is terminated.
+		async function pollFor(milliseconds: number) {
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(milliseconds);
+			});
+		}
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			getSessionMock.mockReset();
+			listProjectsMock.mockResolvedValue({ items: [], page: { hasMore: false } });
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("keeps polling a live session", async () => {
+			getSessionMock.mockResolvedValue({ session: cloudSession("s-1", "cp-1") });
+			const { Wrapper } = clientWrapper();
+			const { unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			expect(getSessionMock).toHaveBeenCalledTimes(1);
+			await pollFor(10_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(3);
+			unmount();
+		});
+
+		it("stops for a session the control plane no longer has, without a retry", async () => {
+			getSessionMock.mockRejectedValue(new CloudCpError("session not found", { status: 404, code: "not_found" }));
+			const { Wrapper } = clientWrapper();
+			const { result, unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-gone", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			expect(result.current.isError).toBe(true);
+			await pollFor(30_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(1);
+			unmount();
+		});
+
+		it("stops once the lookup fails", async () => {
+			getSessionMock
+				.mockResolvedValueOnce({ session: cloudSession("s-1", "cp-1") })
+				.mockRejectedValue(new CloudCpError("unavailable", { status: 503 }));
+			const { Wrapper } = clientWrapper();
+			const { result, unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			expect(result.current.isError).toBe(false);
+			// The next poll fails, and its one retry too.
+			await pollFor(5_100);
+			expect(result.current.isError).toBe(true);
+			const calls = getSessionMock.mock.calls.length;
+			expect(calls).toBe(3);
+			await pollFor(30_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(calls);
+			unmount();
+		});
+
+		it("stops for a terminated session", async () => {
+			getSessionMock.mockResolvedValue({ session: { ...cloudSession("s-1", "cp-1"), isTerminated: true } });
+			const { Wrapper } = clientWrapper();
+			const { unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			await pollFor(30_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(1);
+			unmount();
+		});
+	});
+
+	it("asks once for a project the list never returns, however often its session is seen", async () => {
+		listProjectsMock.mockResolvedValue({ items: [cloudProject("cp-1", "known")], page: { hasMore: false } });
+		listSessionsMock.mockResolvedValue({ items: [cloudSession("s-far", "cp-past-first-page")], page: { hasMore: false } });
+		const { queryClient, Wrapper } = clientWrapper();
+
+		renderHook(() => useWorkspaceQuery(), { wrapper: Wrapper });
+
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+		for (let poll = 0; poll < 3; poll++) await queryClient.refetchQueries({ queryKey: cloudSessionsQueryKey });
+		await new Promise((resolve) => setTimeout(resolve, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS + 100));
+		expect(listProjectsMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("gathers sightings into one refetch, and leaves a list not fetched yet alone", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = new QueryClient();
+			const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+			const key = [...cloudProjectsQueryKey, "https://cp.example.com", "org-1"];
+
+			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-a" }])).toBe(false);
+
+			queryClient.setQueryData(key, [cloudProject("cp-1", "known")]);
+			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-1" }])).toBe(false);
+			// A session lookup and an event see two new projects in the same moment.
+			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-a" }])).toBe(true);
+			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-b" }])).toBe(true);
+			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-a" }])).toBe(false);
+			expect(invalidate).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS);
+			expect(invalidate).toHaveBeenCalledTimes(1);
+			expect(invalidate).toHaveBeenCalledWith({ queryKey: key, exact: true });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refetches the project list when the window regains focus", async () => {
+		listProjectsMock.mockResolvedValue({ items: [cloudProject("cp-1", "known")], page: { hasMore: false } });
+		const { Wrapper } = clientWrapper();
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.data?.some((workspace) => workspace.id === "cp-1")).toBe(true));
+		expect(listProjectsMock).toHaveBeenCalledTimes(1);
+
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
+		focusManager.setFocused(undefined);
 	});
 });

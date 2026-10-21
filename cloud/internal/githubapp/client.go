@@ -56,6 +56,29 @@ type Client struct {
 type HTTPError struct {
 	StatusCode int
 	Message    string
+	// RateLimited is a 403 or 429 GitHub sent because a rate limit ran out,
+	// not because the caller lacks access; it says nothing about access.
+	RateLimited bool
+}
+
+// ErrUserAuthorizationRejected is GitHub refusing a user token exchange or
+// refresh outright (for example an expired, revoked or already used refresh
+// token), as opposed to failing to answer.
+var ErrUserAuthorizationRejected = errors.New("GitHub user authorization was rejected")
+
+// githubRateLimited reports whether a failed GitHub response is a rate limit
+// (primary: X-RateLimit-Remaining 0; secondary: Retry-After or the message).
+func githubRateLimited(response *http.Response, message string) bool {
+	switch response.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden:
+	default:
+		return false
+	}
+	return response.Header.Get("X-RateLimit-Remaining") == "0" ||
+		response.Header.Get("Retry-After") != "" ||
+		strings.Contains(strings.ToLower(message), "rate limit")
 }
 
 func (e *HTTPError) Error() string {
@@ -293,6 +316,23 @@ func (c *Client) ExchangeOAuthCode(ctx context.Context, code, verifier string) (
 	return response.AccessToken, nil
 }
 
+// ExchangeOAuthCodeForUser is ExchangeOAuthCode returning the whole user token
+// (with its refresh token and expiries), so the installation callback can keep
+// the user's GitHub authorization. verifier is omitted when empty, as in the
+// bundled installation-and-authorization flow.
+func (c *Client) ExchangeOAuthCodeForUser(ctx context.Context, code, verifier string) (UserAccessToken, error) {
+	payload := map[string]string{
+		"client_id":     c.clientID,
+		"client_secret": c.clientSecret,
+		"code":          strings.TrimSpace(code),
+		"redirect_uri":  c.OAuthCallbackURL(),
+	}
+	if verifier = strings.TrimSpace(verifier); verifier != "" {
+		payload["code_verifier"] = verifier
+	}
+	return c.exchangeUserToken(ctx, payload)
+}
+
 func (c *Client) ExchangeUserCode(
 	ctx context.Context,
 	code, verifier string,
@@ -346,7 +386,7 @@ func (c *Client) exchangeUserToken(
 	}
 	response.AccessToken = strings.TrimSpace(response.AccessToken)
 	if response.Error != "" || response.AccessToken == "" {
-		return UserAccessToken{}, errors.New("GitHub user authorization was rejected")
+		return UserAccessToken{}, ErrUserAuthorizationRejected
 	}
 	token := UserAccessToken{
 		value:        response.AccessToken,
@@ -719,6 +759,69 @@ func (c *Client) ListRepositories(ctx context.Context, installationID int64) ([]
 		}
 	}
 	return nil, errors.New("GitHub repository pagination exceeded limit")
+}
+
+// ListUserInstallationRepositories lists the repositories of an installation
+// that the user behind token can access: GitHub's intersection of the
+// installation's repository selection and the user's own permissions. A
+// user-scoped installation connection is synced from this list.
+func (c *Client) ListUserInstallationRepositories(
+	ctx context.Context,
+	token string,
+	installationID int64,
+) ([]Repository, error) {
+	if installationID <= 0 {
+		return nil, errors.New("GitHub installation id is invalid")
+	}
+	var repositories []Repository
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			Repositories []Repository `json:"repositories"`
+		}
+		path := fmt.Sprintf("/user/installations/%d/repositories?per_page=100&page=%d", installationID, page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &response); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, response.Repositories...)
+		if len(response.Repositories) < 100 {
+			return repositories, nil
+		}
+	}
+	return nil, errors.New("GitHub repository pagination exceeded limit")
+}
+
+// UserRepositoryAccess reports whether the user behind token can read and push
+// to a repository, addressed by its stable ID. A repository the user cannot see
+// is (false, false, nil): GitHub answers 404 (or 403) rather than revealing it.
+// A rate-limited answer is an error, not a denial.
+func (c *Client) UserRepositoryAccess(
+	ctx context.Context,
+	token string,
+	repositoryID int64,
+) (pull, push bool, err error) {
+	if repositoryID <= 0 {
+		return false, false, errors.New("GitHub repository id is invalid")
+	}
+	var repository struct {
+		Permissions struct {
+			Admin    bool `json:"admin"`
+			Maintain bool `json:"maintain"`
+			Push     bool `json:"push"`
+			Pull     bool `json:"pull"`
+		} `json:"permissions"`
+	}
+	path := fmt.Sprintf("/repositories/%d", repositoryID)
+	if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &repository); err != nil {
+		var httpError *HTTPError
+		if errors.As(err, &httpError) && !httpError.RateLimited &&
+			(httpError.StatusCode == http.StatusNotFound || httpError.StatusCode == http.StatusForbidden) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	permissions := repository.Permissions
+	push = permissions.Push || permissions.Maintain || permissions.Admin
+	return permissions.Pull || push, push, nil
 }
 
 func (c *Client) installationToken(ctx context.Context, installationID int64) (string, error) {
@@ -1288,7 +1391,11 @@ func (c *Client) jsonRequest(
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(raw, &failure)
-		return &HTTPError{StatusCode: response.StatusCode, Message: failure.Message}
+		return &HTTPError{
+			StatusCode:  response.StatusCode,
+			Message:     failure.Message,
+			RateLimited: githubRateLimited(response, failure.Message),
+		}
 	}
 	if destination == nil {
 		return nil

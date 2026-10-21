@@ -27,9 +27,11 @@ vi.mock("../lib/cloud-cp/renderer-client", () => ({
 	createRendererCloudCpClient: () => ({}),
 }));
 
-import { useCloudCp } from "./useCloudCp";
+let useCloudCp: typeof import("./useCloudCp").useCloudCp;
 
-beforeEach(() => {
+beforeEach(async () => {
+	vi.resetModules();
+	({ useCloudCp } = await import("./useCloudCp"));
 	cloudGateState.cloudEnabled = false;
 	getSessionMock.mockReset().mockReturnValue(new Promise(() => undefined));
 	settingsState.isLoading = true;
@@ -84,4 +86,19 @@ it("finishes loading without enabling Cloud when the fresh-mount account read is
 
 	expect(result.current).toMatchObject({ isLoading: true, ready: false });
 	await waitFor(() => expect(result.current).toMatchObject({ isLoading: false, ready: false }));
+});
+
+it("keeps a later mount ready while it rechecks the same authenticated account", async () => {
+	settingsState.isLoading = false;
+	settingsState.settings = { cloudControlPlaneUrl: "https://cloud.example" };
+	cloudGateState.cloudEnabled = true;
+	getSessionMock.mockResolvedValue({ user: { id: "user-1" } });
+	const first = renderHook(() => useCloudCp());
+	await waitFor(() => expect(first.result.current.ready).toBe(true));
+	first.unmount();
+	getSessionMock.mockReturnValue(new Promise(() => undefined));
+
+	const next = renderHook(() => useCloudCp());
+
+	expect(next.result.current).toMatchObject({ isLoading: false, ready: true });
 });

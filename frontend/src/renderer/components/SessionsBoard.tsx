@@ -45,7 +45,7 @@ import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAct
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { ProjectTerminationFeedback } from "./ShellTopbar";
@@ -135,7 +135,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
-		isSuccess: localWorkspaceQuery.isSnapshotSuccess,
+		isSuccess: localWorkspaceQuery.isSuccess,
+		isSnapshotSuccess: localWorkspaceQuery.isSnapshotSuccess,
 		isError: localWorkspaceQuery.isSnapshotError,
 		hasProjects: workspaces.length > 0,
 		hasWorkerSessions: liveSessions.length > 0,
@@ -177,6 +178,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}, [navigate, hostId]);
 	const openSessionArtifact = useCallback((session: WorkspaceSession, path: string) => {
 		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, hostId, "artifact");
+		openSession(session);
+	}, [openSession, hostId]);
+	const openSessionArtifacts = useCallback((session: WorkspaceSession) => {
+		const uiKey = sessionUiKey(session.id, hostId);
+		useUiStore.getState().initializeInspectorSession(uiKey, Boolean(session.previewUrl), true);
+		useUiStore.getState().setInspectorView(uiKey, "artifacts");
+		useUiStore.getState().setInspectorOpen(uiKey, true);
 		openSession(session);
 	}, [openSession, hostId]);
 
@@ -270,7 +278,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
 			    board so lane height (and Needs You scrollbars) stay stable. */}
 			<div className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}>
-				{projectId && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
+				{projectId && (hostId || localWorkspaceQuery.isSnapshotSuccess) && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
 						<span className="min-w-0 flex-1">{health.message}</span>
@@ -303,8 +311,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				</div>
 			) : null}
 				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isSnapshotError) ? (
-					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
-				) : hostId && !workspace ? null : showWelcome ? (
+					<div className="flex flex-col items-center gap-3 py-10 text-xs text-passive">
+						<p role="alert">{t("shell.couldNotLoadSessions")}</p>
+						{localWorkspaceQuery.isSnapshotError ? (
+							<TopbarButton onClick={() => void localWorkspaceQuery.refetchSnapshot()}>{t("cloud.startupError.retry")}</TopbarButton>
+						) : null}
+					</div>
+				) : !hostId && !localWorkspaceQuery.isSnapshotSuccess ? null : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
 					<ProjectBoardEmpty actions={<ProjectBoardActions actions={projectActions} placement="empty" />} />
@@ -319,6 +332,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
+								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
 							/>

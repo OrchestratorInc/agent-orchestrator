@@ -65,6 +65,23 @@ describe("createWindowComposition", () => {
 		expect(addChildView).toHaveBeenLastCalledWith(view, 0);
 	});
 
+	it("keeps the raised shell above browser views added while an overlay is open", () => {
+		const { addChildView, composition, view } = setup();
+
+		composition.restackShell();
+		expect(addChildView).toHaveBeenCalledTimes(1);
+
+		composition.setOverlayOpen(true);
+		addChildView.mockClear();
+		composition.restackShell();
+		expect(addChildView).toHaveBeenCalledExactlyOnceWith(view);
+
+		composition.setOverlayOpen(false);
+		addChildView.mockClear();
+		composition.restackShell();
+		expect(addChildView).not.toHaveBeenCalled();
+	});
+
 	it("does not resize the transparent shell when raising overlays on Windows", () => {
 		const { composition, view } = setup("win32");
 

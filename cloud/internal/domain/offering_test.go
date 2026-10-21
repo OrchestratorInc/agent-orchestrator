@@ -2,31 +2,14 @@ package domain
 
 import "testing"
 
+// Plans apply to every organization once Stripe is configured: Freestyle is
+// paid by everyone, contract and internal organizations included.
 func TestBillingMode(t *testing.T) {
-	cases := []struct {
-		name          string
-		orgBilling    string
-		plan          string
-		grandfathered bool
-		stripe        bool
-		want          string
-	}{
-		{"no stripe is off even for self-serve", OrgBillingSelfServe, "free", false, false, BillingModeOff},
-		{"no stripe is off even for contract", OrgBillingContract, "free", false, false, BillingModeOff},
-		{"self-serve org on a paid deployment", OrgBillingSelfServe, "free", false, true, BillingModeSelfServe},
-		{"unset arrangement reads as self-serve", "", "starter", false, true, BillingModeSelfServe},
-		{"contract metadata", OrgBillingContract, "free", false, true, BillingModeContract},
-		{"contract metadata any spelling", " Contract ", "free", false, true, BillingModeContract},
-		{"internal plan", OrgBillingSelfServe, PlanInternal, false, true, BillingModeContract},
-		{"grandfathered org", OrgBillingSelfServe, "free", true, true, BillingModeContract},
+	if got := BillingMode(false); got != BillingModeOff {
+		t.Fatalf("no stripe: %q, want off", got)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := BillingMode(tc.orgBilling, tc.plan, tc.grandfathered, tc.stripe); got != tc.want {
-				t.Fatalf("BillingMode(%q, %q, %v, %v) = %q, want %q",
-					tc.orgBilling, tc.plan, tc.grandfathered, tc.stripe, got, tc.want)
-			}
-		})
+	if got := BillingMode(true); got != BillingModeSelfServe {
+		t.Fatalf("stripe configured: %q, want self_serve", got)
 	}
 }
 

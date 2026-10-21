@@ -4,6 +4,7 @@ import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-na
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { SheetHeader } from "../ui";
 import { composerSheetContentStyle } from "./chatLayout";
 import { rankComposerCatalog, type ComposerPickerCatalog, type RankedSuggestion } from "./composerSuggestions";
@@ -50,6 +51,7 @@ export function ComposerPickerSheet({
 							onChangeText={setQuery}
 							placeholder={kind === "skills" ? "Search skills" : "Search worktree files"}
 							placeholderTextColor={t.textTertiary}
+							{...textSelectionColors(t)}
 							style={styles.search}
 						/>
 						{query ? <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8} onPress={() => { haptics.tap(); setQuery(""); }}><Feather name="x-circle" size={iconSize.md} color={t.textTertiary} /></Pressable> : null}

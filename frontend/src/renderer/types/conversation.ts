@@ -10,6 +10,8 @@
  * lifecycle decisions all belong to the daemon. Nothing here recomputes them.
  */
 
+import type { ScriptRun } from "../lib/cloud-script-runs";
+
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
 
@@ -99,6 +101,13 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 }
 
+export interface ConversationUsageLimit {
+	/** Absolute provider reset time, when it can be determined safely. */
+	resetsAt?: string;
+	autoResume: boolean;
+	resumeError?: string;
+}
+
 export interface ConversationTurn {
 	id: string;
 	state: TurnState;
@@ -114,7 +123,10 @@ export interface ConversationTurn {
 	retryOfTurnId?: string;
 	/** A retry attempt exists, even if that child is outside the active branch. */
 	hasRetryAttempt?: boolean;
+	/** Durable human-prompt fact, independent of the loaded history page. */
+	hasHumanPrompt?: boolean;
 	errorMessage?: string;
+	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
 	completedAt?: string;
@@ -180,6 +192,8 @@ export interface ConversationMessage {
 	content?: ConversationContentSummary[];
 	/** False when the original prompt content cannot be reproduced safely. */
 	editAvailable?: boolean;
+	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
+	continuation?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
@@ -434,7 +448,22 @@ export interface SystemEventDetail {
 		| "context.reset"
 		| "context.boundary"
 		| "render"
-		| "artifact";
+		| "artifact"
+		| "workspace.setup"
+		| "workspace.script.run"
+		| "account.switched";
+	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
+	scriptRun?: ScriptRun;
+	/** account.switched: the account a stopped turn's conversation continues on. */
+	accountId?: string;
+	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
+	setupStatus?: "succeeded" | "failed" | "timed_out";
+	/** workspace.setup: the 1-based Setup step that failed or timed out. */
+	setupStep?: number;
+	/** workspace.setup: a failed step's command, the user and groups it ran as, where, and its full log. */
+	setupFailure?: { command?: string; user?: string; groups?: string[]; dir?: string; logPath?: string };
+	/** workspace.setup: why a failed step likely failed (no Docker, no sudo, a refused path). */
+	setupHint?: string;
 	/** render */
 	render?: RenderRef;
 	/** artifact */
@@ -578,6 +607,11 @@ export interface ConversationActivity {
 	 * card left on screen cannot answer a request that replaced it.
 	 */
 	requestId?: string;
+	/** Structured-input resolution decoded from the daemon's detail payload. */
+	inputResponse?: {
+		action: "accept" | "decline" | "cancel";
+		content?: Record<string, unknown>;
+	};
 	/** Provider correlation key used to attach nested agent activity to its parent. */
 	providerItemId?: string;
 	/**
@@ -768,6 +802,8 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
+	continueTurnId?: string;
 	conversationId: string;
 	sessionId: string;
 	harness: string;

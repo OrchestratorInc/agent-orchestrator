@@ -312,6 +312,9 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedUsageCostMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered usage-cost migration history: %w", err)
 	}
+	if err := repairRenumberedUsageLimitMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered usage-limit migration history: %w", err)
+	}
 	if err := prepareCancelledConversationTurnsMigration(db); err != nil {
 		return fmt.Errorf("prepare cancelled conversation-turn migration: %w", err)
 	}
@@ -362,6 +365,83 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 	return reconcileSchema(db)
+}
+
+const (
+	usageLimitMigrationVersion      int64 = 20261019220421171
+	usageLimitResetMigrationVersion int64 = 20261019220421514
+)
+
+// Adopt identifiable quota previews without skipping main's unrelated 0213/0214.
+// Foreign 0201 receipts remain intact; collided quota receipts move with their schema.
+func repairRenumberedUsageLimitMigrationHistory(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+	var legacyApplied, previewApplied, canonicalApplied int
+	if err := db.QueryRow(`
+SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 201 ORDER BY id DESC LIMIT 1), 0),
+       COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 213 ORDER BY id DESC LIMIT 1), 0),
+       COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`,
+		usageLimitMigrationVersion).Scan(&legacyApplied, &previewApplied, &canonicalApplied); err != nil {
+		return err
+	}
+	if legacyApplied != 1 && previewApplied != 1 {
+		return nil
+	}
+	var quotaShape int
+	if err := db.QueryRow(`
+SELECT (SELECT COUNT(*) FROM pragma_table_info('conversation_turns')
+        WHERE (name = 'usage_limit_resets_at' AND upper(type) = 'TIMESTAMP' AND "notnull" = 0)
+           OR (name = 'usage_limit_auto_resume' AND upper(type) = 'INTEGER' AND "notnull" = 1 AND dflt_value = '0')
+           OR (name = 'usage_limit_resume_error' AND upper(type) = 'TEXT' AND "notnull" = 1 AND dflt_value = quote('')))
+     + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'index'
+        AND name = 'conversation_turns_auto_resume' AND tbl_name = 'conversation_turns'
+        AND instr(sql, 'usage_limit_resets_at') > 0 AND instr(sql, 'usage_limit_auto_resume = 1') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'
+        AND name = 'conversation_turns_auto_resume_cdc_update' AND tbl_name = 'conversation_turns'
+        AND instr(sql, 'usage_limit_auto_resume') > 0 AND instr(sql, 'usage_limit_resume_error') > 0
+        AND instr(sql, 'INSERT INTO change_log') > 0)`).Scan(&quotaShape); err != nil {
+		return err
+	}
+	if quotaShape != 5 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A quota-shaped preview with no stale-binary columns owns the old 0213
+	// receipt. Relocate it so Goose can apply main's shipped 0213 normally.
+	moved, err := tx.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = 213
+AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'stale_binary_since')`, usageLimitMigrationVersion)
+	if err != nil {
+		return err
+	}
+	n, err := moved.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if canonicalApplied != 1 && n == 0 {
+		if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, usageLimitMigrationVersion); err != nil {
+			return err
+		}
+	}
+	// The deadline CDC body identifies quota's old 0214; main's receipt is
+	// retained when its version-refresh column is present.
+	if _, err := tx.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = 214
+AND NOT EXISTS (SELECT 1 FROM pragma_table_info('app_settings') WHERE name = 'version_refresh')
+AND EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'trigger'
+ AND name = 'conversation_turns_auto_resume_cdc_update'
+ AND instr(sql, 'OLD.usage_limit_resets_at IS NOT NEW.usage_limit_resets_at') > 0)`, usageLimitResetMigrationVersion); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that
@@ -2107,8 +2187,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMemcode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2222,6 +2303,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
+	if needsMemcode {
+		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2273,6 +2357,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
+	}
+	if !strings.Contains(schema, "'memcode'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
 	}
 	return nil
 }

@@ -104,7 +104,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	cmd = append(cmd, binary)
+	// Keep the release immutable while AO owns refresh and retention.
+	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
 	if agentName := copilotAgentName(cfg.SessionID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
@@ -149,7 +150,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	cmd = append(cmd, binary)
+	// Keep the release immutable while AO owns refresh and retention.
+	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	// Deliberately does not forward cfg.Config.Model: --model + --resume
 	// composition is unverified against a real copilot install (see #2895
@@ -181,6 +183,9 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if managed, ok := binaryutil.ManagedBinary("copilot"); ok {
+		return managed, nil
 	}
 
 	if runtime.GOOS == "windows" {
@@ -304,6 +309,13 @@ func copilotSystemPromptText(inline, file string) (string, error) {
 	return strings.TrimRight(string(data), "\n"), nil
 }
 
+// AgentProfileName is the per-session custom-agent profile AO installs for a
+// session with standing instructions, or "" when there are none. The terminal
+// launch selects it with --agent; Chat selects the same profile over ACP.
+func AgentProfileName(sessionID, systemPrompt, systemPromptFile string) string {
+	return copilotAgentName(sessionID, systemPrompt, systemPromptFile)
+}
+
 func copilotAgentName(sessionID, inlinePrompt, promptFile string) string {
 	if strings.TrimSpace(sessionID) == "" {
 		return ""
@@ -331,15 +343,23 @@ var copilotAgentNameReplacer = strings.NewReplacer(
 //	auto               -> --allow-all-tools (auto-approve every tool, still scoped paths/urls)
 //	bypass-permissions -> --allow-all (full bypass: tools, paths, urls)
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
+	*cmd = append(*cmd, ApprovalArgs(permissions)...)
+}
+
+// ApprovalArgs returns the Copilot CLI approval flags for one AO permission
+// mode, so the terminal and Chat launches share one answer to what each mode
+// allows.
+func ApprovalArgs(permissions ports.PermissionMode) []string {
 	switch ports.NormalizePermissionMode(permissions) {
-	case ports.PermissionModeDefault:
-		// No flag: defer to the user's ~/.copilot config / interactive prompts.
 	case ports.PermissionModeAcceptEdits:
-		*cmd = append(*cmd, "--allow-tool", "write")
+		return []string{"--allow-tool", "write"}
 	case ports.PermissionModeAuto:
-		*cmd = append(*cmd, "--allow-all-tools")
+		return []string{"--allow-all-tools"}
 	case ports.PermissionModeBypassPermissions:
-		*cmd = append(*cmd, "--allow-all")
+		return []string{"--allow-all"}
+	default:
+		// No flag: defer to the user's ~/.copilot config / interactive prompts.
+		return nil
 	}
 }
 
@@ -362,4 +382,12 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if trimmed := strings.TrimSpace(cfg.Model); trimmed != "" {
 		*cmd = append(*cmd, "--model", trimmed)
 	}
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

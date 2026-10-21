@@ -1,128 +1,170 @@
-import { memo, useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
-import { StyledQRCode } from "./StyledQRCode";
-import { scramblePairingCodes } from "./qrScramble";
+import { PAIRING_QR_VERSION, QrCanvas } from "./QrCanvas";
 
-/** Decoy layers cycled while waiting.
- *
- * Four, phase-offset by a quarter cycle each, so exactly two are on screen at
- * any moment — one rising, one falling. That overlap is what makes the field
- * appear to move: with layers fading fully out before the next arrived, it
- * read as a slideshow of separate codes rather than as one code churning. */
-const SCRAMBLE_LAYERS = 4;
+/** Crossfade between codes: long enough to read as one code becoming the
+ *  next, short enough that a fresh code is scannable at once. Matches the
+ *  `duration-200` on each slot below. */
+export const QR_FADE_MS = 200;
 
-/** Keep the finished code ready to scan quickly; it only dissolves in. */
-export const QR_RESOLVE_MS = 260;
+/** Slack after a fade before the code beneath it is dropped, so it never goes
+ *  while the new one is still partly transparent. */
+const QR_RETIRE_SLACK_MS = 50;
 
-/** One pass through the decoy stack. Unhurried on purpose: a fast shuffle
- *  reads as a glitch, a slow one as something being worked out.
- *
- *  MUST match the ao-qr-decoy animation duration in styles.css — the per-layer
- *  delays below are phase offsets within this cycle, and they only produce the
- *  intended overlap if both agree. */
-export const QR_SCRAMBLE_CYCLE_MS = 4800;
+function prefersReducedMotion(): boolean {
+	return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+/** One of the two canvases. `fade` animates the next change of `visible`. */
+interface Slot {
+	value: string | null;
+	visible: boolean;
+	fade: boolean;
+}
+
+interface Model {
+	slots: [Slot, Slot];
+	/** The slot holding the newest code: it draws above the other. */
+	front: 0 | 1;
+}
+
+const EMPTY: Slot = { value: null, visible: false, fade: false };
+const EMPTY_MODEL: Model = { slots: [EMPTY, EMPTY], front: 0 };
+
+function modelWith(front: 0 | 1, slot: Slot): Model {
+	return { slots: front === 0 ? [slot, EMPTY] : [EMPTY, slot], front };
+}
 
 /**
- * The pairing code, and the wait that precedes it, as one continuous object.
+ * The pairing code, crossfaded whenever it changes.
  *
- * Bringing the tunnel up takes ~30s. Rather than show a message and then
- * replace it with a QR, this renders decoy codes of the same shape — same QR
- * version, same module size, same corner markers, same logo — shuffling
- * underneath, and dissolves them into the real code when it arrives. Only the
- * data changes; the object on screen never does.
+ * Two canvases, one per code. A new code is drawn hidden into the free canvas
+ * (drawing is synchronous), then faded in over the current one, which stays
+ * fully opaque beneath until the fade has finished and is only then cleared:
+ * no blank card between the two, and the placeholder never shows through a
+ * half-faded code. Only the opacity animates, so a change costs the compositor
+ * one layer fade and no repaint.
  *
- * The logo sits still throughout, so there is a fixed point to look at while
- * the field around it churns.
+ * `value` null fades the code out, revealing whatever the caller has placed
+ * behind this component (the blurred placeholder), and clears the canvases.
  *
- * Owns its own square box and puts the caption beneath it. The caption cannot
- * live inside the clipping aspect-square the panel used to impose — that is
- * what cut it in half and pushed it under the button below.
+ * Fading is opt-in through `animate`, which the caller sets only once the user
+ * has generated or regenerated a code. A code that already exists when the page
+ * opens is on screen in the first frame, with no fade or placeholder, and a
+ * change nobody asked for swaps at once. Reduced motion makes every change such
+ * a swap.
+ *
+ * Fills its parent, which owns the fixed square size, so a code change can
+ * never shift the layout.
  */
 export const PairingQr = memo(function PairingQr({
 	value,
 	size,
-	caption,
+	animate = false,
 	className,
 }: {
-	/** The real pairing code, or null while it is still being prepared. */
+	/** The real pairing code, or null when there is none to show. */
 	value: string | null;
 	size: number;
-	caption: string;
+	/** Crossfade code changes from now on. Off at mount, so opening the page
+	 *  never plays a transition. */
+	animate?: boolean;
 	className?: string;
 }) {
-	const decoys = useMemo(() => scramblePairingCodes(SCRAMBLE_LAYERS), []);
-	// Kept mounted through the crossfade so the two codes overlap rather than
-	// one being swapped for the other.
-	const [scrambling, setScrambling] = useState(!value);
+	// A code present at mount is shown at once: it is not a change.
+	const [model, setModel] = useState<Model>(() => (value ? modelWith(0, { value, visible: true, fade: false }) : EMPTY_MODEL));
+	const modelRef = useRef(model);
+	modelRef.current = model;
+	const animateRef = useRef(animate);
+	animateRef.current = animate;
+	const pending = useRef<{ frame?: number; timer?: ReturnType<typeof setTimeout> }>({});
 
 	useEffect(() => {
-		if (!value) {
-			setScrambling(true);
-			return;
+		const cancel = () => {
+			if (pending.current.frame !== undefined) cancelAnimationFrame(pending.current.frame);
+			if (pending.current.timer !== undefined) clearTimeout(pending.current.timer);
+			pending.current = {};
+		};
+		cancel();
+
+		// Settle whatever an earlier change left in flight: the newest code is
+		// fully shown, the one beneath it gone.
+		const settled = modelRef.current;
+		const current = settled.slots[settled.front];
+		const base: Model = current.value ? modelWith(settled.front, { value: current.value, visible: true, fade: false }) : EMPTY_MODEL;
+		const instant = !animateRef.current || prefersReducedMotion();
+
+		if (value === null) {
+			if (!current.value) return cancel;
+			if (instant) {
+				setModel(EMPTY_MODEL);
+				return cancel;
+			}
+			setModel({ ...base, slots: base.slots.map((slot) => (slot.value ? { ...slot, visible: false, fade: true } : slot)) as [Slot, Slot] });
+			pending.current.timer = setTimeout(() => setModel(EMPTY_MODEL), QR_FADE_MS + QR_RETIRE_SLACK_MS);
+			return cancel;
 		}
-		const timer = setTimeout(() => setScrambling(false), QR_RESOLVE_MS);
-		return () => clearTimeout(timer);
+
+		if (current.value === value) {
+			// Already the newest code: only an unfinished change needs settling.
+			const other = settled.slots[1 - settled.front];
+			if (other.value !== null || !current.visible || current.fade) setModel(base);
+			return cancel;
+		}
+
+		const next = (current.value ? 1 - settled.front : settled.front) as 0 | 1;
+		if (instant) {
+			setModel(modelWith(next, { value, visible: true, fade: false }));
+			return cancel;
+		}
+		// Drawn hidden above the current code, which stays where it is.
+		const slots: [Slot, Slot] = [EMPTY, EMPTY];
+		slots[settled.front] = base.slots[settled.front];
+		slots[next] = { value, visible: false, fade: false };
+		setModel({ slots, front: next });
+		// Two frames, so the hidden state is painted before the fade starts;
+		// flipping it in the frame the canvas mounted in would skip the fade.
+		pending.current.frame = requestAnimationFrame(() => {
+			pending.current.frame = requestAnimationFrame(() => {
+				setModel((prev) => ({
+					...prev,
+					slots: prev.slots.map((slot, index) => (index === next && slot.value === value ? { ...slot, visible: true, fade: true } : slot)) as [Slot, Slot],
+				}));
+				pending.current.timer = setTimeout(
+					() => setModel((prev) => ({ ...prev, slots: prev.slots.map((slot, index) => (index === next ? { ...slot, fade: false } : EMPTY)) as [Slot, Slot] })),
+					QR_FADE_MS + QR_RETIRE_SLACK_MS,
+				);
+			});
+		});
+		return cancel;
 	}, [value]);
 
-	const resolved = Boolean(value);
-
 	return (
-		<div className={cn("flex w-full flex-col", className)}>
-			{/* Light card. The code is drawn dark-on-light because Android's
-			    scanner will not decode an inverted one.
-
-			    The code fills the card: StyledQRCode draws its own quiet zone, so
-			    insetting it here only stacked a second margin on top of that one
-			    and shrank the modules for nothing. */}
-			<div className="relative aspect-square w-full overflow-hidden rounded-md bg-white">
-				{/* Drifts only while waiting: a code being scanned must hold still. */}
-				<div className={cn("absolute inset-0", !resolved && "ao-qr-drift")}>
-					{scrambling &&
-						decoys.map((code, i) => (
-							<div
-								key={code}
-								className={cn("ao-qr-decoy absolute inset-0", resolved && "ao-qr-decoy--settling")}
-								style={
-									resolved
-										? undefined
-										: { animationDelay: `${i * (QR_SCRAMBLE_CYCLE_MS / SCRAMBLE_LAYERS)}ms` }
-								}
-								aria-hidden="true"
-							>
-								<StyledQRCode value={code} size={size} className="ao-qr-visual block size-full [&_svg]:size-full" />
-							</div>
-						))}
-					{value && (
-						<div
-							key={value}
-							className="ao-qr-resolved absolute inset-0"
-							style={{ animationDuration: `${QR_RESOLVE_MS}ms` }}
-						>
-							<StyledQRCode
-								value={value}
-								data-qr-value={value}
-								size={size}
-											className="ao-qr-visual block size-full [&_svg]:size-full"
-							/>
-						</div>
-					)}
-				</div>
-			</div>
-			{/* Fixed height, not min-height: the button below must not move when
-			    the caption appears or goes. Clamped rather than grown, so a long
-			    translation wrapping to a second line still cannot shift it. */}
-			<div className="flex h-6 items-center justify-center px-2">
-				{!resolved && (
-					<p
-						className="flex items-center justify-center gap-2 text-center text-caption leading-(--leading-settings-mobile-hint) text-settings-muted"
-						role="status"
+		<div className={cn("absolute inset-0", className)}>
+			{model.slots.map((slot, index) =>
+				slot.value === null ? null : (
+					<div
+						key={index}
+						aria-hidden={slot.value !== value}
+						className={cn(
+							// Opaque, so a canvas that has finished fading in hides the one
+							// beneath it completely.
+							"absolute inset-0 bg-white",
+							index === model.front ? "z-10" : "z-0",
+							slot.fade ? "transition-opacity duration-200 ease-out motion-reduce:transition-none" : "transition-none",
+							slot.visible ? "opacity-100" : "opacity-0",
+						)}
 					>
-						<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
-						<span className="line-clamp-2">{caption}</span>
-					</p>
-				)}
-			</div>
+						<QrCanvas
+							value={slot.value}
+							data-qr-value={slot.value === value ? slot.value : undefined}
+							size={size}
+							version={PAIRING_QR_VERSION}
+							className="block"
+						/>
+					</div>
+				),
+			)}
 		</div>
 	);
 });

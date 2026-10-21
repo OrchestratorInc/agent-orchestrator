@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -47,7 +47,14 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
-	useWorkspaceQuery: workspaceQueryMock,
+	useWorkspaceQuery: () => {
+		const query = workspaceQueryMock();
+		return {
+			isSnapshotSuccess: query.isSuccess ?? true,
+			isSnapshotError: query.isError ?? false,
+			...query,
+		};
+	},
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
@@ -136,7 +143,7 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 	);
 }
 
-function renderBoardWithShell(queryClient: QueryClient, projectId?: string) {
+function renderBoardWithShell(queryClient: QueryClient, projectId?: string, shellOverrides: Partial<ShellContextValue> = {}) {
 	queryClient.setQueryData(["system-requirements", "http://127.0.0.1:3001"], {
 		ready: true,
 		requirements: [],
@@ -144,6 +151,7 @@ function renderBoardWithShell(queryClient: QueryClient, projectId?: string) {
 	const shell = {
 		daemonStatus: { state: "ready" },
 		workspaceStartupState: "ready",
+		...shellOverrides,
 	} as ShellContextValue;
 	return render(
 		<QueryClientProvider client={queryClient}>
@@ -174,7 +182,7 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it("keeps the startup boundary up until an empty Cloud board snapshot is ready", () => {
+	it("keeps Cloud-only pending content blank without covering navigation until the snapshot is ready", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [],
 			isSuccess: true,
@@ -185,8 +193,9 @@ describe("SessionsBoard", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const view = renderBoardWithShell(queryClient, "p1");
 
-		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
 
 		workspaceQueryMock.mockReturnValue({
 			data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }],
@@ -207,6 +216,42 @@ describe("SessionsBoard", () => {
 		expect(screen.getByTestId("project-board-empty")).toBeInTheDocument();
 	});
 
+	it("does not report a missing Cloud orchestrator before the first session snapshot arrives", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }],
+			isSuccess: true, isError: false, isSnapshotSuccess: false, isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.queryByText("No orchestrator is running for this project.")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
+	});
+
+	it.each([
+		{ daemonStatus: { state: "starting" } },
+		{ workspaceStartupState: "loading" },
+	] as Partial<ShellContextValue>[])("retains the daemon startup screen for %j while Cloud is pending", (shellOverrides) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [], isSuccess: true, isError: false, isSnapshotSuccess: false, isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1", shellOverrides);
+
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+	});
+
+	it("retains the daemon startup screen while the local workspace query is pending", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: undefined, isSuccess: false, isError: false, isSnapshotSuccess: false, isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+	});
+
 	it("shows the empty state immediately for an existing cached Cloud snapshot", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }],
@@ -221,19 +266,23 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
 	});
 
-	it("shows the load error without worker columns when the initial Cloud snapshot fails", () => {
+	it("shows an accessible initial Cloud error with an explicit snapshot retry and no worker columns", async () => {
+		const refetchSnapshot = vi.fn();
 		workspaceQueryMock.mockReturnValue({
 			data: [],
 			isSuccess: true,
 			isError: false,
 			isSnapshotSuccess: false,
 			isSnapshotError: true,
+			refetchSnapshot,
 		});
 		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
 
-		expect(screen.getByText("Could not load sessions.")).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not load sessions.");
 		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(refetchSnapshot).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
@@ -688,6 +737,8 @@ describe("SessionsBoard", () => {
 						title: "spawning-card-task",
 						status: "working",
 						provisionState: "provisioning",
+						branch: "ao/s-spawning/root",
+						provisionSteps: [{ id: "worktree", status: "running" }],
 						activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" },
 					}),
 				]),
@@ -699,8 +750,37 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("spawning-card-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByText("Starting Claude Code…")).toBeInTheDocument();
+		expect(within(card).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(card).queryByText("ao/s-spawning/root")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Working")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
+	});
+
+	it("shows naming shimmer on a synchronous orchestrator-created worker until its worktree is ready", () => {
+		const worker = boardSession({
+			id: "s-delegated",
+			title: "Review: composer correctness",
+			status: "idle",
+			provisionState: "ready",
+			branch: undefined,
+			provisionSteps: [{ id: "worktree", status: "running" }],
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([worker])], isError: false, isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = renderBoardWithClient(queryClient, "p1");
+		const card = () => screen.getByText(worker.title).closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card()).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(card()).getByRole("status").textContent).not.toMatch(/…|\.\.\./);
+
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([{ ...worker, branch: "ao/composer-review/root", provisionSteps: [{ id: "worktree", status: "done" }] }])],
+			isError: false, isSuccess: true,
+		});
+		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
+		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
+		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
 	});
 
 	it("shows start failure instead of Awaiting PR on a failed card", () => {
@@ -1700,6 +1780,10 @@ describe("SessionsBoard", () => {
 });
 
 describe("SessionsBoard artifacts", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {}, workspaceFileOpenRequest: null });
+	});
+
 	const artifact = (name: string, updatedAt: string, kind: "html" | "markdown" = "markdown") => ({
 		kind,
 		name,
@@ -1732,7 +1816,7 @@ describe("SessionsBoard artifacts", () => {
 		renderBoard("p1");
 
 		const list = await screen.findByTestId("board-session-artifacts");
-		const links = within(list).getAllByRole("button");
+		const links = within(list).getAllByRole("button", { name: /^Open artifact / });
 		expect(links.map((link) => link.textContent)).toEqual(["newest.html", "middle.md"]);
 		expect(list).toHaveTextContent("+2 more");
 
@@ -1748,6 +1832,97 @@ describe("SessionsBoard artifacts", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "p1", sessionId: "s-art" },
 		});
+	});
+
+	it.each([3, 10, 12])("expands and collapses %i artifacts in place, capped at ten", async (count) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art",
+				title: "Write the report",
+				status: "working",
+				outputType: "artifact",
+				artifactFiles: Array.from({ length: count }, (_, index) =>
+					artifact(`file-${String(index + 1).padStart(2, "0")}.md`, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const list = await screen.findByTestId("board-session-artifacts");
+		const more = within(list).getByRole("button", { name: `+${count - 2} more` });
+		expect(more).toHaveAttribute("aria-expanded", "false");
+		more.focus();
+		await userEvent.keyboard("{Enter}");
+
+		expect(more).toHaveAttribute("aria-expanded", "true");
+		expect(document.getElementById(more.getAttribute("aria-controls")!)).toBeInTheDocument();
+		expect(within(list).getAllByRole("button", { name: /^Open artifact / })).toHaveLength(Math.min(count, 10));
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+
+		if (count > 10) {
+			await userEvent.click(within(list).getByRole("button", { name: "Open in inspector" }));
+			// SessionView initializes the inspector when navigation mounts a session.
+			useUiStore.getState().initializeInspectorSession("s-art", false, true);
+			expect(useUiStore.getState().inspectorSessions["s-art"]).toMatchObject({
+				initialized: true, isOpen: true, view: "artifacts",
+			});
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+			expect(navigateMock).toHaveBeenCalledTimes(1);
+		} else {
+			expect(within(list).queryByRole("button", { name: "Open in inspector" })).not.toBeInTheDocument();
+		}
+
+		await userEvent.click(within(list).getByRole("button", { name: "Show less" }));
+		expect(within(list).getAllByRole("button", { name: /^Open artifact / })).toHaveLength(2);
+		expect(more).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it.each([1, 2])("shows %i artifacts without expansion controls", async (count) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art", title: "Write the report", status: "working", outputType: "artifact",
+				artifactFiles: Array.from({ length: count }, (_, index) => artifact(`file-${index}.md`, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		const list = await screen.findByTestId("board-session-artifacts");
+		expect(within(list).getAllByRole("button")).toHaveLength(count);
+		expect(within(list).queryByRole("button", { name: /more|Show less|Open in inspector/ })).not.toBeInTheDocument();
+	});
+
+	it.each(["pointer", "keyboard"])("suppresses previews after expansion until intentional %s interaction", async (interaction) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art", title: "Write the report", status: "working", outputType: "artifact",
+				artifactFiles: ["a.md", "b.md", "c.md"].map((name) => artifact(name, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		await userEvent.click(await screen.findByRole("button", { name: "+1 more" }));
+		const row = screen.getByRole("button", { name: "Open artifact c.md" });
+		fireEvent.pointerOver(row, { pointerType: "mouse", clientX: 0, clientY: 0 });
+		fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 0, clientY: 0 });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 350)));
+		expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+
+		if (interaction === "pointer") {
+			fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 10, clientY: 10 });
+			expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+			await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+			fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 20, clientY: 20 });
+			await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+			expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+		} else {
+			fireEvent.focus(row);
+		}
+		expect(await screen.findByRole("status", { name: "c.md" })).toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("orders artifacts with equal or unparseable timestamps by path", () => {

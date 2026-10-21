@@ -31,6 +31,7 @@ type spawnOptions struct {
 	name            string
 	model           string
 	output          string
+	effort          string
 	claimPR         string
 	noTakeover      bool
 	skipAgentCheck  bool
@@ -50,6 +51,7 @@ type spawnRequest struct {
 	Branch          string `json:"branch,omitempty"`
 	Prompt          string `json:"prompt,omitempty"`
 	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
 	RequestedOutput string `json:"requestedOutput,omitempty"`
 	DisplayName     string `json:"displayName"`
 }
@@ -172,11 +174,12 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Branch:          opts.branch,
 				Prompt:          opts.prompt,
 				Model:           strings.TrimSpace(opts.model),
+				Effort:          strings.TrimSpace(opts.effort),
 				RequestedOutput: opts.output,
 				DisplayName:     name,
 			}
 			var res spawnResult
-			if err := ctx.postJSON(cmd.Context(), "sessions", req, &res); err != nil {
+			if err := ctx.postSetupJSON(cmd.Context(), "sessions", req, &res); err != nil {
 				return err
 			}
 			if strings.TrimSpace(res.Session.ID) == "" {
@@ -228,13 +231,14 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
 	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an AO-managed plain directory (requires --agent)")
-	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, mimo-code, deepseek-harness, openhands, command-code (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
+	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, mimo-code, deepseek-harness, openhands, command-code, memcode (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
 	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
+	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")

@@ -140,3 +140,17 @@ describe("PR review composer", () => {
 		expect(prompt).not.toContain('name="arrow-up-right"');
 	});
 });
+
+describe("session changes pill", () => {
+	// Codex-style: once the session has changed files, the meta row offers them
+	// where the "Sent after this" note sat. The placeholder still says a message
+	// waits for the turn, so nothing is lost, and steering stays reachable.
+	it("replaces the queue note and keeps the steer action", () => {
+		const start = composer.indexOf("{changes && !(deliveryPresentation.showQueueNote && attachments.length)");
+		expect(start).toBeGreaterThan(-1);
+		const pill = composer.slice(start, composer.indexOf(': deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>', start));
+		expect(pill).toContain("changes.onOpen()");
+		expect(pill).toContain('accessibilityLabel="Steer this turn now"');
+		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
+	});
+});

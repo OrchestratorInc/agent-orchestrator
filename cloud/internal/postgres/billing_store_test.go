@@ -132,14 +132,15 @@ func TestEntitlementFollowsSubscriptionStatus(t *testing.T) {
 		t.Fatalf("canceled: err = %v, want ErrPlanRequired", err)
 	}
 
-	// An internal organization is exempt, and a webhook never overwrites it.
+	// An internal organization still pays for Freestyle, and a webhook never
+	// overwrites its plan.
 	if _, err := admin.Exec(context.Background(),
 		`UPDATE ao_organizations SET plan = 'internal' WHERE id = $1`, fixture.orgID); err != nil {
 		t.Fatal(err)
 	}
 	subscribe(t, store, fixture.orgID, "canceled", nil)
-	if _, err := createKind(store, fixture, "worker"); err != nil {
-		t.Fatalf("internal plan must be exempt: %v", err)
+	if _, err := createKind(store, fixture, "worker"); !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("internal plan, freestyle without a subscription: err = %v, want ErrPlanRequired", err)
 	}
 	billing, err := store.OrgBilling(context.Background(), domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID)
 	if err != nil || billing.Plan != domain.PlanInternal {
@@ -410,13 +411,15 @@ func TestOrganizationsCreatedBeforeTheCutoffAreExempt(t *testing.T) {
 		`UPDATE ao_organizations SET created_at = now() - interval '1 day' WHERE id = $1`, fixture.orgID); err != nil {
 		t.Fatal(err)
 	}
+	// Freestyle is paid by every organization: grandfathering no longer
+	// exempts it.
 	store.EnableBilling(7*24*time.Hour, time.Now().Add(-time.Hour))
-	if _, err := createKind(store, fixture, "worker"); err != nil {
-		t.Fatalf("an org created before the cutoff must be exempt: %v", err)
+	if _, err := createKind(store, fixture, "worker"); !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("an org created before the cutoff, freestyle: err = %v, want ErrPlanRequired", err)
 	}
 	summary, err := store.BillingSummary(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID)
-	if err != nil || !summary.Exempt || !summary.Entitled {
-		t.Fatalf("summary = %+v, err = %v; want exempt", summary, err)
+	if err != nil || summary.Exempt || summary.Entitled {
+		t.Fatalf("summary = %+v, err = %v; want not exempt", summary, err)
 	}
 	store.EnableBilling(7*24*time.Hour, time.Now().Add(-48*time.Hour))
 	if _, err := createKind(store, fixture, "worker"); !errors.Is(err, ErrPlanRequired) {

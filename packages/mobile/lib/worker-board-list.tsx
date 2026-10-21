@@ -22,7 +22,7 @@ import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
-import { archiveSessionMessage } from "./worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
 import { type, space } from "./tokens";
@@ -295,11 +295,11 @@ export function WorkerBoardList({
 	const confirmDeleteSession = useCallback((session: DashboardSession) => {
 		haptics.warning();
 		Alert.alert(
-			"Archive session?",
-			archiveSessionMessage(session.displayName?.trim() || "this worker"),
+			ARCHIVE_SESSION_CONFIRM.title,
+			ARCHIVE_SESSION_CONFIRM.message,
 			[
-				{ text: "Cancel", style: "cancel" },
-				{ text: "Archive session", style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+				{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
 			],
 		);
 	}, [kill]);

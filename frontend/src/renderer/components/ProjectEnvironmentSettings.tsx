@@ -55,7 +55,7 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 		},
 	});
 	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
-	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
+	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
 	return <VariablesEditor key={projectId} projectId={projectId} initial={query.data.config?.env} onSaveState={onSaveState} onSaved={() => {
 		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -174,13 +174,13 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		return () => window.clearTimeout(timer);
 	}, [activeTab, dirty, mutation, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<p className="text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
+		<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
 		{showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			<div className="settings-row-bar">
 				<span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span>
 				<div className="flex items-center gap-2">
-					<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="ghost"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
-					<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button" variant="ghost"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+					<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+					<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 				</div>
 			</div>
 		</ProjectSettingsSection> : activeTab === "variables" ? <><ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
@@ -192,19 +192,19 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 			</div>)}
 		</ProjectSettingsSection>
 		<div className="flex items-center justify-end gap-2">
-				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="outline"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
-				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} size="sm" type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 			</div>
-		</> : <ProjectSettingsSection title={t("settings.project.pasteVariables")}>
-			<p className="text-sm leading-5 text-settings-muted">{t("settings.project.envPasteHint")}</p>
+		</> : <ProjectSettingsSection title={t("settings.project.pasteVariables")} grouped><div className="settings-content-row flex flex-col gap-3">
+			<p className="text-control leading-4 text-settings-muted">{t("settings.project.envPasteHint")}</p>
 			<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-(--size-textarea-min) min-w-0 resize-none rounded-md! py-2.5 font-mono" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
 			<div className="flex justify-end gap-2">
-				<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
-				<Button disabled={!pasteText.trim()} onClick={importPasted} type="button">{t("settings.project.importVariables")}</Button>
+				<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label">{t("settings.project.envPasteCancel")}</Button>
+				<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
 			</div>
-		</ProjectSettingsSection>}
-		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
-		{error && <p role="alert" className="text-sm text-error">{error}</p>}
-		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
+		</div></ProjectSettingsSection>}
+		{importedCount !== null && <p role="status" className="px-(--settings-row-inset) text-xs text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
+		{error && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{error}</p>}
+		{mutation.isError && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
 	</form>;
 }

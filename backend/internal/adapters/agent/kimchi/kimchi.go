@@ -274,6 +274,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd = []string{binary}
+	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	appendPermissionFlags(&cmd, cfg.Permissions)
 	if err := appendToolFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools); err != nil {
 		return nil, false, err
@@ -416,4 +420,12 @@ func (p *Plugin) kimchiBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }
