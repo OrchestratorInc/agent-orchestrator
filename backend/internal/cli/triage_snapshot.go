@@ -153,20 +153,8 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 		fmt.Fprintf(&b, "unavailable: %s\n", triageErrorReason(err))
 	}
 	github := <-githubCh
+	// Unconfirmed candidates stay in context.md for the agent; posted evidence never lists them.
 	duplicates := <-duplicatesCh
-	if len(queries) == 0 {
-		evidence.WriteString("- Duplicate pre-search " + duplicates)
-	} else {
-		evidence.WriteString("- Duplicate candidates checked by keyword search only, not confirmed:\n")
-		for _, line := range strings.Split(strings.TrimSpace(duplicates), "\n") {
-			line = strings.TrimPrefix(line, "- ")
-			if strings.HasPrefix(line, "none found") {
-				line = "none found"
-			}
-			line, _, _ = strings.Cut(line, " https://")
-			fmt.Fprintf(&evidence, "  - %s\n", line)
-		}
-	}
 	draft := fmt.Sprintf(`status: draft
 
 Title: <one line, the symptom as the user sees it>
