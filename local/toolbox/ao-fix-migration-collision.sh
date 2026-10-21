@@ -97,12 +97,18 @@ read_fork_suffixes() {
 # Канонические номера. Сюда добавлять при появлении НОВОЙ fork-миграции;
 # суффикс из forkLocalMigrations без записи здесь получит следующий свободный
 # номер 9000+ автоматически (с warning'ом).
+#
+# ВАЖНО (инцидент 2026-10-21): канон = номер ПЕРВОЙ ПУБЛИКАЦИИ миграции.
+# Если fork-миграция уехала в fork/main под timestamp-номером и живые БД её
+# уже применили — переименование меняет номер, раннер считает её непримененной
+# и повторяет SQL («index already exists» → демон не стартует). Такие миграции
+# канонизируются ПОД СВОИМ существующим номером, не на 9000+.
 CANONICAL_LIST="add_user_config:9001
 session_provider_stamp:9006
 gateway_entries:9011
 review_run_publication:9012
 app_settings_process_inventory:9013
-preview_poll_sessions:9014"
+preview_poll_sessions:20261020173311321"
 
 is_fork_suffix() {
   printf '%s\n' "$FORK_SUFFIXES" | grep -qx "$1"

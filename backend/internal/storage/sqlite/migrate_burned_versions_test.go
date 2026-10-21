@@ -214,12 +214,12 @@ var shippedMigrations = map[int64]string{
 	// Fork-local migrations live in the reserved 9000+ range so a sync rebase
 	// can never renumber them onto a number upstream will claim. See
 	// migrate_fork_reserved_range_test.go for why.
-	9001: "9001_add_user_config.sql",
-	9006: "9006_session_provider_stamp.sql",
-	9011: "9011_gateway_entries.sql",
-	9012: "9012_review_run_publication.sql",
-	9013: "9013_app_settings_process_inventory.sql",
-	9014: "9014_preview_poll_sessions.sql",
+	20261020173311321: "20261020173311321_preview_poll_sessions.sql",
+	9001:              "9001_add_user_config.sql",
+	9006:              "9006_session_provider_stamp.sql",
+	9011:              "9011_gateway_entries.sql",
+	9012:              "9012_review_run_publication.sql",
+	9013:              "9013_app_settings_process_inventory.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
