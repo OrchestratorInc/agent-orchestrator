@@ -213,7 +213,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -283,6 +283,7 @@ type GetSessionRow struct {
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
 	ProvisionSteps                   string
+	SpawnWarnings                    string
 	BranchState                      string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
@@ -365,6 +366,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.ProvisionState,
 		&i.ProvisionError,
 		&i.ProvisionSteps,
+		&i.SpawnWarnings,
 		&i.BranchState,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
@@ -399,7 +401,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -469,6 +471,7 @@ type GetSessionByAutomationRunIDRow struct {
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
 	ProvisionSteps                   string
+	SpawnWarnings                    string
 	BranchState                      string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
@@ -551,6 +554,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.ProvisionState,
 		&i.ProvisionError,
 		&i.ProvisionSteps,
+		&i.SpawnWarnings,
 		&i.BranchState,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
@@ -748,7 +752,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -818,6 +822,7 @@ type ListAllSessionsRow struct {
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
 	ProvisionSteps                   string
+	SpawnWarnings                    string
 	BranchState                      string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
@@ -906,6 +911,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.ProvisionState,
 			&i.ProvisionError,
 			&i.ProvisionSteps,
+			&i.SpawnWarnings,
 			&i.BranchState,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
@@ -983,7 +989,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -1053,6 +1059,7 @@ type ListSessionsByProjectRow struct {
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
 	ProvisionSteps                   string
+	SpawnWarnings                    string
 	BranchState                      string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
@@ -1141,6 +1148,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.ProvisionState,
 			&i.ProvisionError,
 			&i.ProvisionSteps,
+			&i.SpawnWarnings,
 			&i.BranchState,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
@@ -1958,6 +1966,29 @@ type SetSessionRuntimeReleasedParams struct {
 // released launch, and only while that launch is still the session's own.
 func (q *Queries) SetSessionRuntimeReleased(ctx context.Context, arg SetSessionRuntimeReleasedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionRuntimeReleased, arg.LaunchID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionSpawnWarnings = `-- name: SetSessionSpawnWarnings :execrows
+UPDATE sessions SET
+    spawn_warnings = ?1,
+    updated_at = ?2
+WHERE id = ?3
+`
+
+type SetSessionSpawnWarningsParams struct {
+	SpawnWarnings string
+	UpdatedAt     time.Time
+	ID            domain.SessionID
+}
+
+// Record non-fatal spawn warnings. Like SetSessionProvisionSteps it writes only
+// its own column, so a concurrent controller commit cannot clear it.
+func (q *Queries) SetSessionSpawnWarnings(ctx context.Context, arg SetSessionSpawnWarningsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionSpawnWarnings, arg.SpawnWarnings, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

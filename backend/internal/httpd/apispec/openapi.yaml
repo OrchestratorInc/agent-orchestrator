@@ -15126,6 +15126,10 @@ components:
           - mergeable
           - merged
           type: string
+        spawnWarnings:
+          items:
+            type: string
+          type: array
         staleBinary:
           $ref: '#/components/schemas/SessionStaleBinary'
         status:
@@ -17813,6 +17817,8 @@ components:
           $ref: '#/components/schemas/ContainerReapConfig'
         defaultBranch:
           type: string
+        disableFetchBeforeSpawn:
+          type: boolean
         env:
           additionalProperties:
             type: string

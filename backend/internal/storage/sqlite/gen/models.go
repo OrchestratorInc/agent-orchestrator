@@ -723,6 +723,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	SpawnWarnings                    string
 	RuntimeReleasedLaunchID          string
 	StaleBinarySince                 sql.NullTime
 	StaleBinaryVersion               string
