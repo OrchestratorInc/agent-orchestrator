@@ -740,3 +740,91 @@ func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
 		}
 	}
 }
+
+// Copilot's resolver returns the platform-native binary behind the npm loader,
+// but npm links the package's bin, copilot, into the release (#6991).
+func TestManagedCopilotUpdateFromNativeBinaryBaseline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX release fixtures")
+	}
+	s := newTestService("darwin", "npm")
+	s.managedRoot = t.TempDir()
+	s.releases = &releaseStoreStub{}
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		pkgDir := filepath.Join(prefix, "lib", "node_modules", "@github", "copilot")
+		if err := os.MkdirAll(filepath.Join(pkgDir, "node_modules", ".bin"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "npm-loader.js"), []byte("#!/bin/sh\necho 1.0.99\n"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "node_modules", ".bin", "copilot-darwin-arm64"), []byte("#!/bin/sh\necho 1.0.99\n"), 0o755); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+			return err
+		}
+		return os.Symlink(filepath.Join("..", "lib", "node_modules", "@github", "copilot", "npm-loader.js"), filepath.Join(prefix, "bin", "copilot"))
+	})
+	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Stdout = out
+		cmd.Stderr = stderr
+		return cmd.Run()
+	})
+	plan := Plan{Target: TargetCopilot, Method: "npm", Package: "@github/copilot"}
+	if !s.managedEligible(plan) {
+		t.Fatal("Copilot cannot install side by side")
+	}
+	baseline := &installedBaseline{
+		path:     "/Users/me/.npm-global/lib/node_modules/@github/copilot/node_modules/.bin/copilot-darwin-arm64",
+		expected: "1.0.99",
+	}
+	if err := s.runManagedInstall(context.Background(), plan, baseline, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := filepath.Join(s.managedRoot, string(TargetCopilot))
+	if current, _ := os.Readlink(filepath.Join(targetDir, "current")); current != filepath.Join("versions", "v1") {
+		t.Fatalf("current = %q, want versions/v1", current)
+	}
+	if record, ok := s.readManagedRecord(TargetCopilot); !ok || record.CLI != "copilot" || record.BinRel != filepath.Join("bin", "copilot") || record.Version != "1.0.99" {
+		t.Fatalf("record = %+v, %t", record, ok)
+	}
+	launcher := filepath.Join(s.ManagedBinDir(), "copilot")
+	out, err := exec.Command(launcher, "--version").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "1.0.99" {
+		t.Fatalf("launcher %s --version = %q, %v", launcher, out, err)
+	}
+}
+
+func TestManagedInstallWithoutTheExpectedExecutableExplainsAndKeepsDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX release fixtures")
+	}
+	s := newTestService("darwin", "npm")
+	s.managedRoot = t.TempDir()
+	s.releases = &releaseStoreStub{}
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(prefix, "bin", "something-else"), nil, 0o755)
+	})
+	plan := Plan{Target: TargetCodex, Method: "npm", Package: "@openai/codex"}
+	var output strings.Builder
+	err := s.runManagedInstall(context.Background(), plan, &installedBaseline{path: "/usr/local/bin/codex", expected: "1.1.0"}, nil, &output)
+	if err == nil {
+		t.Fatal("install without the executable succeeded")
+	}
+	if !strings.Contains(err.Error(), "Your current version is unchanged") || strings.Contains(err.Error(), s.managedRoot) {
+		t.Fatalf("error = %q; want a friendly headline without the path", err)
+	}
+	if !strings.Contains(output.String(), filepath.Join("v1", "bin", "codex")) || !strings.Contains(output.String(), "something-else") {
+		t.Fatalf("diagnostics = %q; want the missing path and what the install linked", output.String())
+	}
+	if entries, _ := os.ReadDir(filepath.Join(s.managedRoot, string(TargetCodex), "versions")); len(entries) != 0 {
+		t.Fatalf("failed release was kept: %v", entries)
+	}
+}

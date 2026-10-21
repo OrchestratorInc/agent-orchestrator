@@ -116,9 +116,22 @@ func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	return record, true
 }
 
-// managedCLIName is the executable name sessions launch, taken from the
-// binary AO resolved before the update.
-func managedCLIName(baseline *installedBaseline) string {
+// managedCLINames are the executables a target's package declares, for
+// targets whose resolved binary is named differently. Copilot's resolver skips
+// the npm loader for the platform-native binary (copilot-darwin-arm64), but
+// the package's bin, which npm links into the release, is copilot. OpenCode V2
+// shares V1's executable name and gets a launcher of its own.
+var managedCLINames = map[Target]string{
+	TargetCopilot:    "copilot",
+	TargetOpencodeV2: "opencode",
+}
+
+// managedCLIName is the executable name sessions launch: the package's
+// declared bin, otherwise the name of the binary AO resolved before the update.
+func managedCLIName(target Target, baseline *installedBaseline) string {
+	if name, ok := managedCLINames[target]; ok {
+		return name
+	}
 	if baseline == nil || baseline.path == "" {
 		return ""
 	}
@@ -199,17 +212,12 @@ func nextManagedDir(versionsDir string) string {
 // running session uses is touched; on any failure the new directory is
 // removed and the current release stays as it was.
 func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *installedBaseline, env []string, out io.Writer) error {
-	cli := managedCLIName(baseline)
+	cli := managedCLIName(plan.Target, baseline)
 	if cli == "" {
 		// A reinstall has no baseline; it repairs the copy AO already manages.
 		if record, ok := s.readManagedRecord(plan.Target); ok {
 			cli = record.CLI
 		}
-	}
-	// V1 and V2 share the native executable name but have distinct managed
-	// launchers. A v2 launcher baseline must still install bin/opencode.
-	if plan.Target == TargetOpencodeV2 {
-		cli = "opencode"
 	}
 	if cli == "" {
 		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")
@@ -251,7 +259,21 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	binRel := managedBinRel(s.goos, plan.Method, cli)
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
-		return fmt.Errorf("the install finished but %s is missing", binary)
+		// The path and what the install did link go to diagnostics; the
+		// headline says what the user needs to know.
+		_, _ = fmt.Fprintf(out, "\nExpected executable %s is missing.\n", binary)
+		if entries, readErr := os.ReadDir(filepath.Dir(binary)); readErr == nil {
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			listing := strings.Join(names, ", ")
+			if listing == "" {
+				listing = "(empty)"
+			}
+			_, _ = fmt.Fprintf(out, "%s contains: %s\n", filepath.Dir(binary), listing)
+		}
+		return errors.New("the update installed, but AO couldn't find its executable. Your current version is unchanged")
 	}
 	version, err := s.probeManagedVersion(ctx, plan.Target, binary)
 	if err != nil {
