@@ -124,11 +124,48 @@ ao project rm agent-orchestrator -y
 
 ---
 
+### ao project update
+
+Change selected project settings while preserving every omitted config field. Use `ao project get <id> --json` to inspect the current values first. The daemon validates the resulting config and repository identity.
+
+**Syntax:**
+```
+ao project update <id> [field flags] [--dry-run] [--yes] [--json]
+```
+
+**Flags:**
+
+| Flag | Meaning |
+|---|---|
+| `--canonical-repo-url string` | Explicit upstream HTTPS repository URL used for PR claims. An empty string clears it. |
+| `--default-branch string` | Base branch for new worktrees. An empty string restores automatic inference. |
+| `--dry-run` | Validate and show the exact `changes` without writing or prompting. |
+| `-y, --yes` | Skip the confirmation prompt for a write. |
+| `--json` | Output the project, `changes`, and dry-run state as JSON. |
+
+Supply at least one field flag. Without `--dry-run` or `--yes`, confirm the project id when prompted. The `changes` list reports each changed config path with `from` and `to` values. A no-op has an empty list and does not write. The PATCH API uses an empty string to clear either field; `null` or omission leaves it unchanged.
+
+**Examples:**
+
+```bash
+ao project update agent-orchestrator \
+  --canonical-repo-url https://github.com/OrchestratorInc/agent-orchestrator \
+  --dry-run --json
+ao project update agent-orchestrator \
+  --canonical-repo-url https://github.com/OrchestratorInc/agent-orchestrator \
+  --yes
+ao project update agent-orchestrator --default-branch main --yes
+```
+
+---
+
 ### ao project set-config
 
 Replace a project's saved configuration. AO reads these settings when it spawns a session. Use flags for common fields or `--config-json` for the full object. `--clear` removes all configuration.
 
 **Warning:** This command replaces the whole config, even when you use focused flags. The CLI silently ignores unknown keys in `--config-json`, so a typo can leave the replacement empty. Its config mirror also omits `effort`; `ao project get --json` cannot show it, and a CLI configuration replacement drops existing effort values. Use Project Settings in the desktop app or the daemon API when you need to preserve or change effort. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
+
+For a focused canonical repository URL or default branch change, use `ao project update` above.
 
 **Syntax:**
 ```

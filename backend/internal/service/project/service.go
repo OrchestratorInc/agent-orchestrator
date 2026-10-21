@@ -56,6 +56,7 @@ type Manager interface {
 	// SetConfig replaces a project's per-project config, returning the updated
 	// read-model.
 	SetConfig(ctx context.Context, id domain.ProjectID, in SetConfigInput) (Project, error)
+	UpdateConfig(ctx context.Context, id domain.ProjectID, in UpdateConfigInput) (UpdateConfigResult, error)
 
 	// Remove unregisters a project, stopping its sessions and reclaiming
 	// managed workspaces.
@@ -723,7 +724,7 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 		return Project{}, apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
 	}
 	if row.Kind.WithDefault() == domain.ProjectKindScratch {
-		if err := validateScratchProjectConfig(in.Config); err != nil {
+		if err := domain.ValidateScratchProjectConfig(in.Config); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
 	}
@@ -766,7 +767,7 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
 	if row.Kind.WithDefault() == domain.ProjectKindScratch {
-		if err := validateScratchProjectConfig(in.Config); err != nil {
+		if err := domain.ValidateScratchProjectConfig(in.Config); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
 	}
@@ -781,20 +782,37 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	return m.projectFromRow(ctx, row), nil
 }
 
-func validateScratchProjectConfig(cfg domain.ProjectConfig) error {
-	if cfg.CanonicalRepoURL != "" {
-		return errors.New("scratch projects do not support canonicalRepoURL")
+// UpdateConfig merges explicitly supplied config fields and optionally returns
+// the resulting diff without persisting it.
+func (m *Service) UpdateConfig(ctx context.Context, id domain.ProjectID, in UpdateConfigInput) (UpdateConfigResult, error) {
+	if err := validateProjectID(id); err != nil {
+		return UpdateConfigResult{}, err
 	}
-	if strings.TrimSpace(cfg.DefaultBranch) != "" {
-		return errors.New("scratch projects do not support defaultBranch")
+	patch := domain.ProjectConfigPatch{CanonicalRepoURL: in.CanonicalRepoURL, DefaultBranch: in.DefaultBranch}
+	stored, err := m.store.UpdateProjectConfig(ctx, string(id), patch, in.DryRun)
+	if err != nil {
+		var validation *domain.ProjectConfigPatchError
+		if errors.As(err, &validation) {
+			return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", validation.Error(), nil)
+		}
+		return UpdateConfigResult{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
 	}
-	if cfg.TrackerIntake.Enabled {
-		return errors.New("scratch projects do not support tracker intake")
+	if !stored.Found {
+		return UpdateConfigResult{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
-	if len(cfg.Reviewers) > 0 {
-		return errors.New("scratch projects do not support reviewers")
+	if stored.Applied {
+		m.modelScopeChanged(stored.After.ID)
 	}
-	return nil
+	row := stored.After
+	if in.DryRun {
+		row = stored.Before
+	}
+	changes := make([]ConfigChange, 0, len(stored.Changes))
+	for _, change := range stored.Changes {
+		changes = append(changes, ConfigChange{Path: change.Path, From: change.From, To: change.To})
+	}
+	project := m.projectFromRow(ctx, row)
+	return UpdateConfigResult{Project: &project, Changes: changes, DryRun: in.DryRun}, nil
 }
 
 // resolveGitOriginURL returns the project's `origin` remote URL via
