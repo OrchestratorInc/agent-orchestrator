@@ -98,6 +98,44 @@ func TestPermissionConfigOptionsMapsCommandCodeModes(t *testing.T) {
 	}
 }
 
+func TestPermissionConfigOptionsMapsDevinModes(t *testing.T) {
+	input := []ports.ChatConfigOption{{
+		ID:      "mode",
+		Current: ports.ChatConfigOptionValue{Select: "accept-edits"},
+		Choices: []ports.ChatConfigOptionChoice{
+			{Value: "accept-edits", Name: "Code"},
+			{Value: "smart", Name: "Smart"},
+			{Value: "ask", Name: "Ask"},
+			{Value: "plan", Name: "Plan"},
+			{Value: "bypass", Name: "Bypass Permissions"},
+		},
+	}}
+
+	got := permissionConfigOptions(domain.HarnessDevin, input)
+	want := []struct {
+		value string
+		mode  domain.PermissionMode
+	}{
+		{"accept-edits", domain.PermissionModeAcceptEdits},
+		{"smart", domain.PermissionModeAuto},
+		{"ask", ""},
+		{"plan", ""},
+		{"bypass", domain.PermissionModeBypassPermissions},
+	}
+	if len(got) != 1 || len(got[0].Choices) != len(want) {
+		t.Fatalf("choices = %+v, want every Devin mode kept", got)
+	}
+	for i, choice := range got[0].Choices {
+		if choice.Value != want[i].value || choice.PermissionMode != want[i].mode {
+			t.Errorf("choice[%d] = (%q, %q), want (%q, %q)",
+				i, choice.Value, choice.PermissionMode, want[i].value, want[i].mode)
+		}
+	}
+	if len(input[0].Choices) != 5 || input[0].Choices[0].PermissionMode != "" {
+		t.Fatal("mutated provider catalog")
+	}
+}
+
 func TestPermissionConfigOptionsLabelsOpenCodeTiers(t *testing.T) {
 	// AO injects these as OpenCode agents; build and plan are OpenCode's own
 	// execution modes and must stay out of the approvals vocabulary.
