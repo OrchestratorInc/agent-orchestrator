@@ -227,7 +227,7 @@ func NewLauncher(reviewers ports.ReviewerResolver, rt reviewerRuntime, dataDir s
 func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHarness, workspacePath string, mode ...domain.ReviewerInterfaceMode) error {
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
-		return fmt.Errorf("no reviewer adapter for harness %q", harness)
+		return fmt.Errorf("no reviewer adapter for agent %q", harness)
 	}
 	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && (len(mode) == 0 || mode[0] != domain.ReviewerInterfaceTUI) && l.reviewChatSupported(profile) {
 		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness())
@@ -259,7 +259,7 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 		return err
 	}
 	if authKnown && authStatus == ports.AgentAuthStatusUnauthorized {
-		return fmt.Errorf("reviewer harness %q: %w", harness, ports.ErrChatAuthRequired)
+		return fmt.Errorf("reviewer agent %q: %w", harness, ports.ErrChatAuthRequired)
 	}
 	if pf, ok := reviewer.(preflightReviewer); ok {
 		if err := pf.ReviewPreflight(ctx, workspacePath); err != nil {
@@ -295,7 +295,7 @@ func (l *agentLauncher) agentAuthStatus(ctx context.Context, harness domain.Revi
 	}
 	status, ok, err := l.auth.AuthStatus(ctx, harness)
 	if err != nil {
-		return "", false, fmt.Errorf("agent auth catalog for reviewer harness %q: %w", harness, err)
+		return "", false, fmt.Errorf("agent auth catalog for reviewer agent %q: %w", harness, err)
 	}
 	return status, ok, nil
 }
@@ -511,7 +511,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, restoring bool) (LaunchResult, error) {
 	reviewer, ok := l.reviewers.Reviewer(spec.Harness)
 	if !ok {
-		return LaunchResult{}, fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
+		return LaunchResult{}, fmt.Errorf("no reviewer adapter for agent %q", spec.Harness)
 	}
 	// Some adapters deliver the task in argv rather than InitialMessage.
 	// A replacement must start idle regardless of the delivery strategy.
@@ -744,7 +744,7 @@ func prependPathDir(dir, path string) string {
 func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec LaunchSpec) error {
 	reviewer, ok := l.reviewers.Reviewer(spec.Harness)
 	if !ok {
-		return fmt.Errorf("no reviewer adapter for harness %q", spec.Harness)
+		return fmt.Errorf("no reviewer adapter for agent %q", spec.Harness)
 	}
 	inv, err := l.prepareInvocation(ctx, spec)
 	if err != nil {
@@ -813,7 +813,7 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
-		return fmt.Errorf("no reviewer adapter for harness %q", harness)
+		return fmt.Errorf("no reviewer adapter for agent %q", harness)
 	}
 	canceller, ok := reviewer.(ports.ReviewerCanceller)
 	if !ok {

@@ -40,10 +40,10 @@ func NewVerifier(agents ports.AgentResolver, commands ports.CommandRunner) *Veri
 // probing authentication. Adapters may run a non-authenticating identity check.
 func (v *Verifier) Resolve(ctx context.Context, target Target) (string, error) {
 	if !IsAgentTarget(target) {
-		return "", fmt.Errorf("systeminstall: %s is not a harness", target)
+		return "", fmt.Errorf("systeminstall: %s is not an agent", target)
 	}
 	if v.agents == nil {
-		return "", fmt.Errorf("systeminstall: harness verifier is not configured")
+		return "", fmt.Errorf("systeminstall: agent verifier is not configured")
 	}
 	agent, ok := v.agents.Agent(domain.AgentHarness(target))
 	if !ok {
@@ -66,7 +66,7 @@ func (v *Verifier) Resolve(ctx context.Context, target Target) (string, error) {
 // Verify resolves and version-probes the installed harness executable.
 func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, error) {
 	if v.commands == nil {
-		return VerifyResult{}, fmt.Errorf("systeminstall: harness verifier is not configured")
+		return VerifyResult{}, fmt.Errorf("systeminstall: agent verifier is not configured")
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, v.timeout)

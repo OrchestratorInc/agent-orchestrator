@@ -9,7 +9,7 @@ These examples use capabilities shipped in the current Go daemon and Electron de
 
 1. Add a local GitHub repository in the desktop app.
 2. Create a task named **Fix settings validation**.
-3. Select an installed Chat-capable harness such as Codex or Claude Code.
+3. Select an installed Chat-capable agent such as Codex or Claude Code.
 4. Choose **Chat** and use a bounded prompt:
 
 ```text
@@ -21,7 +21,7 @@ Watch provider activities and changed files in Chat. If an approval or structure
 
 ## Use a native Terminal UI
 
-Create another task and choose **Terminal UI**. Orchestrator creates the worktree and launches the harness's native interface through native PTY hosts on macOS/Linux (tmux for legacy/fallback) or ConPTY on Windows.
+Create another task and choose **Terminal UI**. Orchestrator creates the worktree and launches the agent's native interface through native PTY hosts on macOS/Linux (tmux for legacy/fallback) or ConPTY on Windows.
 
 Use the desktop terminal for native interactive commands. Send normal follow-up guidance through Orchestrator's message controls:
 
@@ -62,7 +62,7 @@ Orchestrator observes GitHub PRs or GitLab MRs and displays their normalized fac
 
 ## Run a reviewer
 
-Open a session with a linked pull request, go to **Reviews**, select a configured reviewer harness, and start a review. Reviewer runs are separate from worker harness configuration. See the [agent catalog](/plugins/agents) for reviewer support. Enable the session auto-review toggle if you want reviews on eligible PR heads while the worker is idle; merge remains explicit.
+Open a session with a linked pull request, go to **Reviews**, select a configured reviewer agent, and start a review. Reviewer runs are separate from worker agent configuration. See the [agent catalog](/plugins/agents) for reviewer support. Enable the session auto-review toggle if you want reviews on eligible PR heads while the worker is idle; merge remains explicit.
 
 Inspect the result, then send actionable findings to the worker. Keep human review in the loop before merging.
 
@@ -146,7 +146,7 @@ A person can send a follow-up through the session message controls or `ao send -
 
 If an agent stops but its session remains, use **Resume agent** or `ao session resume-agent <id>`. If the session was terminated, use **Restore** or `ao session restore <id>` when offered. `exit-agent` stops only the controller; `kill` terminates the session.
 
-Recovery depends on the harness and saved provider state. It cannot recreate terminal screen output as Chat history. Check for uncommitted files before cleanup; Orchestrator does not force-delete a dirty registered worktree.
+Recovery depends on the agent and saved provider state. It cannot recreate terminal screen output as Chat history. Check for uncommitted files before cleanup; Orchestrator does not force-delete a dirty registered worktree.
 
 <span id="next" />
 

@@ -64,7 +64,7 @@ func TestResolveBinaryForMajor(t *testing.T) {
 					if incompatible.ExpectedMajor != tc.major || incompatible.FoundMajor != tc.wantFoundMajor || incompatible.FoundVersion != tc.output || incompatible.Path != binary {
 						t.Fatalf("incompatible version error = %#v, want expected=%d found=%d version=%q path=%q", incompatible, tc.major, tc.wantFoundMajor, tc.output, binary)
 					}
-					for _, detail := range []string{binary, tc.output, fmt.Sprintf("OpenCode %d", tc.wantFoundMajor), "select the matching harness"} {
+					for _, detail := range []string{binary, tc.output, fmt.Sprintf("OpenCode %d", tc.wantFoundMajor), "select the matching agent"} {
 						if !strings.Contains(err.Error(), detail) {
 							t.Fatalf("error = %q, want actionable detail %q", err, detail)
 						}

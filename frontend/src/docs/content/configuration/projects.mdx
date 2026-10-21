@@ -49,12 +49,12 @@ ao project rm <project-id>
 | `postCreate` | Shell commands Orchestrator runs after creating a workspace. |
 | `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
-| `worker` | Worker harness and agent-config overrides. |
-| `orchestrator` | Orchestrator harness and agent-config overrides. |
+| `worker` | Worker agent and agent-config overrides. |
+| `orchestrator` | Orchestrator agent and agent-config overrides. |
 | `agentRules` | Standing instructions for workers. |
 | `agentRulesFile` | Repository-relative instructions appended to worker instructions. |
 | `orchestratorRules` | Standing instructions for orchestrators. |
-| `reviewers` | Harnesses used for Orchestrator review runs. |
+| `reviewers` | Agents used for Orchestrator review runs. |
 | `trackerIntake` | Opt-in, read-only issue intake that can start workers. Also requires `AO_TRACKER_INTAKE=on` in the daemon environment. |
 | `containerReap` | Project-wide opt-out from Orchestrator's session-container cleanup. |
 
@@ -72,7 +72,7 @@ For a single repository or workspace root, set `defaultBranch` explicitly. For a
 
 <span id="split-orchestrator-and-worker-roles" />
 
-Choose each role's harness and provider settings independently:
+Choose each role's agent and provider settings independently:
 
 ```json
 {
@@ -93,11 +93,11 @@ Use the model names provided by the installed agent. Orchestrator uses the provi
 
 <span id="session-interface" />
 
-Chat support depends on the harness and its installed version. See the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui).
+Chat support depends on the agent and its installed version. See the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui).
 
 Choose the default in **Settings → General**. A choice made for a new task or with `ao spawn --mode chat|tui` takes precedence. Otherwise, Orchestrator uses its compatibility default, Terminal UI. `agentConfig.mode` selects a provider execution mode; it does not select Chat or Terminal UI.
 
-If you explicitly request Chat from an unsupported harness, spawning fails. An inherited Chat default can fall back to Terminal UI. Compatible Claude Code and Codex sessions can switch interfaces without changing the Orchestrator session or worktree. For switch choices and history behavior, see [Switch interfaces](/dashboard#switch-interfaces).
+If you explicitly request Chat from an unsupported agent, spawning fails. An inherited Chat default can fall back to Terminal UI. Compatible Claude Code and Codex sessions can switch interfaces without changing the Orchestrator session or worktree. For switch choices and history behavior, see [Switch interfaces](/dashboard#switch-interfaces).
 
 ## Setup and rules
 
@@ -132,7 +132,7 @@ For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt
 
 <span id="choose-a-reviewer" />
 
-Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, Orchestrator reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, Orchestrator uses the session's worker harness when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
+Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, Orchestrator reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, Orchestrator uses the session's worker agent when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer agent explicitly.
 
 These configuration fields choose a reviewer and enable automatic review for new workers. The JSON is a fragment, so keep other fields when using the API:
 
@@ -204,9 +204,9 @@ Create recurring work in **Automations**. Create reusable prompts or shell comma
 
 <span id="session-recovery" />
 
-Use **Resume agent** or `ao session resume-agent <id>` to restart a stopped controller in a session that is still active. Use **Restore** or `ao session restore <id>` to relaunch a terminated session when its harness supports recovery. `ao session kill <id>` terminates the session; `ao session exit-agent <id>` stops only its controller.
+Use **Resume agent** or `ao session resume-agent <id>` to restart a stopped controller in a session that is still active. Use **Restore** or `ao session restore <id>` to relaunch a terminated session when its agent supports recovery. `ao session kill <id>` terminates the session; `ao session exit-agent <id>` stops only its controller.
 
-Keep the harness installed and signed in. Recovery may restore the session, worktree, and supported provider conversation, but it cannot recreate arbitrary terminal screen history. Orchestrator does not force-delete a dirty registered worktree. `orchestratorSessionStrategy` and `opencodeIssueSessionStrategy` are not current configuration fields.
+Keep the agent installed and signed in. Recovery may restore the session, worktree, and supported provider conversation, but it cannot recreate arbitrary terminal screen history. Orchestrator does not force-delete a dirty registered worktree. `orchestratorSessionStrategy` and `opencodeIssueSessionStrategy` are not current configuration fields.
 
 ## Common problems
 
@@ -223,6 +223,6 @@ Keep the harness installed and signed in. Recovery may restore the session, work
 ## Next steps
 
 <Cards>
-	<Card title="Per-role agents" href="/guides/per-role-agents" description="Choose worker and orchestrator harnesses." />
+	<Card title="Per-role agents" href="/guides/per-role-agents" description="Choose worker and orchestrator agents." />
 	<Card title="Parallel work" href="/guides/parallel-issues" description="Start isolated sessions across projects." />
 </Cards>

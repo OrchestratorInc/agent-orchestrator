@@ -238,7 +238,7 @@ func (c ProjectConfig) Validate() error {
 	}
 	for role, ro := range map[string]RoleOverride{"worker": c.Worker, "orchestrator": c.Orchestrator} {
 		if ro.Harness != "" && !ro.Harness.IsKnown() {
-			return fmt.Errorf("%s.agent: unknown harness %q", role, ro.Harness)
+			return fmt.Errorf("%s.agent: unknown agent %q", role, ro.Harness)
 		}
 		if err := ro.AgentConfig.Validate(); err != nil {
 			return fmt.Errorf("%s.%w", role, err)
@@ -254,7 +254,7 @@ func (c ProjectConfig) Validate() error {
 	}
 	for i, rv := range c.Reviewers {
 		if !rv.Harness.IsKnown() {
-			return fmt.Errorf("reviewers[%d].harness: unknown harness %q", i, rv.Harness)
+			return fmt.Errorf("reviewers[%d].harness: unknown agent %q", i, rv.Harness)
 		}
 		if err := rv.AgentConfig.Validate(); err != nil {
 			return fmt.Errorf("reviewers[%d].agentConfig: %w", i, err)

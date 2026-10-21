@@ -25,16 +25,16 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 	d := AgentAuthDiagnostic{Method: method, Code: code, CheckedAt: time.Now()}
 	switch code {
 	case "credential_file_missing":
-		d.Reason = "AO did not find the credential file at the location this harness checks."
-		d.NextStep = "Compare the selected host, user and harness config directory with the terminal where login works. A terminal-only config override may not be present in AO."
+		d.Reason = "AO did not find the credential file at the location this agent checks."
+		d.NextStep = "Compare the selected host, user and agent config directory with the terminal where login works. A terminal-only config override may not be present in AO."
 	case "credential_file_empty":
 		d.Reason = "The credential file AO read is empty."
-		d.NextStep = "Check that the working terminal uses this same credential store, then use the harness's login flow to repair it."
+		d.NextStep = "Check that the working terminal uses this same credential store, then use the agent's login flow to repair it."
 	case "credential_file_read":
 		d.Reason = "AO could read this credential file; this alone does not establish a usable login."
 	case "credential_file_invalid":
 		d.Reason = "AO could not parse the credential file in the format this adapter expects."
-		d.NextStep = "Check the harness version and credential-store format. If native login works, include these diagnostics in a bug report; do not share the file contents."
+		d.NextStep = "Check the agent version and credential-store format. If native login works, include these diagnostics in a bug report; do not share the file contents."
 	case "credential_store_unreadable":
 		d.Reason = "AO could not read the credential store."
 		d.NextStep = "Check file permissions, keychain access, and the user running AO on the selected host."
@@ -43,19 +43,19 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 		d.NextStep = "Make that variable available to the AO process, then restart AO and check again. A variable set only in a terminal shell may not reach the desktop app."
 	case "credential_command_deferred":
 		d.Reason = "The credential is supplied by a command. AO does not execute credential commands during this background check."
-		d.NextStep = "Confirm access in the harness itself. An inconclusive AO check here does not mean the native login is broken."
+		d.NextStep = "Confirm access in the agent itself. An inconclusive AO check here does not mean the native login is broken."
 	case "credential_environment_missing":
 		d.Reason = "None of the credential variables checked here is set in AO's process."
 		d.NextStep = "Compare these variable names with the working terminal. If you change AO's environment, restart AO and check again; do not copy key values into a report."
 	case "credentials_disabled":
 		d.Reason = "The native credential store contains records, but none has an enabled, nonempty credential."
-		d.NextStep = "Review the provider's login in the harness; disabled or empty records do not establish a usable login."
+		d.NextStep = "Review the provider's login in the agent; disabled or empty records do not establish a usable login."
 	case "check_unsupported":
-		d.Reason = "AO does not have a supported authentication check for this harness."
-		d.NextStep = "Use the harness's native login check on the selected host. AO cannot infer that you are signed out."
+		d.Reason = "AO does not have a supported authentication check for this agent."
+		d.NextStep = "Use the agent's native login check on the selected host. AO cannot infer that you are signed out."
 	case "check_inconclusive":
-		d.Reason = "AO could not determine authentication from the available evidence. This is not proof that the harness is signed out."
-		d.NextStep = "Compare the executable and credential sources below with the working terminal, then re-check. If they match, report the harness version and these diagnostics."
+		d.Reason = "AO could not determine authentication from the available evidence. This is not proof that the agent is signed out."
+		d.NextStep = "Compare the executable and credential sources below with the working terminal, then re-check. If they match, report the agent version and these diagnostics."
 	case "check_failed":
 		d.Reason = "AO's authentication check failed before it could establish a result."
 		d.NextStep = "Review the preceding check outcomes and compare the executable, host and credential source with the working terminal."
@@ -92,12 +92,12 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 		d.Reason = "A local credential is configured; its presence alone does not prove provider access."
 	case "credential_missing":
 		d.Reason = "AO could not resolve a credential for this provider."
-		d.NextStep = "Check the harness login and credential environment on the selected host."
+		d.NextStep = "Check the agent login and credential environment on the selected host."
 	case "provider_unsupported":
 		d.Reason = "AO cannot directly verify the selected provider configuration."
-		d.NextStep = "Verify access using the harness on the selected host."
+		d.NextStep = "Verify access using the agent on the selected host."
 	case "token_renewal_pending":
-		d.Reason = "Signed in. The stored access token has expired; the harness renews it with its refresh token the next time it runs, so no action is needed."
+		d.Reason = "Signed in. The stored access token has expired; the agent renews it with its refresh token the next time it runs, so no action is needed."
 	case "provider_accepted":
 		d.Reason = "The provider accepted the selected credential."
 	case "provider_rejected":

@@ -256,10 +256,10 @@ func normalizeDisabledModels(ids []string) ([]string, bool) {
 }
 
 // ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
-var ErrInvalidHarnessDefault = errors.New("invalid harness default")
+var ErrInvalidHarnessDefault = errors.New("invalid agent default")
 
 // ErrUnknownHarness marks a preference for a harness AO does not know.
-var ErrUnknownHarness = errors.New("unknown harness")
+var ErrUnknownHarness = errors.New("unknown agent")
 
 // SetHarnessDefault replaces the selected harness's picker preference. The
 // store writes only that harness's entry, so concurrent saves for other

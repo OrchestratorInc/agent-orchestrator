@@ -11,7 +11,7 @@ Use **Connect Mobile** to pair the native phone app with your desktop.
 2. Put both devices on the same trusted network. In Connect Mobile, choose **Generate** to turn on the separate mobile connection. The app shows an address, password, and QR when a reachable endpoint is ready; a blurred or preparing QR cannot pair a phone.
 3. In the mobile app, tap **Pair Desktop** during onboarding. Newer mobile builds call this button **Pair a machine**. From an unpaired screen, tap **Scan pairing code**. The app opens the scanner. Scan the desktop QR. Treat the entire QR/link as a password.
 4. If scanning fails or camera access is unavailable, tap **Enter details manually** on the pairing screen and enter the address, port, and password shown on the desktop. The listener normally starts at port `3011` but can choose another free port. Use the displayed address, not `127.0.0.1`, which means the phone itself when entered there. A failed scan offers **Try again**.
-5. Open the paired computer in the mobile app, choose a project and worker, then open its Chat or Terminal UI. An approval request needs your response in the session. Pull request and review screens show repository and reviewer state. If a control is absent, check the session interface and harness capability rather than assuming the phone created a second session.
+5. Open the paired computer in the mobile app, choose a project and worker, then open its Chat or Terminal UI. An approval request needs your response in the session. Pull request and review screens show repository and reviewer state. If a control is absent, check the session interface and agent capability rather than assuming the phone created a second session.
 
 Turning mobile access off closes the authenticated listener. Regenerating its password invalidates old pairing credentials. If the phone reports an incompatible pairing or identity contract, update both apps; current desktop pairing does not generate a legacy v1 fallback.
 
@@ -63,7 +63,7 @@ Do not share pairing screenshots or links. Use device mute/remove controls in Co
 
 ## What mobile supports
 
-The Expo/React Native app is a native control surface over the same daemon resources as desktop. New mobile sessions prefer Chat when a compatible installed harness is available; Terminal UI remains an explicit compatibility choice.
+The Expo/React Native app is a native control surface over the same daemon resources as desktop. New mobile sessions prefer Chat when a compatible installed agent is available; Terminal UI remains an explicit compatibility choice.
 
 Mobile supports structured Chat, Terminal UI, session creation, the same capability-gated Chat/TUI handoff, approvals and structured input, model and agent controls, compaction and rollback when the session advertises those capabilities, voice dictation, attachments, a workspace shell, and generated previews.
 

@@ -28,11 +28,11 @@ import (
 
 var (
 	// ErrHarnessActive prevents installers from replacing a binary used by a live session.
-	ErrHarnessActive = errors.New("systeminstall: harness has an active session")
+	ErrHarnessActive = errors.New("systeminstall: agent has an active session")
 	// ErrInstallMethod reports an unknown or currently unavailable install method.
 	ErrInstallMethod = errors.New("systeminstall: invalid install method")
 	// ErrInstallActive prevents a second operation from being silently discarded.
-	ErrInstallActive = errors.New("systeminstall: harness install operation already active")
+	ErrInstallActive = errors.New("systeminstall: agent install operation already active")
 	// ErrInstallOwner refuses to update a binary the selected method did not install.
 	ErrInstallOwner = errors.New("systeminstall: installation owner not confirmed")
 	// ErrUpdateVersion rejects an invalid caller-supplied verification target.
@@ -715,7 +715,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		}
 	}
 	if !IsAgentTarget(target) {
-		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
+		return Job{}, fmt.Errorf("systeminstall: unknown agent target %q", target)
 	}
 	var releaseHarness func()
 	requiresHarnessGate := target == TargetDroid || target == TargetFX || operation == AgentOperationReinstall || operation == AgentOperationUpdate
@@ -1096,7 +1096,7 @@ func (s *Service) Recover(ctx context.Context) error {
 // Verify starts adapter-backed verification without rerunning an installer.
 func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	if !IsAgentTarget(target) {
-		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
+		return Job{}, fmt.Errorf("systeminstall: unknown agent target %q", target)
 	}
 	s.mu.Lock()
 	if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {

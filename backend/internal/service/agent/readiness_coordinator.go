@@ -545,7 +545,7 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	} else if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
 		path, err = resolver.ResolveBinary(ctx)
 	} else {
-		return successfulInstallation(attempted, domain.AgentInstallationUnknown, domain.AgentReadinessReasonInstallCheckUnsupported, "Installation checks are not supported for this harness."), false
+		return successfulInstallation(attempted, domain.AgentInstallationUnknown, domain.AgentReadinessReasonInstallCheckUnsupported, "Installation checks are not supported for this agent."), false
 	}
 	if errors.Is(err, ports.ErrAgentBinaryIdentityUnknown) {
 		return successfulInstallation(attempted, domain.AgentInstallationUnknown, domain.AgentReadinessReasonInstallIdentityPending, item.Manifest.Name+" is present but its identity has not been confirmed."), false
@@ -591,7 +591,7 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	}
 	checker, ok := item.Agent.(ports.AgentAuthChecker)
 	if !ok {
-		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this harness."), false
+		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this agent."), false
 	}
 	timeout := c.authTimeout
 	if timeout == defaultAuthCheckTimeout && item.Harness == domain.HarnessOpenCodeV2 {
@@ -807,7 +807,7 @@ func failedAuthentication(at time.Time, code, reason string) domain.AgentAuthent
 }
 
 func skippedAuthentication(at time.Time) domain.AgentAuthenticationObservation {
-	return successfulAuthentication(at, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthSkippedNotInstalled, "Authentication was skipped because the harness is not installed.")
+	return successfulAuthentication(at, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthSkippedNotInstalled, "Authentication was skipped because the agent is not installed.")
 }
 
 func inconclusiveAuthentication(at time.Time) domain.AgentAuthenticationObservation {

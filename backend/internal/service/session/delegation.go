@@ -175,11 +175,11 @@ func (s *Service) refineDelegatedTaskTitleInBackground(workerID domain.SessionID
 func (s *Service) refineDelegatedTaskTitle(ctx context.Context, workerID domain.SessionID, in DelegateTaskInput) error {
 	raw, err := s.manager.RunBackgroundTask(ctx, workerID, delegatedTaskTitleSystemPrompt, in.Brief)
 	if err != nil {
-		return fmt.Errorf("generate title with worker harness: %w", err)
+		return fmt.Errorf("generate title with worker agent: %w", err)
 	}
 	title := generatedTaskTitle(raw)
 	if title == "" {
-		return errors.New("worker harness returned an empty title")
+		return errors.New("worker agent returned an empty title")
 	}
 	_, err = s.store.RenameSessionIfDisplayName(
 		ctx, workerID, delegatedTaskDisplayName(in.Brief), title, s.now(),

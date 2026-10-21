@@ -122,7 +122,7 @@ func (s *Service) harnessInUse(ctx context.Context, target Target) (sessions, re
 	if s.sessions != nil {
 		records, err := s.sessions.ListAllSessions(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("systeminstall: list sessions before harness operation: %w", err)
+			return nil, nil, fmt.Errorf("systeminstall: list sessions before agent operation: %w", err)
 		}
 		for _, record := range records {
 			if record.Harness == domain.AgentHarness(target) && liveSession(record) {
@@ -133,7 +133,7 @@ func (s *Service) harnessInUse(ctx context.Context, target Target) (sessions, re
 	if s.reviewers != nil {
 		handles, err := s.reviewers.ListLiveReviewerHandles(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("systeminstall: list reviewers before harness operation: %w", err)
+			return nil, nil, fmt.Errorf("systeminstall: list reviewers before agent operation: %w", err)
 		}
 		for _, handle := range handles {
 			if string(handle.Harness) == string(target) {
@@ -142,7 +142,7 @@ func (s *Service) harnessInUse(ctx context.Context, target Target) (sessions, re
 		}
 		chats, err := s.reviewers.ListRecoverableChatReviews(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("systeminstall: list reviewer chats before harness operation: %w", err)
+			return nil, nil, fmt.Errorf("systeminstall: list reviewer chats before agent operation: %w", err)
 		}
 		for _, review := range chats {
 			if string(review.Harness) == string(target) && review.ControllerGeneration != "" {

@@ -6,7 +6,7 @@ description: Add a project, start one worker, and follow it from task to pull re
 This guide walks through a first task in the desktop app: add a repository, start a worker, follow its work, and review the result.
 
 <Callout type="info" title="Before you start">
-	Install Orchestrator and sign in with `gh` if you use a GitHub project. If you choose an external coding agent, install it and complete its sign-in. Orchestrator calls these tools harnesses. Unreal Agent is built in for Chat on macOS and Linux. See [Installation](/installation).
+	Install Orchestrator and sign in with `gh` if you use a GitHub project. If you choose an external coding agent, install it and complete its sign-in. Unreal Agent is built in for Chat on macOS and Linux. See [Installation](/installation).
 </Callout>
 
 ## Pick a safe first task
@@ -32,12 +32,12 @@ Open Orchestrator, choose **Add project**, and select the local repository. The 
 
 ### Create a worker
 
-Create a new task from the project and enter a short name plus a specific prompt. Select an available coding agent. External agents appear after installation; Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux. Orchestrator lists agents under **Harness** in Settings.
+Create a new task from the project and enter a short name plus a specific prompt. Select an available coding agent. External agents appear after installation; Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux. Orchestrator lists agents under **Agents** in Settings.
 
 Choose the interface that fits the task:
 
 - **Chat** for structured conversation, activities, approvals, plans, and durable history.
-- **Terminal UI** for the harness's native interactive terminal.
+- **Terminal UI** for the agent's native interactive terminal.
 
 Orchestrator creates an isolated git worktree and branch for the session before launching the selected controller.
 

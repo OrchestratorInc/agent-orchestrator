@@ -94,6 +94,7 @@ For code entry points:
 ## Coding conventions
 
 - Keep every change surgical and directly tied to the task. Avoid drive-by cleanup, broad renames, formatting churn, speculative abstractions, and architectural refactors unless the task explicitly asks for them.
+- Use **agent** in user-facing copy and **Agents** for the settings page and catalog. Reserve **harness** for existing internal identifiers, API/config fields, CLI flags, and upstream product names.
 - Follow existing Go package boundaries. CLI code should call daemon HTTP routes through shared CLI client helpers; it should not open SQLite, spawn runtimes, or call adapters directly.
 - Keep Cobra commands in the relevant command file and table-test them in the style of `backend/internal/cli/*_test.go`.
 - Mirror existing response/request DTOs in the CLI instead of importing HTTP controller packages into CLI code, unless the package already establishes that dependency.

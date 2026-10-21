@@ -37,7 +37,7 @@ var (
 	ErrPROwnedElsewhere = fmt.Errorf("%w: pull request owned by another session", ErrConflict)
 	// ErrHarnessInstallActive means the reviewer's harness is being installed,
 	// updated or removed, so a reviewer cannot start on it now.
-	ErrHarnessInstallActive = fmt.Errorf("%w: reviewer harness is being updated", ErrConflict)
+	ErrHarnessInstallActive = fmt.Errorf("%w: reviewer agent is being updated", ErrConflict)
 )
 
 // HarnessUseGate keeps reviewer launches from racing a harness update. The
@@ -287,7 +287,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
 	if override != "" && !override.IsKnown() {
-		return TriggerResult{}, fmt.Errorf("%w: unknown reviewer harness %q", ErrInvalid, override)
+		return TriggerResult{}, fmt.Errorf("%w: unknown reviewer agent %q", ErrInvalid, override)
 	}
 	switch source {
 	case domain.ReviewTriggerManual, domain.ReviewTriggerAgent, domain.ReviewTriggerAuto:
@@ -840,7 +840,7 @@ func (e *Engine) SwitchReviewer(
 		return SessionReviews{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
 	if harness != "" && !harness.IsKnown() {
-		return SessionReviews{}, fmt.Errorf("%w: unknown reviewer harness %q", ErrInvalid, harness)
+		return SessionReviews{}, fmt.Errorf("%w: unknown reviewer agent %q", ErrInvalid, harness)
 	}
 	if err := config.Validate(); err != nil {
 		return SessionReviews{}, fmt.Errorf("%w: reviewer config: %w", ErrInvalid, err)

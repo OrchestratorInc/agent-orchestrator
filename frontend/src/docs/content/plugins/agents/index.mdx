@@ -1,6 +1,6 @@
 ---
 title: Agent adapters
-description: The agent harnesses built into AO, with terminal and structured Chat capabilities.
+description: The agents built into AO, with terminal and structured Chat capabilities.
 ---
 
 Most agents require a local installation and sign-in. Unreal Agent is built into Orchestrator for macOS and Linux and is Chat-only. For an installed agent, check that Orchestrator can find it and start a session:
@@ -10,15 +10,17 @@ ao agent ls --refresh
 ao spawn --project my-app --name task --agent codex
 ```
 
-Orchestrator uses the agent CLI and authentication you already installed for external harnesses. It does not bundle external provider credentials or install external adapters from npm.
+Orchestrator uses the agent CLI and authentication you already installed for external agents. It does not bundle external provider credentials or install external adapters from npm.
 
 <span id="shipped-terminal-harnesses" />
 
-## Shipped agent harnesses
+<span id="shipped-agent-harnesses" />
+
+## Shipped agents
 
 The current daemon registers the following capabilities. Availability still depends on platform, installed version, credentials, and permissions; a registered adapter is not proof that it is ready on your machine.
 
-| Harness | Terminal UI | Chat | Reviewer |
+| Agents | Terminal UI | Chat | Reviewer |
 | --- | --- | --- | --- |
 | `claude-code` | Yes | Yes | Yes |
 | `codex` | Yes | Yes | Yes |
@@ -63,11 +65,11 @@ ao agent ls --refresh
 ao agent ls --refresh --json
 ```
 
-The readiness probe reports whether a harness is supported, installed, and authenticated. Spawn still performs authoritative validation.
+The readiness probe reports whether an agent is supported, installed, and authenticated. Spawn still performs authoritative validation.
 
 ### fx (experimental)
 
-Install fx from Settings → Harness on macOS or Linux (expected at
+Install fx from Settings → Agents on macOS or Linux (expected at
 `~/.local/bin/fx`; on Windows use WSL), then spawn it in Terminal UI mode.
 fx Chat is not supported.
 
@@ -77,9 +79,9 @@ ao spawn --name fx-task --agent fx --mode tui
 
 ## Chat versus Terminal UI
 
-Unreal Agent is Chat-only; the other worker adapters provide a terminal interface. These harnesses have structured Chat drivers:
+Unreal Agent is Chat-only; the other worker adapters provide a terminal interface. These agents have structured Chat drivers:
 
-| Harness | Chat transport |
+| Agents | Chat transport |
 | --- | --- |
 | `codex` | Codex native app-server |
 | `claude-code` | `claude-agent-acp` using the user's Claude executable |
@@ -96,13 +98,15 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
 
-Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
+Every other agent is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
 
 Qwen Chat needs version 0.16 or newer; OMP Chat needs version 15 or newer. MiMo Code needs version 0.1.14 or newer and is Terminal UI-only, as is Gemini. Unreal Agent is built into Orchestrator for macOS/Linux, is Chat-only, and requires bypass permissions because it has no interactive approval flow. DeepSeek Chat uses `dsh --profile acp`. Check readiness and the provider options offered by your installed Orchestrator version before launching.
 
 Chat registration does not imply interface handoff support. Use the switch action and its disabled reason in the session UI. Experimental reviewer modes and prompts do not sandbox tools or network access.
 
-## Choosing and configuring a harness
+<span id="choosing-and-configuring-a-harness" />
+
+## Choosing and configuring an agent
 
 ```bash
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
@@ -117,5 +121,5 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Codex" description="Terminal UI and native app-server Chat." href="/plugins/agents/codex" />
 	<Card title="OpenCode" description="Terminal UI and native ACP Chat." href="/plugins/agents/opencode" />
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
-	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
+	<Card title="Aider" description="Built-in terminal agent." href="/plugins/agents/aider" />
 </Cards>

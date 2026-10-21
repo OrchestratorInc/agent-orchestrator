@@ -50,19 +50,19 @@ var (
 	// ErrUnknownHarness means the requested agent harness has no registered
 	// adapter. The API maps it to a 400 so a typo'd `--harness` is a validation
 	// error, not an opaque 500.
-	ErrUnknownHarness = errors.New("session: unknown agent harness")
+	ErrUnknownHarness = errors.New("session: unknown agent")
 	// ErrMissingHarness means neither the spawn request nor the project's role
 	// config selected an agent. Worker/orchestrator spawns must be explicit.
-	ErrMissingHarness = errors.New("session: agent harness required")
+	ErrMissingHarness = errors.New("session: agent required")
 	// ErrArtifactOutputUnavailable rejects an artifact-output spawn when the
 	// daemon has no data dir to hold the session's artifact directory.
 	ErrArtifactOutputUnavailable = errors.New("session: artifact output requires an artifact directory")
 	// ErrHarnessInstallActive prevents launch while the harness executable is replaced.
-	ErrHarnessInstallActive = errors.New("session: harness install active")
+	ErrHarnessInstallActive = errors.New("session: agent install active")
 	// ErrUnsupportedModel means the requested model is not supported by the
 	// selected harness's catalog and the harness does not accept arbitrary model
 	// ids. The API maps it to a 400.
-	ErrUnsupportedModel = errors.New("session: model is not supported by the selected harness")
+	ErrUnsupportedModel = errors.New("session: model is not supported by the selected agent")
 	// ErrScratchBranchUnsupported means a caller tried to force git branch
 	// semantics onto a scratch project.
 	ErrScratchBranchUnsupported = errors.New("session: scratch projects do not support branches")
@@ -85,7 +85,7 @@ var (
 	// ErrUnsupportedSwitchHarness keeps the first release deliberately bounded
 	// to providers whose standing-instruction and native-resume behavior AO has
 	// verified end to end.
-	ErrUnsupportedSwitchHarness = errors.New("session: harness does not support agent switching")
+	ErrUnsupportedSwitchHarness = errors.New("session: agent does not support agent switching")
 	// ErrUnsupportedSwitchKind keeps the first implementation scoped to worker
 	// sessions. Orchestrators own additional delegation and board semantics and
 	// need an explicit product contract before their process can be replaced.
@@ -104,7 +104,7 @@ var (
 	ErrSwitchSourceStopUnconfirmed = errors.New("session: source agent stop could not be confirmed")
 	// ErrAlreadyUsingHarness rejects a no-op replacement that would otherwise
 	// create a misleading switch record and restart the same process.
-	ErrAlreadyUsingHarness = errors.New("session: already using requested harness")
+	ErrAlreadyUsingHarness = errors.New("session: already using requested agent")
 	// ErrSwitchNotFound is returned for a switch id outside the requested AO
 	// session (the same response is used for absent and cross-session ids).
 	ErrSwitchNotFound = errors.New("session: agent switch not found")
@@ -1414,7 +1414,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	agent, ok := m.agents.Agent(cfg.Harness)
 	if !ok {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w: no agent adapter for harness %q", id, ErrUnknownHarness, cfg.Harness)
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w: no agent adapter for agent %q", id, ErrUnknownHarness, cfg.Harness)
 	}
 	var env map[string]string
 	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
@@ -1648,7 +1648,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, and command-code agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for agent %q: effort is only supported for codex, claude-code, and command-code agents", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
@@ -2390,7 +2390,7 @@ func validateSpawnModel(harness domain.AgentHarness, model string) error {
 	if modelcatalog.Accepts(string(harness), model) {
 		return nil
 	}
-	return fmt.Errorf("model %q is not supported by harness %q", model, harness)
+	return fmt.Errorf("model %q is not supported by agent %q", model, harness)
 }
 
 func roleOverride(kind domain.SessionKind, cfg domain.ProjectConfig) domain.RoleOverride {
@@ -3479,7 +3479,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
-		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness)
+		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for agent %q", operation, rec.ID, rec.Harness)
 	}
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.

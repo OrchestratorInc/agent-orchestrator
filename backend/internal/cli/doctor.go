@@ -48,7 +48,7 @@ type doctorReport struct {
 const (
 	doctorSectionCore           = "Core"
 	doctorSectionTools          = "Tools"
-	doctorSectionAgents         = "Agent harnesses"
+	doctorSectionAgents         = "Agents"
 	doctorSectionGitHub         = "GitHub"
 	doctorSectionGitLab         = "GitLab"
 	minGitVersion               = "2.25.0"

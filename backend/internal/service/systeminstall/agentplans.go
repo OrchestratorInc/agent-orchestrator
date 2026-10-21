@@ -245,13 +245,13 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetCodewhale:
 		plans = []Plan{manualPlan(
 			target,
-			"AO does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
+			"AO does not automatically install Codewhale. Follow the upstream installation instructions, then refresh agent status.",
 			agentDocumentationURLs[target],
 		)}
 	case TargetUnreal:
 		plans = []Plan{{
 			Target: target, Unsupported: true, Method: "manual",
-			Reason: "Unreal Agent is built into AO; update AO to update the harness.",
+			Reason: "Unreal Agent is built into AO; update AO to update the agent.",
 		}}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
@@ -341,7 +341,7 @@ func (s requestPlanner) planKiroInstall() Plan {
 	if s.goos == "darwin" {
 		return manualPlan(
 			TargetKiro,
-			"Kiro's official macOS installer writes an app bundle to /Applications and must be run interactively. Follow Kiro's installation guide, then refresh harness status.",
+			"Kiro's official macOS installer writes an app bundle to /Applications and must be run interactively. Follow Kiro's installation guide, then refresh agent status.",
 			agentDocumentationURLs[TargetKiro],
 		)
 	}

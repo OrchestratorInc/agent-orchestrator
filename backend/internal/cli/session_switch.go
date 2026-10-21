@@ -81,7 +81,7 @@ type agentSwitchListResponse struct {
 func newSessionSwitchAgentCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionSwitchAgentOptions
 	cmd := &cobra.Command{
-		Use:   "switch-agent <id> <target-harness>",
+		Use:   "switch-agent <id> <target-agent>",
 		Short: "Switch a running session to another agent",
 		Args:  usageArgs(cobra.ExactArgs(2)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,7 +91,7 @@ func newSessionSwitchAgentCommand(ctx *commandContext) *cobra.Command {
 			}
 			targetHarness := strings.TrimSpace(args[1])
 			if targetHarness == "" {
-				return usageError{errors.New("target harness is required")}
+				return usageError{errors.New("target agent is required")}
 			}
 			return ctx.switchSessionAgent(cmd.Context(), cmd, sessionID, targetHarness, opts)
 		},

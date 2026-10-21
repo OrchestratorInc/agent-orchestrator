@@ -50,7 +50,8 @@ async function openAgentManagement(label: string) {
 	await userEvent.click(await screen.findByLabelText(label));
 	const action = screen.queryByRole("menuitem", { name: /^Manage agents(?:…)?$/ }) ?? screen.getByRole("option", { name: /^Manage agents(?:…)?$/ });
 	await userEvent.click(action);
-	await screen.findByRole("textbox", { name: "Search harnesses" });
+	await screen.findByRole("textbox", { name: "Search agents" });
+	expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 }
 
 function requireCodexLogin(client?: QueryClient) {
@@ -179,8 +180,8 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin(client);
 		await openAgentManagement("Worker agent");
 
-		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
-		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
+		await userEvent.click(await screen.findByRole("button", { name: "All agents" }));
+		const search = await screen.findByRole("textbox", { name: "Search agents" });
 		await userEvent.type(search, "Claude");
 		expect(search).toHaveValue("Claude");
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));

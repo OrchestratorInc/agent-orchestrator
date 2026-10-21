@@ -189,7 +189,7 @@ func TestReviewsTrigger_MissingReviewerBinaryReturns422WithCause(t *testing.T) {
 }
 
 func TestReviewsTrigger_UnauthenticatedReviewerReturns409(t *testing.T) {
-	srv := newReviewTestServer(t, &fakeReviewService{triggerErr: fmt.Errorf("reviewer harness %q: %w", "claude-code", ports.ErrChatAuthRequired)})
+	srv := newReviewTestServer(t, &fakeReviewService{triggerErr: fmt.Errorf("reviewer agent %q: %w", "claude-code", ports.ErrChatAuthRequired)})
 
 	body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", "")
 	assertJSON(t, headers)

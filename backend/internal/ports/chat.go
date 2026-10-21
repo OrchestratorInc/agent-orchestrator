@@ -24,10 +24,10 @@ import (
 //   - shell-terminal lifecycle is unrelated to conversation lifecycle.
 
 // Errors a Chat driver returns. They map to stable API error codes, so a client
-// can tell "this harness cannot do Chat" from "Codex is not logged in".
+// can tell "this agent cannot do Chat" from "Codex is not logged in".
 var (
 	// ErrChatUnsupported means the harness has no Chat driver at all.
-	ErrChatUnsupported = errors.New("chat mode unsupported for harness")
+	ErrChatUnsupported = errors.New("chat mode unsupported for agent")
 	// ErrChatDriverUnavailable means the driver exists but its binary or
 	// bridge is missing.
 	ErrChatDriverUnavailable = errors.New("chat driver unavailable")

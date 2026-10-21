@@ -118,7 +118,7 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&cron, "cron", "", "Supported five-field cron expression")
 	cmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone (defaults to local zone when available)")
 	cmd.Flags().StringVar(&kind, "kind", "worker", "Session kind: worker or orchestrator")
-	cmd.Flags().StringVar(&harness, "harness", "", "Agent harness (empty uses project default)")
+	cmd.Flags().StringVar(&harness, "harness", "", "Agent (empty uses project default)")
 	cmd.Flags().BoolVar(&disabled, "disabled", false, "Create disabled")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
 	return cmd
@@ -241,7 +241,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&cron, "cron", "", "Replace schedule with cron")
 	cmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone")
 	cmd.Flags().StringVar(&kind, "kind", "", "Session kind")
-	cmd.Flags().StringVar(&harness, "harness", "", "Harness; empty uses project default")
+	cmd.Flags().StringVar(&harness, "harness", "", "Agent; empty uses project default")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "Enable or disable future dispatch")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
 	return cmd

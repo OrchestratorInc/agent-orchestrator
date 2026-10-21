@@ -37,7 +37,7 @@ export function SpawnComposerControls({
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = selectedHost?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
-	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
+	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose agent";
 	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
 	const options = openMenu === "host" ? hosts : openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
 	const selectedValue = openMenu === "host" ? (hostId ?? "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;

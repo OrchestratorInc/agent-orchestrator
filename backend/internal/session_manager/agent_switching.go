@@ -255,7 +255,7 @@ func (m *Manager) admitAgentSwitch(ctx context.Context, id domain.SessionID, cfg
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w", id, ErrIncompleteHandle)
 	}
 	if !switchHarnessSupported(rec.Harness) || !switchHarnessSupported(cfg.TargetHarness) {
-		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: supported harnesses are claude-code, codex, and fx", id, ErrUnsupportedSwitchHarness)
+		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: supported agents are claude-code, codex, and fx", id, ErrUnsupportedSwitchHarness)
 	}
 	if rec.Harness == cfg.TargetHarness {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: %s", id, ErrAlreadyUsingHarness, cfg.TargetHarness)
@@ -3473,7 +3473,7 @@ func (m *Manager) targetNativeIdentityRecoverable(ctx context.Context, store por
 func (m *Manager) cleanupRecoveredTargetWorkspace(ctx context.Context, rec domain.SessionRecord, sw domain.AgentSwitch) error {
 	agent, ok := m.agents.Agent(sw.TargetHarness)
 	if !ok {
-		return fmt.Errorf("agent switch recovery: target harness %q is unavailable for workspace cleanup", sw.TargetHarness)
+		return fmt.Errorf("agent switch recovery: target agent %q is unavailable for workspace cleanup", sw.TargetHarness)
 	}
 	if strings.TrimSpace(rec.Metadata.WorkspacePath) == "" {
 		return nil

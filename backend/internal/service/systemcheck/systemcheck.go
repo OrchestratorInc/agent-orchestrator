@@ -198,7 +198,7 @@ func (s *Service) checkTmux() Requirement {
 }
 
 func (s *Service) checkHarness(ctx context.Context) Requirement {
-	const label = "agent harness"
+	const label = "agent"
 	inv, err := s.harnesses.RefreshFresh(ctx)
 	if err != nil {
 		return Requirement{ID: "harness", Label: label, Required: true, Detail: err.Error()}
@@ -220,7 +220,7 @@ func (s *Service) checkHarness(ctx context.Context) Requirement {
 // be resolved. Authentication is intentionally deferred: many agent CLIs
 // determine it by starting a process, which must not delay first render.
 func (s *Service) checkStartupHarness(ctx context.Context) Requirement {
-	const label = "agent harness"
+	const label = "agent"
 	info, ok := s.harnesses.FindInstalledBinary(ctx)
 	if !ok {
 		return Requirement{

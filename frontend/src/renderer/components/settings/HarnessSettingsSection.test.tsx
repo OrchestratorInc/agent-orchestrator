@@ -166,7 +166,7 @@ async function findAgentRow(agentId: string): Promise<HTMLElement> {
 
 /** Returns from a harness page to the list. */
 function backToList() {
-	fireEvent.click(screen.getByRole("button", { name: "All harnesses" }));
+	fireEvent.click(screen.getByRole("button", { name: "All agents" }));
 }
 
 function renderSection(focusAgentId?: string, selectorAgentId?: string, initialView?: "local" | "cloud", client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -270,7 +270,7 @@ describe("HarnessSettingsSection", () => {
 		listRow.focus();
 		await userEvent.keyboard("{Enter}");
 		const page = await findAgentRow("codex");
-		expect(screen.queryByRole("textbox", { name: "Search harnesses" })).toBeNull();
+		expect(screen.queryByRole("textbox", { name: "Search agents" })).toBeNull();
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
 		expect(within(page).getByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(page).getByText("Installed version")).toBeInTheDocument();
@@ -280,7 +280,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).queryByRole("button", { name: "Refresh login" })).toBeNull();
 		backToList();
 		expect(await findListRow("claude-code")).toBeInTheDocument();
-		expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
+		expect(screen.getByRole("textbox", { name: "Search agents" })).toBeInTheDocument();
 	});
 
 	it("lists model metadata without a manual refresh button", async () => {
@@ -750,7 +750,7 @@ describe("HarnessSettingsSection", () => {
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
 		await userEvent.click(within(page).getByRole("button", { name: "Complete login terminal" }));
 		if (authStatus === "configured") {
-			await within(page).findByText("Logout could not be confirmed. The harness may still have another account or an API key configured.", {}, { timeout: 7000 });
+			await within(page).findByText("Logout could not be confirmed. The agent may still have another account or an API key configured.", {}, { timeout: 7000 });
 			expect(within(page).queryByRole("button", { name: "Login" })).toBeNull();
 			return;
 		}
@@ -808,8 +808,8 @@ describe("HarnessSettingsSection", () => {
 			const first = await findListRow("claude-code");
 			await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
 			expect(document.querySelector('div[data-agent="claude-code"]')).not.toBeNull();
-			expect(screen.queryByRole("button", { name: "All harnesses" })).toBeNull();
-			expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "All agents" })).toBeNull();
+			expect(screen.getByRole("textbox", { name: "Search agents" })).toBeInTheDocument();
 			await userEvent.click(await findListRow("codex"));
 			const page = await waitFor(() => document.querySelector<HTMLElement>('div[data-agent="codex"]')!);
 			expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
@@ -842,7 +842,7 @@ describe("HarnessSettingsSection", () => {
 			const body = screen.getByTestId("settings-body");
 			const row = await findListRow("codex");
 			// A search that matches nothing leaves no harness open beside the list.
-			await userEvent.type(screen.getByRole("textbox", { name: "Search harnesses" }), "no-such-harness");
+			await userEvent.type(screen.getByRole("textbox", { name: "Search agents" }), "no-such-harness");
 			await waitFor(() => expect(screen.queryByRole("button", { name: /codex/i })).toBeNull());
 			expect(document.querySelector("[data-harness-detail]")).not.toBeNull();
 			expect(row.isConnected).toBe(false);
@@ -1472,7 +1472,7 @@ describe("HarnessSettingsSection", () => {
 		expect(scrollIntoView).not.toHaveBeenCalled();
 		expect(row).toHaveAttribute("data-focus-highlighted");
 		// The page replaces the list, so its search steps aside.
-		expect(screen.queryByRole("textbox", { name: "Search harnesses" })).toBeNull();
+		expect(screen.queryByRole("textbox", { name: "Search agents" })).toBeNull();
 
 		const highlightTimeout = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
 		expect(highlightTimeout).toBeTypeOf("function");

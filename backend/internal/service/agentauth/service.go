@@ -169,12 +169,12 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
 	}
 	if len(plan.logoutCommand) == 0 {
-		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This harness does not have a supported native logout command.", nil)
+		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This agent does not have a supported native logout command.", nil)
 	}
 	plan.command = plan.logoutCommand
 	plan.Action = ActionLogout
 	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
-	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."
+	plan.Guidance = "Complete the agent's native logout flow, then close the terminal to check authentication again."
 	plan.launcher, plan.terminalInput, plan.initialInput = "", "", ""
 	plan.launcherArgs, plan.initialInputReadyStates = nil, nil
 	plan.prepareWorkspace = nil

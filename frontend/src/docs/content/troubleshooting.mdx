@@ -39,11 +39,11 @@ ao doctor --json
 ## Agents and sessions
 
 <Accordions>
-	<Accordion title="No agent harness is offered">
-		Install the harness, run it once to authenticate, and restart Orchestrator. The desktop daemon inherits a login-shell environment and reuses each provider's installed binary and authentication.
+	<Accordion title="No agent is offered">
+		Install the agent, run it once to authenticate, and restart Orchestrator. The desktop daemon inherits a login-shell environment and reuses each provider's installed binary and authentication.
 	</Accordion>
 	<Accordion title="Chat preflight fails">
-		Confirm the selected harness supports native Chat and its binary is authenticated. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Harness** and provider version/permission requirements. Choose Terminal UI when the harness lacks Chat support or preflight cannot connect.
+		Confirm the selected agent supports native Chat and its binary is authenticated. Chat support depends on the agent and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Agents** and provider version/permission requirements. Choose Terminal UI when the agent lacks Chat support or preflight cannot connect.
 	</Accordion>
 	<Accordion title="A TUI session will not start on macOS or Linux">
 		New macOS/Linux sessions use detached native PTY hosts. Packaged builds bundle tmux for old sessions/fallback; macOS still validates it. For source runs check configured/system tmux and the native-host launch error. Windows uses ConPTY. See [Runtime](/plugins/runtimes).
@@ -55,7 +55,7 @@ ao doctor --json
 		Status is derived from activity, termination, controller, and pull-request facts. A failed runtime probe is not treated as death. Reopen the session and inspect its Chat or terminal before killing it.
 	</Accordion>
 	<Accordion title="A session will not restore">
-		Use the desktop restore action or `ao session restore <session-id>`. Restore reuses the same session and worktree when the selected adapter supports recovery. Check that the harness remains installed and authenticated. For a stopped controller on a non-terminated session use `ao session resume-agent <id>` instead. A disabled interface switch can indicate unavailable native history, an unsupported direction, or pending recovery; inspect its reason before retrying.
+		Use the desktop restore action or `ao session restore <session-id>`. Restore reuses the same session and worktree when the selected adapter supports recovery. Check that the agent remains installed and authenticated. For a stopped controller on a non-terminated session use `ao session resume-agent <id>` instead. A disabled interface switch can indicate unavailable native history, an unsupported direction, or pending recovery; inspect its reason before retrying.
 	</Accordion>
 </Accordions>
 
@@ -110,4 +110,4 @@ ao doctor --json
 | --- | --- |
 | macOS Gatekeeper says the developer cannot be verified | Follow the Gatekeeper steps in [Common Installation Problems](/installation#common-installation-problems). |
 
-Open an issue in the [Orchestrator repository](https://github.com/Untrivial-ai/agent-orchestrator/issues). Include the desktop version, operating system, agent harness and interface mode, reproduction steps, and sanitized `ao doctor --json` output when the CLI is available. Never attach credentials, provider transcripts, or the entire `~/.ao` directory.
+Open an issue in the [Orchestrator repository](https://github.com/Untrivial-ai/agent-orchestrator/issues). Include the desktop version, operating system, agent and interface mode, reproduction steps, and sanitized `ao doctor --json` output when the CLI is available. Never attach credentials, provider transcripts, or the entire `~/.ao` directory.

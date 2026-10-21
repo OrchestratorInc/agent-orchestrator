@@ -119,7 +119,7 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh boo
 
 func (s *Service) releaseAdvisory(ctx context.Context, target Target, refresh bool) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
-		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
+		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown agent %q", target)
 	}
 	if err := ctx.Err(); err != nil {
 		return UpdateAdvisory{}, err

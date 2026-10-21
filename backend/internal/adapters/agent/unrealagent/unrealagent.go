@@ -36,7 +36,7 @@ var _ ports.AgentBinaryResolutionInvalidator = (*Plugin)(nil)
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID: adapterID, Name: "Unreal Agent",
-		Description:  "Built-in async-first Unreal Agent harness.",
+		Description:  "Built-in async-first Unreal Agent.",
 		Version:      "0.1.1",
 		Capabilities: []adapters.Capability{adapters.CapabilityAgent},
 	}
@@ -44,7 +44,7 @@ func (*Plugin) Manifest() adapters.Manifest {
 
 // GetConfigSpec exposes the model override supported by the harness.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	return agentbase.ModelConfigSpec(ctx, "Model passed to the built-in Unreal Agent harness.")
+	return agentbase.ModelConfigSpec(ctx, "Model passed to the built-in Unreal Agent.")
 }
 
 // GetLaunchCommand rejects terminal launches because Unreal is Chat-only.

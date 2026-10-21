@@ -1014,7 +1014,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"role", sessionRole(sess)},
 		{"status", sess.Status},
 		{"activity", sess.Activity.State},
-		{"harness", sess.Harness},
+		{"agent", sess.Harness},
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},
 		{"terminated", fmt.Sprintf("%t", sess.IsTerminated)},

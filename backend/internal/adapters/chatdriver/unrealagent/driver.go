@@ -146,7 +146,7 @@ func validateStart(workspace string, permissions ports.PermissionMode, readOnly 
 		return fmt.Errorf("workspace path must be absolute, got %q", workspace)
 	}
 	if ports.NormalizePermissionMode(permissions) != ports.PermissionModeBypassPermissions {
-		return errors.New("unreal agent currently requires bypass-permissions because its harness has no interactive approval channel")
+		return errors.New("unreal agent currently requires bypass-permissions because its agent has no interactive approval channel")
 	}
 	if readOnly {
 		return errors.New("unreal agent does not provide a read-only sandbox")

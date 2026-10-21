@@ -1,7 +1,7 @@
 # ao session
 
 Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
-agent, switch harnesses, clean up, and claim PRs.
+agent, switch agents, clean up, and claim PRs.
 
 ## In-app session links
 
@@ -226,12 +226,12 @@ ao session resume-agent mer-3
 
 ### ao session switch-agent
 
-Switch a running session to another installed agent harness. This preserves the
-AO session while provisioning the target harness.
+Switch a running session to another installed agent. This preserves the
+AO session while provisioning the target agent.
 
 **Syntax:**
 ```
-ao session switch-agent <id> <target-harness> [flags]
+ao session switch-agent <id> <target-agent> [flags]
 ```
 
 **Flags:**
@@ -251,7 +251,7 @@ ao session switch-agent mer-3 codex
 
 ### ao session agent-switch ls
 
-List agent-harness switches recorded for a session. Alias: `agent-switches`.
+List agent switches recorded for a session. Alias: `agent-switches`.
 
 **Syntax:**
 ```

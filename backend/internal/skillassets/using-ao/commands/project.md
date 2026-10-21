@@ -157,7 +157,7 @@ ao project set-config <id> [flags]
 | `--tracker-assignee string` | Issue assignee required for tracker intake eligibility | - |
 | `--tracker-intake` | Opt this project into GitHub or GitLab issue intake; inert unless the daemon also has `AO_TRACKER_INTAKE=on` | Disabled |
 | `--tracker-repo string` | Provider-native issue repository (`owner/repo` or `group/subgroup/repo`); defaults to the Git origin | - |
-| `--reviewer stringArray` | Reviewer harness for worker PRs (repeatable) | - |
+| `--reviewer stringArray` | Reviewer agent for worker PRs (repeatable) | - |
 | `--worker-agent string` | Harness override for worker sessions | - |
 
 Use `--config-json` for fields without a dedicated flag, including

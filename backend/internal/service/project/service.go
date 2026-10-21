@@ -1082,7 +1082,7 @@ func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in Se
 		return Project{}, apierr.Invalid("INVALID_PERMISSIONS", "A valid permission mode is required", nil)
 	}
 	if in.SourceHarness != "" && !in.SourceHarness.IsKnown() {
-		return Project{}, apierr.Invalid("INVALID_HARNESS", "Unknown source harness", nil)
+		return Project{}, apierr.Invalid("INVALID_HARNESS", "Unknown source agent", nil)
 	}
 	// Codex default grants full access; remember its portable equivalent so
 	// another harness does not interpret it as its own manual baseline.
