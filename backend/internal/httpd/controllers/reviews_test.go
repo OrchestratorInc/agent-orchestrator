@@ -35,6 +35,7 @@ type fakeReviewService struct {
 	activitySignal    reviewsvc.ActivitySignal
 	activityErr       error
 	killed            bool
+	archiveBody       string
 	teardown          bool
 	restored          bool
 	switchedHarness   domain.ReviewerHarness
@@ -121,9 +122,10 @@ func (f *fakeReviewService) TerminateReviewer(context.Context, domain.SessionID,
 	return nil
 }
 
-func (f *fakeReviewService) ArchiveReviewer(ctx context.Context, id domain.SessionID) error {
+func (f *fakeReviewService) ArchiveReviewer(ctx context.Context, id domain.SessionID, cancelBody string) error {
+	f.archiveBody = cancelBody
 	f.list.ReviewerSurface = domain.ReviewerSurface{}
-	return f.TerminateReviewer(ctx, id, "")
+	return f.TerminateReviewer(ctx, id, cancelBody)
 }
 
 func (f *fakeReviewService) TeardownReviewerTerminal(context.Context, domain.SessionID) error {
@@ -395,6 +397,10 @@ func TestReviewsKillArchivesReviewerSurface(t *testing.T) {
 	}
 	if !svc.killed {
 		t.Fatal("ArchiveReviewer was not called")
+	}
+	// The kill marker is what re-arms auto-review for the same SHA (#3745).
+	if svc.archiveBody != domain.ReviewRunCancelledByKill {
+		t.Fatalf("kill cancel body = %q, want the kill marker", svc.archiveBody)
 	}
 	for _, want := range []string{`"reviewerHandleId":""`, `"reviews"`, `"runs"`, `"run-1"`} {
 		if !strings.Contains(string(body), want) {

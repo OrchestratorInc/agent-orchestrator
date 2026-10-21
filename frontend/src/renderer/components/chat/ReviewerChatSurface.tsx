@@ -7,7 +7,24 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import { ChatWorkspace } from "./ChatWorkspace";
 
-export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHeader = false }: { reviewId: string; workerSessionId: string; hostId?: string; hideHeader?: boolean }) {
+export function ReviewerChatSurface({
+	reviewId,
+	workerSessionId,
+	hostId,
+	hideHeader = false,
+	onOpenShell,
+	openingShell,
+	shellError,
+}: {
+	reviewId: string;
+	workerSessionId: string;
+	hostId?: string;
+	hideHeader?: boolean;
+	/** Open a shell in the review's worktree — the stopped-banner's recovery lever. */
+	onOpenShell?: () => void;
+	openingShell?: boolean;
+	shellError?: string;
+}) {
 	const { t } = useTranslation();
 	const { snapshot, isLoading, error, hasOlder, isLoadingOlder, loadOlder } = useReviewerConversation(reviewId, hostId);
 	const catalog = useReviewerConversationModels(reviewId, Boolean(snapshot && snapshot.controller.state !== "stopped"), hostId);
@@ -55,6 +72,9 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 			onResumeAgent={() => commands.resumeAgent(workerSessionId)}
 			resumingAgent={commands.resumingAgent}
 			resumeError={commands.resumeError}
+			onOpenShell={onOpenShell}
+			openingShell={openingShell}
+			shellError={shellError}
 		/>
 	);
 }
