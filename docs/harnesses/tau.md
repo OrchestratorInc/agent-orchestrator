@@ -1,6 +1,6 @@
 # Tau terminal harness
 
-AO integrates the native Textual TUI from [Tau v0.4.7](https://github.com/huggingface/tau/releases/tag/v0.4.7), commit `e4eab0dc5d6c7a92dc40e660087e55f0d5929eba`. The install plan pins `tau-ai==0.4.7`; launch and native restore reject other versions until their contract has been reviewed.
+AO integrates the native Textual TUI from [Tau v0.4.7](https://github.com/huggingface/tau/releases/tag/v0.4.7), commit `e4eab0dc5d6c7a92dc40e660087e55f0d5929eba`. AO requires Tau 0.4.7 or newer: launch, native restore, and `ao doctor` reject older releases, and the install plan installs the latest `tau-ai`.
 
 Tau has no tool approval policy, so AO handles it like Pi: every permission mode launches the same command, with no permission flag, and Tau runs tools without asking. Tau's `--approve` trusts project instructions for one process; it is not a tool grant. Tool allow/deny restrictions are also rejected on launch and restore because Tau cannot enforce them. Configure a provider through Tau's native `/login` flow first. AO reports configured credentials as `configured`, never as verified authorization.
 

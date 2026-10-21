@@ -107,8 +107,21 @@ func TestVersionGateRejectsUninspectedBinary(t *testing.T) {
 		return []byte("tau 0.3.0"), nil
 	}
 	_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeBypassPermissions})
-	if err == nil || !strings.Contains(err.Error(), SupportedVersion) {
+	if err == nil || !strings.Contains(err.Error(), MinimumVersion) {
 		t.Fatalf("version gate = %v", err)
+	}
+}
+
+func TestCheckVersionAcceptsMinimumAndNewer(t *testing.T) {
+	for _, output := range []string{"tau 0.4.7\n", "tau 0.4.8\n", "tau 0.5.0\n", "tau 1.0.0\n", "tau 0.4.10\n"} {
+		if err := CheckVersion(output); err != nil {
+			t.Fatalf("CheckVersion(%q) = %v, want accepted", output, err)
+		}
+	}
+	for _, output := range []string{"tau 0.4.6\n", "tau 0.3.9\n", "tau 0.4\n", "0.4.8\n", ""} {
+		if err := CheckVersion(output); err == nil {
+			t.Fatalf("CheckVersion(%q) accepted, want rejected", output)
+		}
 	}
 }
 

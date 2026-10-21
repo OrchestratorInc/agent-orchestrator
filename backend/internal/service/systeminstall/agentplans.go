@@ -269,7 +269,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
 	case TargetTau:
-		plans = []Plan{s.planUV(target, "tau-ai==0.4.7")}
+		plans = []Plan{s.planUV(target, "tau-ai")}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +22,16 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// SupportedVersion is the released contract inspected for this adapter.
-const SupportedVersion = "0.4.7"
+// MinimumVersion is the oldest released contract inspected for this adapter.
+// Newer releases are accepted.
+const MinimumVersion = "0.4.7"
+
+var minimumVersion = [3]int{0, 4, 7}
+
 const managedSentinel = "agent-orchestrator: managed tau integration"
 
 var nativeIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-var versionPattern = regexp.MustCompile(`(?m)^tau (\d+\.\d+\.\d+)\s*$`)
+var versionPattern = regexp.MustCompile(`(?m)^tau (\d+)\.(\d+)\.(\d+)\s*$`)
 
 type commandRunner func(context.Context, string, map[string]string, ...string) ([]byte, error)
 
@@ -48,7 +53,7 @@ var _ ports.AgentInterruptInputProvider = (*Plugin)(nil)
 
 // Manifest describes the supported terminal contract.
 func (*Plugin) Manifest() adapters.Manifest {
-	return adapters.Manifest{ID: "tau", Name: "Tau", Description: "Tau terminal sessions; Tau has no tool approval policy, so every permission mode runs without approvals.", Version: SupportedVersion, Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
+	return adapters.Manifest{ID: "tau", Name: "Tau", Description: "Tau terminal sessions; Tau has no tool approval policy, so every permission mode runs without approvals.", Version: MinimumVersion, Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
 // GetConfigSpec exposes configured provider/model selection.
@@ -170,9 +175,8 @@ func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentC
 	if err != nil {
 		return nil, fmt.Errorf("tau: version probe: %w", err)
 	}
-	match := versionPattern.FindStringSubmatch(string(out))
-	if len(match) != 2 || match[1] != SupportedVersion {
-		return nil, fmt.Errorf("tau: this adapter requires tau-ai %s; update AO before changing the Tau contract", SupportedVersion)
+	if err := CheckVersion(string(out)); err != nil {
+		return nil, err
 	}
 	cmd := []string{binary, "--cwd", workspace, "--approve", "--extension", extensionPath(workspace)}
 	// --approve admits project AGENTS.md for this process; it is not a tool grant.
@@ -229,6 +233,30 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		p.resolvedBinary = path
 	}
 	return path, err
+}
+
+// CheckVersion reports whether `tau --version` output names MinimumVersion or
+// a newer release.
+func CheckVersion(output string) error {
+	match := versionPattern.FindStringSubmatch(output)
+	if len(match) == 4 {
+		for i, minimum := range minimumVersion {
+			part, err := strconv.Atoi(match[i+1])
+			if err != nil {
+				break
+			}
+			if part != minimum {
+				if part > minimum {
+					return nil
+				}
+				break
+			}
+			if i == len(minimumVersion)-1 {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("tau: this adapter requires tau-ai %s or newer", MinimumVersion)
 }
 
 func (p *Plugin) probe(ctx context.Context, binary string, env map[string]string, args ...string) ([]byte, error) {

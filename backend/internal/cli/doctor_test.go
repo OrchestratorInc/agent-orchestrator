@@ -201,7 +201,7 @@ func TestDoctorWarnsOnIncompatibleTauVersion(t *testing.T) {
 			if len(args) != 1 || args[0] != "--version" {
 				t.Fatalf("unexpected tau command: %s %v", name, args)
 			}
-			return []byte("tau 0.4.8\n"), nil
+			return []byte("tau 0.4.6\n"), nil
 		default:
 			t.Fatalf("unexpected command: %s %v", name, args)
 			return nil, nil
@@ -209,8 +209,8 @@ func TestDoctorWarnsOnIncompatibleTauVersion(t *testing.T) {
 	})
 
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "tau")
-	if check.Level != doctorWarn || !strings.Contains(check.Message, `reports "tau 0.4.8"`) || !strings.Contains(check.Message, `requires exact version "tau 0.4.7"`) {
-		t.Fatalf("tau check = %+v, want WARN with found and required exact versions", check)
+	if check.Level != doctorWarn || !strings.Contains(check.Message, `reports "tau 0.4.6"`) || !strings.Contains(check.Message, "requires tau-ai 0.4.7 or newer") {
+		t.Fatalf("tau check = %+v, want WARN with found and minimum versions", check)
 	}
 }
 

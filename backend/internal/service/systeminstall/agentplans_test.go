@@ -694,10 +694,10 @@ func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
 	}
 }
 
-func TestTauInstallPinsInspectedRelease(t *testing.T) {
+func TestTauInstallUsesLatestRelease(t *testing.T) {
 	s := newTestService("darwin", "uv")
 	plan := s.planAgent(TargetTau)
-	if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install tau-ai==0.4.7" {
+	if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install tau-ai" {
 		t.Fatalf("Tau plan = %+v", plan)
 	}
 }
