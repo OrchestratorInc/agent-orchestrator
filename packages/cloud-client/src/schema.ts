@@ -1071,7 +1071,11 @@ export interface paths {
          *     authenticated worker and epoch. `chat.assistant_delta` is fenced by both
          *     the token epoch and the claimed turn attempt. `workspace.setup` reports
          *     the outcome of the project's Setup commands and is appended to the
-         *     session's event stream.
+         *     session's event stream. `workspace.script.step` reports one step of a
+         *     Setup run (its start, live output updates and outcome, and the steps a
+         *     failure skipped); its output is redacted again and bounded before it
+         *     is appended. A control plane that predates an event type refuses it
+         *     with 400 `INVALID_EVENT_TYPE`.
          *      */
         post: operations["publishWorkerEvent"];
         delete?: never;
@@ -1341,6 +1345,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/interface/chat-start-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The session's current worker reports it cannot start the session's
+         *     Chat controller (code CHAT_ADAPTER_UNAVAILABLE: Claude's Chat needs the
+         *     Claude ACP adapter, which the workspace lacks and the worker could not
+         *     install in time; CHAT_START_UNSUPPORTED: the worker cannot start
+         *     sessions in Chat). A session created in Chat that never started (no
+         *     interface transition ever touched it, no turn was claimed or settled,
+         *     and the agent never reported its conversation) moves to tui: its
+         *     terminal launches without the prompt and its queued first turn stays
+         *     for the terminal's turn forwarder, which delivers it once after the
+         *     agent starts (a session whose launch still carries the prompt has that
+         *     turn settled instead), and a failed tui-to-chat interface transition
+         *     carries the notice the desktop shows. A session the person switched to Chat, or
+         *     whose Chat already ran, does not move; the worker then stays on Chat.
+         *     Requires the worker:connect scope. A worker that reports the
+         *     agent.chat-start capability uses it; for one that does not, the
+         *     control plane makes the same move itself at bootstrap and reconnect.
+         *      */
+        post: operations["fallBackWorkerChatStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/terminals/agent": {
         parameters: {
             query?: never;
@@ -1598,6 +1635,8 @@ export interface components {
             features: string[];
             /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
+            /** @description A Coder session whose worker runs as the dedicated ao-worker user checks the main repository out in the project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). When false, a project's working folder applies only with the workspace user. Absent from older control planes; clients treat absent as false. */
+            coderWorkerWorkingFolder?: boolean;
         };
         /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
         SandboxProviders: {
@@ -1730,8 +1769,10 @@ export interface components {
              * @description The project repository the command runs in (its URL, the main repository or one of repos); absent runs it in the main repository's checkout. Accepted on input only: the project stores every step as a plain command, a step in an additional repository as "(\ncd -- '../<folder>' || exit 1\n<command>\n)", so releases that predate per-repository steps keep and run it.
              */
             repository?: string;
+            /** @description The step's own time limit in whole minutes; absent is the default, 30 for a Setup step and 10 for a Cleanup step. Accepted on input only: a step with a limit is stored as a plain command led by the shell comment line "# ao-timeout: <N>m", so releases that predate per-step limits keep and run it (with their default limit). */
+            timeoutMinutes?: number;
         };
-        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 30 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. Only organization owners and admins may set them. */
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within its time limit (30 minutes unless the step sets timeoutMinutes, 1 to 120); a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder, Freestyle and Docker), best effort, each within its time limit (10 minutes unless the step sets timeoutMinutes) and the whole run within the sum of them (at least 10 minutes, at most 2 hours). Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. A stored step whose first line is "# ao-timeout: <N>m" runs with a time limit of N minutes (1 to 120). Only organization owners and admins may set them. */
         ProjectScriptCommands: (string | components["schemas"]["ProjectScriptStep"])[];
         /** @description Coder dev-kit settings inherited by every Coder session of the project. */
         ProjectCoderConfig: {
@@ -1890,7 +1931,9 @@ export interface components {
         WorkspaceRepository: {
             /** @description The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session. */
             name: string;
-            /** @description GitHub owner/name of an additional repository. */
+            /** @description The name to show when it differs from the folder name, such as the main repository's own name. */
+            label?: string;
+            /** @description The repository's GitHub owner/name, when it is on GitHub. */
             repository?: string;
             /** @description Branch an additional repository was cloned from. */
             branch?: string;
@@ -2045,6 +2088,8 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude-code" | "codex" | "cursor";
                 prompt?: string;
+                /** @description The user's default session interface, as on a session create. With it the orchestrator starts in chat where its harness can; omitted, it starts in tui. The workers it spawns resolve their interface from the default stored here when the orchestrator is created, not from the user's current default. */
+                defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
             };
         };
         CreateGitHubScratchProjectResponse: {
@@ -2171,7 +2216,7 @@ export interface components {
             /** @enum {string} */
             harness: "claude-code" | "codex" | "cursor";
             /** @enum {string} */
-            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "notification" | "session-end";
+            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "stop-failure" | "notification" | "session-end";
             state?: components["schemas"]["SessionActivityState"];
             toolName?: string;
             toolUseId?: string;
@@ -2195,6 +2240,24 @@ export interface components {
             durationMs: number;
             /** @description Redacted tail of the failed (or last) command's combined output, at most 2 KiB. */
             output?: string;
+            /** @description The failed step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. */
+            command?: string;
+            /** @description The repository folder the failed step ran in; absent for the main repository. */
+            repository?: string;
+            /** @description The directory the failed step ran in. */
+            dir?: string;
+            /** @description The Linux user the failed step ran as. */
+            user?: string;
+            /** @description The Linux groups the failed step ran with. */
+            groups?: string[];
+            /** @description The file in the sandbox that holds the failed step's full output. */
+            logPath?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+            /** @description The failed step's time limit in minutes; absent from a worker that predates per-step limits (the step had the Setup default, 30 minutes). */
+            timeoutMinutes?: number;
+            /** @description Set by the control plane, true on the event served to someone outside the session's organization (a share-grant holder): output, logPath, user, groups, dir and hint are absent. */
+            outputHidden?: boolean;
         };
         WorkerSetupEventInput: {
             /**
@@ -2204,7 +2267,73 @@ export interface components {
             type: "workspace.setup";
             payload: components["schemas"]["WorkerSetupPayload"];
         };
-        /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
+        /** @description One step of a project's Setup or Cleanup run. The newest event for a run's step carries everything needed to show it: a live update repeats the step's facts with the latest output tail. */
+        ScriptStepPayload: {
+            /** @enum {string} */
+            phase: "setup" | "cleanup";
+            /** @description The same for every step of one run of the whole list. */
+            runId: string;
+            /** @description 1-based. */
+            step: number;
+            /** @description Number of steps in the run. */
+            total: number;
+            /** @description The step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. Empty when a Cleanup run's output no longer names it. */
+            command: string;
+            /** @description The repository folder the step ran in; empty for the main repository. */
+            repository: string;
+            /**
+             * @description skipped is a step that never ran because an earlier one failed; it is sent once, at the end of the run.
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "failed" | "timed_out" | "skipped";
+            /** @description Set once the step finished (not on running or skipped); -1 when it timed out or could not run. */
+            exitCode?: number;
+            /**
+             * Format: date-time
+             * @description When the step started. Absent on a skipped step and on a Cleanup step whose start the output no longer shows.
+             */
+            startedAt?: string;
+            /** @description Set once the step finished, except on a Cleanup step whose start the output no longer shows. */
+            durationMs?: number;
+            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden. */
+            output: string;
+            /** @description True when the output's beginning was dropped. */
+            outputTruncated: boolean;
+            /** @description Set by the control plane, true on an event served to someone outside the session's organization (a share-grant holder): output is empty and logPath, user, groups, dir and hint are absent. Only the organization's members see a run's output. */
+            outputHidden?: boolean;
+            /** @description The file in the sandbox with the full output (for Cleanup, the whole run's). */
+            logPath?: string;
+            /** @description The Linux user a failed or timed-out step ran as. */
+            user?: string;
+            /** @description The Linux groups a failed or timed-out step ran with. */
+            groups?: string[];
+            /** @description The directory a failed or timed-out step ran in. */
+            dir?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+            /** @description The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had their kind's default, 30 minutes for Setup and 10 for Cleanup). */
+            timeoutMinutes?: number;
+            /**
+             * Format: date-time
+             * @description Set by the control plane on a running step's live update: when the step last wrote any output, by the control plane's clock (from the worker's outputAgeMs). It moves even when the output tail looks the same (a repeated line, a progress line redrawn with a carriage return): a worker updates a step that keeps writing at least every minute. Absent from an older worker; clients then use the event's createdAt.
+             */
+            outputAt?: string;
+        };
+        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
+        WorkerScriptStepEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"] & {
+                /** @enum {string} */
+                phase?: "setup";
+                /** @description On a running step's live update: how many milliseconds before the update the step last wrote any output. The control plane turns it into outputAt with its own clock and does not keep it; an outputAt the worker sends is replaced. */
+                outputAgeMs?: number;
+            };
+        };
+        /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands) and start the terminal agent a switch to the terminal made meanwhile. A failure becomes the session's startup error and stays until a later ready report clears it. */
         WorkerWorkspaceStartupPayload: {
             /** @enum {string} */
             status: "failed" | "ready";
@@ -2212,7 +2341,7 @@ export interface components {
              * @description Required when status is failed.
              * @enum {string}
              */
-            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed";
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed";
             /** @description User-facing explanation; required when status is failed. */
             message?: string;
             /** @description Redacted excerpt, for Setup the failed command's output tail. */
@@ -2226,7 +2355,7 @@ export interface components {
             type: "workspace.startup";
             payload: components["schemas"]["WorkerWorkspaceStartupPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"];
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"] | components["schemas"]["WorkerScriptStepEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;
@@ -2475,6 +2604,13 @@ export interface components {
             /** @description Worker-safe failure message, limited by the server to 4 KiB. */
             message: string;
         };
+        WorkerChatStartFallbackInput: {
+            /** @enum {string} */
+            code: "CHAT_ADAPTER_UNAVAILABLE" | "CHAT_START_UNSUPPORTED";
+        };
+        WorkerChatStartFallbackResponse: {
+            movedToTui: boolean;
+        };
         WorkerAgentTerminalResponse: {
             /** Format: uuid */
             terminalId: string;
@@ -2579,9 +2715,9 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable and project_setup_failed are the exception: the worker has checked in but could not prepare the workspace, so the agent does not start; they stay until the worker reports the workspace ready after the user reopens the session (a workspace checkout request). */
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), repository_checkout_failed, working_directory_unusable or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
@@ -2605,8 +2741,10 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
-            /** @description Interface the session starts in. Optional; omitted starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. */
+            /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
@@ -2710,6 +2848,14 @@ export interface components {
             pullRequestUrl: string;
             conflictFiles: components["schemas"]["PullRequestConflictFile"][];
         };
+        /** @description The person who started the session behind a pull request the AO GitHub App opened, so its author is the App's bot. Shown only to organization members. */
+        PullRequestOpener: {
+            /** @description Their AO display name; empty when they have none. */
+            name: string;
+            /** @description Their GitHub login, when they connected GitHub to AO. */
+            githubLogin?: string;
+            avatarUrl?: string;
+        };
         PullRequestSummary: {
             url: string;
             htmlUrl?: string;
@@ -2720,6 +2866,7 @@ export interface components {
             repository: string;
             author: string;
             authorAvatarUrl?: string;
+            openedBy?: components["schemas"]["PullRequestOpener"];
             sourceBranch: string;
             targetBranch: string;
             headSha: string;
@@ -2902,7 +3049,18 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"];
+        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. A step's live updates (status running) are deleted once its final event is stored, so a replay shows only the final event and sequences may skip. */
+        ScriptStepEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -3129,6 +3287,8 @@ export interface components {
         EventLimit: number;
         /** @description Return events with a sequence strictly greater than this value. */
         After: number;
+        /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+        EventTypes: string[];
         /** @description Reusing a key with the same command returns the original result.
          *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
          *      */
@@ -4401,6 +4561,8 @@ export interface operations {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
                 limit?: components["parameters"]["EventLimit"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {
@@ -4428,6 +4590,8 @@ export interface operations {
             query?: {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {
@@ -5444,6 +5608,37 @@ export interface operations {
             /** @description The command is no longer claimed or has expired. */
             409: components["responses"]["Error"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    fallBackWorkerChatStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerChatStartFallbackInput"];
+            };
+        };
+        responses: {
+            /** @description Whether the session moved to tui. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerChatStartFallbackResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            404: components["responses"]["WorkerRoutesDisabled"];
+            /** @description The code is not one the control plane knows. */
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     ensureWorkerAgentTerminal: {

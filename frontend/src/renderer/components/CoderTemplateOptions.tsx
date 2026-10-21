@@ -1,16 +1,22 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
+import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpCoderTemplateParameter } from "../lib/cloud-cp/types";
 import {
+	coderReusesTemplateCheckout,
 	decodeListValue,
+	duplicateCloneOptions,
 	editableTemplateParameters,
 	effectiveParameterValue,
 	encodeListValue,
 	withParameterValue,
 } from "../lib/coder-template-parameters";
 import { onboardingFieldErrorClass, onboardingFieldHintClass } from "../lib/onboarding-ui";
+import { cn } from "../lib/utils";
+import { LiveStatus } from "./LiveStatus";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -44,6 +50,8 @@ export function CoderTemplateOptions({
 	onChange,
 	disabled,
 	footer,
+	repositoryUrls = [],
+	projectWorkingDirectory,
 }: {
 	orgId: string | undefined;
 	templateId: string | undefined;
@@ -52,10 +60,29 @@ export function CoderTemplateOptions({
 	disabled?: boolean;
 	/** Shown under the fields, e.g. the settings form's save state. */
 	footer?: ReactNode;
+	/** The project's main and additional repositories, which AO checks out itself. */
+	repositoryUrls?: readonly string[];
+	/** The project's own working folder, when it sets one. */
+	projectWorkingDirectory?: string;
 }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { parameters: all, isError, settled } = useCoderTemplateParameters(orgId, templateId, true, overrides);
 	const parameters = editableTemplateParameters(all);
+	// A ticked template option naming one of the project's repositories makes
+	// the template clone a second copy beside AO's own checkout, unless the
+	// session adopts the template's checkout (workspace user with reuse or a
+	// working folder). Stay quiet until the connection's mode is known; a
+	// disabled read (no own Coder connection) means the default ao-worker.
+	// The project's org decides the mode, which need not be the signed-in org.
+	const orgCoder = useOrgCoderConfig(true, orgId);
+	// With a project working folder and the ao-worker user, the template's
+	// clone lands where AO checks out, so the session cannot start at all;
+	// only once the control plane checks ao-worker sessions out there.
+	const { coderWorkerWorkingFolder } = useCloudOffering();
+	const modeKnown = orgCoder.data !== undefined || (!orgCoder.isLoading && !orgCoder.isError);
+	const duplicates = modeKnown && !coderReusesTemplateCheckout(orgCoder.data ?? null, projectWorkingDirectory)
+		? duplicateCloneOptions(parameters, overrides, repositoryUrls)
+		: undefined;
 	// Only an edit made here prunes values: a saved value is never dropped just
 	// because the form opened.
 	const edited = useRef(false);
@@ -70,29 +97,51 @@ export function CoderTemplateOptions({
 	}, [all, onChange, overrides, settled]);
 	const collapsible = parameters.length > COLLAPSE_AFTER;
 	const [open, setOpen] = useState(false);
+	const collapsedWarningId = `${useId()}-duplicate-clone`;
 	if (isError && parameters.length === 0) {
 		return <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.loadFailed")}</p>;
 	}
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
+	const blocksWorkingFolder = coderWorkerWorkingFolder === true && (projectWorkingDirectory ?? "").trim() !== "";
+	const duplicateMessage = (labels: readonly string[]) => t(
+		blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
+		{ count: labels.length, repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
+	);
+	const duplicateWarning = (labels: readonly string[], id: string) => (
+		<TemplateOptionWarning id={id} startFails={blocksWorkingFolder}>{duplicateMessage(labels)}</TemplateOptionWarning>
+	);
+	const duplicateLabels = duplicates ? [...new Set([...duplicates.values()].flat())] : [];
+	// Collapsed, the fields (and their warnings) are hidden, so the warning
+	// moves up under the header; expanded, it sits under its field instead.
+	const collapsedDuplicates = expanded ? [] : duplicateLabels;
 	return (
 		<section className="flex flex-col gap-3 text-sm" aria-label={t("coder.templateOptions.title")} data-testid="coder-template-options">
+			{/* Said when a warning appears, wherever it is shown. */}
+			<LiveStatus text={duplicateLabels.length > 0 ? duplicateMessage(duplicateLabels) : ""} />
 			{isError ? <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.checkFailed")}</p> : null}
-			{collapsible ? (
-				<button
-					type="button"
-					className="flex w-fit items-center gap-1 font-medium text-foreground"
-					aria-expanded={expanded}
-					onClick={() => setOpen((value) => !value)}
-				>
-					{expanded
-						? <ChevronDown aria-hidden="true" className="size-icon-sm text-muted-foreground" />
-						: <ChevronRight aria-hidden="true" className="size-icon-sm text-muted-foreground" />}
-					{t("coder.templateOptions.titleCount", { total: parameters.length })}
-				</button>
-			) : (
-				<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
-			)}
+			<div className="flex flex-col gap-1">
+				{collapsible ? (
+					<button
+						type="button"
+						className="flex w-fit items-center gap-1 font-medium text-foreground"
+						aria-expanded={expanded}
+						aria-describedby={collapsedDuplicates.length > 0 ? collapsedWarningId : undefined}
+						onClick={() => setOpen((value) => !value)}
+					>
+						{expanded
+							? <ChevronDown aria-hidden="true" className="size-icon-sm text-muted-foreground" />
+							: <ChevronRight aria-hidden="true" className="size-icon-sm text-muted-foreground" />}
+						{t("coder.templateOptions.titleCount", { total: parameters.length })}
+					</button>
+				) : (
+					<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
+				)}
+				{collapsedDuplicates.length > 0 ? (
+					duplicateWarning(collapsedDuplicates, collapsedWarningId)
+				) : null}
+				<p className={onboardingFieldHintClass}>{t("coder.templateOptions.subtitle")}</p>
+			</div>
 			{expanded ? (
 				<div className="flex flex-col gap-4">
 					{parameters.map((parameter) => (
@@ -102,6 +151,9 @@ export function CoderTemplateOptions({
 							value={effectiveParameterValue(parameter, overrides)}
 							disabled={disabled}
 							problem={parameter.name in overrides ? valueProblem(parameter) : undefined}
+							warning={duplicates?.has(parameter.name)
+								? (warningId) => duplicateWarning(duplicates.get(parameter.name) ?? [], warningId)
+								: undefined}
 							onChange={(value) => {
 								edited.current = true;
 								onChange(withParameterValue(overrides, parameter, value));
@@ -120,11 +172,28 @@ function valueProblem(parameter: CloudCpCoderTemplateParameter): string | undefi
 	return parameter.diagnostics?.find((diagnostic) => diagnostic.severity === "error")?.summary?.trim() || undefined;
 }
 
+/**
+ * A heads-up under a template option. It does not block saving, so it reads as
+ * muted helper text behind a warning icon rather than as a red field error;
+ * only one that means the session will fail to start keeps the warning color.
+ */
+function TemplateOptionWarning({ id, startFails, children }: { id: string; startFails: boolean; children: ReactNode }) {
+	// The field's description, so a screen reader hears it on reaching the
+	// option; the section's live status says it when it appears.
+	return (
+		<p id={id} className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
+			<TriangleAlert aria-hidden="true" className="mt-1 size-3 shrink-0 text-warning" />
+			<span className="min-w-0">{children}</span>
+		</p>
+	);
+}
+
 function TemplateParameterField({
 	parameter,
 	value,
 	disabled,
 	problem,
+	warning,
 	onChange,
 }: {
 	parameter: CloudCpCoderTemplateParameter;
@@ -132,6 +201,8 @@ function TemplateParameterField({
 	disabled?: boolean;
 	/** Coder's error about the current value, shown under the field. */
 	problem?: string;
+	/** A heads-up about the current value that does not block saving, rendered with the id the field is described by. */
+	warning?: (id: string) => ReactNode;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
@@ -150,9 +221,10 @@ function TemplateParameterField({
 		</Label>
 	);
 	const problemId = `${id}-problem`;
+	const warningId = `${id}-warning`;
 	const hint = description ? <p id={hintId} className={onboardingFieldHintClass}>{description}</p> : null;
 	const problemText = problem ? <p id={problemId} className={onboardingFieldErrorClass} role="alert">{problem}</p> : null;
-	const describedBy = [description ? hintId : "", problem ? problemId : ""].filter(Boolean).join(" ") || undefined;
+	const describedBy = [description ? hintId : "", warning ? warningId : "", problem ? problemId : ""].filter(Boolean).join(" ") || undefined;
 
 	if (parameter.type === "bool") {
 		return (
@@ -250,6 +322,7 @@ function TemplateParameterField({
 			{heading}
 			{hint}
 			{control}
+			{warning ? warning(warningId) : null}
 			{problemText}
 		</div>
 	);

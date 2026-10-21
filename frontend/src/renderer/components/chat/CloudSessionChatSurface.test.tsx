@@ -69,6 +69,76 @@ describe("CloudSessionChatSurface", () => {
 		expect(succeeded?.turnId).toBeUndefined();
 		expect(failed?.kind === "activity" ? failed.detail?.output : "unexpected").toBeUndefined();
 	});
+	it("draws one live row per script run and drops the summary it supersedes", () => {
+		const step = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-01T00:00:00Z",
+			payload: { phase: "setup", runId: "run-1", total: 2, command: "npm ci", repository: "", ...payload },
+		});
+		const running = [
+			step(1, { step: 1, status: "running" }),
+			step(2, { step: 1, status: "running", output: "added 10" }),
+		];
+		const [live] = toSnapshot(session, running).items;
+		expect(live).toMatchObject({
+			kind: "activity", id: "cloud-script-run-run-1", activityKind: "system", status: "running", revision: 2,
+			summary: "Setup: Running step 1 of 2",
+			detail: { event: "workspace.script.run", scriptRun: { runId: "run-1", status: "running", runningStep: 1 } },
+		});
+		const finished = [
+			// An older worker's summary for an earlier boot has no step events and keeps its row.
+			{ sessionId: session.id, sequence: 0, type: "workspace.setup", payload: { status: "succeeded" }, createdAt: "2026-10-01T00:00:00Z" },
+			...running,
+			step(3, { step: 1, status: "succeeded", exitCode: 0, durationMs: 1000 }),
+			step(4, { step: 2, status: "succeeded", exitCode: 0, durationMs: 1000, command: "npm run build" }),
+			{ sessionId: session.id, sequence: 5, type: "workspace.setup", payload: { status: "succeeded", durationMs: 2000 }, createdAt: "2026-10-01T00:00:05Z" },
+			step(6, { phase: "cleanup", runId: "cleanup-1", total: 1, step: 1, status: "succeeded", exitCode: 0, durationMs: 10 }),
+		] satisfies CloudCpClientEvent[];
+		const items = toSnapshot(session, finished).items;
+		expect(items.map((item) => item.kind === "activity" ? item.detail?.event : item.kind)).toEqual([
+			"workspace.setup", "workspace.script.run", "workspace.script.run",
+		]);
+		expect(items[1]).toMatchObject({ status: "completed", summary: "Setup: Succeeded", detail: { scriptRun: { status: "succeeded" } } });
+		expect(items[2]).toMatchObject({ summary: "Cleanup: Succeeded", detail: { scriptRun: { phase: "cleanup" } } });
+	});
+	it("places the session's start Setup above the first prompt, and a later Setup where it ran", () => {
+		const at = "2026-10-01T00:00:00Z";
+		const step = (sequence: number, runId: string, status: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: at,
+			payload: { phase: "setup", runId, total: 1, step: 1, command: "npm ci", repository: "", status },
+		});
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Reply OK", turnId: "t1" }, createdAt: at },
+			step(2, "start", "running"),
+			step(3, "start", "succeeded"),
+			{ sessionId: session.id, sequence: 4, type: "chat.turn_started", payload: { turnId: "t1" }, createdAt: at },
+			{ sessionId: session.id, sequence: 5, type: "chat.turn_completed", payload: { turnId: "t1" }, createdAt: at },
+			step(6, "retry", "succeeded"),
+		];
+		const runs = toSnapshot(session, events).items.filter((item) => item.kind === "activity" && item.detail?.event === "workspace.script.run");
+		expect(runs.map((run) => [run.id, run.sequence])).toEqual([["cloud-script-run-start", 0.5], ["cloud-script-run-retry", 6]]);
+		// A first prompt without a turn id shares Setup's turn-less group, so Setup leads it in item order too.
+		const untracked = events.map((event) => event.type === "chat.user_message" ? { ...event, payload: { text: "Reply OK" } } : event);
+		expect(toSnapshot(session, untracked).items.slice(0, 2).map((item) => item.id)).toEqual(["cloud-script-run-start", "cloud-event-1"]);
+	});
+	it("carries a failed setup step's command, user, directory, log and hint", () => {
+		const events: CloudCpClientEvent[] = [{
+			sessionId: session.id, sequence: 1, type: "workspace.setup",
+			payload: {
+				status: "failed", step: 2, exitCode: 1, output: "denied", command: "docker compose up -d", dir: "/w/lib",
+				user: "ao-worker", groups: ["ao-worker", "users"], logPath: "/d/setup-logs/step-2.log", hint: "No Docker.",
+			},
+			createdAt: "2026-10-01T00:00:00Z",
+		}];
+		expect(toSnapshot(session, events).items[0]).toMatchObject({
+			detail: {
+				setupHint: "No Docker.",
+				setupFailure: {
+					command: "docker compose up -d", user: "ao-worker", groups: ["ao-worker", "users"],
+					dir: "/w/lib", logPath: "/d/setup-logs/step-2.log",
+				},
+			},
+		});
+	});
 	it("preserves structured sender metadata for linked automation rendering", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -193,6 +263,80 @@ describe("CloudSessionChatSurface", () => {
 		expect(props().snapshot.controller.state).not.toBe("stopped");
 	});
 
+	it("keeps the first prompt queued under a failed Setup's checklist, and Retry waits for a waking worker", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			const prompt: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: "2026-10-20T16:01:57Z" };
+			const failedRun: CloudCpClientEvent = {
+				sessionId: session.id, sequence: 2, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+				payload: { phase: "setup", runId: "run-1", step: 1, total: 1, status: "failed", exitCode: 1, command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+			};
+			const startupError = { code: "project_setup_failed", message: "The project's Setup script failed at step 1 (exit status 1).", at: "2026-10-20T16:02:02Z" };
+			const failedSession = { ...session, runtimeConnected: true, cloud: { orgId: "org-1", startupError } };
+			// Nothing works on the prompt until a retry passes, as while Setup runs.
+			expect(toSnapshot(failedSession, [prompt, failedRun]).turns).toEqual([expect.objectContaining({ id: "turn-1", state: "queued" })]);
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [prompt, failedRun], hasMore: false, nextAfter: 2 });
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+			// An idle-paused workspace refuses the request until its worker is back.
+			cloudMocks.requestWorkspaceCheckout.mockReset()
+				.mockRejectedValueOnce(new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" }))
+				.mockResolvedValueOnce({});
+			cloudMocks.chatProps.mockClear();
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<CloudSessionChatSurface session={failedSession} />
+				</QueryClientProvider>,
+			);
+			const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+			await waitFor(() => expect(props().snapshot.turns).toEqual([expect.objectContaining({ id: "turn-1", state: "queued" })]));
+			// The checklist reports the failure, so the failed run is not also a row.
+			expect(props().snapshot.items.filter((item: { detail?: { event?: string } }) => item.detail?.event === "workspace.script.run")).toEqual([]);
+			expect(props().session).toMatchObject({ provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }, { id: "setup", status: "running" }, { id: "agent", status: "pending" }] });
+			act(() => props().onResumeAgent());
+			await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+			await waitFor(() => expect(cloudMocks.requestWorkspaceCheckout).toHaveBeenCalledTimes(2));
+			await waitFor(() => expect(props().session.provisionState).toBe("provisioning"));
+			expect(props().resumeError).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps only the Setup run that passed once a retry recovers, from step events too", async () => {
+		const run = (sequence: number, runId: string, status: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+			payload: { phase: "setup", runId, step: 1, total: 1, status, ...(status === "running" ? {} : { exitCode: status === "succeeded" ? 0 : 1, durationMs: 10 }), command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+		});
+		const prompt: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: "2026-10-20T16:01:57Z" };
+		const runs = (items: { kind: string; detail?: { event?: string; scriptRun?: { runId: string } } }[]) =>
+			items.filter((item) => item.detail?.event === "workspace.script.run").map((item) => item.detail?.scriptRun?.runId);
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [prompt, run(2, "run-1", "failed"), run(3, "run-2", "succeeded")], hasMore: false, nextAfter: 3 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(runs(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items ?? [])).toEqual(["run-2"]));
+		// The start Setup that passed still leads the first prompt.
+		const items = cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items as { kind: string; role?: string; detail?: { event?: string } }[];
+		expect(items.findIndex((item) => item.detail?.event === "workspace.script.run")).toBeLessThan(items.findIndex((item) => item.kind === "message" && item.role === "user"));
+	});
+
+	it("shows a terminal agent that could not start after Setup as the checklist's agent step", () => {
+		const startupError = { code: "agent_start_failed", message: "The coding agent did not start.", at: "2026-10-20T16:02:02Z" };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1", startupError } }} />
+			</QueryClientProvider>,
+		);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].session).toMatchObject({
+			provisionState: "failed",
+			provisionSteps: [{ id: "worktree", status: "done" }, { id: "setup", status: "done" }, { id: "agent", status: "running" }],
+		});
+	});
+
 	it("keeps only the Setup that passed once a retry recovers, as a local start keeps no failed attempts", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [
 			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "failed", step: 1, exitCode: 1 }, createdAt: "2026-10-01T00:00:00Z" },
@@ -268,6 +412,65 @@ describe("CloudSessionChatSurface", () => {
 		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toEqual([
 			{ id: "codex-test", displayName: "Codex Test", default: true },
 		]));
+	});
+
+	it("does not ask a deleted session for models and loads them once its restored worker connects", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset()
+			.mockRejectedValueOnce(new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" }))
+			.mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true }] });
+		// Resuming a deleted session is refused; only a restore brings it back.
+		cloudMocks.resumeSession.mockReset().mockRejectedValue(
+			new CloudCpError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }),
+		);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const deleted = { ...session, cloud: { orgId: "org-1" }, isTerminated: true, terminalGeneration: "15702" };
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={deleted} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+		expect(cloudMocks.resumeSession).not.toHaveBeenCalled();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+
+		// Restore clears the terminated flag before the new worker connects, so
+		// the first attempt cannot reach a worker yet.
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...deleted, isTerminated: false }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toMatch(/^Model choices unavailable/));
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...deleted, isTerminated: false, terminalGeneration: "15704" }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toEqual([
+			{ id: "codex-test", displayName: "Codex Test", default: true },
+		]));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+	});
+
+	it("says a session deleted under the composer must be restored", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockRejectedValue(
+			new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" }),
+		);
+		cloudMocks.resumeSession.mockReset().mockRejectedValue(
+			new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" }),
+		);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// The session list has not caught up with the delete yet.
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError)
+			.toBe("This session was deleted. Restore it to continue."));
 	});
 
 	it("shows provider models and sends the selected model and effort with the next turn", async () => {
@@ -367,7 +570,7 @@ describe("CloudSessionChatSurface", () => {
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.configOptions).toBeUndefined();
 		expect(props.approvalModes).toEqual(modes);
-		act(() => props.onChooseSettings({ approvalMode: chosen }));
+		act(() => props.onChooseSettings({ approvalMode: chosen }, "approvalMode"));
 		await props.onSend("hello", [], `mode-${provider}`);
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
 			text: "hello", mode: ceiling, approvalMode: chosen,
@@ -385,10 +588,11 @@ describe("CloudSessionChatSurface", () => {
 		);
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.approvalModes).toEqual(["accept-edits", "auto"]);
-		act(() => props.onChooseSettings({ approvalMode: "bypass-permissions" }));
+		expect(props.snapshot.settings?.approvalMode).toBe("auto");
+		act(() => props.onChooseSettings({ approvalMode: "bypass-permissions" }, "approvalMode"));
 		await props.onSend("hello", [], "capped-message");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
-			text: "hello", mode: "standard", approvalMode: "accept-edits",
+			text: "hello", mode: "standard",
 		}, { idempotencyKey: "capped-message" });
 	});
 
@@ -432,8 +636,125 @@ describe("CloudSessionChatSurface", () => {
 		);
 		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("next", [], "after-handoff");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
-			text: "next", mode: "trusted", approvalMode: "default",
+			text: "next", mode: "trusted",
 		}, { idempotencyKey: "after-handoff" });
+	});
+
+	it("shows a trusted Chat's default without sending it and keeps the user's own choice", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("bypass-permissions");
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("first", [], "trusted-1");
+		// The worker derives the mode from the session's, stepping down when
+		// the adapter does not offer it.
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "first", mode: "trusted",
+		}, { idempotencyKey: "trusted-1" });
+		// The settings bar sends the shown settings back with an effort change.
+		const shown = cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings;
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ ...shown, reasoningEffort: "high" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("effort", [], "trusted-effort");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "effort", reasoningEffort: "high", mode: "trusted",
+		}, { idempotencyKey: "trusted-effort" });
+		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).not.toHaveProperty("approvalMode");
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ approvalMode: "default" }, "approvalMode"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("second", [], "trusted-2");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "second", reasoningEffort: "high", mode: "trusted", approvalMode: "default",
+		}, { idempotencyKey: "trusted-2" });
+		// The pick is saved as one and survives a remount.
+		view.unmount();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("default"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("third", [], "trusted-3");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "third", reasoningEffort: "high", mode: "trusted", approvalMode: "default",
+		}, { idempotencyKey: "trusted-3" });
+	});
+
+	it("sends the shown default once the user picks it from the approval menu", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		const shown = cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings;
+		expect(shown?.approvalMode).toBe("bypass-permissions");
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ ...shown, approvalMode: "bypass-permissions" }, "approvalMode"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("go", [], "picked-default");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", mode: "trusted", approvalMode: "bypass-permissions",
+		}, { idempotencyKey: "picked-default" });
+		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).toMatchObject({ approvalMode: "bypass-permissions" });
+	});
+
+	it("stops showing a pick the session's mode no longer allows", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ approvalMode: "default" }, "approvalMode"));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("default");
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "standard" } }} />
+			</QueryClientProvider>,
+		);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.approvalModes).not.toContain("default");
+		expect(props.snapshot.settings?.approvalMode).toBe("auto");
+		await props.onSend("go", [], "dropped-mode");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", mode: "standard",
+		}, { idempotencyKey: "dropped-mode" });
+	});
+
+	it("ignores an approval mode an older build saved with the model catalog", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({
+			models: [{ id: "claude-sonnet", displayName: "Claude Sonnet", default: true, efforts: ["medium", "high"] }],
+			model: "claude-sonnet", reasoningEffort: "medium",
+		});
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const key = "cloud-chat-settings:org-1:session-1:claude-code";
+		localStorage.setItem(key, JSON.stringify({ model: "claude-sonnet", reasoningEffort: "medium", approvalMode: "default" }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+		await waitFor(() => expect(localStorage.getItem(key)).not.toContain("approvalMode"));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("bypass-permissions");
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("go", [], "legacy-default");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", model: "claude-sonnet", reasoningEffort: "medium", mode: "trusted",
+		}, { idempotencyKey: "legacy-default" });
 	});
 
 	it("surfaces send errors and sends cancellation to the active turn", async () => {
@@ -542,6 +863,44 @@ describe("CloudSessionChatSurface", () => {
 		const snapshot = toSnapshot(session, events);
 		expect(snapshot.turns).toEqual([expect.objectContaining({ id: "turn-next", state: "running" })]);
 		expect(snapshot.controller.state).toBe("busy");
+	});
+
+	it("shows the session starting, not working, while its Setup runs ahead of the first turn", async () => {
+		const setupStep = (sequence: number, status: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+			payload: { phase: "setup", runId: "run-1", step: 1, total: 1, status, command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+		});
+		const prompt: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: "2026-10-20T16:01:57Z" };
+		// Setup running: the first prompt waits on it rather than being worked on.
+		const during = toSnapshot(session, [prompt, setupStep(2, "running")]);
+		expect(during.turns).toEqual([expect.objectContaining({ id: "turn-1", state: "queued" })]);
+		expect(during.controller.state).toBe("ready");
+		// Setup done: the turn is the active request again while the worker claims it.
+		const after = toSnapshot(session, [prompt, setupStep(2, "running"), { ...setupStep(3, "succeeded"), createdAt: "2026-10-20T16:03:01Z" }]);
+		expect(after.turns[0].state).toBe("running");
+		// Its working time counts from Setup's end, not from the prompt.
+		expect(after.turns[0].startedAt).toBe("2026-10-20T16:03:01Z");
+
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [prompt, setupStep(2, "running")], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].session.provisionState).toBe("provisioning"));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		// The startup checklist in place of a working timer, and nothing to stop. It is
+		// the checklist a failed start shows, with Setup running.
+		expect(props.session.provisionSteps).toEqual([
+			{ id: "worktree", status: "done" },
+			{ id: "setup", status: "running", startedAt: expect.any(String) },
+			{ id: "agent", status: "pending" },
+		]);
+		expect(props.onInterrupt).toBeUndefined();
+		expect(props.onSteer).toBeUndefined();
 	});
 
 	it("queues only later Cloud sends while the first awaits its worker", () => {

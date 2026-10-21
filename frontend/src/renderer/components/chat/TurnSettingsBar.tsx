@@ -121,7 +121,8 @@ export function TurnSettingsBar({
 	 * model that is not the one producing the answers.
 	 */
 	reroute?: ModelReroute;
-	onChange?: (next: TurnSettings) => void;
+	/** `picked` is set when the user chose that setting from its own menu. */
+	onChange?: (next: TurnSettings, picked?: keyof TurnSettings) => void;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
@@ -326,7 +327,7 @@ export function TurnSettingsBar({
 										key={mode}
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
-										onSelect={() => onChange({ ...settings, approvalMode: mode })}
+										onSelect={() => onChange({ ...settings, approvalMode: mode }, "approvalMode")}
 										className={cn("text-xs")}
 									>
 										<span

@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
+import { useHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -75,6 +76,23 @@ describe("startup harness update notice", () => {
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
 		expect(notice).toHaveClass("fixed", "right-4");
+	});
+
+	it("publishes the corner it covers while shown, so session content can keep clear of it", async () => {
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			return this.classList.contains("harness-update-notice") ? new DOMRect(1004, 72, 300, 68) : new DOMRect();
+		});
+		function Probe() {
+			const rect = useHarnessUpdateNoticeRect();
+			return <output aria-label="notice rect">{rect ? `${rect.left},${rect.top},${rect.right},${rect.bottom}` : "none"}</output>;
+		}
+		render(<Probe />);
+		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
+		const { unmount } = mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		await waitFor(() => expect(screen.getByLabelText("notice rect")).toHaveTextContent("1004,72,1304,140"));
+		unmount();
+		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
 	});
 
 	it("keeps the app corner, hides for browser overlap, and returns after the inspector closes", async () => {

@@ -1,4 +1,4 @@
-import type { CloudCpCoderTemplateParameter } from "./cloud-cp/types";
+import type { CloudCpCoderTemplateParameter, CloudCpOrgCoderConfig } from "./cloud-cp/types";
 
 // Template parameters AO sets itself from the project's own controls (the
 // machine size select and the startup script), after any project override. They
@@ -92,6 +92,58 @@ export function changedParameterOverrides(
 		if (typeof value !== "string") continue;
 		if (parameter && isDefaultParameterValue(parameter, value)) continue;
 		result[name] = value;
+	}
+	return result;
+}
+
+/**
+ * Whether sessions work in the template's own checkout instead of the one AO
+ * clones: only with the workspace user, and then when the connection reuses a
+ * matching checkout under ~/work (on unless turned off) or names a working
+ * folder (the connection's, or the project's own). Mirrors the control plane's
+ * OrgCoderConfig.ReusesExistingCheckout and the working directory override.
+ * No connection (null) means the default ao-worker.
+ */
+export function coderReusesTemplateCheckout(
+	config: Pick<CloudCpOrgCoderConfig, "workerUser" | "reuseExistingCheckout" | "workingDirectory"> | null,
+	projectWorkingDirectory = "",
+): boolean {
+	if (config?.workerUser !== "workspace") return false;
+	return (config.reuseExistingCheckout ?? true)
+		|| (config.workingDirectory ?? "").trim() !== ""
+		|| projectWorkingDirectory.trim() !== "";
+}
+
+/** A repository-ish string reduced to its bare name: "11x-ai/alice.git" gives "alice". */
+function bareRepoName(value: string): string {
+	const trimmed = value.trim().replace(/[/\\]+$/, "").replace(/\.git$/i, "");
+	return (trimmed.split(/[/:]/).pop() ?? "").trim().toLowerCase();
+}
+
+/**
+ * The selected options of each list(string) parameter that name one of the
+ * repositories AO checks out itself, keyed by parameter name. Kept
+ * conservative: an option counts only when its label or value, reduced to a
+ * bare repository name, equals a repository's name (case-insensitive).
+ */
+export function duplicateCloneOptions(
+	parameters: readonly CloudCpCoderTemplateParameter[],
+	overrides: Readonly<Record<string, string>>,
+	repositoryUrls: readonly string[],
+): Map<string, string[]> {
+	const result = new Map<string, string[]>();
+	const names = new Set(repositoryUrls.map(bareRepoName).filter((name) => name !== ""));
+	if (names.size === 0) return result;
+	for (const parameter of parameters) {
+		if (parameter.type !== "list(string)") continue;
+		const options = parameter.options ?? [];
+		const labels = decodeListValue(effectiveParameterValue(parameter, overrides)).flatMap((value) => {
+			const option = options.find((item) => item.value === value);
+			// names never holds "", so an empty label or value matches nothing.
+			const matches = names.has(bareRepoName(value)) || names.has(bareRepoName(option?.name ?? ""));
+			return matches ? [option?.name?.trim() || value] : [];
+		});
+		if (labels.length > 0) result.set(parameter.name, labels);
 	}
 	return result;
 }

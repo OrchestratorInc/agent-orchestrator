@@ -71,6 +71,13 @@ export interface CloudCpOffering {
 	 * billed. Absent from older control planes.
 	 */
 	customCoder?: boolean;
+	/**
+	 * A Coder session run as the dedicated ao-worker user checks out in the
+	 * project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Absent
+	 * from older control planes, which is read as off: a working folder then
+	 * applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder?: boolean;
 }
 
 /** GET /me */
@@ -254,7 +261,7 @@ export interface CloudCpProjectRepo {
  * repoScriptCommand). The control plane also accepts {command, repository} and
  * stores it in the wrapped form.
  */
-export type CloudCpProjectScriptStep = string | { command: string; repository?: string };
+export type CloudCpProjectScriptStep = string | { command: string; repository?: string; timeoutMinutes?: number };
 
 /** Where a project's coding agent starts: its main repository, or the folder holding every repository. */
 export type CloudCpAgentStartsIn = "repository" | "parent";
@@ -308,7 +315,7 @@ export interface CloudCpProjectCoderConfig {
 	/** Additional repositories every session of the project clones alongside the primary repo. */
 	extraRepos?: CloudCpSessionRepo[];
 	/**
-	 * Prefix for the project's new Coder workspace names (`<prefix>-<short id>`).
+	 * Prefix for the project's new Coder workspace names (`<prefix>-o-<id>` / `<prefix>-w-<word>-<id>`).
 	 * Empty/absent keeps the default `ao`. Must match `^[a-z][a-z0-9-]{0,19}$`
 	 * without a trailing `-` or a `--` run.
 	 */
@@ -381,6 +388,15 @@ export interface CloudCpCreateSessionRequest {
 	provider?: string;
 	/** Interface the session starts in. Omitted, or a harness without Chat, starts in the terminal. */
 	interfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * The user's default session interface (Settings > General), for a create
+	 * without interfaceMode: the control plane resolves the session's
+	 * interface from it exactly as the local daemon resolves a spawn's (an
+	 * orchestrator starts in Chat where its harness can), and an orchestrator
+	 * keeps it for the workers it spawns. An older control plane rejects the
+	 * field (see createCloudSession).
+	 */
+	defaultInterfaceMode?: CloudCpInterfaceMode;
 }
 
 export interface CloudCpSessionRepo {
@@ -617,7 +633,10 @@ export interface CloudCpSession {
 /**
  * A cloud session's startup failure. Known codes: workspace_not_ready,
  * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
- * worker_never_started, bootstrap_failed; treat any other code generically.
+ * worker_never_started, bootstrap_failed, workspace_build_failed,
+ * workspace_create_failed, working_directory_not_durable (the project's
+ * working folder is outside the Coder durable root); treat any other code
+ * generically.
  */
 export interface CloudCpSessionStartupError {
 	code: string;
@@ -800,6 +819,8 @@ export interface CloudCpWorkspaceReviewResponse {
 export interface CloudCpWorkspaceRepository {
 	/** The folder it is checked out into; the `repository` parameter for a sibling. */
 	name: string;
+	/** The name to show when it differs from the folder (the main repository's own name). */
+	label?: string;
 	/** owner/name on GitHub, when known. */
 	repository?: string;
 	branch?: string;
@@ -949,6 +970,12 @@ export interface CloudCpSessionChildrenResponse {
 // Pull requests and AO reviews (`pull_request_handlers.go`)
 // ---------------------------------------------------------------------------
 
+export interface CloudCpPullRequestOpener {
+	name: string;
+	githubLogin?: string;
+	avatarUrl?: string;
+}
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -959,6 +986,8 @@ export interface CloudCpPullRequestSummary {
 	repository: string;
 	author: string;
 	authorAvatarUrl?: string;
+	/** The person behind a pull request the AO GitHub App opened for them. */
+	openedBy?: CloudCpPullRequestOpener;
 	sourceBranch: string;
 	targetBranch: string;
 	headSha: string;
@@ -1164,6 +1193,12 @@ export interface CloudCpChatEventsQuery {
 	after?: number;
 	/** Page size, 1-500 (control-plane default: 100). */
 	limit?: number;
+	/**
+	 * Only these event types, sent as one comma-separated `types` parameter.
+	 * An older control plane ignores it (and returns every type) or refuses
+	 * it with 400; callers filter the page themselves either way.
+	 */
+	types?: readonly string[];
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/chat-events */

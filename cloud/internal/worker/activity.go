@@ -156,8 +156,12 @@ func ValidActivityEvent(event ActivityEvent) bool {
 			return event.State == contract.ActivityActive
 		case "permission-request":
 			return event.State == contract.ActivityBlocked
-		case "stop":
+		case "stop", "stop-failure":
 			return event.State == contract.ActivityIdle
+		case "interrupt":
+			// Claude Code has no hook for an Esc interrupt. The worker reports
+			// it from the transcript (workertransport/claude_turns.go).
+			return event.State == contract.ActivityIdle && event.SourceInterface == "tui"
 		case "notification":
 			return event.State == contract.ActivityIdle ||
 				event.State == contract.ActivityWaitingInput ||
@@ -175,6 +179,11 @@ func ValidActivityEvent(event ActivityEvent) bool {
 			return event.State == contract.ActivityWaitingInput
 		case "stop", "interrupt":
 			return event.State == contract.ActivityIdle
+		case "stop-failure":
+			// Codex has no hook for a turn that ended on an error. The worker
+			// reports it from the rollout (workertransport/codex_turns.go), as it
+			// does an interrupt for a Codex without the Interrupt hook.
+			return event.State == contract.ActivityIdle && event.SourceInterface == "tui"
 		}
 	case "cursor":
 		switch event.Event {
@@ -220,7 +229,9 @@ func deriveClaudeActivity(
 		return contract.ActivityActive, true
 	case "permission-request":
 		return contract.ActivityBlocked, true
-	case "stop":
+	case "stop", "stop-failure":
+		// StopFailure fires instead of Stop when an API error (rate limit,
+		// auth failure) ended the turn; the agent is back at its prompt.
 		return contract.ActivityIdle, true
 	case "notification":
 		var notification struct {

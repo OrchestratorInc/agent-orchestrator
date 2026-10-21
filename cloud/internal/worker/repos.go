@@ -2,8 +2,10 @@ package worker
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
@@ -138,4 +140,22 @@ func ResolveRepoCheckout(checkouts []RepoCheckout, selector string) (RepoCheckou
 		}
 	}
 	return RepoCheckout{}, ErrUnknownRepository
+}
+
+// ExtraRepoFolderBlocked says why the worker cannot create an additional
+// repository's checkout folder: it does not exist yet and the folder beside
+// the main checkout does not let the worker's user add one (for example a
+// ~/work the Coder template created, which the session's bootstrap prepared
+// only the repositories' folders of the project at session creation in). It
+// returns "" when the folder exists or can be created.
+func ExtraRepoFolderBlocked(path string) string {
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	parent := filepath.Dir(path)
+	const writeAndSearch = 0x2 | 0x1 // W_OK | X_OK
+	if err := syscall.Access(parent, writeAndSearch); err != nil {
+		return parent + " does not let AO's worker user create " + filepath.Base(path) + " (" + err.Error() + ")"
+	}
+	return ""
 }

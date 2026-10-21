@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 // orgCapabilities returns the effective entitlement flags for one organization.
@@ -216,6 +218,12 @@ type offeringResponse struct {
 	// holds the coder capability), or still has a connection its sessions run
 	// on; the desktop shows the Coder settings page.
 	CustomCoder bool `json:"customCoder"`
+	// CoderWorkerWorkingFolder: a Coder session whose worker runs as the
+	// dedicated ao-worker user checks out in the project's working folder
+	// (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Off, a working folder applies
+	// only with the workspace user, as before; the desktop's copy follows it.
+	// An older control plane does not send it, which the desktop reads as off.
+	CoderWorkerWorkingFolder bool `json:"coderWorkerWorkingFolder"`
 }
 
 func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal, orgID string) (offeringResponse, error) {
@@ -233,6 +241,7 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 		Features: []string{},
 		CustomCoder: s.orgHasCustomCoder(principal, orgID) ||
 			(slices.Contains(providers, sandbox.ProviderCoder) && s.orgHasCoderConnection(ctx, principal, orgID)),
+		CoderWorkerWorkingFolder: s.provisioning.Coder.WorkerWorkingFolder,
 	}, nil
 }
 
@@ -380,6 +389,7 @@ type coderPlacement struct {
 // untouched.
 func resolveCoderPlacement(
 	projectConfig json.RawMessage,
+	repositoryURL string,
 	connections []domain.ProviderConnection,
 	preferredConnectionID string,
 ) (coderPlacement, error) {
@@ -408,6 +418,8 @@ func resolveCoderPlacement(
 		}
 	}
 	if chosen == nil {
+		// The deployment's Coder runs the worker as the dedicated ao-worker user.
+		placement.addCheckoutDirectory(projectConfig, repositoryURL)
 		return placement, nil
 	}
 	cfg, err := domain.DecodeOrgCoderConfig(chosen.Config)
@@ -438,7 +450,39 @@ func resolveCoderPlacement(
 		cfg.WorkerUser == domain.CoderWorkerUserWorkspace {
 		placement.override.WorkingDirectory = directory
 	}
+	// With the dedicated ao-worker user the project's working folder is where
+	// AO checks the main repository out (the connection's working directory
+	// needs the workspace user and never applies here).
+	if cfg.WorkerUser != domain.CoderWorkerUserWorkspace {
+		placement.addCheckoutDirectory(projectConfig, repositoryURL)
+	}
 	return placement, nil
+}
+
+// addCheckoutDirectory stamps the project's working folder, resolved for the
+// project's main repository (domain.CoderCheckoutDirectory), as the session's
+// checkout folder for a worker that runs as the dedicated ao-worker user. A
+// project without a working folder or without a repository (standalone) keeps
+// the default checkout. A folder the checkout refuses (for example one inside
+// a hidden folder, which a project saved before that rule, or saved without an
+// ao-worker connection, may still hold) is recorded as the reason instead, so
+// the session stops with a working_directory_unusable startup error rather
+// than quietly starting in the default checkout.
+func (p *coderPlacement) addCheckoutDirectory(projectConfig json.RawMessage, repositoryURL string) {
+	directory := domain.ProjectWorkingDirectory(projectConfig)
+	if directory == "" || strings.TrimSpace(repositoryURL) == "" || worker.IsScratchRepositoryURL(repositoryURL) {
+		return
+	}
+	if p.options == nil {
+		p.options = &sandbox.CoderSessionOptions{}
+	}
+	checkout, err := domain.CoderCheckoutDirectory(directory, repositoryURL)
+	if err != nil {
+		p.options.CheckoutDirectoryUnusable = domain.CoderCheckoutDirectoryUnusableMessage(directory, err)
+		return
+	}
+	p.options.CheckoutDirectory = checkout
+	p.options.CheckoutSiblings = domain.CoderCheckoutSiblings(projectConfig, checkout)
 }
 
 // orgCoderPlacement resolves the Coder placement for a request-driven session
@@ -449,6 +493,7 @@ func (s *Server) orgCoderPlacement(
 	principal domain.Principal,
 	orgID string,
 	projectConfig json.RawMessage,
+	repositoryURL string,
 ) (coderPlacement, error) {
 	var connections []domain.ProviderConnection
 	if store, ok := s.store.(providerConnectionStore); ok {
@@ -458,7 +503,7 @@ func (s *Server) orgCoderPlacement(
 			return coderPlacement{}, err
 		}
 	}
-	return resolveCoderPlacement(projectConfig, connections, "")
+	return resolveCoderPlacement(projectConfig, repositoryURL, connections, "")
 }
 
 // writeSessionPlanError reports a failure to resolve a session's provisioning
@@ -546,7 +591,7 @@ func (s *Server) scratchSessionPlan(
 	var placement coderPlacement
 	if provider == sandbox.ProviderCoder {
 		var err error
-		placement, err = s.orgCoderPlacement(r.Context(), principal, orgID, projectConfig)
+		placement, err = s.orgCoderPlacement(r.Context(), principal, orgID, projectConfig, "")
 		if err != nil {
 			s.writeCoderPlacementError(w, r, err)
 			return sandbox.Plan{}, "", false

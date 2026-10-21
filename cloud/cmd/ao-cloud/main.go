@@ -91,6 +91,9 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 			DurableRoot:        cfg.CoderDurableRoot,
 			WorkerTokenTTL:     cfg.CoderWorkerTokenTTL,
 			AllowedTemplateIDs: cfg.CoderTemplateIDs,
+			// Rollout flag: off keeps ao-worker sessions in the durable root's
+			// repository folder (see config.Config.CoderWorkerWorkingFolder).
+			WorkerWorkingFolder: cfg.CoderWorkerWorkingFolder,
 		},
 		Freestyle: sandbox.FreestyleConfig{
 			BaseURL:           cfg.FreestyleBaseURL,
@@ -428,6 +431,9 @@ func run(logger *slog.Logger) error {
 	// replica, plus a 90-day retention prune.
 	activityRecorder := activity.NewRecorder(store, logger, activity.Options{})
 	store.SetActivityLogger(activityRecorder.Log)
+	// Rollout flag: off keeps new Coder sessions on the <prefix>-<id> names
+	// (see config.Config.CoderReadableWorkspaceNames).
+	store.SetCoderReadableWorkspaceNames(cfg.CoderReadableWorkspaceNames)
 	go activityRecorder.Run(ctx)
 	go activity.RunPruner(ctx, store, activity.Retention, activity.DefaultPruneInterval, logger)
 	reconciler, err := newSandboxReconciler(cfg, store, providerCipher, logger)

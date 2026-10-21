@@ -54,7 +54,8 @@ describe("CloudWorkspaceExplorer", () => {
 			sections: { staged: [], unstaged: [file(path)], untracked: [], committed: [] },
 			...(withRepositories ? { repositories: [
 				{ name: "11x", repository: "acme/11x", present: true },
-				{ name: "alice", repository: "acme/alice", main: true, present: true },
+				// Freestyle and Coder check the main repository out into a fixed folder.
+				{ name: "repository", label: "alice", repository: "acme/alice", main: true, present: true },
 				{ name: "voice-calling-ai", present: false },
 			] } : {}),
 		});

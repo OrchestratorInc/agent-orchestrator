@@ -177,6 +177,9 @@ func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 // the prompt on the agent's command line and queues no turn.
 func TestCreateSessionStartsInTheRequestedInterface(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	// Read as the organization, so forced row-level security shows the turns
+	// under a role that does not bypass it.
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	for _, tc := range []struct {
 		requested    domain.SessionInterface
@@ -250,7 +253,7 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 }
 
 func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
-	const scanSessionDestinations = 36
+	const scanSessionDestinations = 37
 	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
 		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
 	}
@@ -261,5 +264,33 @@ func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
 		if !strings.Contains(sessionInsertReturning, field) {
 			t.Fatalf("session insert RETURNING is missing %s", field)
 		}
+	}
+}
+
+// A full organization still reports a requested branch that can never work,
+// rather than a quota error the caller would wait out for nothing.
+func TestCreateSessionChecksTheBranchBeforeTheSandboxQuota(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	create := func(branch string, maxSandboxes int) error {
+		t.Helper()
+		_, err := store.CreateSession(ctx, principal, fixture.orgID, "branch-quota-"+uuid.NewString(), maxSandboxes, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Branch quota",
+			Prompt: "hello", Provider: "docker", Branch: branch,
+		})
+		return err
+	}
+	if err := create("feature/held", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := create("main", 0); !errors.Is(err, ErrInvalidBranch) {
+		t.Fatalf("the default branch in a full organization: err = %v, want ErrInvalidBranch", err)
+	}
+	if err := create("feature/held", 0); !errors.Is(err, ErrBranchInUse) {
+		t.Fatalf("a held branch in a full organization: err = %v, want ErrBranchInUse", err)
+	}
+	if err := create("feature/free", 0); !errors.Is(err, ErrSandboxQuotaExceeded) {
+		t.Fatalf("a usable branch in a full organization: err = %v, want ErrSandboxQuotaExceeded", err)
 	}
 }

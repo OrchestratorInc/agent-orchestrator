@@ -179,7 +179,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				DisplayName:     name,
 			}
 			var res spawnResult
-			if err := ctx.postJSON(cmd.Context(), "sessions", req, &res); err != nil {
+			if err := ctx.postSetupJSON(cmd.Context(), "sessions", req, &res); err != nil {
 				return err
 			}
 			if strings.TrimSpace(res.Session.ID) == "" {
