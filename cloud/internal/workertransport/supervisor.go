@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -65,7 +66,10 @@ type Supervisor struct {
 	// Repositories are the session's additional repository checkouts beside
 	// Workspace (worker.SessionRepoCheckouts without the main one). Workspace
 	// requests select one with "repository".
-	Repositories        []worker.RepoCheckout
+	Repositories []worker.RepoCheckout
+	// MainRepository is the main repository's identity (URL and GitHub
+	// owner/name); its Name and Path are always the Workspace folder's.
+	MainRepository      worker.RepoCheckout
 	repositories        repositoryWorkspaces
 	DataDir             string
 	Harness             string
@@ -109,6 +113,24 @@ type Supervisor struct {
 	// PersistAgent keeps the interactive agent alive across worker restarts
 	// (see persistentAgent). It takes effect only when dtach is installed.
 	PersistAgent bool
+	// StartupTask reports that the terminal agent's first start in this
+	// worker runs the session's task from its command line. Until it starts,
+	// a drain treats the terminal as busy (see startupTaskWaiting).
+	StartupTask bool
+	// AgentReady, when set, reports that a switch to the terminal started the
+	// terminal agent (the agent.ready event a terminal session's own start
+	// publishes).
+	AgentReady func(context.Context)
+	// AgentStartFailed, when set, reports that the terminal agent a switch to
+	// the terminal committed (or the session's own, OwnAgentStartFailed)
+	// could not start, after a few attempts, so the
+	// session shows a startup error with a Retry (the workspace.checkout
+	// request, see retryFailedAgentStart). With a nil error it reports that
+	// the failure no longer stands: a retry started the agent, or a switch
+	// away cancelled the start.
+	AgentStartFailed func(context.Context, error)
+	// agentStartRetryDelay overrides defaultAgentStartRetryDelay (tests).
+	agentStartRetryDelay time.Duration
 
 	persistOnce              sync.Once
 	persist                  *persistentAgent
@@ -124,8 +146,38 @@ type Supervisor struct {
 	pendingAgentTerminalData [][]byte
 	pendingAgentTerminalSize *worker.TerminalCommand
 	tuiStartedAt             time.Time
-	lastTUIInputAt           time.Time
-	tuiHandoffClosing        bool
+	// lastTUIInputAt is the latest agent terminal input that could change
+	// what the agent does (see mayChangeAgentTerminal).
+	lastTUIInputAt time.Time
+	// lastTUISubmitAt is the latest agent terminal input that could submit a
+	// prompt (see mayStartTurn).
+	lastTUISubmitAt   time.Time
+	tuiHandoffClosing bool
+	// pendingTUIStart is a switch to the terminal committed before the
+	// workspace was ready; MarkWorkspaceReady starts it.
+	pendingTUIStart *pendingTUIStart
+	// startupTaskAbandoned records that the terminal agent's start failed, so
+	// the StartupTask it carried no longer holds a drain.
+	startupTaskAbandoned bool
+	// workspaceStartupFailed records a failed checkout or Setup that waits for
+	// the session's retry (SetWorkspaceStartupFailed).
+	workspaceStartupFailed bool
+	// ownAgentStartFailed records that the session's own terminal agent could
+	// not start and waits for the session's retry (OwnAgentStartFailed).
+	ownAgentStartFailed bool
+
+	// The worker's own commands (FallBackToTUI) run on Run's serial loop,
+	// like the control plane's interface commands, never beside them.
+	loopOnce     sync.Once
+	loopWake     chan struct{}
+	loopMu       sync.Mutex
+	loopCommands []loopCommand
+}
+
+// loopCommand is a worker-originated command waiting for Run's serial loop.
+type loopCommand struct {
+	run  func(context.Context) error
+	done chan error
 }
 
 // ChatRunner executes the headless Chat controller kind for a session. Run
@@ -166,11 +218,134 @@ func (s *Supervisor) HoldAgentInputUntilWorkspaceReady() {
 // MarkWorkspaceReady releases prompts collected while the agent was waiting for
 // its checkout. If the agent PTY has not started yet, the prompts remain queued
 // until StartAgent makes the terminal live.
+//
+// A switch to the terminal committed while the workspace was not ready starts
+// its terminal agent now, on Run's serial loop.
 func (s *Supervisor) MarkWorkspaceReady() {
 	s.mu.Lock()
 	s.workspaceReady = true
+	pendingTUI := s.pendingTUIStart != nil
 	s.mu.Unlock()
 	s.flushReadyAgentTerminal()
+	if pendingTUI {
+		s.queueOnLoop(s.startPendingTUI)
+	}
+}
+
+// StartStartupAgent starts a terminal session's own agent once its workspace
+// is ready (StartAgent on a freshly ticketed agent terminal), unless an
+// interface switch made while the workspace was being prepared took over: the
+// session is in Chat now, or the switch back to the terminal starts the agent
+// itself. It runs on Run's serial loop, so it never interleaves with an
+// interface command, and reports whether it started the agent. A command it
+// does not start is cleaned up.
+func (s *Supervisor) StartStartupAgent(ctx context.Context, command workerexec.Command) (bool, error) {
+	// Atomic: when ctx ends first, runOnLoop returns while the loop may still
+	// run the command.
+	var started atomic.Bool
+	err := s.runOnLoop(ctx, func(ctx context.Context) error {
+		s.mu.Lock()
+		superseded := s.pendingTUIStart != nil || s.agentStarted || s.agentStarting
+		s.mu.Unlock()
+		if superseded || s.iface.Current() != InterfaceTUI {
+			if command.Cleanup != nil {
+				command.Cleanup()
+			}
+			return nil
+		}
+		terminal, err := s.Control.EnsureAgentTerminal(ctx)
+		if err != nil {
+			if command.Cleanup != nil {
+				command.Cleanup()
+			}
+			return fmt.Errorf("initialize agent terminal: %w", err)
+		}
+		if err := s.StartAgent(ctx, command, terminal); err != nil {
+			return fmt.Errorf("start interactive coding-agent terminal: %w", err)
+		}
+		started.Store(true)
+		return nil
+	})
+	return started.Load(), err
+}
+
+// Interface is the committed interface the transport runs ("tui" or "chat").
+func (s *Supervisor) Interface() string {
+	return s.iface.Current()
+}
+
+// AbandonStartupTask records that the terminal agent could not start, so its
+// StartupTask no longer holds a drain.
+func (s *Supervisor) AbandonStartupTask() {
+	s.mu.Lock()
+	s.startupTaskAbandoned = true
+	s.mu.Unlock()
+}
+
+// SetWorkspaceStartupFailed records that the workspace's checkout or Setup
+// failed and waits for the session's retry (true), or that a retry is
+// preparing it again (false).
+func (s *Supervisor) SetWorkspaceStartupFailed(failed bool) {
+	s.mu.Lock()
+	s.workspaceStartupFailed = failed
+	s.mu.Unlock()
+}
+
+// OwnAgentStartFailed reports that the session's own terminal agent (its
+// first start in this worker, StartStartupAgent) could not start and waits for
+// the session's retry, as AgentStartFailed reports a switch's start. Until the
+// retry (ClearOwnAgentStartFailed) a drain to Chat is bounded as for a failed
+// Setup (startupFailureWaiting), and a switch away from the terminal clears
+// the failure (stopInterface). It runs on Run's serial loop, so it never
+// interleaves with a switch: a session a switch already took off the terminal
+// reports nothing.
+func (s *Supervisor) OwnAgentStartFailed(ctx context.Context, err error) error {
+	return s.runOnLoop(ctx, func(ctx context.Context) error {
+		if s.iface.Current() != InterfaceTUI {
+			return nil
+		}
+		s.mu.Lock()
+		s.ownAgentStartFailed = true
+		s.mu.Unlock()
+		if s.AgentStartFailed != nil {
+			s.AgentStartFailed(ctx, err)
+		}
+		return nil
+	})
+}
+
+// ClearOwnAgentStartFailed records that the session's retry starts its own
+// terminal agent again.
+func (s *Supervisor) ClearOwnAgentStartFailed() {
+	s.mu.Lock()
+	s.ownAgentStartFailed = false
+	s.mu.Unlock()
+}
+
+// startupFailureWaiting reports a startup that failed and waits for the
+// session's retry with no terminal agent running: the workspace's checkout
+// or Setup, or the terminal agent's start (startPendingTUI, or the session's
+// own, OwnAgentStartFailed).
+func (s *Supervisor) startupFailureWaiting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentStarted {
+		return false
+	}
+	return (s.holdAgentInput && !s.workspaceReady && s.workspaceStartupFailed) ||
+		(s.pendingTUIStart != nil && s.pendingTUIStart.failed) || s.ownAgentStartFailed
+}
+
+// startupTaskWaiting reports a terminal agent that has not started yet and
+// runs the session's task once it does: a terminal session's own agent, or the
+// one a switch to the terminal made while the workspace was being prepared.
+// An own start that failed and waits for the session's retry still holds the
+// task: the retry runs it.
+func (s *Supervisor) startupTaskWaiting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.StartupTask && !s.agentStarted && (!s.startupTaskAbandoned || s.ownAgentStartFailed) &&
+		(s.pendingTUIStart != nil || s.InitialInterface != InterfaceChat)
 }
 
 type terminalProcess struct {
@@ -190,6 +365,9 @@ type terminalProcess struct {
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
 	outputID atomic.Int64
+	// input tracks whether the interactive agent takes the turns the worker types
+	// into it (agent terminals only; see agent_input.go).
+	input agentInput
 }
 
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -249,6 +427,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	for {
+		if s.runLoopCommands(ctx) {
+			continue
+		}
 		request, err := s.Control.ClaimTransport(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -283,7 +464,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		// turn/transport enqueue (NOTIFY), or a short server-side timeout,
 		// instead of busy-polling the claim routes. The claims above remain the
 		// source of truth; WaitForWork is only an accelerant.
-		if err := s.Control.WaitForWork(ctx); err != nil {
+		if err := s.waitForWork(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -297,6 +478,77 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (s *Supervisor) loopWakeChannel() chan struct{} {
+	s.loopOnce.Do(func() { s.loopWake = make(chan struct{}, 1) })
+	return s.loopWake
+}
+
+// runOnLoop runs command on Run's serial loop, waking the loop from its wait
+// for control plane work, and returns the command's result. It returns
+// ctx's error if ctx ends first.
+func (s *Supervisor) runOnLoop(ctx context.Context, command func(context.Context) error) error {
+	done := s.queueOnLoop(command)
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// queueOnLoop queues command for Run's serial loop, waking the loop from its
+// wait for control plane work, without waiting for it. The returned channel
+// receives the command's result.
+func (s *Supervisor) queueOnLoop(command func(context.Context) error) <-chan error {
+	queued := loopCommand{run: command, done: make(chan error, 1)}
+	s.loopMu.Lock()
+	s.loopCommands = append(s.loopCommands, queued)
+	s.loopMu.Unlock()
+	s.wakeLoop()
+	return queued.done
+}
+
+// wakeLoop cuts Run's wait for control plane work short, so the loop runs
+// its worker commands and tries to forward a queued turn again.
+func (s *Supervisor) wakeLoop() {
+	select {
+	case s.loopWakeChannel() <- struct{}{}:
+	default:
+	}
+}
+
+// runLoopCommands runs the queued worker commands in order and reports
+// whether there were any.
+func (s *Supervisor) runLoopCommands(ctx context.Context) bool {
+	s.loopMu.Lock()
+	queued := s.loopCommands
+	s.loopCommands = nil
+	s.loopMu.Unlock()
+	for _, command := range queued {
+		command.done <- command.run(ctx)
+	}
+	return len(queued) > 0
+}
+
+// waitForWork is Control.WaitForWork, cut short when a worker command is
+// queued for the loop (a nil error then).
+func (s *Supervisor) waitForWork(ctx context.Context) error {
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-s.loopWakeChannel():
+			cancel()
+		case <-waitCtx.Done():
+		}
+	}()
+	err := s.Control.WaitForWork(waitCtx)
+	if err != nil && waitCtx.Err() != nil && ctx.Err() == nil {
+		return nil
+	}
+	return err
 }
 
 // ConfigureAgent reserves an agent terminal before its PTY may be started. A
@@ -408,6 +660,12 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	if agentTerminalID == "" || !agentStarted || !workspaceReady {
 		return false, nil
 	}
+	// A live PTY is not yet an agent taking input: a prompt typed while its
+	// TUI boots arrives in one read with its Enter, which the TUI takes as a
+	// paste and leaves unsubmitted. Leave the turn queued until it is ready.
+	if !s.agentInputReady(agentTerminalID) {
+		return false, nil
+	}
 	turn, err := s.Control.ClaimTurn(ctx)
 	if err != nil || turn == nil {
 		return false, err
@@ -474,7 +732,12 @@ func (s *Supervisor) handle(
 		}
 		response = summary
 	case "workspace.checkout":
-		if s.RequestCheckout == nil {
+		// A session's Retry: a terminal agent start that failed after the
+		// workspace became ready tries again; otherwise the workspace's
+		// checkout and Setup do.
+		if s.retryFailedAgentStart() {
+			response = map[string]bool{"requested": true}
+		} else if s.RequestCheckout == nil {
 			err = errors.New("workspace checkout is unavailable")
 		} else {
 			err = s.RequestCheckout()
@@ -731,6 +994,32 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		cancel()
 		return err
 	}
+	// Before the PTY starts, so only what this agent writes is new.
+	var turnEnds *transcriptTail
+	// A worker that re-attaches to an agent still running under dtach sees no
+	// new start-up output: that agent took input long ago.
+	reattached := false
+	if s.persistsAgent(input) {
+		_, reattached = s.persistentAgent().running()
+	}
+	if input.Kind == "agent" && !input.Review {
+		switch s.Harness {
+		case "codex":
+			if home := environmentValue(command.Env, "CODEX_HOME"); home != "" {
+				s.mu.Lock()
+				conversationID := s.AgentCommand.ConversationID
+				s.mu.Unlock()
+				turnEnds = newCodexRolloutTail(home, conversationID, time.Now())
+			}
+		case "claude-code":
+			if configDir := environmentValue(command.Env, "CLAUDE_CONFIG_DIR"); configDir != "" {
+				s.mu.Lock()
+				conversationID := claudeTerminalConversationID(s.AgentCommand)
+				s.mu.Unlock()
+				turnEnds = newClaudeTranscriptTail(configDir, conversationID, s.DataDir, time.Now())
+			}
+		}
+	}
 	s.mu.Lock()
 	if _, exists := s.terminals[input.TerminalID]; exists {
 		s.mu.Unlock()
@@ -769,9 +1058,13 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		terminal.outputID.Store(input.NextOutputSequence - 1)
 	}
 	s.terminals[input.TerminalID] = terminal
+	if input.Kind == "agent" && !input.Review {
+		terminal.input.start(s.Harness, reattached)
+	}
 	if input.Kind == "agent" {
 		s.tuiStartedAt = time.Now()
 		s.lastTUIInputAt = time.Time{}
+		s.lastTUISubmitAt = time.Time{}
 		s.tuiHandoffClosing = false
 	}
 	s.mu.Unlock()
@@ -783,6 +1076,9 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	}()
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
+	}
+	if turnEnds != nil {
+		go s.watchTerminalTurnEnds(processCtx, s.Harness, turnEnds, environmentValue(command.Env, "AO_CHECKPOINT_SOCKET"), terminalTurnPollInterval)
 	}
 	go func() {
 		_ = command.Wait()
@@ -919,10 +1215,14 @@ func (s *Supervisor) copyTerminalOutput(
 	clearPreviousDisplay bool,
 ) {
 	buffer := make([]byte, 16<<10)
+	var startup bracketedPasteScan
 	for {
 		count, err := terminal.pty.Read(buffer)
 		if count > 0 {
 			s.activity.noteOutput(time.Now())
+			if terminal.input.waiting() && startup.enabled(buffer[:count]) {
+				s.agentInputBecameReady(terminal)
+			}
 			data := append([]byte(nil), buffer[:count]...)
 			if clearPreviousDisplay {
 				// A handoff resumes the conversation in a new PTY but reuses its
@@ -982,7 +1282,7 @@ func (s *Supervisor) writeTerminal(input worker.TerminalCommand) error {
 			s.mu.Unlock()
 			return errors.New("agent terminal is switching interfaces")
 		}
-		s.lastTUIInputAt = time.Now()
+		s.noteAgentTerminalInput(input.Data)
 	}
 	if s.agentStarting && input.TerminalID == s.AgentTerminalID {
 		s.pendingAgentTerminalData = append(s.pendingAgentTerminalData, append([]byte(nil), input.Data...))

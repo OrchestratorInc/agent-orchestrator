@@ -525,6 +525,30 @@ type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
 }
 
+// TurnFailure is a provider turn that ended on an error, and when it ended.
+type TurnFailure struct {
+	At      time.Time
+	Message string
+	// Interrupted marks a turn the user interrupted (Esc) rather than one
+	// that ended on an error.
+	Interrupted bool
+}
+
+// TranscriptTurnFailureDetector is implemented by adapters whose harness can
+// end a turn without firing the hook that reports the turn's end, while still
+// recording that end in its native transcript. Codex runs its Stop hook only
+// after a successful turn, and fires no Stop when Esc interrupts one; Claude
+// Code fires no hook at all for an Esc interrupt. Without this such a turn
+// left the session active until the stale-activity observer screen-proved it
+// idle.
+type TranscriptTurnFailureDetector interface {
+	// LastTurnFailure reports the newest turn end recorded in the transcript
+	// when that turn ended on an error or was interrupted and no later turn
+	// has started. ok is false for a successful or still-running turn, and
+	// for a transcript that is missing or not the harness's own.
+	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
+}
+
 // TerminalActivityOptions lets an adapter declare how the shared observer
 // should read its terminal and which native decision states it can report.
 type TerminalActivityOptions struct {
@@ -738,8 +762,10 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
-	// Env is the launch environment, for steps that must follow it (such as
-	// the provider config folder an account selects).
+	// Env is the environment the runtime layers over the daemon's own for this
+	// launch (the project env plus AO's variables). The session manager sets it
+	// for PreLaunch, so an adapter prepares the provider config the launched
+	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
 	Env map[string]string
 }
 

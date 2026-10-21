@@ -218,6 +218,30 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
+// setupRoute reports a request that may run the project's Setup steps.
+func setupRoute(req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		return false
+	}
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+		return true
+	}
+	return false
+}
+
+// serveWithSetupBudget serves a Setup route under budget, like
+// middleware.Timeout, except that the operation may extend the deadline
+// (ports.ExtendSpawnRequestBudget) once it knows its Setup steps.
+func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Request, budget time.Duration) {
+	ctx, timedOut, release := ports.NewSpawnRequestContext(req.Context(), budget)
+	defer release()
+	next.ServeHTTP(w, req.WithContext(ctx))
+	if timedOut() {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}
+}
+
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
 func (a *API) Register(root chi.Router) {
@@ -237,6 +261,18 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A spawn, an orchestrator start or a restore runs the project's
+					// Setup inside the request, and a Setup step may take far longer
+					// than one REST request: the operation extends this budget by its
+					// Setup steps' limits once it knows its project.
+					if setupRoute(req) {
+						budget := timeout
+						if attachmentUploadRoute(req) {
+							budget = max(timeout, 10*time.Minute)
+						}
+						serveWithSetupBudget(next, w, req, budget)
+						return
+					}
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
 						return

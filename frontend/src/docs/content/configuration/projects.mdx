@@ -46,8 +46,8 @@ ao project rm <project-id>
 | `sessionPrefix` | Prefix for generated session identifiers. |
 | `env` | Extra environment variables passed to agent runtimes. |
 | `symlinks` | Repository-relative paths linked into each session workspace. |
-| `postCreate` | Shell commands Orchestrator runs after creating a workspace. |
-| `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. |
+| `postCreate` | Shell commands Orchestrator runs after creating a workspace. A step whose first line is `# ao-timeout: <N>m` runs for at most N minutes (1 to 120). |
+| `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. A step may set its own time limit the same way. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
 | `worker` | Worker harness and agent-config overrides. |
 | `orchestrator` | Orchestrator harness and agent-config overrides. |
@@ -108,11 +108,11 @@ Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failin
 
 Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
 
-Setup steps run in order in separate shells. Each step has its own 30-minute limit. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a 10-minute total start budget, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
+Setup steps run in order in separate shells. Each step has its own time limit: 30 minutes unless you set one from 1 to 120 minutes for the step in **Project settings > Scripts**. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a total start budget of 10 minutes plus the setup steps' limits, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
 
 The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
 
-Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and Orchestrator removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
+Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit unless you set one for a step (1 to 120 minutes); a step that runs out of time fails like any other. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and Orchestrator removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
 
 Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, Orchestrator combines the inline rules and file contents.
 

@@ -5090,7 +5090,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Interrupted" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -6710,6 +6710,8 @@ export interface components {
              * @description Time the local hook process observed the event, before delivery to the daemon.
              */
             observedAt?: string;
+            /** @description Process id of the provider process that fired the hook (Claude's CLAUDE_PID). */
+            processId?: number;
             /** @description Native main-turn identity reported by the hook, when supported. */
             providerTurnId?: string;
             /** @description Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot. */

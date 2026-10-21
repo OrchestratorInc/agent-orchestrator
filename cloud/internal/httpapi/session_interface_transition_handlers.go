@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -42,13 +41,10 @@ type startInterfaceTransitionRequest struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
-// chatHarnesses are the harnesses with a headless Chat controller in the
-// worker: a session can start in Chat or switch to it. The local daemon
-// publishes its own list the same way (settings chatHarnesses).
-var chatHarnesses = []string{"claude-code", "codex", "cursor"}
-
+// chatControllerSupported reports whether a session of harness can start in
+// Chat or switch to it (domain.ChatHarnesses, the list /me publishes).
 func chatControllerSupported(harness string) bool {
-	return slices.Contains(chatHarnesses, harness)
+	return domain.HarnessHasChat(harness)
 }
 
 // getSessionInterfaceTransition reports whether the session's harness can

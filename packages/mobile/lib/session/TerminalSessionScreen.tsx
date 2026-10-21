@@ -11,6 +11,7 @@ import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { MinimalBackButton } from "../MinimalBackButton";
 import { MuxClient, type MuxStatus } from "../mux";
+import { filesRoute } from "../files/navigation";
 import { glassHeaderControl } from "../native-header-items";
 import { Composer } from "./Composer";
 import { dockInset, rootKeyboardPad } from "./keyboardInset";
@@ -1186,10 +1187,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						/>
 						{hasPreview && <View style={styles.browserReadyDot} />}
 					</Pressable>
+					<Pressable
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel="Session files and changes"
+						onPress={() => { haptics.tap(); router.push(filesRoute(sessionId, params.hostId, params.title)); }}
+						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
+					>
+						<Feather name="file-diff" size={iconSize.lg} color={t.textSecondary} />
+					</Pressable>
 				</View>
 			),
 		});
-	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch]);
+	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch, router, sessionId, params.hostId, params.title]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {

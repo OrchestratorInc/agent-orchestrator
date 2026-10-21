@@ -48,7 +48,7 @@ func (s *Supervisor) workspaceFor(main *workspace, payload any) (*workspace, str
 	if err := decodePayload(payload, &selector); err != nil || strings.TrimSpace(selector.Repository) == "" {
 		return main, "", nil
 	}
-	checkouts := append([]worker.RepoCheckout{{Name: mainCheckoutName(s.Workspace), Path: s.Workspace, Main: true}}, s.Repositories...)
+	checkouts := append([]worker.RepoCheckout{s.mainCheckout()}, s.Repositories...)
 	checkout, err := worker.ResolveRepoCheckout(checkouts, selector.Repository)
 	if err != nil {
 		return nil, "", errUnknownRepository
@@ -84,6 +84,14 @@ func mainCheckoutName(path string) string {
 	return parts[len(parts)-1]
 }
 
+// mainCheckout is the main repository's checkout: always the workspace
+// folder, with the repository's identity when the worker knows its URL.
+func (s *Supervisor) mainCheckout() worker.RepoCheckout {
+	main := s.MainRepository
+	main.Name, main.Path, main.Main = mainCheckoutName(s.Workspace), s.Workspace, true
+	return main
+}
+
 // workspaceRepositories lists the session's checkouts for the
 // "workspace.repositories" request and for the main review summary, so the
 // review panel can offer a repository switcher. A single-repository session
@@ -92,7 +100,16 @@ func (s *Supervisor) workspaceRepositories() []worker.WorkspaceRepository {
 	if len(s.Repositories) == 0 {
 		return nil
 	}
-	repositories := []worker.WorkspaceRepository{{Name: mainCheckoutName(s.Workspace), Main: true, Present: true}}
+	main := s.mainCheckout()
+	// The main checkout's folder is a provider's fixed name ("repository" on
+	// Freestyle and Coder), so it is labeled with the repository's own name.
+	label := ""
+	if strings.TrimSpace(main.URL) != "" {
+		label = worker.ExtraRepoDirName(main.URL)
+	}
+	repositories := []worker.WorkspaceRepository{{
+		Name: main.Name, Label: label, Repository: main.FullName, Main: true, Present: true,
+	}}
 	for _, checkout := range s.Repositories {
 		info, err := os.Stat(checkout.Path)
 		repositories = append(repositories, worker.WorkspaceRepository{

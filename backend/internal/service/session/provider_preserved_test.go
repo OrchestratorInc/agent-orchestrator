@@ -30,7 +30,7 @@ func TestChatProviderPreservationIsDerivedFromLiveOwnership(t *testing.T) {
 			}
 			session, err := svc.toSessionWithFacts(context.Background(), domain.SessionRecord{
 				ID: "s", Harness: domain.HarnessPi, Mode: tc.mode, IsTerminated: tc.terminated,
-			}, nil, nil, "")
+			}, nil, nil, false, "")
 			if err != nil || session.ChatProviderPreserved != tc.want {
 				t.Fatalf("preserved=%v, want %v; err=%v", session.ChatProviderPreserved, tc.want, err)
 			}

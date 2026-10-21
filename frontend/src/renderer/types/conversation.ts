@@ -10,6 +10,8 @@
  * lifecycle decisions all belong to the daemon. Nothing here recomputes them.
  */
 
+import type { ScriptRun } from "../lib/cloud-script-runs";
+
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
 
@@ -448,13 +450,20 @@ export interface SystemEventDetail {
 		| "render"
 		| "artifact"
 		| "workspace.setup"
+		| "workspace.script.run"
 		| "account.switched";
+	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
+	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
 	setupStep?: number;
+	/** workspace.setup: a failed step's command, the user and groups it ran as, where, and its full log. */
+	setupFailure?: { command?: string; user?: string; groups?: string[]; dir?: string; logPath?: string };
+	/** workspace.setup: why a failed step likely failed (no Docker, no sudo, a refused path). */
+	setupHint?: string;
 	/** render */
 	render?: RenderRef;
 	/** artifact */

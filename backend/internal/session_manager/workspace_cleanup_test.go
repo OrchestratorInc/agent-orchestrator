@@ -357,3 +357,90 @@ func TestRequestKillCleanupFailureRemainsRetryable(t *testing.T) {
 		t.Fatalf("retry did not clear the failure: result=%+v facts=%+v err=%v", retry, facts, err)
 	}
 }
+
+// A Cleanup step runs without a limit unless it sets one; one that sets one
+// is stopped at it and reported as timed out, keeping the worktree.
+func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
+	previous := scriptStepMinute
+	scriptStepMinute = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute = previous })
+	slow := "sleep 2"
+	if runtime.GOOS == "windows" {
+		slow = "ping -n 3 127.0.0.1 > NUL"
+	}
+	m, _, _, rec := newCleanupFixture(t, slow)
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+		t.Fatalf("a step without a limit must run to its end: %v", err)
+	}
+	m, _, _, rec = newCleanupFixture(t, "# ao-timeout: 1m\n"+slow)
+	err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath)
+	if !errors.Is(err, ErrCleanupScript) || err.Error() != "cleanup step 1 failed: timed out after 1 minute" {
+		t.Fatalf("err = %v, want the step timed out", err)
+	}
+}
+
+// A step that exits cleanly at the very moment its limit expires succeeded and
+// must not be reported as timed out.
+func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
+	previousMinute, previousRun := scriptStepMinute, runCleanupStep
+	scriptStepMinute = 20 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute, runCleanupStep = previousMinute, previousRun })
+	runCleanupStep = func(ctx context.Context, _, _ string, _ map[string]string, _ io.Writer) error {
+		<-ctx.Done()
+		return nil
+	}
+	m, _, _, rec := newCleanupFixture(t, "# ao-timeout: 1m\necho done")
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+		t.Fatalf("a step that succeeded at its deadline must not fail: %v", err)
+	}
+}
+
+// A shell that exits 0 just as its step's context ends can still have Wait
+// report the context's error: the tree kill finds the group gone and reports
+// no error. That race cannot be forced with a real shell, so this pins the
+// rule runWorkspaceStep applies to the real process states it gets.
+func TestWorkspaceStepExitingCleanlyAtCancelSucceeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell exit status")
+	}
+	state := func(command string) *os.ProcessState {
+		cmd := exec.Command("sh", "-c", command)
+		_ = cmd.Run()
+		return cmd.ProcessState
+	}
+	succeeded, failed := state("exit 0"), state("exit 3")
+	expired, cancel := context.WithTimeout(context.Background(), -time.Second)
+	defer cancel()
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	for _, tc := range []struct {
+		name  string
+		ctx   context.Context
+		state *os.ProcessState
+		err   error
+		want  bool
+	}{
+		{"exited 0 at its deadline", expired, succeeded, context.DeadlineExceeded, true},
+		{"exited 0 at daemon shutdown", cancelled, succeeded, context.Canceled, true},
+		{"exited 3 at its deadline", expired, failed, context.DeadlineExceeded, false},
+		{"never collected", expired, nil, context.DeadlineExceeded, false},
+		{"another error", expired, succeeded, exec.ErrWaitDelay, false},
+		{"context still live", context.Background(), succeeded, context.DeadlineExceeded, false},
+	} {
+		if got := exitedCleanlyAtCancel(tc.ctx, tc.state, tc.err); got != tc.want {
+			t.Errorf("%s: exitedCleanlyAtCancel = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A step its deadline really stops still fails.
+func TestWorkspaceStepStoppedAtItsDeadlineFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := runWorkspaceStep(ctx, t.TempDir(), "sleep 5", nil, io.Discard); err == nil {
+		t.Fatal("a step stopped at its deadline succeeded")
+	}
+}

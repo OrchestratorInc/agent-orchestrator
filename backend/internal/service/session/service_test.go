@@ -80,6 +80,7 @@ type fakeStore struct {
 	comments            map[string][]domain.PullRequestComment
 	commentsErr         error
 	reviewRuns          map[domain.SessionID][]domain.CurrentHeadReviewRun
+	interrupted         map[domain.SessionID]bool
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
@@ -134,6 +135,35 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 	if st.listReviewRunsCalls != 1 {
 		t.Fatalf("ListCurrentHeadReviewRuns calls = %d, want 1 batched call", st.listReviewRunsCalls)
+	}
+}
+
+func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.interrupted = map[domain.SessionID]bool{"mer-1": true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	for _, sess := range list {
+		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
+			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
+		}
+	}
+	sess, err := svc.Get(context.Background(), "mer-1")
+	if err != nil || sess.DisplayStatus != "Interrupted" {
+		t.Fatalf("get displayStatus = %q, %v; want Interrupted", sess.DisplayStatus, err)
 	}
 }
 
@@ -486,6 +516,16 @@ func (f *fakeStore) ListCurrentHeadReviewRunsForSessions(_ context.Context, ids 
 	out := make(map[domain.SessionID][]domain.CurrentHeadReviewRun, len(ids))
 	for _, id := range ids {
 		out[id] = append([]domain.CurrentHeadReviewRun(nil), f.reviewRuns[id]...)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListInterruptedSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
+	out := make(map[domain.SessionID]bool, len(ids))
+	for _, id := range ids {
+		if f.interrupted[id] {
+			out[id] = true
+		}
 	}
 	return out, nil
 }
@@ -2591,6 +2631,8 @@ type fakeCommander struct {
 	sendFunc         func(domain.SessionID, string) error
 	cleanupErr       error
 	spawnErr         error
+	spawnWaitsForCtx bool
+	spawnHook        func(context.Context)
 	spawnRecord      domain.SessionRecord
 	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls       int
@@ -2618,6 +2660,13 @@ type backgroundTaskCall struct {
 
 func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
 	f.spawnCtx = ctx
+	if f.spawnHook != nil {
+		f.spawnHook(ctx)
+	}
+	if f.spawnWaitsForCtx {
+		<-ctx.Done()
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ctx.Err())
+	}
 	if f.spawnErr != nil {
 		return domain.SessionRecord{}, 0, 0, f.spawnErr
 	}
@@ -2930,6 +2979,55 @@ func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T)
 	}
 	if fc.spawnCtx == nil || !errors.Is(fc.spawnCtx.Err(), context.Canceled) {
 		t.Fatal("replacement spawn must receive the cancelled request context")
+	}
+}
+
+// A clean replacement runs the retired orchestrator's Cleanup before the
+// spawn extends the request's budget; the request used to die at its base
+// budget while the Cleanup ran.
+func TestSpawnOrchestratorCleanBudgetCoversTheRetiredOrchestratorsCleanup(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{PreRemove: []string{"make clean"}}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{
+		retireFunc: func(context.Context, domain.SessionID) error {
+			time.Sleep(80 * time.Millisecond)
+			return nil
+		},
+		spawnHook: func(ctx context.Context) { spawnErr = ctx.Err() },
+	}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("replacement spawn context Err() = %v, want live after the retirement's Cleanup", spawnErr)
+	}
+}
+
+// The spawn's own extension, from its own start, is not capped by the
+// orchestrator start's earlier one.
+func TestSpawnOrchestratorLeavesTheSpawnsOwnBudgetExtensionUncapped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{spawnHook: func(ctx context.Context) {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 300*time.Millisecond)
+		defer cancel()
+		time.Sleep(100 * time.Millisecond)
+		spawnErr = ctx.Err()
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("spawn context Err() = %v, want live within the spawn's own extension", spawnErr)
 	}
 }
 
@@ -3636,6 +3734,22 @@ func TestSpawnEmitsTypedErrorCodeOnFailure(t *testing.T) {
 	}
 	if got := ev.Payload["error_code"]; got != "UNKNOWN_HARNESS" {
 		t.Fatalf("event payload error_code = %#v, want UNKNOWN_HARNESS", got)
+	}
+}
+
+// A spawn whose request budget runs out before it extends it (its project's
+// Setup steps) timed out; it is not a cancellation by the client.
+func TestSpawnReportsTimeoutWhenTheBaseRequestBudgetRunsOut(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{spawnWaitsForCtx: true}, Store: st, Clock: func() time.Time { return time.Unix(1700000000, 0).UTC() }})
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 20*time.Millisecond)
+	defer release()
+
+	_, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var e *apierr.Error
+	if !errors.As(err, &e) || e.Code != "SPAWN_TIMEOUT" {
+		t.Fatalf("Spawn error = %v, want SPAWN_TIMEOUT", err)
 	}
 }
 
@@ -5654,7 +5768,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], "")
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5712,7 +5826,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], "")
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,6 +54,8 @@ func TestCreateSessionInterfaceMode(t *testing.T) {
 		status              int
 	}{
 		{"chat", "claude-code", "chat", domain.SessionInterfaceChat, http.StatusCreated},
+		{"cursor chat", "cursor", "chat", domain.SessionInterfaceChat, http.StatusCreated},
+		{"tui", "claude-code", "tui", domain.SessionInterfaceTUI, http.StatusCreated},
 		{"omitted", "claude-code", "", "", http.StatusCreated},
 		{"no chat controller", "aider", "chat", "", http.StatusConflict},
 		{"unknown", "claude-code", "gui", "", http.StatusUnprocessableEntity},

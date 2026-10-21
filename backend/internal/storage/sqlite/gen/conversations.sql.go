@@ -1371,6 +1371,59 @@ func (q *Queries) LatestVisibleUserTurnSettled(ctx context.Context, arg LatestVi
 	return exists, err
 }
 
+const listInterruptedSessions = `-- name: ListInterruptedSessions :many
+WITH wanted_session AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+),
+session_conversation AS (
+    SELECT wanted_session.session_id, (
+        SELECT conversations.id FROM conversations
+        WHERE conversations.current_session_id = wanted_session.session_id
+        ORDER BY conversations.scope = 'project' DESC, conversations.created_at DESC, conversations.id DESC
+        LIMIT 1
+    ) AS conversation_id
+    FROM wanted_session
+)
+SELECT CAST(session_conversation.session_id AS TEXT) AS session_id
+FROM session_conversation
+WHERE (
+    SELECT conversation_turns.state FROM conversation_turns
+    WHERE conversation_turns.conversation_id = session_conversation.conversation_id
+      AND conversation_turns.promoted_to_turn_id IS NULL
+      AND conversation_turns.rolled_back_at IS NULL
+      AND conversation_turns.state <> 'cancelled'
+    ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+    LIMIT 1
+) = 'interrupted'
+`
+
+// Sessions in the batch whose latest Chat turn the person interrupted. The
+// conversation is the one SelectConversationBySession picks. A cancelled turn is
+// a queued prompt the user withdrew, so it never counts as the latest turn.
+func (q *Queries) ListInterruptedSessions(ctx context.Context, jsonEach interface{}) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listInterruptedSessions, jsonEach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var session_id string
+		if err := rows.Scan(&session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, session_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVisibleRunningTurnsForConversation = `-- name: ListVisibleRunningTurnsForConversation :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)

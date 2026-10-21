@@ -58,6 +58,16 @@ func TestWorkerEventRecordsAndClearsWorkspaceStartupError(t *testing.T) {
 		t.Fatalf("recorded = %+v", store)
 	}
 
+	// A colour code between a secret's name and its value is stripped
+	// before the redaction, so the pair is still recognized.
+	rec = post(`{"type":"workspace.startup","payload":{"status":"failed","code":"project_setup_failed",` +
+		`"message":"Setup step 1 failed: exit status 1.",` +
+		`"detail":"\u001b[1mNPM_AUTH\u001b[0m=\u001b[32mLeakAnsiDetail\u001b[0m\nSIGNING_KEY\u001b[0m: LeakAnsiTwo"}}`)
+	if rec.Code >= 300 || store.recorded != 2 || strings.Contains(store.detail, "LeakAnsi") ||
+		strings.Contains(store.detail, "\x1b") || !strings.Contains(store.detail, "NPM_AUTH=[REDACTED]") {
+		t.Fatalf("ANSI detail: status = %d, recorded = %+v", rec.Code, store)
+	}
+
 	if rec := post(`{"type":"workspace.startup","payload":{"status":"ready"}}`); rec.Code >= 300 || store.cleared != 1 {
 		t.Fatalf("ready: status = %d, cleared = %d; body = %s", rec.Code, store.cleared, rec.Body.String())
 	}
@@ -72,7 +82,7 @@ func TestWorkerEventRecordsAndClearsWorkspaceStartupError(t *testing.T) {
 			t.Errorf("%s: status = %d; body = %s", name, rec.Code, rec.Body.String())
 		}
 	}
-	if store.recorded != 1 || store.cleared != 1 {
+	if store.recorded != 2 || store.cleared != 1 {
 		t.Fatalf("refused payloads reached the store: %+v", store)
 	}
 }

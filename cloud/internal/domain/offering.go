@@ -91,6 +91,9 @@ type OrchestratorPlacement struct {
 	ProjectConfig json.RawMessage
 	// ProjectName is the orchestrator project's display name.
 	ProjectName string
+	// RepositoryURL is the orchestrator project's main repository, which
+	// resolves {repo} in the project's working folder for its children.
+	RepositoryURL string
 	// CoderConnections are the organization's Coder provider connections,
 	// without secrets.
 	CoderConnections []ProviderConnection

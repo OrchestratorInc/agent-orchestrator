@@ -21,11 +21,14 @@ export function CopyButton({
 	/** Icon-only, for places where a word of chrome would be one too many. */
 	compact,
 	className,
+	/** Confirmation once the text is on the clipboard; callers outside Chat pass a localized one. */
+	copiedLabel = "Copied",
 }: {
 	text: string;
 	label: string;
 	compact?: boolean;
 	className?: string;
+	copiedLabel?: string;
 }) {
 	const [copied, setCopied] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -52,7 +55,7 @@ export function CopyButton({
 		<button
 			type="button"
 			onClick={copy}
-			aria-label={copied ? "Copied" : label}
+			aria-label={copied ? copiedLabel : label}
 			className={cn(
 				compact
 					? "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[background-color,color,transform] hover:bg-interactive-hover hover:text-foreground"
@@ -65,7 +68,7 @@ export function CopyButton({
 			) : (
 				<Copy aria-hidden="true" className="size-3" />
 			)}
-			{compact ? null : copied ? "Copied" : "Copy"}
+			{compact ? null : copied ? copiedLabel : "Copy"}
 		</button>
 	);
 
@@ -76,7 +79,7 @@ export function CopyButton({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{button}</TooltipTrigger>
-			<TooltipContent side="bottom">{copied ? "Copied" : label}</TooltipContent>
+			<TooltipContent side="bottom">{copied ? copiedLabel : label}</TooltipContent>
 		</Tooltip>
 	);
 }

@@ -99,13 +99,24 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
-	sections = append(sections, publishingScopePrompt(), systemPromptGuard())
+	sections = append(sections, userOrientationPrompt(), publishingScopePrompt(), systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
 			sections = append(sections, section)
 		}
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+// userOrientationPrompt asks for a sentence alongside tool calls. Left to
+// itself, Claude's narration varies widely from run to run in both the terminal
+// and chat (measured: anywhere from none to one per call on the same task), and
+// a run of bare "Ran command" rows leaves the user unable to tell what is
+// happening or what a later question refers to.
+func userOrientationPrompt() string {
+	return `## Keeping the User Oriented
+
+The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write one short sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, branches or worktrees. Skip this only for a single trivial step.`
 }
 
 // publishingScopePrompt clarifies authority without replacing the established
@@ -324,7 +335,7 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - Whenever you produce a reviewable deliverable the orchestrator or the human should be able to open directly — a requested document, a rendered dashboard, or similar durable output — attach it with `+"`--artifact <reference>`"+` on the report for that milestone. Report it as soon as it exists; do not wait for `+"`--done`"+` and do not let it go unreported.
 - Keep routine test logs, command output, scratch notes, and intermediate diagnostics out of report attachments unless requested or needed to explain an actionable failure. Summarize validation in the report note; when a separate deliverable is useful, prefer one consolidated report over individual logs.
 - Saving a local artifact or attaching its reference to an AO report is not external publishing authorization. Publish externally only within the user-authorized scope.
-- Do not narrate routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session.
+- Do not file a report for routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session. This limit applies to `+"`ao report`"+` only, not to what you tell the user in the conversation.
 
 ## In-App Session Links
 

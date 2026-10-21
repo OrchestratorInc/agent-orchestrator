@@ -14647,6 +14647,7 @@ components:
           - Blocked
           - Exited
           - No signal
+          - Interrupted
           - Awaiting PR
           - Fixing CI failures
           - Addressing comments
@@ -18923,6 +18924,11 @@ components:
             to the daemon.
           format: date-time
           type: string
+        processId:
+          description: Process id of the provider process that fired the hook (Claude's
+            CLAUDE_PID).
+          minimum: 0
+          type: integer
         providerTurnId:
           description: Native main-turn identity reported by the hook, when supported.
           type: string

@@ -145,3 +145,33 @@ func TestConfigSetsAdminProjectSettings(t *testing.T) {
 		}
 	}
 }
+
+// A Setup or Cleanup step's time limit is a whole number of minutes from 1
+// to 120, checked before the store is called; a valid one is saved.
+func TestProjectSettingsValidatesScriptStepTimeouts(t *testing.T) {
+	for _, test := range []struct {
+		name, body    string
+		status, calls int
+	}{
+		{"valid limits", `{"config":{"postCreate":[{"command":"npm ci","timeoutMinutes":45},"# ao-timeout: 120m\nmake"],"preRemove":[{"command":"make down","timeoutMinutes":1}]}}`, http.StatusOK, 1},
+		{"zero", `{"config":{"postCreate":[{"command":"npm ci","timeoutMinutes":0}]}}`, http.StatusUnprocessableEntity, 0},
+		{"over the maximum", `{"config":{"preRemove":[{"command":"make down","timeoutMinutes":121}]}}`, http.StatusUnprocessableEntity, 0},
+		{"fraction", `{"config":{"postCreate":[{"command":"npm ci","timeoutMinutes":1.5}]}}`, http.StatusUnprocessableEntity, 0},
+		{"stored form out of range", `{"config":{"postCreate":["# ao-timeout: 600m\nnpm ci"]}}`, http.StatusUnprocessableEntity, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &projectScriptsAdminStore{}
+			s := New(Options{Store: store})
+			router := chi.NewRouter()
+			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", s.updateProjectSettings)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/orgs/00000000-0000-0000-0000-000000000001/projects/00000000-0000-0000-0000-000000000002/settings", strings.NewReader(test.body)))
+			if response.Code != test.status || store.calls != test.calls {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, store.calls, response.Body.String())
+			}
+			if test.status != http.StatusOK && !strings.Contains(response.Body.String(), "from 1 to 120") {
+				t.Fatalf("body = %s, want the limit explained", response.Body.String())
+			}
+		})
+	}
+}

@@ -19,17 +19,30 @@ local project has: open the project's settings and choose **Scripts**.
   session each get their own workspace, created from the template chosen for
   the project. Concurrent sessions never share a workspace, a checkout or a
   shell.
-- **Workspace names.** A session's workspace is named `<prefix>-<id>`, where
-  `<id>` is the start of the session id. For a bring-your-own Coder the prefix
-  defaults to the project name, lowercased and shortened to fit Coder's
-  naming rules; set **Workspace name prefix** in the project's
-  settings (or when creating the project) to choose another. The session's top
-  bar shows the workspace name with a link that opens it in Coder, for as long
-  as the session exists.
+- **Workspace names.** An orchestrator's workspace is named
+  `<prefix>-o-<id>` and a worker's `<prefix>-w-<word>-<id>`, where `<id>` is
+  the first 12 characters of the session id and `<word>` is the first word of
+  the chat's name when the session was created (lowercase letters and digits,
+  at most 10 characters, left out when the name has none). For a
+  bring-your-own Coder the prefix defaults to the project name, lowercased
+  and shortened to fit Coder's naming rules; set **Workspace name prefix** in
+  the project's settings (or when creating the project) to choose another.
+  When everything does not fit Coder's 32 characters, the word (down to 3
+  characters) and then the prefix are shortened; the `-o-`/`-w-` marker and
+  the 12-character id are always kept. If Coder reports the name as already
+  taken by another workspace, AO tries once more with a longer id that fills
+  the 32 characters, and keeps that name. AO records the name when it creates
+  the session and never changes it otherwise: renaming the chat does not
+  rename the workspace. Sessions created before
+  this scheme keep their original `<prefix>-<id>` (or `ao-<id>`) workspace
+  names, and so do new sessions while the control plane's
+  `AO_CLOUD_CODER_READABLE_NAMES` is off (see
+  [Coder rollout flags](deployment.md#coder-rollout-flags)). The session's top bar shows the workspace name with a link that
+  opens it in Coder, for as long as the session exists.
 - **Durable root.** AO keeps its own state under the workspace user's home
   (`$HOME/.ao`): the worker, its logs, and the agent's configuration and
-  conversations. Without a working directory (below), the session's checkout
-  is `$HOME/repository`.
+  conversations. Without a working directory or a project working folder
+  (below), the session's checkout is `$HOME/repository`.
 - **Lifecycle.** AO starts, stops and deletes the workspaces it created. A
   startup failure marks the session failed with a message in the app; AO never
   stops or deletes your workspace because of it.
@@ -111,6 +124,47 @@ default with the workspace user) makes AO look for a checkout of the session's
 repository directly under `~/work` and then under `~`, matching on the `origin`
 remote, and falls back to a fresh clone in `$HOME/repository`.
 
+### Working folder with the `ao-worker` user
+
+With **Run the agent as the workspace user** off (the default), and the
+control plane's `AO_CLOUD_CODER_WORKER_WORKING_FOLDER` on (see
+[Coder rollout flags](deployment.md#coder-rollout-flags)), a project's
+**Working folder** (Project settings > Repositories, for example
+`~/work/{repo}`) is where AO clones the main repository instead of
+`$HOME/repository`, and the additional repositories go beside it
+(`~/work/<name>`). `~` is the workspace login user's home; `{repo}` is the
+repository name, fixed when the session is created. The folder must be inside
+the connection's durable root (your home by default, so start it with `~/`):
+a folder outside it, such as `/workspace/{repo}` on a Docker template, loses
+the agent's uncommitted work when the workspace restarts. AO refuses such a
+folder when the project is saved, or, when that is only known inside the
+workspace, stops the session with "The working folder must be inside ... so
+the agent's work survives restarts." The bootstrap creates missing parent
+folders below your home (owned by the login user; the checkout's own parent
+is group-writable for `ao-worker`) and the checkout folders (owned by
+`ao-worker`), and adds traverse permission (`o+x`) to your home or a folder
+below it that `ao-worker` cannot enter, never to `/`, `/root` or a folder
+outside your home. If it cannot prepare those folders the session stops with
+"The working directory can't be used" and the reason. It
+never takes over or changes a folder that already exists: if the template
+already cloned `~/work/<repo>` (for example because the project ticked that in
+its **Template options**), the session stops with "The working folder is already
+in use". Untick it in the Template options, or turn on **Run the agent as the
+workspace user** to work in the template's checkout instead. Such a session
+never opens its terminal in that folder, and deleting it runs no Cleanup
+("Cleanup did not run: this session never got its working folder"), so the
+project's Cleanup never touches the template's folder. An additional
+repository's folder beside it that the template already cloned (say
+`~/work/billing`) is refused the same way: the session starts on its other
+repositories, logs that it skipped that one, and shows that repository's Setup
+and Cleanup steps as skipped ("... already exists (created by your
+Coder template), so AO did not run this step in it."), never running them in
+the template's folder. A restarted or
+restored session keeps using AO's own folder. The additional repositories'
+folders are prepared for the repositories the project lists when the session
+is created; a repository added later is checked out in new sessions (an
+existing session skips it, and logs why, when it cannot create its folder).
+
 ### What goes where
 
 Keep machine-level setup in the template and per-session setup in the
@@ -137,8 +191,9 @@ read-only.
   run once per session, when its workspace is first prepared; a worker restart
   or a workspace stop and start keeps the prepared checkout and does not run
   them again, and a session that started before the project had Setup never
-  runs Setup added later. Each command may run for
-  30 minutes. If one fails or times out, the agent does not start: the session
+  runs Setup added later. Each command may run for its time limit: 30
+  minutes unless you set one for the step (1 to 120 minutes) in **Project
+  settings > Scripts**. If one fails or times out, the agent does not start: the session
   shows "The project's Setup script failed at step N" with the end of the
   command's output, and
   reopening the session runs Setup again with the project's current commands,
@@ -146,9 +201,10 @@ read-only.
   project, where a failed setup step stops the launch.
 - **Cleanup** commands run in order before AO deletes the session's workspace,
   in the same directory and environment, as the same user as the agent. They do
-  not run when a workspace is stopped or paused. Cleanup is best effort: it has
-  10 minutes in total, a failed command stops the remaining ones, and the
-  workspace is deleted either way. Like a local project, AO uses the project's
+  not run when a workspace is stopped or paused. Cleanup is best effort: each command
+  has its time limit (10 minutes unless you set one for the step), the whole
+  run has the sum of them (at least 10 minutes, at most 2 hours), a failed
+  command stops the remaining ones, and the workspace is deleted either way. Like a local project, AO uses the project's
   Cleanup as it is when the workspace is deleted, so editing it after a session
   started still applies to that session, and removing the project runs its
   last Cleanup in each of its workspaces. (A Cleanup longer than 12 KB in total
@@ -228,6 +284,10 @@ workspace user.
 - **The agent works in `~/repository` instead of your checkout.** Turn on
   **Run the agent as the workspace user** and set the working directory; both
   apply to new sessions only.
+- **"The working folder is already in use".** The project's working folder
+  already exists in the workspace and is not AO's (usually the template cloned
+  it). Untick that in the project's Template options, or turn on **Run the
+  agent as the workspace user** to reuse it, then start a new session.
 - **"Permission denied" on files the template created.** The agent is running
   as `ao-worker`. Turn on **Run the agent as the workspace user**.
 - **The session waits a long time, then fails to start.** The template's
