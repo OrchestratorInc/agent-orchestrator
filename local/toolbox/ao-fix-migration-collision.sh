@@ -108,7 +108,9 @@ session_provider_stamp:9006
 gateway_entries:9011
 review_run_publication:9012
 app_settings_process_inventory:9013
-preview_poll_sessions:20261020173311321"
+preview_poll_sessions:20261020173311321
+orphan_workers_notification:9014
+app_settings_scm_proxy_url:9015"
 
 is_fork_suffix() {
   printf '%s\n' "$FORK_SUFFIXES" | grep -qx "$1"

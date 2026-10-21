@@ -73,7 +73,7 @@ if [ ! -f "$reserved" ]; then
 	echo "!! (5) $reserved не найден — инварианты канонизации гонять только в форке" >&2
 	exit 1
 fi
-fork_suffixes="$(sed -n '/var forkLocalMigrations = \[\]string{/,/^}/p' "$reserved" | grep -oE '"[a-zA-Z_0-9]+"' | tr -d '"' || true)"
+fork_suffixes="$(sed -n '/var forkLocalMigrations = \[\]string{/,/^}/p' "$reserved" | grep -oE '"[a-zA-Z_0-9]+"' | tr -d '"' | sort -u || true)"
 fixer="$(cd "$(dirname "$0")" && pwd)/ao-fix-migration-collision.sh"
 canon_list="$(sed -n '/^CANONICAL_LIST="/,/^"$/p' "$fixer" | sed 's/^CANONICAL_LIST="//; s/"$//' | grep -E '^[a-zA-Z_0-9]+:[0-9]+$' || true)"
 [ -n "$fork_suffixes" ] || { echo "!! (5) forkLocalMigrations пуст — вне форка это ожидаемо, здесь нет" >&2; exit 1; }

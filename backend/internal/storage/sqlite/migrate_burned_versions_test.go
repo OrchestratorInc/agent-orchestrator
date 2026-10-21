@@ -220,6 +220,7 @@ var shippedMigrations = map[int64]string{
 	9011:              "9011_gateway_entries.sql",
 	9012:              "9012_review_run_publication.sql",
 	9013:              "9013_app_settings_process_inventory.sql",
+	9014:              "9014_orphan_workers_notification.sql",
 	9015:              "9015_app_settings_scm_proxy_url.sql",
 }
 
