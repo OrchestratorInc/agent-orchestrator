@@ -3,6 +3,7 @@
 import { setupI18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
 import { RootProvider } from "fumadocs-ui/provider/next";
+import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { CATALOGS } from "@/i18n/catalogs";
 import {
@@ -14,6 +15,7 @@ import {
   SUPPORTED_LOCALES,
   type SupportedLocale,
 } from "@/i18n/locales";
+import { localePath, splitLocalePath, type Translations, withTrailingSlash } from "@/i18n/paths";
 import { frameworkTranslations } from "@/i18n/ui-messages";
 import { DocsSearchDialog } from "./search-dialog";
 
@@ -21,18 +23,33 @@ const LOCALE_ITEMS = SUPPORTED_LOCALES.map((locale) => ({ locale, name: LOCALE_L
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
 /**
- * Every page has one URL and is prerendered in English. The reader's saved
+ * A translated article has its own URL, and `urlLocale` is its language. The
+ * interface follows the URL there, whatever language is saved.
+ *
+ * Every other page has one URL and is prerendered in English. The saved
  * language is applied after hydration, and the switcher changes it in place.
+ * When the saved language has a translation of the page, the reader is sent
+ * to it.
  */
-export function Providers({ children }: { children: ReactNode }) {
+export function Providers({
+  urlLocale,
+  translations = {},
+  children,
+}: {
+  urlLocale?: SupportedLocale;
+  translations?: Translations;
+  children: ReactNode;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
   // Null until the cookie is read. Renders in English meanwhile, so the
   // first render matches the prerendered HTML.
   const [saved, setSaved] = useState<SupportedLocale | null>(null);
-  const locale = saved ?? DEFAULT_LOCALE;
+  const locale = urlLocale ?? saved ?? DEFAULT_LOCALE;
 
   useEffect(() => {
-    setSaved(readLocaleCookie(document.cookie));
-  }, []);
+    if (!urlLocale) setSaved(readLocaleCookie(document.cookie));
+  }, [urlLocale]);
 
   // The inline head script already set <html lang> from the cookie, so
   // only write it once the cookie has been read.
@@ -40,17 +57,36 @@ export function Providers({ children }: { children: ReactNode }) {
     if (saved) document.documentElement.lang = saved;
   }, [saved]);
 
+  // The head script handles the first page load; this handles navigation
+  // to a translated article inside the site.
+  useEffect(() => {
+    if (urlLocale || !saved || saved === DEFAULT_LOCALE) return;
+    const path = withTrailingSlash(pathname);
+    if (translations[path]?.includes(saved)) router.replace(localePath(path, saved));
+  }, [urlLocale, saved, pathname, translations, router]);
+
   const i18n = useMemo(
     () => setupI18n({ locale, messages: { [locale]: CATALOGS[locale] } }),
     [locale],
   );
-  const translations = useMemo(() => frameworkTranslations(i18n), [i18n]);
+  const frameworkStrings = useMemo(() => frameworkTranslations(i18n), [i18n]);
 
-  const changeLocale = useCallback((next: string) => {
-    if (!isSupportedLocale(next)) return;
-    document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
-    setSaved(next);
-  }, []);
+  const changeLocale = useCallback(
+    (next: string) => {
+      if (!isSupportedLocale(next)) return;
+      document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
+      const { path } = splitLocalePath(pathname);
+      if (next !== DEFAULT_LOCALE && translations[path]?.includes(next)) {
+        router.push(localePath(path, next));
+      } else if (urlLocale) {
+        // No translation in that language, so go to the English article.
+        router.push(path);
+      } else {
+        setSaved(next);
+      }
+    },
+    [pathname, translations, urlLocale, router],
+  );
 
   return (
     <I18nProvider i18n={i18n}>
@@ -60,7 +96,7 @@ export function Providers({ children }: { children: ReactNode }) {
         i18n={{
           locale,
           locales: LOCALE_ITEMS,
-          translations,
+          translations: frameworkStrings,
           onLocaleChange: changeLocale,
         }}
       >

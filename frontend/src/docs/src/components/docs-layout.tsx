@@ -15,7 +15,7 @@ function translateName(i18n: I18n, name: ReactNode): ReactNode {
 }
 
 // Section and folder titles follow the interface language. Page titles come
-// from the articles, which are English.
+// from the articles, in the article's language.
 function translateNode(i18n: I18n, node: Node): Node {
   if (node.type === "page") return node;
   if (node.type === "separator") return { ...node, name: translateName(i18n, node.name) };
@@ -36,12 +36,20 @@ function translateTree(i18n: I18n, tree: PageTree.Root): PageTree.Root {
   };
 }
 
-export function LocalizedDocsLayout({ tree, children }: { tree: PageTree.Root; children: ReactNode }) {
+export function LocalizedDocsLayout({
+  tree,
+  homeUrl,
+  children,
+}: {
+  tree: PageTree.Root;
+  homeUrl: string;
+  children: ReactNode;
+}) {
   const { i18n } = useLingui();
   const localizedTree = useMemo(() => translateTree(i18n, tree), [i18n, tree]);
 
   return (
-    <DocsLayout tree={localizedTree} {...baseOptions(i18n)}>
+    <DocsLayout tree={localizedTree} {...baseOptions(i18n, homeUrl)}>
       {children}
     </DocsLayout>
   );

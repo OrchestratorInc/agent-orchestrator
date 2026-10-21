@@ -4,11 +4,11 @@ import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
 import { LanguageSelect, LanguageSelectText } from "@/components/language-select";
 import { COMPANY } from "./constants";
 
-export function baseOptions(i18n: I18n): BaseLayoutProps {
+export function baseOptions(i18n: I18n, homeUrl = "/"): BaseLayoutProps {
   const name = COMPANY.NAME;
   return {
     nav: {
-      url: "/",
+      url: homeUrl,
       title: (
         <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <img

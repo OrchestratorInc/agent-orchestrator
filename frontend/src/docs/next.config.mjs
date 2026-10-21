@@ -8,6 +8,9 @@ const config = {
   reactStrictMode: true,
   trailingSlash: true,
   experimental: {
+    // Each language has its own root layout, so the 404 page renders its
+    // own <html> instead of borrowing one.
+    globalNotFound: true,
     // Compiles the Lingui macros. Keep the plugin version pinned to one
     // that matches Next's swc_core.
     swcPlugins: [["@lingui/swc-plugin", {}]],
