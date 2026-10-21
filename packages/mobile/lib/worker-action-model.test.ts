@@ -64,6 +64,28 @@ describe("workerContextActions", () => {
 		expect(everything).not.toContain("pause");
 	});
 
+	// The orchestrator row on the board is a door into its conversation. The
+	// daemon refuses to rename the project orchestrator, and Start/Restart —
+	// the destructive path, with its confirmation — belongs to the project card.
+	it("offers an orchestrator only open, plus resume when its agent stopped", () => {
+		expect(ids({ orchestrator: true })).toEqual(["open"]);
+		expect(ids({ orchestrator: true, stopped: true })).toEqual(["open", "resume"]);
+	});
+
+	it("never offers worker-only actions on an orchestrator, whatever its state", () => {
+		const everything = [
+			...ids({ orchestrator: true }),
+			...ids({ orchestrator: true, pinned: true, hasPr: true, stopped: true }),
+			...ids({ orchestrator: true, terminated: true }),
+		];
+		expect(everything).not.toContain("pin");
+		expect(everything).not.toContain("unpin");
+		expect(everything).not.toContain("rename");
+		expect(everything).not.toContain("openPr");
+		expect(everything).not.toContain("delete");
+		expect(everything).not.toContain("restore");
+	});
+
 	// Archive calls killSession, which deletes a clean worktree folder.
 	it("keeps Archive last and marks it as the only destructive action", () => {
 		for (const over of [{}, { pinned: true, hasPr: true }, { terminated: true }]) {

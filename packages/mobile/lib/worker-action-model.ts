@@ -31,6 +31,12 @@ export type WorkerActionState = {
 	/** The runtime is stopped but the session is alive; the agent can be resumed. */
 	stopped: boolean;
 	hasPr: boolean;
+	/**
+	 * The row is the project orchestrator, not a worker. The daemon refuses to
+	 * rename it and the project card owns its lifecycle (start/restart), so the
+	 * board offers only what a conversation needs: open it, resume its agent.
+	 */
+	orchestrator?: boolean;
 };
 
 /**
@@ -40,6 +46,16 @@ export type WorkerActionState = {
  * distinction the app is supposed to make for them.
  */
 export function workerContextActions(state: WorkerActionState): WorkerAction[] {
+	// An orchestrator row is a door into its conversation, nothing more. Rename
+	// is refused by the daemon, Archive would take the whole project's
+	// coordination down from a swipe, and Start/Restart already live on the
+	// project card where the destructive path carries its confirmation.
+	if (state.orchestrator) {
+		const actions: WorkerAction[] = [{ id: "open", title: "Open" }];
+		if (state.stopped) actions.push({ id: "resume", title: "Resume agent" });
+		return actions;
+	}
+
 	const actions: WorkerAction[] = [{ id: "open", title: "Open" }];
 
 	if (state.terminated) actions.push({ id: "restore", title: "Restore session" });

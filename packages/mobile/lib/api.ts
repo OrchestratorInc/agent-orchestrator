@@ -89,6 +89,15 @@ export type DashboardSession = {
 	userPrompt: string | null;
 	displayName: string | null;
 	summary: string | null;
+	/**
+	 * What the daemon says this session is: a worker or the project
+	 * orchestrator. Straight off the wire (`WireSession.kind`) — the board uses
+	 * it to badge the orchestrator row and to keep worker-only actions (rename,
+	 * archive, pin) off it, since the daemon refuses the former and the project
+	 * card owns the latter. Absent on rows mapped before the field existed, so
+	 * everything reads as a worker unless the daemon said otherwise.
+	 */
+	kind?: "worker" | "orchestrator";
 	createdAt: string;
 	lastActivityAt: string;
 	/**
@@ -306,6 +315,7 @@ function mapSession(s: WireSession): DashboardSession {
 		userPrompt: null,
 		displayName: s.displayName ?? null,
 		summary: null,
+		kind: s.kind === "orchestrator" ? "orchestrator" : "worker",
 		createdAt: s.createdAt ?? "",
 		lastActivityAt: activityLastAt(s.activity) ?? s.updatedAt ?? s.createdAt ?? "",
 		lastEventAt: s.lastEventAt || undefined,
@@ -515,8 +525,6 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
 	const rawOrchestrators: WireSession[] = Array.isArray(orchData?.sessions) ? orchData.sessions : [];
 
-	const sessions = rawSessions.filter((s) => s.kind !== "orchestrator").map(mapSession);
-
 	// The daemon returns EVERY orchestrator session per project (one per past
 	// kill/respawn), so pick a single one per project - preferring the live
 	// (non-terminated) one, else the most recent. Otherwise the screen would
@@ -532,6 +540,21 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		// (the daemon lists them oldest to newest).
 		if (!cur || cur.isTerminated) bestByProject.set(s.projectId, s);
 	}
+
+	// The board lists a project's workers AND its orchestrator: the orchestrator
+	// is a session the user can open and chat with like any other, so hiding it
+	// from the list made it reachable only through the project card. Two things
+	// keep that row honest. Historical orchestrator sessions (one per past
+	// kill/respawn) stay out — only the best-per-project row above joins the
+	// board, or the archive would fill with every restart. And a *terminated*
+	// orchestrator stays out too — there is nothing to chat with, and starting
+	// or restarting one is the project card's job (Start / Restart), not a row
+	// action the board would have to invent.
+	const orchestratorRows = [...bestByProject.values()].filter((s) => !s.isTerminated).map(mapSession);
+	const sessions = [
+		...rawSessions.filter((s) => s.kind !== "orchestrator").map(mapSession),
+		...orchestratorRows,
+	];
 	const orchestrators = [...bestByProject.values()].map((s) =>
 		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);

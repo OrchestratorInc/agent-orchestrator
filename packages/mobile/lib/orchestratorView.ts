@@ -99,7 +99,10 @@ export function workersOf(
 	projectId: string,
 	link: OrchestratorLink | null | undefined,
 ): DashboardSession[] {
-	return sessions.filter((s) => s.projectId === projectId && s.id !== link?.id);
+	// The kind check backs the id check up: getSessions lists the project's
+	// orchestrator among its sessions now, and a stale or missing link must not
+	// turn the orchestrator into one more worker on the project card's counts.
+	return sessions.filter((s) => s.projectId === projectId && s.id !== link?.id && s.kind !== "orchestrator");
 }
 
 export type OrchestratorProjectAction = "open" | "start" | "resume";
@@ -458,6 +461,10 @@ export function projectPageStats(
 	const orchestratorWaiting = orchestrator && orchestrator.isTerminal !== true && agentBlocked({ status: orchestrator.status ?? null });
 	const stats: ProjectPageStats = { workers: 0, needsYou: orchestratorWaiting ? 1 : 0, ready: 0, archived: 0 };
 	for (const session of sessions) {
+		// The orchestrator is counted once, from its link above — the session row
+		// of the same agent now rides along in `sessions` and would otherwise be
+		// counted a second time (and read as one more worker).
+		if (session.kind === "orchestrator") continue;
 		if (isArchived(session)) {
 			stats.archived += 1;
 			continue;

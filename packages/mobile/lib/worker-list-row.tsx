@@ -118,22 +118,25 @@ export const WorkerListRow = memo(
 			setRenameSaving(false);
 		}
 	}, [onRename, onRenameCancel, renameSaving, renameTitle]);
+	const isOrchestrator = session.kind === "orchestrator";
 	const renderRightActions = useCallback(
 		() => (
 			<View style={styles.actionRail}>
-				<WorkerRowActions
-					title={row.title}
-					pinned={Boolean(session.isPinned)}
-					onSetPinned={(pinned) => {
-						closeActionRailRef.current();
-						haptics.tap();
-						void onSetPinned(pinned);
-					}}
-					onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
-				/>
+				{isOrchestrator ? null : (
+					<WorkerRowActions
+						title={row.title}
+						pinned={Boolean(session.isPinned)}
+						onSetPinned={(pinned) => {
+							closeActionRailRef.current();
+							haptics.tap();
+							void onSetPinned(pinned);
+						}}
+						onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
+					/>
+				)}
 			</View>
 		),
-		[onDelete, onSetPinned, row.title, session.isPinned, styles.actionRail],
+		[isOrchestrator, onDelete, onSetPinned, row.title, session.isPinned, styles.actionRail],
 	);
 	const openSession = useCallback(() => {
 		haptics.tap();
@@ -152,6 +155,7 @@ export const WorkerListRow = memo(
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
 		hasPr: Boolean(reviewRoute),
+		orchestrator: isOrchestrator,
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {
@@ -190,7 +194,7 @@ export const WorkerListRow = memo(
 			rowStyle={styles.row}
 			pressedStyle={styles.rowPressed}
 			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
-			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
+			accessibilityHint={isOrchestrator ? "Opens the orchestrator conversation." : "Swipe left for pin and delete actions. Long press for more."}
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -207,6 +211,7 @@ export const WorkerListRow = memo(
 					prsTone={prs?.tone}
 					harness={session.harness}
 					machine={machine}
+					orchestrator={isOrchestrator}
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
@@ -226,6 +231,7 @@ export const WorkerListRow = memo(
 					prsTone={prs?.tone}
 					harness={session.harness}
 					machine={machine}
+					orchestrator={isOrchestrator}
 					styles={styles}
 					t={t}
 				/>
@@ -259,6 +265,7 @@ function WorkerRowContents({
 	prsTone,
 	harness,
 	machine,
+	orchestrator = false,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
@@ -276,6 +283,8 @@ function WorkerRowContents({
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
 	machine?: { name: string; appearance: MachineAppearance };
+	/** Renders the small "Orchestrator" badge beside the project name. */
+	orchestrator?: boolean;
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -294,6 +303,10 @@ function WorkerRowContents({
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
 				</Text>
+				{/* The one visible signal that this row is the project orchestrator
+				    rather than a worker — the board groups it like any other session,
+				    so without the badge nothing would set it apart. */}
+				{orchestrator ? <Text style={styles.orchestratorBadge} accessibilityLabel="Orchestrator">Orchestrator</Text> : null}
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
@@ -398,6 +411,21 @@ const makeStyles = (t: Theme) =>
 		renameControlDisabled: { opacity: 0.45 },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
 		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
+		// Purple is the orchestrator's color across the app (project card status,
+		// online state), so the badge reads as the same thing in a smaller shape.
+		orchestratorBadge: {
+			flexShrink: 0,
+			paddingHorizontal: space.xs + 1,
+			paddingVertical: 1,
+			borderRadius: 7,
+			overflow: "hidden",
+			backgroundColor: t.tintPurple,
+			color: t.purple,
+			fontFamily: "Geist_500Medium",
+			fontSize: type.caption2.fontSize,
+			lineHeight: type.caption2.lineHeight,
+			fontWeight: "500",
+		},
 		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },

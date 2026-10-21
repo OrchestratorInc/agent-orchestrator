@@ -37,7 +37,12 @@ function SessionRouteContent() {
 	const router = useRouter();
 	const { sessions, orchestrators, config, currentHostId, connection, loading } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
+	// Orchestrators first: getSessions now lists the project orchestrator among
+	// a host's sessions too, but the chat screen tells an orchestrator apart by
+	// the OrchestratorLink shape ("projectName" in session) to withhold the
+	// worker-only actions the daemon refuses (rename, delete, pin). Resolving
+	// the session row first would present the orchestrator as a worker.
+	const listed = hostMatches ? orchestrators.find((item) => item.id === id) ?? sessions.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
 	const configured = config === null ? null : isConfigured(config);
 	const machine = config ? machineIdentity(config) : "";

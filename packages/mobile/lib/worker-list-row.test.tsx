@@ -188,4 +188,19 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
 	});
+	it("badges an orchestrator row and keeps the badge off worker rows", () => {
+		const orchestrator: DashboardSession = { ...session, id: "orch-1", kind: "orchestrator" };
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerBoardList sessions={[session, orchestrator]} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />); });
+		const badges = renderer.root.findAllByType("Text" as never).filter((node) => node.props.children === "Orchestrator");
+		expect(badges).toHaveLength(1);
+		act(() => renderer.unmount());
+	});
+	it("offers an orchestrator row no swipe pin/archive actions", () => {
+		const orchestrator: DashboardSession = { ...session, id: "orch-1", kind: "orchestrator" };
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerBoardList sessions={[orchestrator]} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />); });
+		expect(renderer.root.findAllByType("WorkerRowActions" as never)).toHaveLength(0);
+		act(() => renderer.unmount());
+	});
 });
