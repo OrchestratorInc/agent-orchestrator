@@ -61,4 +61,45 @@ sed -n '/^classify_upstream_subject()/,/^}/p' "$sync" > "$tmp/cls.sh"
 	[ "$(classify_upstream_subject "perf(api): speed up list")" = "skip" ] || exit 1
 ) || { echo "!! classify_upstream_subject классифицирует неверно" >&2; exit 1; }
 
+# 5. Инварианты канонизации fork-миграций (класс инцидента 2026-10-21: в
+#    CANONICAL_LIST фиксера не хватало записи — settle выдал «канон» и
+#    переименовал уже применённую живой БД миграцию, раннер повторил SQL,
+#    демон не стартовал). Канон миграции = номер её первой публикации;
+#    применённые живыми БД миграции не переименовываются никогда.
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+reserved="$root/backend/internal/storage/sqlite/migrate_fork_reserved_range_test.go"
+migdir="$root/backend/internal/storage/sqlite/migrations"
+if [ ! -f "$reserved" ]; then
+	echo "!! (5) $reserved не найден — инварианты канонизации гонять только в форке" >&2
+	exit 1
+fi
+fork_suffixes="$(sed -n '/var forkLocalMigrations = \[\]string{/,/^}/p' "$reserved" | grep -oE '"[a-zA-Z_0-9]+"' | tr -d '"' || true)"
+fixer="$(cd "$(dirname "$0")" && pwd)/ao-fix-migration-collision.sh"
+canon_list="$(sed -n '/^CANONICAL_LIST="/,/^"$/p' "$fixer" | sed 's/^CANONICAL_LIST="//; s/"$//' | grep -E '^[a-zA-Z_0-9]+:[0-9]+$' || true)"
+[ -n "$fork_suffixes" ] || { echo "!! (5) forkLocalMigrations пуст — вне форка это ожидаемо, здесь нет" >&2; exit 1; }
+[ -n "$canon_list" ] || { echo "!! (5) CANONICAL_LIST в ao-fix-migration-collision.sh пуст или не читается" >&2; exit 1; }
+
+inv_fail=""
+for s in $fork_suffixes; do
+	entry="$(printf '%s\n' "$canon_list" | grep -E "^$s:" | cut -d: -f2 || true)"
+	if [ -z "$entry" ]; then
+		inv_fail="$inv_fail
+  в CANONICAL_LIST нет записи для '$s' (settle авто-присвоит и, возможно, переименует применённое)"
+		continue
+	fi
+	if [ ! -f "$migdir/${entry}_${s}.sql" ]; then
+		inv_fail="$inv_fail
+  канон '$s' = $entry, но файла ${entry}_${s}.sql нет — settle захочет переименовать применённую миграцию"
+	fi
+done
+for e in $canon_list; do
+	s="${e%%:*}"
+	printf '%s\n' "$fork_suffixes" | grep -qx "$s" || inv_fail="$inv_fail
+  CANONICAL_LIST содержит '$s', которого нет в forkLocalMigrations (протухшая запись)"
+done
+[ -z "$inv_fail" ] || {
+	echo "!! (5) инварианты канонизации миграций нарушены:$inv_fail" >&2
+	exit 1
+}
+
 echo "ao-sync.test.sh: OK"
