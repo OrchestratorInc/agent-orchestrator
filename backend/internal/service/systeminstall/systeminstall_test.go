@@ -1810,9 +1810,9 @@ func TestFailedUpdateQuotesWhatTheUpdaterReported(t *testing.T) {
 	plan := Plan{Target: TargetDroid, Method: "official-installer", Command: []string{"/Users/test/.local/bin/droid", "update"}}
 	baseline := &installedBaseline{path: "/Users/test/.local/bin/droid", version: "0.159.1", expected: "0.242.0", scheme: versionSchemeFor(TargetDroid)}
 	s.runAgentOperation(context.Background(), plan, AgentOperationUpdate, job, baseline)
-	want := `the update finished, but the installed version 0.159.1 did not reach the requested version 0.242.0; the update command reported: "Droid is already up to date."`
-	if job.Status != StatusFailed || job.Error != want {
-		t.Fatalf("status = %s, error = %q; want failed with %q", job.Status, job.Error, want)
+	want := "Updated, but it reports 0.159.1, not the requested version 0.242.0."
+	if job.Status != StatusFailed || job.Error != want || !strings.Contains(job.Output, `The update command reported: "Droid is already up to date."`) {
+		t.Fatalf("status = %s, error = %q, output = %q; want failed with %q", job.Status, job.Error, job.Output, want)
 	}
 }
 

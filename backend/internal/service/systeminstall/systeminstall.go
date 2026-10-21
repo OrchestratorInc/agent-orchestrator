@@ -1393,7 +1393,8 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	}
 	if failure != "" {
 		if updaterReport != "" {
-			failure = fmt.Sprintf("%s; the update command reported: %q", failure, updaterReport)
+			// Diagnostics, not the notice, quote the update command.
+			output = strings.TrimRight(output, "\n") + fmt.Sprintf("\nThe update command reported: %q", updaterReport)
 		}
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
