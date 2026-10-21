@@ -194,6 +194,40 @@ func TestManagedUpdateInstallsSideBySideAndSwitches(t *testing.T) {
 	}
 }
 
+// @github/copilot declares only bin/copilot, its Node loader; the native
+// executable belongs to an @github/copilot-<os>-<arch> optional dependency,
+// so npm links it only into that dependency's node_modules/.bin, never into
+// the release's bin. The update must find it there, run it, and point the
+// launcher at it.
+func TestManagedUpdateFindsACLIBinaryADependencyShips(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		spec := command.Argv[len(command.Argv)-1]
+		version := spec[strings.LastIndex(spec, "@")+1:]
+		// npm's global layout with no bin/<cli>: the CLI is a dependency's bin.
+		bin := filepath.Join(prefix, "lib", "node_modules", "@github", "copilot", "node_modules", ".bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			return err
+		}
+		// The fake binary's content is its version; the probe below reads it.
+		return os.WriteFile(filepath.Join(bin, "codex"), []byte(version+"\n"), 0o755)
+	})
+
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusSucceeded {
+		t.Fatalf("managed update with a dependency bin = %+v", job)
+	}
+	binRel := filepath.Join("lib", "node_modules", "@github", "copilot", "node_modules", ".bin", "codex")
+	if record, ok := f.s.readManagedRecord(TargetCodex); !ok || record.BinRel != binRel {
+		t.Fatalf("record.BinRel = %q, %t; want %q", record.BinRel, ok, binRel)
+	}
+	want := filepath.Join("..", "codex", "current", binRel)
+	if target, _ := os.Readlink(filepath.Join(f.root, "bin", "codex")); target != want {
+		t.Fatalf("launcher = %q, want %q", target, want)
+	}
+}
+
 func TestManagedUpdateRunsAlongsideSessionsOnEveryPlatform(t *testing.T) {
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		s := newTestService(goos, "npm")
