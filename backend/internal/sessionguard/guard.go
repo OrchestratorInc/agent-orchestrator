@@ -414,6 +414,12 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 			return SuppressedUnknown, fmt.Errorf("guard %s: pre-write check: %w", id, err)
 		}
 	}
+	// Tau's Textual composer needs a complete paste event: raw chunked
+	// multiline text can submit mid-message and leave a remainder draft.
+	// Frame only admitted nonempty messages; Enter nudges stay unchanged.
+	if rec.Harness == domain.HarnessTau && msg != "" {
+		msg = "\x1b[200~" + msg + "\x1b[201~"
+	}
 	if err := g.messenger.Send(ctx, id, msg); err != nil {
 		return Sent, fmt.Errorf("guard %s: send: %w", id, err)
 	}

@@ -123,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 37 {
-		t.Fatalf("got %d plans, want 37", len(plans))
+	if len(plans) != 38 {
+		t.Fatalf("got %d plans, want 38", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -691,5 +691,13 @@ func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
 	}
 	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
 		t.Fatalf("Codewhale reason = %q", plan.Reason)
+	}
+}
+
+func TestTauInstallUsesLatestRelease(t *testing.T) {
+	s := newTestService("darwin", "uv")
+	plan := s.planAgent(TargetTau)
+	if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install tau-ai" {
+		t.Fatalf("Tau plan = %+v", plan)
 	}
 }

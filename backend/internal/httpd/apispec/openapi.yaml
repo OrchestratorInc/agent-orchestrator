@@ -16174,6 +16174,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - tau
           - fake
           type: string
         approvalMode:
@@ -16874,6 +16875,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - tau
           - cloudflared
           type: string
         updatedAt:
@@ -20220,6 +20222,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - tau
           type: string
         issueId:
           type: string

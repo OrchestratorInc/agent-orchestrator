@@ -1,0 +1,42 @@
+name: Tau released TUI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/internal/adapters/agent/tau/**'
+      - '.github/workflows/tau-conformance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tau-conformance-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  released-tui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install hash-pinned official Tau wheel
+        shell: bash
+        run: |
+          wheel="$RUNNER_TEMP/tau_ai-0.4.7-py3-none-any.whl"
+          curl --fail --location --retry 3 https://files.pythonhosted.org/packages/73/b7/9ec4250c314c20e2fe9b9210f79dc4bddd61f5794ef0ffe4dc60ed0ffdf0/tau_ai-0.4.7-py3-none-any.whl -o "$wheel"
+          echo "4899ca3cc1c965e27c175fefad8754a68b441d9af49838f6624cc0e1adb59ce9  $wheel" | sha256sum --check
+          python -m venv "$RUNNER_TEMP/tau"
+          "$RUNNER_TEMP/tau/bin/python" -m pip install "$wheel"
+      - name: Verify native TUI lifecycle against localhost provider
+        working-directory: backend
+        env:
+          AO_TAU_BINARY: ${{ runner.temp }}/tau/bin/tau
+        run: go test -race -count=1 -timeout=5m -run '^TestReleasedTau' -v ./internal/adapters/agent/tau

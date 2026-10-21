@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 )
 
 func authorizedAgentsJSON(agent string) string {
@@ -51,6 +53,18 @@ func TestSpawnHelpListsOpenCodeV2Harness(t *testing.T) {
 	}
 	if !strings.Contains(out, "opencode, opencode-v2") {
 		t.Fatalf("spawn help does not list OpenCode 1 and 2 distinctly:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsEveryRegisteredHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range registry.Harnessed() {
+		if id := string(harness.Harness); !strings.Contains(out, id) {
+			t.Errorf("spawn help does not list registered harness %q:\n%s", id, out)
+		}
 	}
 }
 

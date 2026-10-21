@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
@@ -62,12 +63,14 @@ type harnessProbe struct {
 	Name                  string
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
 }
 
@@ -94,6 +97,7 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	// is the built-in shell; the full name resolves on every platform.
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
+	"tau":          {BinaryName: "tau", VersionArg: "--version", VersionCheck: tau.CheckVersion},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
@@ -218,6 +222,7 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
+			VersionCheck:          spec.VersionCheck,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
 		}))
 	}
@@ -450,6 +455,14 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 	version := firstOutputLine(out)
 	if version == "" {
 		version = "version output was empty"
+	}
+	if harness.VersionCheck != nil {
+		if err := harness.VersionCheck(version); err != nil {
+			return doctorCheck{
+				Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
+				Message: fmt.Sprintf("%s resolves to %s, but reports %q: %v", harness.BinaryName, path, version, err),
+			}
+		}
 	}
 	if harness.ExpectedVersionPrefix != "" && !strings.HasPrefix(version, harness.ExpectedVersionPrefix) {
 		return doctorCheck{
