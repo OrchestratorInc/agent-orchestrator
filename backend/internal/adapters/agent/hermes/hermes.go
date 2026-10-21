@@ -4,15 +4,12 @@
 package hermes
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/url"
 	"os"
@@ -245,22 +242,54 @@ func wrapperTarget(path string) string {
 		return ""
 	}
 	for _, line := range strings.Split(text, "\n")[1:] {
-		rest, ok := strings.CutPrefix(line, "exec ")
-		if !ok {
-			continue
+		if rest, ok := strings.CutPrefix(line, "exec "); ok {
+			return firstShellWord(rest)
 		}
-		// shlex.join quotes a path containing shell metacharacters.
-		if quoted, ok := strings.CutPrefix(rest, "'"); ok {
-			program, _, ok := strings.Cut(quoted, "'")
-			if !ok {
-				return ""
-			}
-			return program
-		}
-		program, _, _ := strings.Cut(rest, " ")
-		return program
 	}
 	return ""
+}
+
+// firstShellWord reads the first POSIX shell word, joining adjacent quoted
+// and unquoted segments as the shell does. shlex.join writes an apostrophe
+// as '"'"', so /a/Owner's Hermes becomes '/a/Owner'"'"'s Hermes'.
+func firstShellWord(text string) string {
+	var word strings.Builder
+	for i := 0; i < len(text); i++ {
+		switch c := text[i]; c {
+		case ' ', '\t':
+			return word.String()
+		case '\'':
+			end := strings.IndexByte(text[i+1:], '\'')
+			if end < 0 {
+				return ""
+			}
+			word.WriteString(text[i+1 : i+1+end])
+			i += end + 1
+		case '"':
+			i++
+			for ; i < len(text) && text[i] != '"'; i++ {
+				if text[i] == '\\' && i+1 < len(text) && strings.IndexByte("$`\"\\\n", text[i+1]) >= 0 {
+					i++
+				} else if text[i] == '$' || text[i] == '`' {
+					return "" // expansion: not a literal path
+				}
+				word.WriteByte(text[i])
+			}
+			if i >= len(text) {
+				return ""
+			}
+		case '\\':
+			if i+1 < len(text) {
+				i++
+				word.WriteByte(text[i])
+			}
+		case '$', '`', ';', '&', '|', '<', '>', '(', ')':
+			return ""
+		default:
+			word.WriteByte(c)
+		}
+	}
+	return word.String()
 }
 
 // sourceRoots are the checkouts whose project .env Hermes may load: those
@@ -356,83 +385,35 @@ func gitDirs(checkout string) (gitDir, commonDir string) {
 	return gitDir, commonDir
 }
 
-// releaseTagsAt lists the vX.Y.Z tags that point at commit in a checkout,
-// peeling annotated tags through packed-refs or their loose tag object.
-func releaseTagsAt(checkout, commit string) []string {
-	if commit == "" {
-		return nil
-	}
-	_, commonDir := gitDirs(checkout)
-	var tags []string
-	add := func(name, target string) {
-		if tag, ok := strings.CutPrefix(name, "refs/tags/"); ok && target == commit && stableReleaseTag.MatchString(tag) && !slices.Contains(tags, tag) {
-			tags = append(tags, tag)
-		}
-	}
-	if packed, err := os.ReadFile(filepath.Join(commonDir, "packed-refs")); err == nil {
-		lines := strings.Split(string(packed), "\n")
-		for i, line := range lines {
-			sha, name, ok := strings.Cut(strings.TrimSpace(line), " ")
-			if !ok || strings.HasPrefix(sha, "#") {
-				continue
-			}
-			add(name, sha)
-			if i+1 < len(lines) {
-				if peeled, ok := strings.CutPrefix(strings.TrimSpace(lines[i+1]), "^"); ok {
-					add(name, peeled)
-				}
-			}
-		}
-	}
-	entries, _ := os.ReadDir(filepath.Join(commonDir, "refs", "tags"))
-	for _, entry := range entries {
-		b, err := os.ReadFile(filepath.Join(commonDir, "refs", "tags", entry.Name()))
-		if err != nil {
-			continue
-		}
-		sha := strings.TrimSpace(string(b))
-		add("refs/tags/"+entry.Name(), sha)
-		add("refs/tags/"+entry.Name(), looseTagTarget(commonDir, sha))
-	}
-	return tags
-}
-
-// looseTagTarget reads the object an annotated tag stored as a loose object
-// names; packed objects are not read.
-func looseTagTarget(commonDir, sha string) string {
-	if len(sha) != 40 {
-		return ""
-	}
-	f, err := os.Open(filepath.Join(commonDir, "objects", sha[:2], sha[2:]))
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	r, err := zlib.NewReader(f)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = r.Close() }()
-	b, _ := io.ReadAll(io.LimitReader(r, 512))
-	header, body, ok := bytes.Cut(b, []byte{0})
-	if !ok || !bytes.HasPrefix(header, []byte("tag ")) {
-		return ""
-	}
-	target, ok := bytes.CutPrefix(body, []byte("object "))
-	if !ok || len(target) < 40 {
-		return ""
-	}
-	return string(target[:40])
-}
-
 func identityConfirmed(path string) bool {
 	current, ok := currentIdentity(path)
 	if !ok {
 		return false
 	}
+	// A shell wrapper whose source checkout AO cannot name could forward to
+	// changed code with no visible revision, so it is always re-probed.
+	// Homebrew's versioned Cellar target already names its release.
+	if !inCellar(current.target) && isShellScript(current.target) && launcherSourceRoot(path) == "" {
+		return false
+	}
 	remembered, found := confirmedIdentities.Load(path)
 	entry, ok := remembered.(confirmedIdentity)
 	return found && ok && entry.binaryIdentity == current && time.Since(entry.at) < confirmedIdentityTTL
+}
+
+func inCellar(path string) bool {
+	return slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "Cellar")
+}
+
+func isShellScript(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	b := make([]byte, 2)
+	n, _ := f.Read(b)
+	return n == 2 && string(b) == "#!"
 }
 
 func rememberIdentity(path string) {
@@ -459,7 +440,7 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	}
 	firstLine, _, _ := strings.Cut(string(b), "\n")
 	firstLine = strings.TrimSuffix(firstLine, "\r")
-	if err == nil && (supportedNativeVersion(firstLine) || qualifiedSourceCheckout(path, firstLine)) {
+	if err == nil && (supportedNativeVersion(firstLine) || qualifiedSourceCheckout(ctx, path, firstLine)) {
 		return true, "", false
 	}
 	if len(firstLine) > 120 {
@@ -481,18 +462,20 @@ var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
 
 // qualifiedSourceCheckout accepts the banner Hermes prints when its own git
 // lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
-// checkout) if the launcher's clean source checkout sits exactly on a
-// qualified release tag at that commit.
-func qualifiedSourceCheckout(launcher, line string) bool {
-	tag := SourceReleaseTag(launcher, line)
+// checkout) if the launcher's source checkout is exactly a qualified release.
+func qualifiedSourceCheckout(ctx context.Context, launcher, line string) bool {
+	tag := SourceReleaseTag(ctx, launcher, line)
 	return tag != "" && supportedNativeVersion("Hermes Agent "+tag)
 }
 
 // SourceReleaseTag names the release a tagless `vgit.<sha>` banner was built
-// from: the vX.Y.Z tag (preferring a qualified line) at the clean HEAD of the
-// source checkout the launcher runs, when that HEAD matches the banner. It
-// returns "" for any other banner or checkout.
-func SourceReleaseTag(launcher, banner string) string {
+// from. The banner alone proves neither: Hermes can print it from a stored
+// source stamp. So git itself must report that the launcher's source
+// checkout is at the banner's commit, has no tracked modifications, and
+// carries an effective vX.Y.Z tag on that commit (preferring a qualified
+// line). Asking git covers packed and loose refs, shadowing, annotated tags
+// in packs and alternates. It returns "" otherwise, including without git.
+func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 	firstLine, _, _ := strings.Cut(banner, "\n")
 	m := nativeSourceVersionLine.FindStringSubmatch(strings.TrimSuffix(firstLine, "\r"))
 	if m == nil {
@@ -502,11 +485,32 @@ func SourceReleaseTag(launcher, banner string) string {
 	if root == "" {
 		return ""
 	}
-	head := gitHead(root)
-	if len(head) != 40 || !strings.HasPrefix(head, m[1]) {
+	git := func(args ...string) (string, bool) {
+		gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		cmd := aoprocess.CommandContext(gitCtx, "git", append([]string{"--no-optional-locks", "-C", root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err == nil
+	}
+	head, ok := git("rev-parse", "--verify", "HEAD^{commit}")
+	if !ok || len(head) != 40 || !strings.HasPrefix(head, m[1]) {
 		return ""
 	}
-	tags := releaseTagsAt(root, head)
+	if status, ok := git("status", "--porcelain", "--untracked-files=no"); !ok || status != "" {
+		return ""
+	}
+	listed, ok := git("tag", "--points-at", head, "--list", "v*")
+	if !ok {
+		return ""
+	}
+	var tags []string
+	for _, tag := range strings.Split(listed, "\n") {
+		if stableReleaseTag.MatchString(tag) {
+			tags = append(tags, tag)
+		}
+	}
+	slices.Sort(tags)
 	for _, tag := range tags {
 		if supportedNativeVersion("Hermes Agent " + tag) {
 			return tag
@@ -666,11 +670,11 @@ func ResolveHome(env map[string]string) (string, error) {
 }
 
 func nativeHomeFrom(lookup envLookup, get func(string) string) (string, error) {
-	if dir := strings.TrimSpace(get("HERMES_HOME")); dir != "" {
+	if dir := pyStrip(get("HERMES_HOME")); dir != "" {
 		return expandNativePath(dir, lookup)
 	}
 	if runtime.GOOS == "windows" {
-		local := strings.TrimSpace(get("LOCALAPPDATA"))
+		local := pyStrip(get("LOCALAPPDATA"))
 		if local == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -859,13 +863,13 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return fmt.Errorf("hermes: named native profiles are not supported by this initial rendered-composer integration")
 	}
 	// Native sticky profiles can redirect a root even when HERMES_HOME is set.
-	if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && strings.TrimSpace(string(b)) != "" && strings.TrimSpace(string(b)) != "default" {
+	if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && pyStrip(string(b)) != "" && pyStrip(string(b)) != "default" {
 		return fmt.Errorf("hermes: sticky native profiles are not supported; clear active_profile or select the default native profile")
 	}
 	// Hermes resolves HERMES_MANAGED_DIR against its working directory, the
 	// session workspace.
 	for _, managed := range []string{os.Getenv("HERMES_MANAGED_DIR"), cfg.Env["HERMES_MANAGED_DIR"], "/etc/hermes"} {
-		if managed = strings.TrimSpace(managed); managed == "" {
+		if managed = pyStrip(managed); managed == "" {
 			continue
 		}
 		// Not filepath.Join: lexical cleaning would fold "link/.." where the
@@ -911,16 +915,12 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 				return fmt.Errorf("hermes: invalid native configuration: %w", err)
 			}
 		}
-		// Only parsed instruction values matter: the installer's generated
-		// config shows ${VAR} examples in comments.
-		agent, _ := config["agent"].(map[string]any)
-		display, _ := config["display"].(map[string]any)
-		for _, value := range []any{agent["system_prompt"], agent["personalities"], config["personalities"], display["personality"]} {
-			if referencesEnv(value) {
-				return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
-			}
+		// Only parsed values the overlay renders matter: the installer's
+		// generated config shows ${VAR} examples in comments.
+		var envRef bool
+		if original, envRef = nativeOverlay(config); envRef {
+			return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
 		}
-		original = nativeOverlay(config)
 	}
 	cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"] = original
 	instructions := cfg.SystemPrompt
@@ -994,11 +994,17 @@ func referencesEnv(value any) bool {
 	return false
 }
 
-func nativeOverlay(config map[string]any) string {
+// nativeOverlay rebuilds the overlay Hermes renders (personality.py): the
+// selected personality's prompt (system_prompt, tone and style for a
+// structured one), or agent.system_prompt without one. envRef reports a
+// ${VAR} reference in any value that rendering consumes; UI-only fields such
+// as a personality's description are ignored.
+func nativeOverlay(config map[string]any) (overlay string, envRef bool) {
 	agent, _ := config["agent"].(map[string]any)
 	display, _ := config["display"].(map[string]any)
-	name := strings.ToLower(strings.TrimSpace(fmt.Sprint(display["personality"])))
-	if name != "" && name != "<nil>" && name != "none" && name != "default" && name != "neutral" {
+	selection := display["personality"]
+	name := strings.ToLower(pyStrip(fmt.Sprint(selection)))
+	if selection != nil && name != "" && name != "none" && name != "default" && name != "neutral" {
 		definitions := map[string]any{}
 		for k, v := range builtinPersonalities {
 			definitions[k] = v
@@ -1006,25 +1012,31 @@ func nativeOverlay(config map[string]any) string {
 		for _, src := range []any{config["personalities"], agent["personalities"]} {
 			if m, ok := src.(map[string]any); ok {
 				for k, v := range m {
-					definitions[strings.ToLower(strings.TrimSpace(k))] = v
+					// A name that interpolates could select another definition.
+					envRef = envRef || strings.Contains(k, "${")
+					definitions[strings.ToLower(pyStrip(k))] = v
 				}
 			}
 		}
+		envRef = envRef || referencesEnv(selection)
 		if v, ok := definitions[name]; ok {
 			if m, ok := v.(map[string]any); ok {
 				parts := []string{promptText(m["system_prompt"])}
+				envRef = envRef || referencesEnv(m["system_prompt"])
 				for _, k := range []string{"tone", "style"} {
+					envRef = envRef || referencesEnv(m[k])
 					if s := promptText(m[k]); s != "" {
 						parts = append(parts, strings.ToUpper(k[:1])+k[1:]+": "+s)
 					}
 				}
-				return strings.TrimSpace(strings.Join(parts, "\n"))
+				return pyStrip(strings.Join(parts, "\n")), envRef
 			}
-			return promptText(v)
+			return promptText(v), envRef || referencesEnv(v)
 		}
 	}
-	return promptText(agent["system_prompt"])
+	return promptText(agent["system_prompt"]), envRef || referencesEnv(agent["system_prompt"])
 }
+
 func promptText(v any) string {
 	if v == nil {
 		return ""
@@ -1032,13 +1044,13 @@ func promptText(v any) string {
 	if a, ok := v.([]any); ok {
 		var parts []string
 		for _, item := range a {
-			if s := strings.TrimSpace(fmt.Sprint(item)); s != "" {
+			if s := pyStrip(fmt.Sprint(item)); s != "" {
 				parts = append(parts, s)
 			}
 		}
 		return strings.Join(parts, "\n")
 	}
-	return strings.TrimSpace(fmt.Sprint(v))
+	return pyStrip(fmt.Sprint(v))
 }
 func nativeHome(data, id string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(sessionDir(data, id), "native-home"))

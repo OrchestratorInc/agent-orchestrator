@@ -376,11 +376,11 @@ func TestNativeLookupDoesNotExecuteEarlierPathCandidate(t *testing.T) {
 	}
 }
 func TestPersonalityPreservesNativePrecedence(t *testing.T) {
-	overlay := nativeOverlay(map[string]any{"display": map[string]any{"personality": "technical"}, "agent": map[string]any{"system_prompt": "ignored native manual overlay"}})
+	overlay, _ := nativeOverlay(map[string]any{"display": map[string]any{"personality": "technical"}, "agent": map[string]any{"system_prompt": "ignored native manual overlay"}})
 	if overlay != builtinPersonalities["technical"] {
 		t.Fatalf("overlay=%q", overlay)
 	}
-	overlay = nativeOverlay(map[string]any{"display": map[string]any{"personality": "custom"}, "personalities": map[string]any{"custom": "first"}, "agent": map[string]any{"personalities": map[string]any{"custom": map[string]any{"system_prompt": "native", "tone": "gentle"}}}})
+	overlay, _ = nativeOverlay(map[string]any{"display": map[string]any{"personality": "custom"}, "personalities": map[string]any{"custom": "first"}, "agent": map[string]any{"personalities": map[string]any{"custom": map[string]any{"system_prompt": "native", "tone": "gentle"}}}})
 	if overlay != "native\nTone: gentle" {
 		t.Fatalf("overlay=%q", overlay)
 	}
@@ -725,6 +725,13 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
 		t.Fatalf("workspace-relative managed scope accepted: %v", err)
 	}
+	// Python's str.strip also removes U+001C..U+001F.
+	for _, prefix := range []string{"\x1c", "\x1f", "\u00a0"} {
+		managed.Env = map[string]string{"HERMES_HOME": home, "HERMES_MANAGED_DIR": prefix + filepath.Join(workspace, ".ao-review-managed")}
+		if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
+			t.Fatalf("managed scope with %q prefix accepted: %v", prefix, err)
+		}
+	}
 	// The filesystem follows a symlink before "..", unlike filepath.Join.
 	if runtime.GOOS != "windows" {
 		external := t.TempDir()
@@ -890,7 +897,10 @@ func TestConfirmedIdentityFollowsInstallRevision(t *testing.T) {
 	}
 	write(filepath.Join(home, "hermes-agent", ".git", "HEAD"), "ref: refs/heads/main\n")
 	write(filepath.Join(gitDir, "main"), "1111111111111111111111111111111111111111\n")
-	launcher := filepath.Join(home, "hermes")
+	launcher := filepath.Join(home, "hermes-agent", ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	write(launcher, "#!/bin/sh\n")
 	rememberIdentity(launcher)
 	if !identityConfirmed(launcher) {
@@ -926,7 +936,10 @@ func TestConfirmedIdentityFollowsLinkedWorktreeRevision(t *testing.T) {
 	git(repo, "commit", "-q", "--allow-empty", "-m", "one")
 	worktree := filepath.Join(home, "hermes-agent")
 	git(repo, "worktree", "add", "-q", "-b", "runtime", worktree, "main")
-	launcher := filepath.Join(home, "hermes")
+	launcher := filepath.Join(worktree, ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -978,6 +991,82 @@ func TestConfirmedIdentityFollowsWrapperSourceRevision(t *testing.T) {
 	write(filepath.Join(refs, "main"), "2222222222222222222222222222222222222222\n")
 	if identityConfirmed(wrapper) {
 		t.Fatal("confirmation survived a commit in the wrapper's source checkout")
+	}
+}
+
+func TestFirstShellWordMatchesShlexJoin(t *testing.T) {
+	for in, want := range map[string]string{
+		`/a/b/.hermes/bin/hermes "$@"`:                    "/a/b/.hermes/bin/hermes",
+		`'/a/with space/.hermes/bin/hermes' "$@"`:         "/a/with space/.hermes/bin/hermes",
+		`'/a/Owner'"'"'s Hermes/.hermes/bin/hermes' "$@"`: "/a/Owner's Hermes/.hermes/bin/hermes",
+		`/a/x\ y/hermes "$@"`:                             "/a/x y/hermes",
+		`"/a/q\"d/hermes" "$@"`:                           `/a/q"d/hermes`,
+		`"$HOME/hermes" "$@"`:                             "",
+		`/a/$(id)/hermes`:                                 "",
+		`'/a/unterminated`:                                "",
+	} {
+		if got := firstShellWord(in); got != want {
+			t.Errorf("firstShellWord(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestApostropheWrapperResolvesSourceRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell wrapper")
+	}
+	src := filepath.Join(t.TempDir(), "Owner's Hermes")
+	launcher := filepath.Join(src, ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	quoted := "'" + strings.ReplaceAll(launcher, "'", `'"'"'`) + "'"
+	wrapper := filepath.Join(t.TempDir(), "hermes")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec "+quoted+" \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(src)
+	if got := launcherSourceRoot(wrapper); got != want {
+		t.Fatalf("launcherSourceRoot = %q, want %q", got, want)
+	}
+	// A wrapper whose checkout AO cannot name is never served from cache.
+	opaque := filepath.Join(t.TempDir(), "hermes")
+	if err := os.WriteFile(opaque, []byte("#!/bin/sh\nexec \"$HERMES_ROOT/hermes\" \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rememberIdentity(opaque)
+	if identityConfirmed(opaque) {
+		t.Fatal("unresolvable wrapper reused a cached confirmation")
+	}
+}
+
+func TestInheritedCredentialClearedByProjectDotenv(t *testing.T) {
+	for _, key := range hermesCredentialEnv {
+		t.Setenv(key, "")
+	}
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	t.Setenv("HERMES_MANAGED_DIR", "")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-review-dummy-key")
+	if err := os.MkdirAll(filepath.Join(home, "hermes-agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "hermes-agent", ".env"), []byte("OPENROUTER_API_KEY=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Without a home .env, Hermes loads the project .env with override.
+	if identity, found := credentialStoreIdentity(t.Context()); found {
+		t.Fatalf("key cleared by project .env reported: %+v", identity)
+	}
+	// With one, the project .env loads without override and cannot clear it.
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("NOTES=ordinary\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := credentialStoreIdentity(t.Context()); !found {
+		t.Fatal("inherited key not found when the home .env leaves it alone")
 	}
 }
 
@@ -1037,10 +1126,26 @@ func TestHooksIgnoreEnvExamplesInConfigComments(t *testing.T) {
 	for _, config := range []string{
 		"agent:\n  system_prompt: \"Use ${PROJECT}\"\n",
 		"display:\n  personality: mine\npersonalities:\n  mine: \"I am ${NAME}\"\n",
-		"agent:\n  personalities:\n    mine:\n      system_prompt: ${PROMPT}\n",
+		"display:\n  personality: mine\nagent:\n  personalities:\n    mine:\n      system_prompt: ${PROMPT}\n",
+		"display:\n  personality: mine\npersonalities:\n  mine:\n    system_prompt: ok\n    tone: ${TONE}\n",
+		"display:\n  personality: mine\npersonalities:\n  mine:\n    system_prompt: ok\n    style: ${STYLE}\n",
+		"display:\n  personality: mine\npersonalities:\n  mine:\n    - first\n    - ${LINE}\n",
+		"display:\n  personality: ${CHOICE}\n",
 	} {
 		if err := hooks(config); err == nil || !strings.Contains(err.Error(), "environment-expanded") {
 			t.Fatalf("instruction ${VAR} accepted for %q: %v", config, err)
+		}
+	}
+	// Hermes renders only system_prompt, tone and style of the selected
+	// personality; a description is list-preview text.
+	for _, config := range []string{
+		"display:\n  personality: mine\npersonalities:\n  mine:\n    description: \"${LABEL}\"\n    system_prompt: Native overlay\n",
+		"display:\n  personality: mine\nagent:\n  personalities:\n    mine:\n      description: \"${LABEL}\"\n      system_prompt: Native overlay\n",
+		"display:\n  personality: helpful\npersonalities:\n  other: \"${UNSELECTED}\"\n",
+		"agent:\n  personalities:\n    mine:\n      system_prompt: ${UNSELECTED}\n",
+	} {
+		if err := hooks(config); err != nil {
+			t.Fatalf("unrendered ${VAR} refused for %q: %v", config, err)
 		}
 	}
 }
@@ -1071,36 +1176,76 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 	}
 	head := git("rev-parse", "HEAD")
 	banner := "Hermes Agent vgit." + head[:7] + " (2026.9.24) · stable · local " + head[:12]
-	if qualifiedSourceCheckout(launcher, banner) {
+	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("untagged checkout accepted")
 	}
 	// An annotated tag is a loose ref and object, then packed with a peel line.
 	git("tag", "-a", "v0.22.2", "-m", "v0.22.2")
-	if !qualifiedSourceCheckout(launcher, banner) {
+	if !qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("loose annotated qualified tag at HEAD rejected")
 	}
 	git("pack-refs", "--all")
-	if !qualifiedSourceCheckout(launcher, banner) {
+	if !qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("packed annotated qualified tag at HEAD rejected")
 	}
 	for _, line := range []string{
 		"Hermes Agent vgit." + head[:7] + ".dirty (2026.9.24)",
 		"Hermes Agent vgit.0000000 (2026.9.24)",
 	} {
-		if qualifiedSourceCheckout(launcher, line) {
+		if qualifiedSourceCheckout(t.Context(), launcher, line) {
 			t.Fatalf("%q accepted", line)
 		}
 	}
+	// A tracked modification is not the release, whatever the banner says.
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("release\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "tracked.txt")
+	git("commit", "-q", "-m", "tracked")
+	git("tag", "-d", "v0.22.2")
+	git("tag", "-a", "v0.22.2", "-m", "v0.22.2")
+	head = git("rev-parse", "HEAD")
+	banner = "Hermes Agent vgit." + head[:7] + " (2026.9.24) · stable · local " + head[:12]
+	if !qualifiedSourceCheckout(t.Context(), launcher, banner) {
+		t.Fatal("clean tagged checkout rejected")
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("REVIEW LOCAL BUSY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
+		t.Fatal("tracked modification accepted")
+	}
+	git("checkout", "-q", "--", "tracked.txt")
+	// A loose ref can name an annotated tag object stored in a pack.
+	tagObject := git("rev-parse", "refs/tags/v0.22.2")
+	git("repack", "-q", "-a", "-d")
+	git("update-ref", "-d", "refs/tags/v0.22.2")
+	git("update-ref", "refs/tags/v0.22.2", tagObject)
+	if !qualifiedSourceCheckout(t.Context(), launcher, banner) {
+		t.Fatal("loose ref to a packed annotated tag rejected")
+	}
+	// A loose ref shadows a stale packed entry of the same name.
+	git("pack-refs", "--all")
+	release := head
+	git("commit", "-q", "--allow-empty", "-m", "retag")
+	git("tag", "-f", "v0.22.2", "HEAD")
+	git("checkout", "-q", "--detach", release)
+	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
+		t.Fatal("stale packed tag shadowed by a loose ref accepted")
+	}
+	git("checkout", "-q", "main")
+	git("tag", "-f", "v0.22.2", release)
+	git("checkout", "-q", "--detach", release)
 	// A commit past the tag, or an unqualified line, is not that release.
 	git("tag", "v0.23.0")
 	git("tag", "-d", "v0.22.2")
-	if qualifiedSourceCheckout(launcher, banner) {
+	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("unqualified release tag accepted")
 	}
 	git("tag", "v0.22.2")
 	git("commit", "-q", "--allow-empty", "-m", "after")
 	head = git("rev-parse", "HEAD")
-	if qualifiedSourceCheckout(launcher, "Hermes Agent vgit."+head[:7]+" (2026.9.24)") {
+	if qualifiedSourceCheckout(t.Context(), launcher, "Hermes Agent vgit."+head[:7]+" (2026.9.24)") {
 		t.Fatal("commit past the release tag accepted")
 	}
 }

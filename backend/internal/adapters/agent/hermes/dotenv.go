@@ -164,6 +164,11 @@ func guardedEnvName(key string) string {
 	return processEnvName(strings.TrimLeft(key, "\ufeff"))
 }
 
+// pyStrip is Python's str.strip().
+func pyStrip(s string) string {
+	return strings.TrimFunc(s, pyIsSpace)
+}
+
 // pyIsSpace is Python's str.isspace: Unicode White_Space plus the ASCII
 // separators U+001C..U+001F.
 func pyIsSpace(r rune) bool {

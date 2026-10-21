@@ -1,6 +1,7 @@
 package systeminstall
 
 import (
+	"context"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -64,7 +65,7 @@ func installedVersionText(target Target, resolvedPath, output string) string {
 			}
 		}
 	}
-	if tag := hermes.SourceReleaseTag(resolvedPath, output); tag != "" {
+	if tag := hermes.SourceReleaseTag(context.Background(), resolvedPath, output); tag != "" {
 		return tag
 	}
 	if m := hermesVersionToken.FindStringSubmatch(output); m != nil {

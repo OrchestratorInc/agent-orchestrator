@@ -3,6 +3,8 @@ package hermes
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -118,16 +120,16 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 	if err != nil {
 		return domain.AgentAccountIdentity{}, false
 	}
-	// Hermes loads its home .env with override, so a key it assigns, even to
+	// A key that a dotenv layer Hermes loads with override assigns, even to
 	// empty, replaces the one AO's environment would pass down.
-	bindings, _ := dotenvBindings(filepath.Join(home, ".env"))
-	assigned := dotenvEnvironment(bindings)
-	inherited := slices.DeleteFunc(slices.Clone(hermesCredentialEnv), func(name string) bool {
-		_, ok := assigned[processEnvName(name)]
-		return ok
-	})
-	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, inherited...); name != "" {
-		return domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), true
+	if assigned, known := overridingAssignments(home); known {
+		inherited := slices.DeleteFunc(slices.Clone(hermesCredentialEnv), func(name string) bool {
+			_, ok := assigned[processEnvName(name)]
+			return ok
+		})
+		if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, inherited...); name != "" {
+			return domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), true
+		}
 	}
 	if path := filepath.Join(home, ".env"); envFileHasCredential(path) {
 		return authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey), true
@@ -136,6 +138,36 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 		return authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount), true
 	}
 	return domain.AgentAccountIdentity{}, false
+}
+
+// overridingAssignments collects the names set by the dotenv layers Hermes
+// loads with override (env_loader.load_hermes_dotenv): <HERMES_HOME>/.env
+// when it exists, otherwise the source checkout's project .env, and then any
+// managed scope's .env. known is false when a layer cannot be read the way
+// Hermes reads it, so no inherited key can be trusted.
+func overridingAssignments(home string) (assigned map[string]string, known bool) {
+	assigned = map[string]string{}
+	layers := []string{filepath.Join(home, ".env")}
+	if _, err := os.Stat(layers[0]); errors.Is(err, os.ErrNotExist) {
+		roots := sourceRoots(home, nil)
+		layers = make([]string, 0, len(roots)+2)
+		for _, root := range roots {
+			layers = append(layers, filepath.Join(root, ".env"))
+		}
+	}
+	for _, managed := range []string{os.Getenv("HERMES_MANAGED_DIR"), "/etc/hermes"} {
+		if managed = pyStrip(managed); managed != "" {
+			layers = append(layers, filepath.Join(managed, ".env"))
+		}
+	}
+	for _, layer := range layers {
+		bindings, err := dotenvBindings(layer)
+		if err != nil {
+			return nil, false
+		}
+		maps.Copy(assigned, dotenvEnvironment(bindings))
+	}
+	return assigned, true
 }
 
 // envFileHasCredential reads the value Hermes ends up with: a later empty
