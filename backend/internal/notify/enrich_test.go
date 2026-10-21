@@ -32,6 +32,33 @@ func TestEnrichReadyToMergePrioritizesPRContext(t *testing.T) {
 	}
 }
 
+func TestEnrichOrphanWorkersCarriesDetailWithoutPR(t *testing.T) {
+	t.Parallel()
+
+	detail := "1 orphaned worker process tree of terminated sessions: dead-1."
+	rec, err := enrich(Intent{
+		Type:      domain.NotificationOrphanWorkers,
+		SessionID: "dead-1",
+		SourceKey: "orphan_workers:run-1",
+		Detail:    detail,
+		CreatedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("enrich orphan notification: %v", err)
+	}
+	if want := "Orphaned worker processes found"; rec.Title != want {
+		t.Fatalf("title = %q, want %q", rec.Title, want)
+	}
+	if rec.Body != detail {
+		t.Fatalf("body = %q, want the intent detail verbatim", rec.Body)
+	}
+	// Same shape without a PR URL must stay valid for the session-bound kinds'
+	// gate; the orphan intent needs no PR at all.
+	if rec.PRURL != "" {
+		t.Fatalf("pr url = %q, want empty", rec.PRURL)
+	}
+}
+
 func TestEnrichReadyToMergeFallsBackWithoutPRTitle(t *testing.T) {
 	t.Parallel()
 

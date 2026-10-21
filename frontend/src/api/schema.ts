@@ -3903,6 +3903,23 @@ export interface paths {
         patch: operations["updateHarnessDefault"];
         trace?: never;
     };
+    "/api/v1/settings/scm-proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set or clear the explicit outbound proxy for the daemon's SCM clients */
+        patch: operations["updateScmProxy"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -3935,23 +3952,6 @@ export interface paths {
         head?: never;
         /** Choose whether idle open sessions move to newly installed harness releases */
         patch: operations["updateVersionRefresh"];
-        trace?: never;
-    };
-    "/api/v1/settings/scm-proxy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Set or clear the explicit outbound proxy for the daemon's SCM clients */
-        patch: operations["updateScmProxy"];
         trace?: never;
     };
     "/api/v1/shell-terminals": {
@@ -4084,6 +4084,23 @@ export interface paths {
         put?: never;
         /** Start (or return the already-running) install job for a fixed system target */
         post: operations["startSystemInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/orphan-workers/reap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Kill the orphaned worker trees reported by the boot scan (the allow decision; re-derived from a fresh snapshot) */
+        post: operations["reapOrphanWorkers"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6186,7 +6203,7 @@ export interface components {
             target: components["schemas"]["NotificationTarget"];
             title: string;
             /** @enum {string} */
-            type: "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged" | "review_completed" | "review_changes_requested";
+            type: "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged" | "review_completed" | "review_changes_requested" | "orphan_workers";
         };
         NotificationTarget: {
             /** @enum {string} */
@@ -6214,6 +6231,10 @@ export interface components {
             id: string;
             projectId: string;
             projectName?: string;
+        };
+        OrphanWorkerReapResponse: {
+            killed: number;
+            sessions: string[];
         };
         PRReviewState: {
             latestRun?: components["schemas"]["ReviewRun"];
@@ -7102,11 +7123,11 @@ export interface components {
                 [key: string]: components["schemas"]["HarnessDefault"];
             };
             localEnabled: boolean;
+            /** @description Outbound proxy URL (http/https/socks5/socks5h) for the daemon's GitHub and GitLab clients. Empty uses the standard proxy environment variables. */
+            scmProxyUrl: string;
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
-            /** @description Outbound proxy URL (http/https/socks5/socks5h) for the daemon's GitHub and GitLab clients. Empty uses the standard proxy environment variables; a set value wins over them. */
-            scmProxyUrl: string;
         };
         ShellTerminalEnvelope: {
             shellTerminal: components["schemas"]["ShellTerminalResponse"];
@@ -7583,6 +7604,9 @@ export interface components {
             config: components["schemas"]["ProjectConfig"];
             displayName: string;
         };
+        UpdateScmProxyURLRequest: {
+            url: string;
+        };
         UpdateSessionInterfaceRequest: {
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
@@ -7593,10 +7617,6 @@ export interface components {
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
-        };
-        UpdateScmProxyURLRequest: {
-            /** @description Proxy URL (http/https/socks5/socks5h) for the daemon's SCM clients. An empty string clears the override. */
-            url: string;
         };
         UpdateWorkspaceFileRequest: {
             content: string;
@@ -22180,6 +22200,57 @@ export interface operations {
             };
         };
     };
+    updateScmProxy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateScmProxyURLRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     updateSessionInterface: {
         parameters: {
             query?: never;
@@ -22241,57 +22312,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateVersionRefreshRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SettingsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    updateScmProxy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateScmProxyURLRequest"];
             };
         };
         responses: {
@@ -22836,6 +22856,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    reapOrphanWorkers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrphanWorkerReapResponse"];
                 };
             };
             /** @description Internal Server Error */

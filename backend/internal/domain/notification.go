@@ -21,13 +21,18 @@ const (
 	NotificationReviewCompleted NotificationType = "review_completed"
 	// NotificationReviewChangesRequested means an AO reviewer found changes to make.
 	NotificationReviewChangesRequested NotificationType = "review_changes_requested"
+	// NotificationOrphanWorkers means the boot scan found orphaned worker
+	// process trees of already-terminated sessions and waits for the user to
+	// allow or deny their removal. The batch report hangs off the first
+	// affected session; its Body lists every one of them.
+	NotificationOrphanWorkers NotificationType = "orphan_workers"
 )
 
 // Valid reports whether t is one of the v1 notification kinds.
 func (t NotificationType) Valid() bool {
 	switch t {
 	case NotificationNeedsInput, NotificationReadyToMerge, NotificationPRMerged, NotificationPRClosedUnmerged,
-		NotificationReviewCompleted, NotificationReviewChangesRequested:
+		NotificationReviewCompleted, NotificationReviewChangesRequested, NotificationOrphanWorkers:
 		return true
 	default:
 		return false

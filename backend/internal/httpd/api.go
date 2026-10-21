@@ -69,6 +69,9 @@ type APIDeps struct {
 	// Processes exposes the process-footprint inventory and orphan kill; nil
 	// answers 501 like every other optional surface.
 	Processes controllers.ProcessService
+	// Orphans executes the user's allow decision behind the bell's orphan
+	// notification; nil answers 501 like every other optional surface.
+	Orphans controllers.OrphanReaper
 	// HostID is this machine's stable, machine-bound identity, served by the
 	// unauthenticated GET /api/v1/identity probe so a phone can confirm which
 	// machine answered before presenting a credential.
@@ -223,7 +226,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
-		processes:     &controllers.ProcessController{Processes: deps.Processes},
+		processes:     &controllers.ProcessController{Processes: deps.Processes, Orphans: deps.Orphans},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},

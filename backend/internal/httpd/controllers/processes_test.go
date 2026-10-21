@@ -70,6 +70,58 @@ func TestProcessRoutes_NilServiceIs501(t *testing.T) {
 	}
 }
 
+type fakeOrphanReaper struct {
+	sessions []string
+	err      error
+	called   int
+}
+
+func (f *fakeOrphanReaper) ReapOrphanWorkers(context.Context) ([]string, error) {
+	f.called++
+	return f.sessions, f.err
+}
+
+// TestOrphanWorkersReap_AllowDecision pins the bell's allow endpoint: the
+// reaper is called once, the report maps to {sessions, killed}, and a nil
+// surface (embedders) answers the standard 501.
+func TestOrphanWorkersReap_AllowDecision(t *testing.T) {
+	reaper := &fakeOrphanReaper{sessions: []string{"dead-1"}}
+	c := &controllers.ProcessController{Orphans: reaper}
+	r := chi.NewRouter()
+	r.Route("/api/v1", func(sub chi.Router) { c.Register(sub) })
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Post(srv.URL+"/api/v1/system/orphan-workers/reap", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out controllers.OrphanWorkerReapResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sessions) != 1 || out.Sessions[0] != "dead-1" || out.Killed != 1 {
+		t.Fatalf("body = %+v, want sessions [dead-1] killed 1", out)
+	}
+	if reaper.called != 1 {
+		t.Fatalf("reaper called %d times, want 1", reaper.called)
+	}
+
+	nilSrv := processServer(t, nil)
+	resp2, err := http.Post(nilSrv.URL+"/api/v1/system/orphan-workers/reap", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("nil reaper status = %d, want 501", resp2.StatusCode)
+	}
+}
+
 // TestProcessRoutes_DisabledServiceReportsGateAndRefusesKill covers the
 // AO_NO_PROCINVENTORY runtime gate: the list route still answers 200 with
 // disabled=true (one round trip teaches the status bar to hide and stop

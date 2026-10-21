@@ -1037,6 +1037,7 @@ type fakeSessionLifecycle struct {
 	reconcileSafetyCalled     bool
 	reconcileBackgroundCalled bool
 	restoreAllCalled          bool
+	reapTerminatedCalled      bool
 	reconcileErr              error
 	restoreErr                error
 }
@@ -1154,6 +1155,15 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 
 func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
 func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
+
+func (f *fakeSessionLifecycle) ReapTerminated(context.Context) error {
+	f.reapTerminatedCalled = true
+	return nil
+}
+
+func (*fakeSessionLifecycle) ReapOrphanWorkers(context.Context) ([]string, error) {
+	return nil, nil
+}
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}

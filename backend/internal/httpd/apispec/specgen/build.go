@@ -201,6 +201,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
+	"ControllersUpdateScmProxyURLRequest":                  "UpdateScmProxyURLRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationTurnDiffResponse":              "ConversationTurnDiffResponse",
@@ -636,6 +637,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersProcessKillResponse":      "ProcessKillResponse",
 	"ControllersProcessKillTargetDTO":     "ProcessKillTarget",
 	"ControllersProcessKillResultDTO":     "ProcessKillResult",
+	"ControllersOrphanWorkerReapResponse": "OrphanWorkerReapResponse",
 }
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
@@ -1095,6 +1097,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/version-refresh", id: "updateVersionRefresh", tag: "settings",
 			summary: "Choose whether idle open sessions move to newly installed harness releases",
 			reqBody: controllers.UpdateVersionRefreshRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/scm-proxy", id: "updateScmProxy", tag: "settings",
+			summary: "Set or clear the explicit outbound proxy for the daemon's SCM clients",
+			reqBody: controllers.UpdateScmProxyURLRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -2596,6 +2609,15 @@ func processOperations() []operation {
 				{http.StatusOK, controllers.ProcessKillResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/system/orphan-workers/reap", id: "reapOrphanWorkers", tag: "system",
+			summary: "Kill the orphaned worker trees reported by the boot scan (the allow decision; re-derived from a fresh snapshot)",
+			resps: []respUnit{
+				{http.StatusOK, controllers.OrphanWorkerReapResponse{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 			},

@@ -28,6 +28,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
+	"github.com/aoagents/agent-orchestrator/backend/internal/orphanreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -1671,6 +1672,12 @@ func newManager() (*Manager, *fakeStore, *fakeRuntime, *fakeWorkspace) {
 	// returns argv ["launch"] which is not a real binary on PATH.
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	// The orphan scan must never touch real processes from tests: stub the
+	// table empty and leave the killer unarmed. Tests that exercise the scan
+	// (reap_terminated_test.go) inject their own table and killer.
+	m.processTable = func(context.Context) (*orphanreap.Table, time.Time, error) {
+		return &orphanreap.Table{}, time.Time{}, nil
+	}
 	return m, st, rt, ws
 }
 func testRoleAgents() domain.ProjectConfig {

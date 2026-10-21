@@ -23,6 +23,7 @@ const {
 	navigateMock,
 	notificationQueryMock,
 	paramsMock,
+	reapPostMock,
 	restoreSessionMock,
 	workspaceQueryMock,
 } = vi.hoisted(() => ({
@@ -35,6 +36,7 @@ const {
 	navigateMock: vi.fn(),
 	notificationQueryMock: vi.fn(),
 	paramsMock: vi.fn(),
+	reapPostMock: vi.fn(),
 	restoreSessionMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 }));
@@ -172,6 +174,14 @@ vi.mock("../lib/notifications", async (importOriginal) => ({
 		return { connect: () => undefined };
 	},
 }));
+
+vi.mock("../lib/api-client", async (importOriginal) => {
+	const real = await importOriginal<typeof import("../lib/api-client")>();
+	return {
+		...real,
+		apiClient: { ...real.apiClient, POST: reapPostMock },
+	};
+});
 
 function renderNotificationCenter(
 	queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
@@ -1123,5 +1133,41 @@ describe("NotificationCenter cloud rows", () => {
 		expect(screen.getByText("acme/cloud#8 is ready to merge.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+
+	// The orphan_workers report is the one notification with a decision: Allow
+	// reaps the trees and clears the row; the X beside it stays the deny.
+	it("allows the orphan report by reaping and clearing the row", async () => {
+		const orphan: NotificationDTO = {
+			id: "ntf_orphan",
+			sessionId: "sess-dead",
+			projectId: "proj-1",
+			prUrl: "",
+			type: "orphan_workers",
+			title: "Orphaned worker processes found",
+			body: "1 orphaned worker process tree of terminated sessions: dead-1. Allow to kill them; dismiss to keep them until the next start.",
+			status: "read",
+			createdAt: "2026-07-18T09:00:00Z",
+			target: { kind: "session", sessionId: "sess-dead" },
+		};
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) => {
+			const result = notificationQueryResult(status);
+			if (status === "all") {
+				result.data.pages[0].notifications = [...result.data.pages[0].notifications, orphan];
+			}
+			return result;
+		});
+		reapPostMock.mockResolvedValue({ data: { sessions: ["dead-1"], killed: 1 }, error: undefined });
+		renderNotificationCenter();
+		await clickOpen();
+
+		const row = screen.getByText("Orphaned worker processes found").closest("[role='listitem']") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Kill orphaned processes" }));
+		await waitFor(() => expect(reapPostMock).toHaveBeenCalledWith("/api/v1/system/orphan-workers/reap"));
+		await waitFor(() => expect(clearOneMock).toHaveBeenCalledWith(orphan));
+
+		reapPostMock.mockResolvedValue({ data: undefined, error: { body: { code: "PROCESS_SCAN_FAILED" } } });
+		await userEvent.click(within(row).getByRole("button", { name: "Kill orphaned processes" }));
+		await screen.findByText("Could not kill orphaned processes");
 	});
 });

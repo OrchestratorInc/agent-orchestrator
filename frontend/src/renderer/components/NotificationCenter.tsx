@@ -17,6 +17,7 @@ import {
 	MessageSquareDiff,
 	MessageSquareDot,
 	RotateCcw,
+	Trash2,
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -30,6 +31,7 @@ import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
+import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { formatTimeCompact } from "../lib/format-time";
 import { LOCAL_HOST, parseRefKey, refKey, sessionUiKey, type HostId } from "../lib/hosts";
 import {
@@ -311,6 +313,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// cursor. Keep the open-time unread ids highlighted until the panel closes.
 	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
 	const [clearingNotificationIds, setClearingNotificationIds] = useState<Set<string>>(() => new Set());
+	const [reapingKeys, setReapingKeys] = useState<Set<string>>(() => new Set());
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [clearingAll, setClearingAll] = useState(false);
 	const [remoteOlderPages, setRemoteOlderPages] = useState<Record<string, NotificationsPage[]>>({});
@@ -652,6 +655,27 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 	}, [clearCloudOne, t]);
 
+	// Allow on the orphan_workers report: run the reap, then dismiss the row.
+	// The X beside the button stays the deny — nothing is killed, the report
+	// returns on the next daemon start.
+	const allowOrphanReap = useCallback(async (notification: NotificationDTO, hostId: HostId, key: string) => {
+		setActionError(null);
+		setReapingKeys((current) => new Set(current).add(key));
+		try {
+			const { error } = await apiClient.POST("/api/v1/system/orphan-workers/reap");
+			if (error) throw new Error(apiErrorMessage(error, t("notify.orphanReapFailed")));
+			handleClear(notification, hostId);
+		} catch (error: unknown) {
+			setActionError(error instanceof Error ? error.message : t("notify.orphanReapFailed"));
+		} finally {
+			setReapingKeys((current) => {
+				const next = new Set(current);
+				next.delete(key);
+				return next;
+			});
+		}
+	}, [handleClear, t]);
+
 	const loadEarlierOnScroll = (event: React.UIEvent<HTMLDivElement>) => {
 		const list = event.currentTarget;
 		const remaining = list.scrollHeight - list.scrollTop - list.clientHeight;
@@ -845,6 +869,10 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							// a terminated session behind one of these should stay viewable, not
 							// gated behind a restore action.
 							const offerRestore = sessionReady && terminated && notification.type === "needs_input";
+							// The reap endpoint kills THIS machine's processes, so the Allow
+							// button exists only on local rows; a remote host's report is
+							// deny-only here — its own daemon owns the ask on its own bell.
+							const offerAllow = hostId === LOCAL_HOST && notification.type === "orphan_workers";
 							return (
 								<NotificationItem
 									highlighted={highlightedIds.has(key) || notification.status === "unread"}
@@ -853,6 +881,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									onOpenSession={() => openSessionAndDismiss(notification, hostId)}
 									onRestore={() => restoreAndOpen(notification, hostId)}
 									onClear={() => handleClear(notification, hostId)}
+									onAllow={() => void allowOrphanReap(notification, hostId, key)}
+									allowing={reapingKeys.has(key)}
+									offerAllow={offerAllow}
 									clearing={clearingNotificationIds.has(key)}
 									clearDisabled={clearingNotificationIds.has(key) || clearingAll}
 									restoring={restoringSessionId === sessionKey}
@@ -943,6 +974,9 @@ const NotificationItem = memo(function NotificationItem({
 	onOpenSession,
 	onRestore,
 	onClear,
+	onAllow,
+	allowing,
+	offerAllow,
 	hostLabel,
 	projectName,
 	clearing,
@@ -956,9 +990,12 @@ const NotificationItem = memo(function NotificationItem({
 	highlighted: boolean;
 	notification: NotificationDTO;
 	offerRestore: boolean;
+	offerAllow: boolean;
 	onOpenSession: (notification: NotificationDTO) => void;
 	onRestore: (notification: NotificationDTO) => void;
 	onClear: (notification: NotificationDTO) => void;
+	onAllow: (notification: NotificationDTO) => void;
+	allowing: boolean;
 	hostLabel?: string;
 	projectName?: string;
 	clearing: boolean;
@@ -973,6 +1010,10 @@ const NotificationItem = memo(function NotificationItem({
 	const Icon = notificationIcon(notification.type);
 	const sessionId = notification.target.sessionId || notification.sessionId;
 	const canOpenSession = Boolean(sessionId) && sessionsReady && (!terminated || !offerRestore);
+	// The orphan report is the one notification with a decision button: Allow
+	// runs the reap; the X beside it stays the deny. The parent gates the flag
+	// on LOCAL_HOST — the reap endpoint kills this machine's processes, so a
+	// remote host's report must not offer it here.
 	const copy = notificationCopy(notification, sessionName);
 	const titleLink = notificationPRTitleLink(notification, copy.title);
 	const showSessionMeta = Boolean(sessionName) && !notificationMentions(copy, sessionName ?? "");
@@ -1066,6 +1107,28 @@ const NotificationItem = memo(function NotificationItem({
 					<time className="shrink-0 font-mono text-[9px] leading-none text-passive" dateTime={notification.createdAt}>
 						{formatTimeCompact(notification.createdAt)}
 					</time>
+					{offerAllow ? (
+						<Tooltip delayDuration={0}>
+							<TooltipTrigger asChild>
+								<button
+									aria-label={t("notify.orphanAllow")}
+									title=""
+									className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+									disabled={allowing || clearDisabled}
+									onClick={(event) => {
+										event.stopPropagation();
+										onAllow(notification);
+									}}
+									type="button"
+								>
+									<Trash2 className={cn("size-icon-md", allowing && "animate-spin")} aria-hidden="true" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="top">
+								{allowing ? t("notify.orphanKilling") : t("notify.orphanAllow")}
+							</TooltipContent>
+						</Tooltip>
+					) : null}
 					{offerRestore && sessionId ? (
 						<Tooltip delayDuration={0}>
 							<TooltipTrigger asChild>
@@ -1355,6 +1418,8 @@ function notificationIcon(type: string) {
 			return GitMerge;
 		case "pr_closed_unmerged":
 			return GitPullRequestClosed;
+		case "orphan_workers":
+			return Trash2;
 		default:
 			return Bell;
 	}
@@ -1367,6 +1432,7 @@ function notificationIconClass(type: string): string {
 	switch (type) {
 		case "needs_input":
 		case "review_feedback":
+		case "orphan_workers":
 			return "text-warning";
 		case "agent_failed":
 			return "text-error";

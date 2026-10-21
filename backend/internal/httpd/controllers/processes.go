@@ -24,15 +24,24 @@ type ProcessService interface {
 	Disabled() bool
 }
 
+// OrphanReaper executes the user's allow decision behind the bell's
+// orphan_workers notification: a fresh evidence scan, then the kill. Nil
+// answers 501 like every other optional surface.
+type OrphanReaper interface {
+	ReapOrphanWorkers(ctx context.Context) ([]string, error)
+}
+
 // ProcessController owns the /system/processes routes.
 type ProcessController struct {
 	Processes ProcessService
+	Orphans   OrphanReaper
 }
 
 // Register mounts the process routes on the supplied router.
 func (c *ProcessController) Register(r chi.Router) {
 	r.Get("/system/processes", c.list)
 	r.Post("/system/processes/kill", c.kill)
+	r.Post("/system/orphan-workers/reap", c.reapOrphanWorkers)
 }
 
 func processInventoryDTO(inv procinventory.Inventory) ProcessInventoryResponse {
@@ -166,4 +175,20 @@ func (c *ProcessController) kill(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, ProcessKillResponse{Results: results})
+}
+
+func (c *ProcessController) reapOrphanWorkers(w http.ResponseWriter, r *http.Request) {
+	if c.Orphans == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/system/orphan-workers/reap")
+		return
+	}
+	sessions, err := c.Orphans.ReapOrphanWorkers(r.Context())
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "PROCESS_SCAN_FAILED", "Process table scan failed", nil)
+		return
+	}
+	if sessions == nil {
+		sessions = []string{}
+	}
+	envelope.WriteJSON(w, http.StatusOK, OrphanWorkerReapResponse{Sessions: sessions, Killed: len(sessions)})
 }

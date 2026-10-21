@@ -18,6 +18,10 @@ type NotificationIntent struct {
 	// SourceKey makes one terminal fact idempotent across retries and restarts.
 	SourceKey string
 
+	// Detail carries the kind-specific free-text body for intents that report
+	// a computed fact rather than a session/PR transition (orphan_workers).
+	Detail string
+
 	// Enrichment hints. These avoid storage reads on the hot path.
 	SessionDisplayName string
 	PRNumber           int

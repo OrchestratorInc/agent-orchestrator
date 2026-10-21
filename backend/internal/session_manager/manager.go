@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/orphanreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -448,17 +449,30 @@ type Manager struct {
 	modelCatalog interface {
 		Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
 	}
-	lcm                         lifecycleRecorder
-	preview                     PreviewLifecycle
-	browser                     BrowserLifecycle
-	browserCapabilities         BrowserCapabilityIssuer
-	agentAccounts               ports.AgentAccountLaunchEnv
-	accountOverrideMu           sync.Mutex
-	accountOverrides            map[domain.SessionID]string
-	attachments                 *attachmentstore.Store
-	attachmentSuffix            func() (string, error)
-	dataDir                     string
-	runFilePath                 string
+	lcm                 lifecycleRecorder
+	preview             PreviewLifecycle
+	browser             BrowserLifecycle
+	browserCapabilities BrowserCapabilityIssuer
+	agentAccounts       ports.AgentAccountLaunchEnv
+	accountOverrideMu   sync.Mutex
+	accountOverrides    map[domain.SessionID]string
+	attachments         *attachmentstore.Store
+	attachmentSuffix    func() (string, error)
+	dataDir             string
+	runFilePath         string
+	// bootStartedAt pins this incarnation's start: orphan reaping only targets
+	// processes that predate it, because a process spawned by this daemon is
+	// not a leftover of a past one.
+	bootStartedAt time.Time
+	// processTable reads the machine's process table for the orphan scan
+	// (ps-backed in production); tests substitute a fake.
+	processTable func(ctx context.Context) (*orphanreap.Table, time.Time, error)
+	// orphanKiller terminates decided orphan trees; tests substitute a fake.
+	orphanKiller orphanreap.Killer
+	// notifier records the boot's orphan-worker report; nil skips the ask.
+	notifier interface {
+		Notify(context.Context, ports.NotificationIntent) error
+	}
 	clock                       func() time.Time
 	reconcileWorkers            int
 	defaultBranchRefreshTimeout time.Duration
@@ -884,6 +898,11 @@ type Deps struct {
 	// CodexOperationGate is shared with account clients and reviewer launches.
 	// Nil preserves focused-test compatibility by disabling device-global gating.
 	CodexOperationGate ports.CodexOperationGate
+	// Notifier records the boot's orphan-worker report in the bell for the
+	// user's allow/deny decision. Nil (tests, embedders) skips the ask.
+	Notifier interface {
+		Notify(context.Context, ports.NotificationIntent) error
+	}
 	// ReconcileWorkers bounds concurrent live-session recovery during daemon
 	// startup. Values below one preserve the serial default for embedders/tests;
 	// production explicitly opts into a small worker pool.
@@ -978,6 +997,12 @@ func New(d Deps) *Manager {
 		// default produced mixed-timezone timestamps in `ao session get`.
 		m.clock = func() time.Time { return time.Now().UTC() }
 	}
+	// Pinned after the clock defaults so tests with an injected clock see the
+	// same reference time the orphan scan compares process ages against.
+	m.bootStartedAt = m.clock()
+	m.processTable = snapshotProcessTable
+	m.orphanKiller = orphanreap.NewKiller()
+	m.notifier = d.Notifier
 	m.statusRecoveries = make(map[domain.SessionID]statusRecovery)
 	m.statusVerificationLimit = statusVerificationLimit
 	if m.reconcileWorkers < 1 {
@@ -4340,14 +4365,10 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		m.endAgentResume(rec.ID)
 	}
 	m.reconcileLivePass(ctx, recs)
-	for _, rec := range recs {
-		if !rec.IsTerminated {
-			continue
-		}
-		if err := m.reconcileReap(ctx, rec); err != nil {
-			m.logger.Error("reconcile: reap pass failed, skipping", "sessionID", rec.ID, "error", err)
-		}
+	if err := m.ReapTerminated(ctx); err != nil {
+		m.logger.Error("reconcile: reap pass failed, skipping", "error", err)
 	}
+	m.NotifyOrphanWorkers(ctx)
 	if err := m.deliverAllTransitionMessages(ctx); err != nil {
 		m.logger.Error("reconcile: transition-message delivery deferred for retry", "error", err)
 	}

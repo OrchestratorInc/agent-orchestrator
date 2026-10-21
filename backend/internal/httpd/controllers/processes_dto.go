@@ -109,3 +109,11 @@ type ProcessKillResultDTO struct {
 type ProcessKillResponse struct {
 	Results []ProcessKillResultDTO `json:"results"`
 }
+
+// OrphanWorkerReapResponse reports the trees the allow decision removed. The
+// sessions were re-derived from a fresh snapshot; an empty list means nothing
+// provable remained (the normal second click).
+type OrphanWorkerReapResponse struct {
+	Sessions []string `json:"sessions"`
+	Killed   int      `json:"killed"`
+}
