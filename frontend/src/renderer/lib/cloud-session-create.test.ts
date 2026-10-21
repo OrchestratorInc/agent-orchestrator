@@ -22,17 +22,19 @@ describe("cloudDefaultInterfaceMode", () => {
 });
 
 describe("createCloudSession", () => {
+	const options = { idempotencyKey: "create-request-1", signal: new AbortController().signal };
+
 	it("sends the interface with the create", async () => {
 		const createSession = vi.fn().mockResolvedValue({ session: { id: "s1" } });
-		await createCloudSession({ createSession }, "org-1", { ...body, interfaceMode: "chat" });
+		await createCloudSession({ createSession }, "org-1", { ...body, interfaceMode: "chat" }, options);
 		expect(createSession).toHaveBeenCalledTimes(1);
-		expect(createSession).toHaveBeenCalledWith("org-1", { ...body, interfaceMode: "chat" });
+		expect(createSession).toHaveBeenCalledWith("org-1", { ...body, interfaceMode: "chat" }, options);
 	});
 
 	it("sends the request an older desktop sent when there is no interface to ask for", async () => {
 		const createSession = vi.fn().mockResolvedValue({ session: { id: "s1" } });
-		await createCloudSession({ createSession }, "org-1", body);
-		expect(createSession).toHaveBeenCalledWith("org-1", body);
+		await createCloudSession({ createSession }, "org-1", body, options);
+		expect(createSession).toHaveBeenCalledWith("org-1", body, options);
 		expect(createSession.mock.calls[0]?.[1]).not.toHaveProperty("interfaceMode");
 		expect(createSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
@@ -45,11 +47,11 @@ describe("createCloudSession", () => {
 		const createSession = vi.fn()
 			.mockRejectedValueOnce(new CloudCpError("The request body is invalid.", { status: 400, code: "invalid_request" }))
 			.mockResolvedValueOnce({ session: { id: "s1" } });
-		await expect(createCloudSession({ createSession }, "org-1", { ...body, ...fields })).resolves.toEqual({ session: { id: "s1" } });
-		expect(createSession).toHaveBeenNthCalledWith(1, "org-1", { ...body, ...fields });
+		await expect(createCloudSession({ createSession }, "org-1", { ...body, ...fields }, options)).resolves.toEqual({ session: { id: "s1" } });
+		expect(createSession).toHaveBeenNthCalledWith(1, "org-1", { ...body, ...fields }, options);
 		// The prompt stays: an older control plane starts the session in the
 		// terminal with the prompt on the agent's command line.
-		expect(createSession).toHaveBeenNthCalledWith(2, "org-1", body);
+		expect(createSession).toHaveBeenNthCalledWith(2, "org-1", body, options);
 	});
 
 	it("does not retry any other refusal", async () => {

@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
 	cloudChatHarnesses: ["claude-code", "codex", "cursor"],
+	cloudOfferingSource: "offering" as "offering" | undefined,
+	cloudOfferingError: false,
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -96,7 +98,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses }),
+	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, source: h.cloudOfferingSource, isError: h.cloudOfferingError }),
 }));
 
 import { TaskComposer } from "./TaskComposer";
@@ -155,6 +157,8 @@ afterEach(() => {
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
 	h.cloudChatHarnesses = ["claude-code", "codex", "cursor"];
+	h.cloudOfferingSource = "offering";
+	h.cloudOfferingError = false;
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -1180,6 +1184,153 @@ describe("TaskComposer", () => {
 		expect(h.post).not.toHaveBeenCalled();
 	});
 
+	describe("Cloud creation readiness and retries", () => {
+		beforeEach(() => {
+			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+			h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+				? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code"] } }
+				: { data: { agent: "claude-code", selectionMode: "catalog", models: [{ id: "claude-sonnet-test", label: "Sonnet", isDefault: true, efforts: ["low", "medium", "high"] }], allowCustom: true } });
+		});
+
+		it("waits for settings before starting a Cloud task in the saved Chat mode", async () => {
+			let resolveSettings!: (value: unknown) => void;
+			const pending = new Promise((resolve) => { resolveSettings = resolve; });
+			const get = h.get.getMockImplementation()!;
+			h.get.mockImplementation((path: string) => path === "/api/v1/settings" ? pending : get(path));
+			h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			expect(startTask()).toBeDisabled();
+			fireEvent.click(startTask());
+			expect(h.cloudCreateSession).not.toHaveBeenCalled();
+			await act(async () => resolveSettings({ data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code"] } }));
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }), { idempotencyKey: expect.any(String) }));
+		});
+
+		it("shows a settings failure and recovers instead of silently using Terminal", async () => {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
+			await queryClient.fetchQuery({ queryKey: ["settings"], queryFn: async () => { throw { message: "Settings unavailable" }; } }).catch(() => undefined);
+			render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			expect(await screen.findByRole("alert")).toHaveTextContent("Settings unavailable");
+			expect(startTask()).toBeDisabled();
+			fireEvent.click(startTask());
+			expect(h.cloudCreateSession).not.toHaveBeenCalled();
+			act(() => queryClient.setQueryData(["settings"], { defaultSessionMode: "chat", chatHarnesses: ["claude-code"] }));
+			await waitForTaskReady();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		});
+
+		it("does not infer a Terminal fallback from pending Cloud capabilities", async () => {
+			h.cloudOfferingSource = undefined;
+			h.cloudChatHarnesses = [];
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			await screen.findByRole("button", { name: "Effort" });
+			expect(startTask()).toBeDisabled();
+			fireEvent.click(startTask());
+			expect(h.cloudCreateSession).not.toHaveBeenCalled();
+			h.cloudOfferingSource = "offering";
+			h.cloudChatHarnesses = ["claude-code"];
+			view.rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			await waitForTaskReady();
+			h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+			fireEvent.click(startTask());
+			await waitFor(() => expect(h.cloudCreateSession.mock.calls[0]?.[1].interfaceMode).toBe("chat"));
+		});
+
+		it("shows a Cloud capability failure and keeps Start disabled", async () => {
+			h.cloudOfferingSource = undefined;
+			h.cloudOfferingError = true;
+			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load Cloud capabilities. Please try again.");
+			expect(startTask()).toBeDisabled();
+			expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		});
+
+		it("keeps cached Cloud capabilities usable after a background refresh fails", async () => {
+			h.cloudOfferingError = true;
+			h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			await waitForTaskReady();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }), { idempotencyKey: expect.any(String) }));
+		});
+
+		it.each([false, true])("reuses the create key after a lost response without duplicating sessions (legacy: %s)", async (legacy) => {
+			const sessions = new Map<string, string>();
+			let loseResponse = true;
+			h.cloudCreateSession.mockImplementation(async (_org, body, options) => {
+				if (legacy && body.interfaceMode) throw new CloudCpError("Unknown field", { status: 400, code: "invalid_request" });
+				const key = options?.idempotencyKey ?? globalThis.crypto.randomUUID();
+				if (!sessions.has(key)) sessions.set(key, `session-${sessions.size + 1}`);
+				if (loseResponse) {
+					loseResponse = false;
+					throw new Error("Response lost");
+				}
+				return { session: { id: sessions.get(key) } };
+			});
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			await screen.findByText("Response lost");
+			expect(onCreated).not.toHaveBeenCalled();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
+			expect(sessions.size).toBe(1);
+			const retryKeys = h.cloudCreateSession.mock.calls.map((call) => call[2]?.idempotencyKey);
+			expect(retryKeys[0]).toEqual(expect.any(String));
+			expect(new Set(retryKeys).size).toBe(1);
+			fireEvent.change(task(), { target: { value: "A different request" } });
+			fireEvent.click(startTask());
+			await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-2"));
+			expect(sessions.size).toBe(2);
+			expect(h.cloudCreateSession.mock.lastCall?.[2].idempotencyKey).not.toBe(retryKeys[0]);
+		});
+
+		it("does not send another create while a response is pending", async () => {
+			let resolveCreate!: (value: unknown) => void;
+			h.cloudCreateSession.mockReturnValue(new Promise((resolve) => { resolveCreate = resolve; }));
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(1));
+			const starting = screen.getByRole("button", { name: "Starting..." });
+			expect(starting).toBeDisabled();
+			fireEvent.click(starting);
+			expect(h.cloudCreateSession).toHaveBeenCalledTimes(1);
+			await act(async () => resolveCreate({ session: { id: "session-1" } }));
+			expect(onCreated).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not gate local creation on Cloud capabilities or pending settings", async () => {
+			h.cloudOfferingSource = undefined;
+			h.cloudOfferingError = true;
+			const get = h.get.getMockImplementation()!;
+			h.get.mockImplementation((path: string) => path === "/api/v1/settings" ? new Promise(() => {}) : path === "/api/v1/projects/{id}"
+				? { data: { status: "ok", project: { id: "project-local", config: { worker: { agent: "claude-code" } } } } }
+				: get(path));
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/orchestrators/delegate" ? { data: { workerId: "local-session" } } : { data: {} });
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId="project-local" onCreated={onCreated} /></Wrap>);
+			fireEvent.change(task(), { target: { value: "Do local work" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(onCreated).toHaveBeenCalledWith("local-session"));
+			expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		});
+	});
+
 	it("starts a cloud task in the default session mode, as a local task does", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
@@ -1190,7 +1341,7 @@ describe("TaskComposer", () => {
 		await waitForTaskReady();
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("starts a cloud task in the terminal when the control plane has no Chat for its agent, as local does", async () => {
@@ -1204,7 +1355,7 @@ describe("TaskComposer", () => {
 		await waitForTaskReady();
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("offers to create a refused cloud Chat task in the terminal, as local does", async () => {
@@ -1219,7 +1370,8 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
 		fireEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[1]?.[2].idempotencyKey).not.toBe(h.cloudCreateSession.mock.calls[0]?.[2].idempotencyKey);
 	});
 
 	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
@@ -1236,12 +1388,12 @@ describe("TaskComposer", () => {
 		await userEvent.keyboard("{Escape}");
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" }), { idempotencyKey: expect.any(String) }));
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		fireEvent.change(task(), { target: { value: "Another task" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("starts a cloud task in the terminal when that is the default", async () => {
@@ -1257,7 +1409,7 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
 		// A task carries the interface it starts in, never the default an
 		// orchestrator create carries.
-		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }));
+		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) });
 		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
 

@@ -201,7 +201,7 @@ export function TaskComposer({
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
 					...(input.mode ? { interfaceMode: input.mode } : {}),
-				});
+				}, { idempotencyKey: input.clientRequestId });
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -555,7 +555,9 @@ export function TaskComposer({
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
 	// local project's come from the daemon.
 	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
+	const cloudCapabilitiesReady = cloudOffering.source !== undefined;
 	const requiresTuiFallback =
+		(!isCloudProject || cloudCapabilitiesReady) &&
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!(chatHarnesses ?? []).includes(selectedAgent);
@@ -588,7 +590,11 @@ export function TaskComposer({
 		(!isStandalone || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
+		(!isCloudProject || (settings !== undefined && cloudCapabilitiesReady)) &&
 		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
+	const cloudLoadError = !isCloudProject ? undefined : settingsError ?? (!cloudCapabilitiesReady && cloudOffering.isError
+		? t("newTask.cloudCapabilitiesUnavailable", { defaultValue: "Unable to load Cloud capabilities. Please try again." })
+		: undefined);
 	const remoteLoadError = !hostId ? undefined : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
@@ -816,7 +822,7 @@ export function TaskComposer({
 			}}
 			submission={{
 				showFallbackAction: fallbackAction !== undefined,
-				error: error ?? remoteLoadError ?? undefined,
+				error: error ?? cloudLoadError ?? remoteLoadError ?? undefined,
 				isSubmitting,
 				modelWarning,
 				onFallbackAction: (brief) =>
