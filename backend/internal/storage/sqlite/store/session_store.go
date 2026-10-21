@@ -1280,8 +1280,8 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// monotonic reading survive into the column. Rows written from a local-zone
 	// clock ("… +0700 +07 m=+995.1") then stop comparing as timestamps against
 	// UTC rows, and activity_last_at is compared directly in SQL — the
-	// agent-switch source-stop predicate is one such comparison, and a mismatched
-	// row silently matches zero rows there. Normalize every writer's value here
+	// activity predicates are one such comparison, and a mismatched row silently
+	// matches zero rows there. Normalize every writer's value here
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a

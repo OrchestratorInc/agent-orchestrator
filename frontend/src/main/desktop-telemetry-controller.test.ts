@@ -3,34 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { telemetryPolicyRetryable, type TelemetryPolicySnapshot } from "../shared/telemetry-policy";
-import { DaemonTelemetryPolicyClient } from "./daemon-telemetry-policy-client";
 import { DesktopTelemetryController, telemetryRetryDelayMs } from "./desktop-telemetry-controller";
 import { nodeTelemetryPolicyFileSystem, TelemetryPolicyAuthority } from "./telemetry-policy-file";
 
 describe("DesktopTelemetryController", () => {
-	it("cancels visibility before disable and advances it with every trusted generation", async () => {
-		const authority = new AuthorityFake(true, "generation-on");
-		const visibility = { setPolicy: vi.fn(), disableAndDrain: vi.fn().mockResolvedValue(undefined), closeAndDrain: vi.fn().mockResolvedValue(undefined) };
-		const transport = { closeAndDrain: vi.fn(), capture: vi.fn(), clearCache: vi.fn() };
-		const daemon = {
-			prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "generation-on", eventsEnabled: false, gateDrained: true, purgeConfirmed: false }),
-			applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })),
-		};
-		const controller = new DesktopTelemetryController({ authority, daemon, transportFactory: async () => transport, environmentAllowsEvents: true, productionEnabled: true, visibility });
-		await controller.initialize();
-		await controller.setEventsEnabled(false, "generation-on");
-		expect(visibility.setPolicy).toHaveBeenCalledWith(false, "generation-on");
-		expect(visibility.setPolicy).toHaveBeenLastCalledWith(false, "generation-1");
-		expect(visibility.setPolicy.mock.invocationCallOrder[1]).toBeLessThan(transport.closeAndDrain.mock.invocationCallOrder[0]);
-		await controller.close();
-		expect(visibility.closeAndDrain).toHaveBeenCalled();
-	});
-
 	it("keeps opt-out cleanup pending when any desktop purge fails", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
 		const transport = { closeAndDrain: vi.fn(), capture: vi.fn(), clearCache: vi.fn().mockRejectedValue(new Error("cache purge failed")) };
-		const daemon = { prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "generation-on", eventsEnabled: false, gateDrained: true, purgeConfirmed: false }), applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })) };
-		const controller = new DesktopTelemetryController({ authority, daemon, transportFactory: async () => transport, environmentAllowsEvents: true, productionEnabled: true, clearRendererQueues: vi.fn().mockRejectedValue(new Error("queue purge failed")) });
+		const controller = new DesktopTelemetryController({ authority, transportFactory: async () => transport, environmentAllowsEvents: true, productionEnabled: true, clearRendererQueues: vi.fn().mockRejectedValue(new Error("queue purge failed")) });
 		await controller.initialize();
 		const result = await controller.setEventsEnabled(false, "generation-on");
 		expect(result).toMatchObject({ eventsEnabled: false, state: "cleanup_pending", acknowledged: false, reason: "cleanup_failed" });
@@ -39,8 +19,7 @@ describe("DesktopTelemetryController", () => {
 	it("fails closed in memory when the durable off replacement fails", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
 		authority.failWrites = true;
-		const daemon = { prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "generation-on", eventsEnabled: false, gateDrained: true, purgeConfirmed: false }), applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })) };
-		const controller = new DesktopTelemetryController({ authority, daemon, transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }), environmentAllowsEvents: true, productionEnabled: true });
+		const controller = new DesktopTelemetryController({ authority, transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }), environmentAllowsEvents: true, productionEnabled: true });
 		await controller.initialize();
 		await expect(controller.setEventsEnabled(false, "generation-on")).rejects.toThrow("write failed");
 		expect(controller.snapshot()).toMatchObject({ eventsEnabled: false, acknowledged: false, state: "cleanup_failed" });
@@ -75,13 +54,8 @@ describe("DesktopTelemetryController", () => {
 			});
 			const transport = { closeAndDrain: vi.fn(), capture: vi.fn(), clearCache: vi.fn() };
 			const clearRendererQueues = vi.fn();
-			const daemon = {
-				prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: enabledGeneration, eventsEnabled: false, gateDrained: true, purgeConfirmed: false }),
-				applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })),
-			};
 			const controller = new DesktopTelemetryController({
 				authority,
-				daemon,
 				transportFactory: async () => transport,
 				environmentAllowsEvents: true,
 				productionEnabled: true,
@@ -105,7 +79,6 @@ describe("DesktopTelemetryController", () => {
 				state: "applied",
 			});
 			expect(authority.snapshot()).toMatchObject({ consentGeneration: pending.consentGeneration, acknowledged: true });
-			expect(daemon.applyPolicy).toHaveBeenLastCalledWith(pending.consentGeneration, false);
 			expect(transport.clearCache).toHaveBeenCalledOnce();
 			expect(clearRendererQueues).toHaveBeenCalledOnce();
 		} finally {
@@ -113,114 +86,63 @@ describe("DesktopTelemetryController", () => {
 		}
 	});
 
-	it("writes one durable off generation even when prepare is unavailable and remains pending without purge acknowledgement", async () => {
+	it("drains the transport before writing one durable off generation, then purges the desktop cache", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
 		const transport = { closeAndDrain: vi.fn(), capture: vi.fn(), clearCache: vi.fn() };
-		const daemon = { prepareDisable: vi.fn().mockRejectedValue(new Error("offline")), applyPolicy: vi.fn().mockResolvedValueOnce({ status: "applied", consentGeneration: "generation-on", eventsEnabled: true, gateDrained: false, purgeConfirmed: false }).mockRejectedValue(new Error("offline")) };
-		const controller = new DesktopTelemetryController({ authority, daemon, transportFactory: async () => transport, environmentAllowsEvents: true, productionEnabled: true });
+		const controller = new DesktopTelemetryController({ authority, transportFactory: async () => transport, environmentAllowsEvents: true, productionEnabled: true });
 		await controller.initialize();
 		const result = await controller.setEventsEnabled(false, "generation-on");
 		expect(authority.writes).toEqual([false]);
 		expect(transport.closeAndDrain.mock.invocationCallOrder[0]).toBeLessThan(authority.writeSpy.mock.invocationCallOrder[0]);
-		expect(result).toMatchObject({ eventsEnabled: false, state: "cleanup_pending", acknowledged: false });
+		expect(authority.writeSpy.mock.invocationCallOrder[0]).toBeLessThan(transport.clearCache.mock.invocationCallOrder[0]);
+		expect(result).toMatchObject({ eventsEnabled: false, consentGeneration: "generation-1", state: "applied", acknowledged: true });
 	});
 
 	it("rejects stale renderer generations and broadcasts disable then enable to the same subscriber", async () => {
 		const authority = new AuthorityFake(false, "generation-off");
-		const daemon = {
-			prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "generation-off", eventsEnabled: false, gateDrained: true, purgeConfirmed: false }),
-			applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })),
-		};
 		const views: string[] = [];
-		const controller = new DesktopTelemetryController({ authority, daemon, transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }), environmentAllowsEvents: true, productionEnabled: true, broadcast: (view) => views.push(view.consentGeneration) });
+		const controller = new DesktopTelemetryController({ authority, transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }), environmentAllowsEvents: true, productionEnabled: true, broadcast: (view) => views.push(view.consentGeneration) });
 		await controller.initialize();
 		await expect(controller.setEventsEnabled(true, "stale")).rejects.toThrow("stale");
+		expect(authority.writes).toEqual([]);
 		await controller.setEventsEnabled(true, "generation-off");
 		expect(views.at(-1)).toBe("generation-1");
 	});
 
-	it("rolls a durable enablement back off when the daemon applies it but its response is lost", async () => {
-		const authority = new AuthorityFake(false, "generation-off");
-		const visibility = { setPolicy: vi.fn(), disableAndDrain: vi.fn().mockResolvedValue(undefined), closeAndDrain: vi.fn().mockResolvedValue(undefined) };
-		let daemonEnabled = false;
-		const daemon = {
-			prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "generation-1", eventsEnabled: false, gateDrained: true, purgeConfirmed: false }),
-			applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => {
-				daemonEnabled = enabled;
-				if (enabled) throw new Error("daemon response lost");
-				return { status: "applied", consentGeneration: generation, eventsEnabled: false, gateDrained: true, purgeConfirmed: true } as const;
-			}),
-		};
-		const controller = new DesktopTelemetryController({
-			authority,
-			daemon,
-			transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
-			environmentAllowsEvents: true,
-			productionEnabled: true,
-			visibility,
-		});
-		await controller.initialize();
-
-		await expect(controller.setEventsEnabled(true, "generation-off")).rejects.toThrow("daemon response lost");
-
-		expect(authority.writes).toEqual([true, false]);
-		expect(daemon.applyPolicy.mock.calls).toEqual([
-			["generation-off", false],
-			["generation-1", true],
-			["generation-2", false],
-		]);
-		expect(daemonEnabled).toBe(false);
-		expect(controller.snapshot()).toMatchObject({ eventsEnabled: false, consentGeneration: "generation-2", acknowledged: true, state: "applied" });
-		expect(visibility.setPolicy).toHaveBeenLastCalledWith(false, "generation-2");
-	});
-
-	it("rolls a daemon-acknowledged enablement back off when the main transport cannot start", async () => {
+	it("rolls a durable enablement back off when the main transport cannot start", async () => {
 		const authority = new AuthorityFake(false, "generation-off");
 		const transportFactory = vi.fn().mockRejectedValue(new Error("transport start failed"));
-		let daemonEnabled = false;
-		const daemon = {
-			prepareDisable: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "generation-1", eventsEnabled: false, gateDrained: true, purgeConfirmed: false }),
-			applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => {
-				daemonEnabled = enabled;
-				return { status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled } as const;
-			}),
-		};
-		const controller = new DesktopTelemetryController({ authority, daemon, transportFactory, environmentAllowsEvents: true, productionEnabled: true });
+		const controller = new DesktopTelemetryController({ authority, transportFactory, environmentAllowsEvents: true, productionEnabled: true });
 		await controller.initialize();
 
 		await expect(controller.setEventsEnabled(true, "generation-off")).rejects.toThrow("transport start failed");
 
 		expect(authority.writes).toEqual([true, false]);
-		expect(daemon.applyPolicy.mock.calls).toEqual([
-			["generation-off", false],
-			["generation-1", true],
-			["generation-2", false],
-		]);
-		expect(daemonEnabled).toBe(false);
 		expect(controller.snapshot()).toMatchObject({ eventsEnabled: false, consentGeneration: "generation-2", acknowledged: true, state: "applied" });
+		expect(controller.capture({ consentGeneration: "generation-2", kind: "message", message: "not sent" })).toBe(false);
 	});
 
-	it("settles a saved opt-in in one request when the release gate refuses enablement", async () => {
+	it("settles a saved opt-in as release-blocked, without a transport or retries, when the release gate refuses enablement", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
-		const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => new Response(JSON.stringify({
-			status: "applied",
-			consentGeneration: JSON.parse(String(init.body)).consentGeneration,
-			eventsEnabled: false, gateDrained: true, purgeConfirmed: true,
-		}), { status: 200 }));
-		const daemon = new DaemonTelemetryPolicyClient(() => "http://127.0.0.1:3001", fetcher);
-		const applyPolicy = fetcher;
+		const transportFactory = vi.fn().mockResolvedValue({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} });
+		const broadcast = vi.fn();
 		const controller = new DesktopTelemetryController({
-			authority, daemon,
-			transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
+			authority,
+			transportFactory,
 			environmentAllowsEvents: true, productionEnabled: false,
+			broadcast,
 		});
 
 		await controller.initialize();
 		expect(controller.snapshot()).toMatchObject({ state: "applied", reason: "release_blocked", eventsEnabled: true, acknowledged: true });
-		expect(applyPolicy).toHaveBeenCalledTimes(1);
+		expect(transportFactory).not.toHaveBeenCalled();
+		expect(controller.capture({ consentGeneration: "generation-on", kind: "message", message: "not sent" })).toBe(false);
+		expect(broadcast).toHaveBeenCalledTimes(1);
 
 		for (let i = 0; i < 60; i += 1) await controller.retryPendingCleanup();
-		expect(applyPolicy).toHaveBeenCalledTimes(1);
+		expect(broadcast).toHaveBeenCalledTimes(1);
+		expect(transportFactory).not.toHaveBeenCalled();
+		expect(authority.writes).toEqual([]);
 	});
 
 	it("stays terminal on a platform without durable policy replacement", async () => {
@@ -229,9 +151,8 @@ describe("DesktopTelemetryController", () => {
 			packagedDefault: false,
 			platform: "win32",
 		});
-		const daemon = { prepareDisable: vi.fn(), applyPolicy: vi.fn() };
 		const controller = new DesktopTelemetryController({
-			authority, daemon,
+			authority,
 			transportFactory: async () => null,
 			environmentAllowsEvents: true, productionEnabled: false,
 		});
@@ -242,23 +163,6 @@ describe("DesktopTelemetryController", () => {
 		await controller.retryPendingCleanup();
 		expect(controller.snapshot()).toMatchObject({ state: "cleanup_failed", reason: "durability_unsupported" });
 		expect(telemetryPolicyRetryable(controller.snapshot())).toBe(false);
-		expect(daemon.applyPolicy).not.toHaveBeenCalled();
-	});
-
-	it("keeps refusing an acknowledgement whose generation does not match", async () => {
-		const authority = new AuthorityFake(true, "generation-on");
-		const daemon = {
-			prepareDisable: vi.fn(),
-			applyPolicy: vi.fn().mockResolvedValue({ status: "applied", consentGeneration: "some-other-generation", eventsEnabled: false, gateDrained: true, purgeConfirmed: true }),
-		};
-		const controller = new DesktopTelemetryController({
-			authority, daemon,
-			transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
-			environmentAllowsEvents: true, productionEnabled: false,
-		});
-
-		await controller.initialize();
-		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending", reason: "daemon_cleanup_pending", acknowledged: false });
 	});
 
 	it("asks again for an opt-in given while the release gate was closed once a release opens it", async () => {
@@ -271,33 +175,24 @@ describe("DesktopTelemetryController", () => {
 				consent_generation: gatedGeneration,
 				updated_at: "2026-08-28T10:15:30.000Z",
 			})}\n`, { mode: 0o600 });
-			const boot = () => {
-				const daemon = {
-					prepareDisable: vi.fn(),
-					applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })),
-				};
-				const controller = new DesktopTelemetryController({
-					authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux", productionEnabled: true }),
-					daemon,
-					transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
-					environmentAllowsEvents: true, productionEnabled: true,
-				});
-				return { controller, daemon };
-			};
+			const boot = () => new DesktopTelemetryController({
+				authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux", productionEnabled: true }),
+				transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
+				environmentAllowsEvents: true, productionEnabled: true,
+			});
 
 			const first = boot();
-			await first.controller.initialize();
-			expect(first.controller.snapshot()).toMatchObject({ eventsEnabled: false, consentRenewalRequired: true, state: "applied", acknowledged: true, consentGeneration: gatedGeneration });
-			expect(first.daemon.applyPolicy).toHaveBeenCalledWith(gatedGeneration, false);
-			expect(first.controller.capture({ consentGeneration: gatedGeneration, kind: "message", message: "not sent" })).toBe(false);
+			await first.initialize();
+			expect(first.snapshot()).toMatchObject({ eventsEnabled: false, consentRenewalRequired: true, state: "applied", acknowledged: true, consentGeneration: gatedGeneration });
+			expect(first.capture({ consentGeneration: gatedGeneration, kind: "message", message: "not sent" })).toBe(false);
 
-			const optedIn = await first.controller.setEventsEnabled(true, gatedGeneration);
+			const optedIn = await first.setEventsEnabled(true, gatedGeneration);
 			expect(optedIn).toMatchObject({ eventsEnabled: true, consentRenewalRequired: false, state: "applied" });
 
 			const second = boot();
-			await second.controller.initialize();
-			expect(second.controller.snapshot()).toMatchObject({ eventsEnabled: true, state: "applied", consentGeneration: optedIn.consentGeneration });
-			expect(second.daemon.applyPolicy).toHaveBeenCalledWith(optedIn.consentGeneration, true);
+			await second.initialize();
+			expect(second.snapshot()).toMatchObject({ eventsEnabled: true, state: "applied", consentGeneration: optedIn.consentGeneration });
+			expect(second.capture({ consentGeneration: optedIn.consentGeneration, kind: "message", message: "sent" })).toBe(true);
 		} finally {
 			await rm(dataDir, { recursive: true, force: true });
 		}
@@ -315,10 +210,6 @@ describe("DesktopTelemetryController", () => {
 			})}\n`, { mode: 0o600 });
 			const boot = () => new DesktopTelemetryController({
 				authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux", productionEnabled: true }),
-				daemon: {
-					prepareDisable: vi.fn().mockImplementation(async () => ({ status: "applied", consentGeneration: gatedGeneration, eventsEnabled: false, gateDrained: true, purgeConfirmed: false })),
-					applyPolicy: vi.fn().mockImplementation(async (generation: string, enabled: boolean) => ({ status: "applied", consentGeneration: generation, eventsEnabled: enabled, gateDrained: !enabled, purgeConfirmed: !enabled })),
-				},
 				transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
 				environmentAllowsEvents: true, productionEnabled: true,
 			});
@@ -338,23 +229,21 @@ describe("DesktopTelemetryController", () => {
 		}
 	});
 
-	it("paces retries against an unreachable daemon instead of once a second", async () => {
+	it("paces retries of a desktop purge that keeps failing instead of once a second", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
 		let clock = 0;
 		const attempts: number[] = [];
-		const daemon = {
-			prepareDisable: vi.fn(),
-			applyPolicy: vi.fn().mockImplementation(async () => { attempts.push(clock); throw new Error("connect ECONNREFUSED 127.0.0.1"); }),
-		};
 		const controller = new DesktopTelemetryController({
-			authority, daemon,
+			authority,
 			transportFactory: async () => null,
 			environmentAllowsEvents: true, productionEnabled: false,
 			now: () => clock,
+			clearRendererQueues: vi.fn().mockImplementation(async () => { attempts.push(clock); throw new Error("queue purge failed"); }),
 		});
 
 		await controller.initialize();
-		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending", reason: "daemon_cleanup_pending" });
+		await controller.setEventsEnabled(false, "generation-on");
+		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending", reason: "cleanup_failed" });
 		expect(telemetryPolicyRetryable(controller.snapshot())).toBe(true);
 		attempts.length = 0;
 
@@ -362,36 +251,7 @@ describe("DesktopTelemetryController", () => {
 
 		expect(attempts.slice(0, 6)).toEqual([1_000, 3_000, 7_000, 15_000, 31_000, 63_000]);
 		expect(attempts.length).toBeLessThan(70);
-		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending", reason: "daemon_cleanup_pending" });
-	});
-
-	it("settles as soon as the daemon first becomes ready instead of backing off while it boots", async () => {
-		const authority = new AuthorityFake(true, "generation-on");
-		let clock = 0;
-		let daemonReady = false;
-		const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => new Response(JSON.stringify({
-			status: "applied",
-			consentGeneration: JSON.parse(String(init.body)).consentGeneration,
-			eventsEnabled: false, gateDrained: true, purgeConfirmed: true,
-		}), { status: 200 }));
-		const controller = new DesktopTelemetryController({
-			authority,
-			daemon: new DaemonTelemetryPolicyClient(() => daemonReady ? "http://127.0.0.1:3001" : null, fetcher),
-			transportFactory: async () => null,
-			environmentAllowsEvents: true, productionEnabled: false,
-			now: () => clock,
-		});
-
-		await controller.initialize();
-		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending" });
-
-		for (clock = 1_000; clock <= 20_000; clock += 1_000) await controller.retryPendingCleanup();
-		daemonReady = true;
-		clock = 21_000;
-		await controller.retryPendingCleanup();
-
-		expect(controller.snapshot()).toMatchObject({ state: "applied", reason: "release_blocked" });
-		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending", reason: "cleanup_failed" });
 	});
 
 	it("measures the retry delay from when a hung attempt gives up, not from when it started", async () => {
@@ -399,23 +259,21 @@ describe("DesktopTelemetryController", () => {
 		let clock = 0;
 		const starts: number[] = [];
 		const ends: number[] = [];
-		const daemon = {
-			prepareDisable: vi.fn(),
-			applyPolicy: vi.fn().mockImplementation(async () => {
+		const controller = new DesktopTelemetryController({
+			authority,
+			transportFactory: async () => null,
+			environmentAllowsEvents: true, productionEnabled: false,
+			now: () => clock,
+			clearRendererQueues: vi.fn().mockImplementation(async () => {
 				starts.push(clock);
 				clock += 2_000;
 				ends.push(clock);
 				throw new Error("This operation was aborted");
 			}),
-		};
-		const controller = new DesktopTelemetryController({
-			authority, daemon,
-			transportFactory: async () => null,
-			environmentAllowsEvents: true, productionEnabled: false,
-			now: () => clock,
 		});
 
 		await controller.initialize();
+		await controller.setEventsEnabled(false, "generation-on");
 		starts.length = 0;
 		ends.length = 0;
 
@@ -428,35 +286,33 @@ describe("DesktopTelemetryController", () => {
 		expect(idleGaps.slice(0, 3)).toEqual([2_000, 4_000, 8_000]);
 	});
 
-	it("settles as soon as a transiently unreachable daemon answers again", async () => {
+	it("settles as soon as a transiently failing desktop purge succeeds again", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
 		let clock = 0;
-		let reachable = false;
-		const daemon = {
-			prepareDisable: vi.fn(),
-			applyPolicy: vi.fn().mockImplementation(async (generation: string) => {
-				if (!reachable) throw new Error("connect ECONNREFUSED 127.0.0.1");
-				return { status: "applied", consentGeneration: generation, eventsEnabled: false, gateDrained: true, purgeConfirmed: true };
-			}),
-		};
+		let purgeable = false;
+		const clearRendererQueues = vi.fn().mockImplementation(async () => {
+			if (!purgeable) throw new Error("queue purge failed");
+		});
 		const controller = new DesktopTelemetryController({
-			authority, daemon,
+			authority,
 			transportFactory: async () => null,
 			environmentAllowsEvents: true, productionEnabled: false,
 			now: () => clock,
+			clearRendererQueues,
 		});
 
 		await controller.initialize();
+		await controller.setEventsEnabled(false, "generation-on");
 		for (clock = 1_000; clock <= 20_000; clock += 1_000) await controller.retryPendingCleanup();
 		expect(controller.snapshot()).toMatchObject({ state: "cleanup_pending" });
 
-		reachable = true;
+		purgeable = true;
 		for (clock = 21_000; clock <= 90_000; clock += 1_000) await controller.retryPendingCleanup();
-		expect(controller.snapshot()).toMatchObject({ state: "applied", reason: "release_blocked" });
+		expect(controller.snapshot()).toMatchObject({ state: "applied", reason: "release_blocked", eventsEnabled: false, acknowledged: true });
 
-		const settled = daemon.applyPolicy.mock.calls.length;
+		const settled = clearRendererQueues.mock.calls.length;
 		for (clock = 91_000; clock <= 150_000; clock += 1_000) await controller.retryPendingCleanup();
-		expect(daemon.applyPolicy).toHaveBeenCalledTimes(settled);
+		expect(clearRendererQueues).toHaveBeenCalledTimes(settled);
 	});
 
 });

@@ -101,10 +101,13 @@ function worstWindow(
 export function ContextMeter({
 	usage,
 	rateLimits,
+	compactsAt,
 	className,
 }: {
 	usage?: ConversationUsage;
 	rateLimits?: ConversationRateLimits;
+	/** The size at which the agent compacts on its own, such as Claude Code's "200k". */
+	compactsAt?: string;
 	className?: string;
 }) {
 	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
@@ -121,14 +124,15 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
-				{usage && hasContext ? <ContextReadout usage={usage} /> : null}
+				{usage && hasContext ? <ContextReadout usage={usage} compactsAt={compactsAt} /> : null}
 				{showQuota && quota ? <QuotaWarning quota={quota} limits={rateLimits} /> : null}
 			</div>
 		</TooltipProvider>
 	);
 }
 
-function ContextReadout({ usage }: { usage: ConversationUsage }) {
+function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compactsAt?: string }) {
+	const compactsLine = compactsAt ? <p>Compacts on its own at {compactsAt.toUpperCase()}</p> : null;
 	const { contextUsed, contextWindow } = usage;
 	// A border separates the tooltip without the layered shadow's hover halos.
 	const tooltipSurface = "border border-border shadow-none";
@@ -159,6 +163,7 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 				<TooltipContent className={tooltipSurface}>
 					<p className="font-medium">Context {compactUsed} / {compactTotal}</p>
 					<p>{contextUsed <= 0 ? "The provider has not reported current context used." : "The provider has not reported a context window."} Conversation fullness is unknown.</p>
+					{compactsLine}
 				</TooltipContent>
 			</Tooltip>
 		);
@@ -203,6 +208,7 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 			<TooltipContent className={tooltipSurface}>
 				<p className="font-medium">Context window</p>
 				<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
+				{compactsLine}
 				{severity !== "normal" ? (
 					<p className="mt-1">
 						{severity === "critical"

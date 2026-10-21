@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
 
-const projectId = "chat-agent-switch";
+const projectId = "chat-interface-refusal";
 const sessionId = "chat-switch-worker";
 
 test("untouched Chat reports interface refusal and can dismiss and retry @T0", async ({ page }) => {
@@ -93,16 +93,14 @@ test("untouched Chat reports interface refusal and can dismiss and retry @T0", a
 
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	await expect(page.getByRole("region", { name: "Chat" })).toBeVisible();
-	await page.getByRole("button", { name: "Session actions", exact: true }).click();
-	await page.getByRole("menuitem", { name: "Switch to terminal UI" }).click();
+	await page.getByRole("button", { name: "Switch to terminal UI" }).click();
 	const notice = page.getByRole("alert").filter({ hasText: "Could not switch interfaces" });
 	await expect(notice).toContainText("The agent has not exposed a native conversation that can resume in the other interface");
 	await expect(notice).not.toContainText("NATIVE_SESSION_MISSING");
 	await expect(page.getByRole("dialog")).toHaveCount(0);
 	await page.getByRole("button", { name: "Dismiss interface switch error" }).click();
 	await expect(notice).toHaveCount(0);
-	await page.getByRole("button", { name: "Session actions", exact: true }).click();
-	await page.getByRole("menuitem", { name: "Switch to terminal UI" }).click();
+	await page.getByRole("button", { name: "Switch to terminal UI" }).click();
 	await expect(notice).toContainText("The agent has not exposed a native conversation that can resume in the other interface");
 	await expect(notice).not.toContainText("NATIVE_SESSION_MISSING");
 });

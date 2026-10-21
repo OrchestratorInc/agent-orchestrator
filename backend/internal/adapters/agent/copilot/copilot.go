@@ -176,10 +176,11 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 
 // ResolveCopilotBinary returns the path to the copilot binary on this machine,
 // searching PATH then a handful of well-known install locations (npm global,
-// Homebrew, the VS Code extension's bundled CLI). When the resolved path is the
-// npm-loader shim, the platform-native binary is returned instead. This resolver
-// stays hand-rolled (rather than binaryutil.ResolveBinary) because of that
-// native-loader indirection.
+// Homebrew). When the resolved path is the npm-loader shim, the platform-native
+// binary is returned instead. This resolver stays hand-rolled (rather than
+// binaryutil.ResolveBinary) because of that native-loader indirection.
+//
+// VS Code's launcher is never an answer: see isVSCodeCopilotLauncher.
 func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -190,7 +191,7 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"copilot.cmd", "copilot.exe", "copilot"} {
-			if path, err := exec.LookPath(name); err == nil && path != "" {
+			if path := lookCopilotOnPath(name); path != "" {
 				return path, nil
 			}
 			if err := ctx.Err(); err != nil {
@@ -221,7 +222,7 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
 	}
 
-	if path, err := exec.LookPath("copilot"); err == nil && path != "" {
+	if path := lookCopilotOnPath("copilot"); path != "" {
 		if native := copilotNativeBinaryForLoader(path); native != "" {
 			return native, nil
 		}
@@ -235,7 +236,6 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 			filepath.Join(home, ".npm", "bin", "copilot"),
 			filepath.Join(home, ".local", "bin", "copilot"),
 			filepath.Join(home, ".copilot", "bin", "copilot"),
-			filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli", "copilot"),
 		)
 		candidates = append(candidates, binaryutil.UnixPackageManagerBinCandidates(home, "copilot")...)
 		nodeManagerCandidates, err := binaryutil.UnixNodeManagerBinCandidates(ctx, home, "copilot")
@@ -246,7 +246,7 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	}
 
 	for _, candidate := range candidates {
-		if hookutil.IsExecutableFile(candidate) {
+		if hookutil.IsExecutableFile(candidate) && !isVSCodeCopilotLauncher(candidate) {
 			if native := copilotNativeBinaryForLoader(candidate); native != "" {
 				return native, nil
 			}
@@ -258,6 +258,43 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	}
 
 	return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
+}
+
+// vsCodeCopilotLauncherScript sits beside the `copilot` launcher VS Code's
+// Copilot Chat extension puts on its terminals' PATH.
+const vsCodeCopilotLauncherScript = "copilotCLIShim.js"
+
+// isVSCodeCopilotLauncher reports whether path is VS Code's launcher, which only
+// forwards to a `copilot` elsewhere on PATH and, with none, stops at "Install
+// GitHub Copilot CLI? [y/N]". It never shows that the CLI is installed.
+func isVSCodeCopilotLauncher(path string) bool {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	_, err := os.Stat(filepath.Join(filepath.Dir(path), vsCodeCopilotLauncherScript))
+	return err == nil
+}
+
+// lookCopilotOnPath is exec.LookPath that passes over VS Code's launcher and
+// keeps searching the rest of PATH for the CLI itself.
+func lookCopilotOnPath(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil || path == "" {
+		return ""
+	}
+	if !isVSCodeCopilotLauncher(path) {
+		return path
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate, err := exec.LookPath(filepath.Join(dir, name))
+		if err == nil && candidate != "" && !isVSCodeCopilotLauncher(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func copilotNativeBinaryForLoader(path string) string {
