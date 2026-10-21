@@ -36,6 +36,12 @@ export interface ResolvedCloudOffering {
 	 * list stands in.
 	 */
 	customCoder: boolean;
+	/**
+	 * An ao-worker Coder session checks out in the project's working folder.
+	 * Off when the control plane does not say so (an older one never does):
+	 * a working folder then applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder: boolean;
 	/** "server" when `/me` carried an offering, "fallback" when it was derived. */
 	source: "server" | "fallback";
 }
@@ -107,6 +113,7 @@ export function resolveCloudOffering(
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
 			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
+			coderWorkerWorkingFolder: offering.coderWorkerWorkingFolder === true,
 			source: "server",
 		};
 	}
@@ -121,6 +128,7 @@ export function resolveCloudOffering(
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
 		customCoder: providers.includes(CODER_PROVIDER),
+		coderWorkerWorkingFolder: false,
 		source: "fallback",
 	};
 }

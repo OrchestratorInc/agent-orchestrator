@@ -16,7 +16,7 @@ import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } 
 import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
-import { isStandaloneCloudProject, projectAdditionalRepos } from "../lib/cloud-project-repos";
+import { isStandaloneCloudProject, projectAdditionalRepos, projectConfigText } from "../lib/cloud-project-repos";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
@@ -111,7 +111,7 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 	// without an org-default template (the control plane's
 	// coder_template_required). Otherwise the deployment or org default applies,
 	// and non-Coder providers need no template at all.
-	const orgCoder = useOrgCoderConfig();
+	const orgCoder = useOrgCoderConfig(true, project.orgId);
 	const orgCoderConfig = orgCoder.data as { templateId?: string; defaultTemplateId?: string } | null | undefined;
 	const orgDefaultTemplateId = (orgCoderConfig?.templateId ?? orgCoderConfig?.defaultTemplateId ?? "").trim();
 	const templateRequired = templateId === "" && orgCoderConfig != null && orgDefaultTemplateId === "";
@@ -190,6 +190,8 @@ function CoderTemplateParametersSettings({ project, templateId }: { project: Clo
 				templateId={templateId}
 				overrides={shown}
 				onChange={setDraft}
+				repositoryUrls={isStandaloneCloudProject(project) ? [] : [project.repositoryUrl, ...projectAdditionalRepos(project.config).map((repo) => repo.url)]}
+				projectWorkingDirectory={projectConfigText(project.config, "workingDirectory")}
 				footer={save.isError ? (
 					<p className="text-xs text-error" role="alert">
 						{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}

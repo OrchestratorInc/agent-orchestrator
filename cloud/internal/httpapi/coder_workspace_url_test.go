@@ -18,6 +18,7 @@ const (
 	byoDefaultSessionID  = "00000000-0000-0000-0000-0000000000b1"
 	managedCoderSession  = "00000000-0000-0000-0000-0000000000b2"
 	freestyleSessionID   = "00000000-0000-0000-0000-0000000000b3"
+	byoStoredNameSession = "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"
 )
 
 // coderWorkspaceURLStore serves sessions as the postgres store projects them:
@@ -71,6 +72,13 @@ func TestSessionResponsesExposeCoderWorkspaceURLOnlyForBYOCoder(t *testing.T) {
 			ID: byoDefaultSessionID, OrgID: byocOrgID, SandboxProvider: "coder",
 			BYOCoderWorkspace: &domain.CoderWorkspaceRef{BaseURL: "https://coder.acme.example.com", Owner: "ao-bot"},
 		},
+		// A session created since AO stores the workspace name links to it.
+		{
+			ID: byoStoredNameSession, OrgID: byocOrgID, SandboxProvider: "coder",
+			BYOCoderWorkspace: &domain.CoderWorkspaceRef{
+				BaseURL: "https://coder.acme.example.com", Owner: "dev", NamePrefix: "dev", Name: "dev-w-fix-7c1d2e3f",
+			},
+		},
 		// AO's managed Coder and Freestyle never carry a workspace ref.
 		{ID: managedCoderSession, OrgID: byocOrgID, SandboxProvider: "coder"},
 		{ID: freestyleSessionID, OrgID: byocOrgID, SandboxProvider: "freestyle"},
@@ -79,6 +87,7 @@ func TestSessionResponsesExposeCoderWorkspaceURLOnlyForBYOCoder(t *testing.T) {
 		// The project prefix names the workspace <prefix>-<short session id>.
 		byoPrefixedSessionID: "https://coder.acme.example.com/@dev/dev-3f2a9c1e7b4d",
 		byoDefaultSessionID:  "https://coder.acme.example.com/@ao-bot/" + coder.WorkspaceName(byoDefaultSessionID),
+		byoStoredNameSession: "https://coder.acme.example.com/@dev/dev-w-fix-7c1d2e3f",
 		managedCoderSession:  "",
 		freestyleSessionID:   "",
 	}

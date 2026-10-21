@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,10 @@ import (
 // agentBrowserStreamTimeout bounds how long a desktop request waits for the
 // worker to dial the stream socket it was asked to open.
 const agentBrowserStreamTimeout = 10 * time.Second
+
+// agentBrowserRetryAfterSeconds is how long the desktop waits before asking
+// again for a session whose agent browser is not connected.
+const agentBrowserRetryAfterSeconds = 30
 
 // agentBrowserRelays maps a session to the control socket its worker holds for
 // the sandbox's agent browser. Like the terminal relay it is process-local and
@@ -188,7 +193,12 @@ func (s *Server) proxyAgentBrowser(w http.ResponseWriter, r *http.Request) {
 	}
 	relay := s.agentBrowserRelays.lookup(sessionID)
 	if relay == nil {
-		writeError(w, r, http.StatusBadGateway, "AGENT_BROWSER_UNAVAILABLE", "The session's agent browser is not connected.")
+		// Not a gateway failure: the session has no agent browser right now
+		// (its sandbox has no Chromium, as on a bring-your-own Coder image, or
+		// it is asleep or still starting). The desktop asks again after
+		// Retry-After rather than counting a server error every few seconds.
+		w.Header().Set("Retry-After", strconv.Itoa(agentBrowserRetryAfterSeconds))
+		writeError(w, r, http.StatusConflict, "AGENT_BROWSER_UNAVAILABLE", "The session's agent browser is not connected.")
 		return
 	}
 	// The server's ReadTimeout covers reading the request body, so it would cut

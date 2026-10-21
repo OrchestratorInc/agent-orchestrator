@@ -15,6 +15,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
+// failureStorePragmas opens a second connection the way the store does.
+const failureStorePragmas = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+
 func TestBindSessionAgentAccountCancelsOnlyChangedProviderAutoResume(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
 		t.Run(string(harness), func(t *testing.T) {

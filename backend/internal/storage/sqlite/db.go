@@ -300,6 +300,9 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
+	if err := repairRenumberedProviderSwitchingMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered provider-switching migration history: %w", err)
+	}
 	if err := repairRenumberedChatMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered chat migration history: %w", err)
 	}
@@ -332,9 +335,6 @@ func migrate(db *sql.DB) error {
 	}
 	if err := preparePRCommentReviewIDMigration(db); err != nil {
 		return fmt.Errorf("prepare PR comment review-id migration: %w", err)
-	}
-	if err := repairRenumberedAgentSwitchMigrationHistory(db); err != nil {
-		return fmt.Errorf("repair renumbered agent-switch migration history: %w", err)
 	}
 	if err := repairRenumberedPRReviewPartialMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered PR review-partial migration history: %w", err)
@@ -1281,6 +1281,57 @@ func quoteSQLiteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
+// providerSwitchingVersion is the provider switching migration's version.
+const providerSwitchingVersion = 20261020131539535
+
+// repairRenumberedProviderSwitchingMigrationHistory moves a database that ran
+// provider switching under an earlier number in this branch's preview builds
+// to its version. It would otherwise apply the migration again,
+// and those numbers are left for main. The migration's table tells this
+// branch's entry apart from another migration that took the number.
+func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
+	var gooseTable, turnsTable, applied int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_terminal_turns'`).Scan(&turnsTable); err != nil || turnsTable == 0 {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion).Scan(&applied); err != nil || applied != 0 {
+		return err
+	}
+	// Earlier builds also used 0196, 0199 and 0200, which main has since
+	// taken. Those count as this migration's only while main's own schema for
+	// that number is absent; goose then applies main's file, as it is missing.
+	for _, old := range []struct {
+		version int64
+		mainHas string
+	}{
+		{version: 201}, {version: 216},
+		{196, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_artifact_versions'`},
+		{199, `SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name = 'continuation'`},
+		{200, `SELECT COUNT(*) FROM pragma_table_info('session_artifact_versions') WHERE name = 'source'`},
+	} {
+		if old.mainHas != "" {
+			var present int
+			if err := db.QueryRow(old.mainHas).Scan(&present); err != nil {
+				return err
+			}
+			if present != 0 {
+				continue
+			}
+		}
+		res, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion, old.version)
+		if err != nil {
+			return err
+		}
+		if moved, err := res.RowsAffected(); err != nil || moved > 0 {
+			return err
+		}
+	}
+	return nil
+}
+
 // repairRenumberedChatMigrationHistory preserves databases opened by this
 // feature branch before its Chat migrations moved from 0052-0065 to 0066-0079.
 // The files are byte-for-byte identical after the rename, so recording the new
@@ -1659,128 +1710,6 @@ SELECT COALESCE((
 	}
 	if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = ?`, collidedVersion); err != nil {
 		return err
-	}
-	return tx.Commit()
-}
-
-// repairRenumberedAgentSwitchMigrationHistory preserves databases opened by
-// earlier revisions of this feature branch. Agent switching first occupied
-// 0080/0081, later 0081/0082, and briefly 0083/0084; main now owns 0080
-// through 0084. Remap the physically present switching schema to the
-// consolidated 0085, then release only the main migration numbers whose
-// schema effects are still absent.
-func repairRenumberedAgentSwitchMigrationHistory(db *sql.DB) error {
-	var gooseTable, agentSwitchTable int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
-	).Scan(&gooseTable); err != nil {
-		return err
-	}
-	if gooseTable == 0 {
-		return nil
-	}
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_switches'`,
-	).Scan(&agentSwitchTable); err != nil {
-		return err
-	}
-	if agentSwitchTable == 0 {
-		return nil
-	}
-
-	reviewUpgraded, err := reviewHasSessionHarnessUnique(db)
-	if err != nil {
-		return err
-	}
-
-	var browserVerifierColumn, primeHarnessShape, reconciledKimchiPrimeHarnessShape, autoInjectReviewColumn int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'browser_capability_verifier'`,
-	).Scan(&browserVerifierColumn); err != nil {
-		return err
-	}
-	if err := db.QueryRow(`
-SELECT COUNT(*)
-FROM sqlite_master
-WHERE type = 'table'
-  AND name = 'sessions'
-  AND instr(COALESCE(sql, ''), '''prime-agent''') > 0`).Scan(&primeHarnessShape); err != nil {
-		return err
-	}
-	if err := db.QueryRow(`
-SELECT COUNT(*)
-FROM sqlite_master
-WHERE type = 'table'
-  AND name = 'sessions'
-  AND instr(COALESCE(sql, ''), '''kimchi''') > 0
-  AND instr(COALESCE(sql, ''), '''prime-agent''') > 0`).Scan(&reconciledKimchiPrimeHarnessShape); err != nil {
-		return err
-	}
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'auto_inject_review'`,
-	).Scan(&autoInjectReviewColumn); err != nil {
-		return err
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Earlier feature builds split finalized-handoff storage into 0084, while
-	// still earlier builds only had the base switching table. Repair either
-	// shape before recording the now-consolidated 0085 as applied. The status is
-	// deliberately not inferred from retained paths: old rows remain unknown.
-	for _, column := range []struct {
-		name string
-		ddl  string
-	}{
-		{name: "final_handoff_path", ddl: `ALTER TABLE agent_switches ADD COLUMN final_handoff_path TEXT NOT NULL DEFAULT ''`},
-		{name: "final_handoff_hash", ddl: `ALTER TABLE agent_switches ADD COLUMN final_handoff_hash TEXT NOT NULL DEFAULT ''`},
-		{name: "source_transcript_status", ddl: `ALTER TABLE agent_switches ADD COLUMN source_transcript_status TEXT NOT NULL DEFAULT 'not_attempted' CHECK (source_transcript_status IN ('not_attempted', 'available', 'unavailable'))`},
-		{name: "semantic_handoff_included", ddl: `ALTER TABLE agent_switches ADD COLUMN semantic_handoff_included INTEGER NOT NULL DEFAULT 0 CHECK (semantic_handoff_included IN (0, 1))`},
-	} {
-		var present int
-		if err := tx.QueryRow(
-			`SELECT COUNT(*) FROM pragma_table_info('agent_switches') WHERE name = ?`, column.name,
-		).Scan(&present); err != nil {
-			return err
-		}
-		if present == 0 {
-			if _, err := tx.Exec(column.ddl); err != nil {
-				return err
-			}
-		}
-	}
-
-	var applied85 int
-	if err := tx.QueryRow(`
-SELECT COALESCE((
-    SELECT is_applied FROM goose_db_version
-	WHERE version_id = 85 ORDER BY id DESC LIMIT 1
-), 0)`).Scan(&applied85); err != nil {
-		return err
-	}
-	if applied85 == 0 {
-		if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (85, 1)`); err != nil {
-			return err
-		}
-	}
-
-	for version, mainEffectPresent := range map[int64]bool{
-		80: reviewUpgraded,
-		81: browserVerifierColumn != 0,
-		82: primeHarnessShape != 0,
-		83: reconciledKimchiPrimeHarnessShape != 0,
-		84: autoInjectReviewColumn != 0,
-	} {
-		if mainEffectPresent {
-			continue
-		}
-		if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = ?`, version); err != nil {
-			return err
-		}
 	}
 	return tx.Commit()
 }

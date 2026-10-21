@@ -37,12 +37,12 @@ func multiRepoWorkspace(t *testing.T) (workspace string, launch worker.LaunchCon
 }
 
 func TestRepositoriesPromptNote(t *testing.T) {
-	if note := repositoriesPromptNote(worker.LaunchContext{RepositoryURL: "https://github.com/acme/alice"}, "/workspace/repository"); note != "" {
+	if note := repositoriesPromptNote(worker.LaunchContext{RepositoryURL: "https://github.com/acme/alice"}, "/workspace/repository", ""); note != "" {
 		t.Fatalf("a single-repo session got a note: %q", note)
 	}
 	workspace, launch := multiRepoWorkspace(t)
 	root := filepath.Dir(workspace)
-	note := repositoriesPromptNote(launch, workspace)
+	note := repositoriesPromptNote(launch, workspace, "")
 	for _, want := range []string{
 		"Your working directory is the main repository's checkout, " + workspace,
 		"- alice (main repository): " + workspace + " (relative to your working directory: .)",
@@ -56,7 +56,7 @@ func TestRepositoriesPromptNote(t *testing.T) {
 		}
 	}
 	launch.AgentStartsIn = domain.ProjectAgentStartsInParent
-	parent := repositoriesPromptNote(launch, workspace)
+	parent := repositoriesPromptNote(launch, workspace, "")
 	for _, want := range []string{
 		"Your working directory is " + root + ", the folder that holds every repository",
 		"(relative to your working directory: alice)",
@@ -76,24 +76,50 @@ func TestAgentDirectoryAndAdditionalDirectories(t *testing.T) {
 		t.Fatalf("default agent directory = %s", got)
 	}
 	want := []string{filepath.Join(root, "voice-calling-ai"), filepath.Join(root, "julian")}
-	if got := additionalDirectories(launch, workspace); !slices.Equal(got, want) {
+	if got := additionalDirectories(launch, workspace, ""); !slices.Equal(got, want) {
 		t.Fatalf("additional directories = %v, want %v (missing clones skipped)", got, want)
 	}
 	launch.AgentStartsIn = domain.ProjectAgentStartsInParent
 	if got := agentDirectory(launch, workspace); got != root {
 		t.Fatalf("parent-mode agent directory = %s", got)
 	}
-	if got := additionalDirectories(launch, workspace); got != nil {
+	if got := additionalDirectories(launch, workspace, ""); got != nil {
 		t.Fatalf("parent mode still adds directories: %v", got)
 	}
 	reviewer := launch
 	reviewer.Kind = "reviewer"
-	if agentDirectory(reviewer, workspace) != workspace || additionalDirectories(reviewer, workspace) != nil {
+	if agentDirectory(reviewer, workspace) != workspace || additionalDirectories(reviewer, workspace, "") != nil {
 		t.Fatal("a reviewer must review from the main checkout")
 	}
 	standalone := worker.LaunchContext{Kind: "worker", AgentStartsIn: domain.ProjectAgentStartsInParent, RepositoryURL: "https://scratch.ao.local/p1"}
 	if agentDirectory(standalone, "/workspace/repository") != "/workspace/repository" {
 		t.Fatal("a standalone session must start in its own folder")
+	}
+}
+
+// In a session whose checkouts must be AO's own, an additional repository
+// whose folder is the Coder template's own clone is neither opened to the
+// agent nor listed in its system prompt: AO did not check it out there.
+func TestAdditionalDirectoriesLeaveOutARefusedRepositoryFolder(t *testing.T) {
+	workspace, launch := multiRepoWorkspace(t)
+	root := filepath.Dir(workspace)
+	templateClone := filepath.Join(root, "voice-calling-ai")
+	if err := os.Remove(templateClone); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), templateClone); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	if _, err := worker.RecordOwnedRepoFolders(dataDir, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := additionalDirectories(launch, workspace, dataDir), []string{filepath.Join(root, "julian")}; !slices.Equal(got, want) {
+		t.Fatalf("additional directories = %v, want %v", got, want)
+	}
+	note := repositoriesPromptNote(launch, workspace, dataDir)
+	if strings.Contains(note, "voice-calling-ai") || !strings.Contains(note, "- julian (cloned at develop): "+filepath.Join(root, "julian")) {
+		t.Fatalf("note lists the refused folder or misses the used one:\n%s", note)
 	}
 }
 
@@ -318,11 +344,27 @@ func TestParentAgentDirectoryIsRefusedWhenUnsafe(t *testing.T) {
 		if got := agentDirectory(launch, workspace); got != workspace {
 			t.Fatalf("agent directory = %s, want the main checkout", got)
 		}
-		if got := additionalDirectories(launch, workspace); len(got) == 0 {
+		if got := additionalDirectories(launch, workspace, ""); len(got) == 0 {
 			t.Fatal("the fallback must still grant the sibling checkouts")
 		}
-		if note := repositoriesPromptNote(launch, workspace); !strings.Contains(note, "it is the home directory") {
+		if note := repositoriesPromptNote(launch, workspace, ""); !strings.Contains(note, "it is the home directory") {
 			t.Fatalf("prompt does not explain the fallback:\n%s", note)
+		}
+	})
+	// A dedicated ao-worker user has its own HOME; the workspace login user's
+	// home (where ~/{repo} would put the checkouts) is refused all the same,
+	// while the ~/work folder of ~/work/{repo} is accepted.
+	t.Run("workspace login user's home", func(t *testing.T) {
+		workspace, launch := multiRepoWorkspace(t)
+		launch.AgentStartsIn = domain.ProjectAgentStartsInParent
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv(worker.UserHomeEnv, filepath.Dir(workspace))
+		if got := agentDirectory(launch, workspace); got != workspace {
+			t.Fatalf("agent directory = %s, want the main checkout", got)
+		}
+		t.Setenv(worker.UserHomeEnv, filepath.Dir(filepath.Dir(workspace)))
+		if got := agentDirectory(launch, workspace); got != filepath.Dir(workspace) {
+			t.Fatalf("agent directory = %s, want the folder holding the checkouts", got)
 		}
 	})
 	t.Run("AO worker state", func(t *testing.T) {
@@ -352,7 +394,7 @@ func TestRepositoriesPromptNoteNamesEachRepositorysInstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	note := repositoriesPromptNote(launch, workspace)
+	note := repositoriesPromptNote(launch, workspace, "")
 	for _, want := range []string{
 		"read its instruction files below and follow them there",
 		"- alice: " + filepath.Join(root, "alice", "AGENTS.md"),
@@ -366,14 +408,14 @@ func TestRepositoriesPromptNoteNamesEachRepositorysInstructions(t *testing.T) {
 		t.Fatalf("a repository without instruction files was listed:\n%s", note)
 	}
 	bare, bareLaunch := multiRepoWorkspace(t)
-	if strings.Contains(repositoriesPromptNote(bareLaunch, bare), "instruction files") {
+	if strings.Contains(repositoriesPromptNote(bareLaunch, bare, ""), "instruction files") {
 		t.Fatal("a session without instruction files got the instructions note")
 	}
 	single := t.TempDir()
 	if err := os.WriteFile(filepath.Join(single, "AGENTS.md"), []byte("rules\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if note := repositoriesPromptNote(worker.LaunchContext{RepositoryURL: "https://github.com/acme/alice"}, single); note != "" {
+	if note := repositoriesPromptNote(worker.LaunchContext{RepositoryURL: "https://github.com/acme/alice"}, single, ""); note != "" {
 		t.Fatalf("a single-repo session got a note: %q", note)
 	}
 }

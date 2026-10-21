@@ -983,6 +983,16 @@ func (s *Service) RaisePullRequest(
 	return record, nil
 }
 
+// IsAppAccount reports whether a GitHub login is this App's bot account. The
+// REST API names it "<slug>[bot]" and GraphQL plain "<slug>".
+func (s *Service) IsAppAccount(login string) bool {
+	if s == nil || s.client == nil || s.client.appSlug == "" {
+		return false
+	}
+	login = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+	return login == strings.ToLower(s.client.appSlug)
+}
+
 // ClaimPullRequest records a pull request that worker-side tooling already
 // opened. Installation tokens deliberately do not represent a human GitHub
 // identity, so this claims ownership for the AO worker session instead of

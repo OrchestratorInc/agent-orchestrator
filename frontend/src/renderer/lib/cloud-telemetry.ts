@@ -15,7 +15,7 @@
  */
 
 import type { CloudCpClient } from "./cloud-cp/client";
-import type { CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
+import type { CloudCpCreateSessionRequest, CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
 import { captureRendererEvent, setCloudTelemetryContext } from "./telemetry";
 
 /** Pending session creations, keyed by session id, for time-to-ready. */
@@ -204,6 +204,20 @@ function projectProvider(config: Record<string, unknown> | undefined): string {
 }
 
 /**
+ * Reports a user's request for a cloud session, once per create
+ * (createCloudSession): a create that a control plane predating
+ * interfaceMode and defaultInterfaceMode rejects is sent again without them, and that retry is
+ * not a second request.
+ */
+export function reportCloudSessionCreateRequested(body: Pick<CloudCpCreateSessionRequest, "provider" | "kind" | "projectId">): void {
+	void captureRendererEvent("ao.renderer.cloud_session_create_requested", {
+		provider: body.provider || defaultProvider || "default",
+		session_kind: body.kind,
+		project_id: body.projectId,
+	});
+}
+
+/**
  * Wraps the funnel calls of a control-plane client with telemetry. Results and
  * errors pass through unchanged; telemetry never throws into the caller.
  */
@@ -234,14 +248,11 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 		});
 		return response;
 	};
+	// The request itself is reported once per user create, by
+	// reportCloudSessionCreateRequested: a create can take two calls.
 	instrumented.createSession = async (orgId, body, options) => {
 		const requestedAt = Date.now();
 		const provider = body.provider || defaultProvider || "default";
-		void captureRendererEvent("ao.renderer.cloud_session_create_requested", {
-			provider,
-			session_kind: body.kind,
-			project_id: body.projectId,
-		});
 		try {
 			const response = await client.createSession(orgId, body, options);
 			pendingSessions.set(response.session.id, {
@@ -252,6 +263,13 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			observeCloudSessions([response.session]);
 			return response;
 		} catch (error) {
+			// A control plane that predates interfaceMode and defaultInterfaceMode
+			// rejects the body with 400 invalid_request, and createCloudSession
+			// sends the create again without them: not a failed session.
+			if ((body.interfaceMode !== undefined || body.defaultInterfaceMode !== undefined) && errorStatus(error) === 400 &&
+				errorCode(error) === "invalid_request") {
+				throw error;
+			}
 			void captureRendererEvent("ao.renderer.cloud_session_failed", {
 				provider,
 				session_kind: body.kind,

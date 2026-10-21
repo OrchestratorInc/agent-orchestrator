@@ -165,7 +165,7 @@ func TestVersionRefreshDoesNotCommitFailedStartup(t *testing.T) {
 	rt := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}, fencedResult: ports.FencedProbeResult{Liveness: ports.FencedDead}}}
 	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
 	mgr, store, _ := newExitedResumeManager(t, rt, agent)
-	mgr.switchTargetStartWait = time.Millisecond
+	mgr.launchStartWait = time.Millisecond
 	rec := store.sessions["mer-1"]
 	rec.StaleBinary = &domain.SessionStaleBinary{Version: "new", Since: time.Now()}
 	store.sessions[rec.ID] = rec
@@ -224,7 +224,7 @@ func TestRefreshStaleTerminalWithoutChatHandoff(t *testing.T) {
 			rt := &refreshTestRuntime{fakeRestartRuntime: &fakeRestartRuntime{fakeRuntime: &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}}}
 			agent := refreshTestAgent{supervisedLaunchAgent{launchArgvAgent{argv: []string{"pi", "--session", "agent-x"}}}}
 			mgr, st, _ := newExitedResumeManager(t, rt, agent)
-			mgr.switchTargetStartWait = time.Millisecond
+			mgr.launchStartWait = time.Millisecond
 			store := &refreshTestStore{fakeStore: st}
 			mgr.store = store
 			rec := st.sessions["mer-1"]
@@ -334,7 +334,7 @@ func TestFailedTerminalChildStartupCanRetryWithoutOldExitCallback(t *testing.T) 
 	store := &refreshTestStore{fakeStore: st}
 	mgr.store = store
 	mgr.SetTerminalInputGate(&refreshInputGate{})
-	mgr.switchTargetStartWait = time.Millisecond
+	mgr.launchStartWait = time.Millisecond
 	rec := st.sessions["mer-1"]
 	rec.Harness = domain.HarnessPi
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now().Add(-time.Hour)}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
@@ -65,7 +66,9 @@ type Store interface {
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
-	ListClientEvents(context.Context, domain.Principal, string, string, int64, int) ([]domain.ClientEvent, bool, error)
+	// ListClientEvents lists the session's client events after a sequence,
+	// only of the given types when any are given.
+	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
 	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	RestoreSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
@@ -123,6 +126,7 @@ type Store interface {
 	GitHubInstallationForRepository(context.Context, string, string) (int64, int64, error)
 	PullRequestForMerge(context.Context, domain.Principal, string, string, int, string) (domain.PullRequest, error)
 	PullRequestSnapshot(context.Context, string, string) (domain.PullRequestSnapshot, error)
+	SessionPullRequestOpener(context.Context, domain.Principal, string, string) (domain.PullRequestOpener, error)
 	ListReviewRunsBySession(context.Context, domain.Principal, string, string) ([]domain.ReviewRunPullRequest, error)
 	PRFactsBySession(ctx context.Context, orgID string, sessionIDs []string) (map[string][]contract.PRFacts, error)
 	PullRequestsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.PullRequest, error)
@@ -215,6 +219,7 @@ type Server struct {
 	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
 	notificationWake        func()
+	analytics               analytics.Sink
 	sandboxWake             func()
 	projectSnapshots        ProjectSnapshotter
 	billingOptions          *BillingOptions
@@ -273,6 +278,8 @@ type Options struct {
 	TerminalStreamEnabled   bool
 	TerminalRelayEnabled    bool
 	NotificationWake        func()
+	// Analytics receives server-side product events. Nil disables them.
+	Analytics analytics.Sink
 	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
 	// this control plane runs no reconciler.
 	SandboxWake func()
@@ -386,6 +393,7 @@ func New(options Options) *Server {
 		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
+		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
 		projectSnapshots:          options.ProjectSnapshots,
 		billingOptions:            options.Billing,
@@ -497,6 +505,7 @@ func New(options Options) *Server {
 			router.Get("/worker/reconnect", server.workerReconnect)
 			router.Post("/worker/events", server.workerEvent)
 			router.Get("/worker/session", server.workerSession)
+			router.Post("/worker/interface/chat-start-fallback", server.workerChatStartFallback)
 			router.Post("/worker/notification-events", server.workerNotificationEvent)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)
@@ -805,6 +814,17 @@ func (s *Server) principalForBearer(
 		return domain.Principal{}, err
 	}
 	return s.store.UpsertWorkOSUser(ctx, principal)
+}
+
+// capture reports a product event for the signed-in WorkOS user. Local-auth
+// (development) principals and anonymous callers are never reported.
+func (s *Server) capture(r *http.Request, event string, props map[string]any) {
+	if s.analytics == nil {
+		return
+	}
+	if p := principalFrom(r); p.Provider == "workos" && p.UserID != "" {
+		s.analytics.Capture(p.UserID, event, props)
+	}
 }
 
 func principalFrom(r *http.Request) domain.Principal {

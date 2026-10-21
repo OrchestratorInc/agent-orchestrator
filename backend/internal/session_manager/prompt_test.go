@@ -223,7 +223,8 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		"ao report --needs-input --note <text>",
 		"ao report --stuck --note <text>",
 		"ao report --done --note <text>",
-		"Do not narrate routine commands",
+		"Do not file a report for routine commands",
+		"applies to `ao report` only",
 		"Keep routine test logs",
 		"Summarize validation in the report note",
 		"not external publishing authorization",
@@ -280,6 +281,19 @@ func TestBuildSystemPromptPreservesPublishingScope(t *testing.T) {
 					t.Error("freeform task still treats PR association as publishing authority")
 				}
 			})
+		}
+	}
+}
+
+func TestBuildSystemPromptAsksEveryRoleToNarrateToolCalls(t *testing.T) {
+	for _, cfg := range []systemPromptConfig{
+		{Role: sessionPromptRoleWorker},
+		{Role: sessionPromptRoleWorker, Standalone: true},
+		{Role: sessionPromptRoleOrchestrator},
+	} {
+		got := buildSystemPromptText(cfg)
+		if !strings.Contains(got, "Before each tool call, or each batch of related calls, write one short sentence") {
+			t.Errorf("%s (standalone=%v) prompt does not ask for narration:\n%s", cfg.Role, cfg.Standalone, got)
 		}
 	}
 }
