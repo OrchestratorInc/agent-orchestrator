@@ -131,22 +131,23 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 }
 
 // envFileHasCredential reads the value Hermes ends up with: a later empty
-// assignment clears an earlier key.
+// assignment clears an earlier key, and a blank value is no key.
 func envFileHasCredential(path string) bool {
 	bindings, _ := dotenvBindings(path)
 	env := dotenvEnvironment(bindings)
 	for _, name := range hermesCredentialEnv {
-		if env[nativeEnvName(name)] != "" {
+		if strings.TrimFunc(env[processEnvName(name)], pyIsSpace) != "" {
 			return true
 		}
 	}
 	return false
 }
 
-// authFileHasCredential looks for an actual credential in Hermes's auth store:
-// a non-empty provider state or a credential-pool entry. Hermes keeps a
-// provider's empty pool list after its last credential is removed, and older
-// stores held provider states at the top level.
+// authFileHasCredential looks for a secret held in Hermes's auth store: a
+// token or key in a provider state or credential-pool entry. Hermes keeps a
+// provider's empty pool list after its last credential is removed, and keeps
+// secret-free references to borrowed environment keys, which it never uses
+// once that key is gone. Older stores held provider states at the top level.
 func authFileHasCredential(path string) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -162,16 +163,27 @@ func authFileHasCredential(path string) bool {
 		providers = store
 	}
 	for _, state := range providers {
-		if state, ok := state.(map[string]any); ok && len(state) > 0 {
+		if holdsSecret(state) {
 			return true
 		}
 	}
 	for _, entries := range pool {
 		entries, _ := entries.([]any)
-		for _, entry := range entries {
-			if entry, ok := entry.(map[string]any); ok && len(entry) > 0 {
-				return true
-			}
+		if slices.ContainsFunc(entries, holdsSecret) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdsSecret reports whether a stored record carries a non-blank token or
+// key field, such as access_token, refresh_token or api_key.
+func holdsSecret(record any) bool {
+	fields, _ := record.(map[string]any)
+	for name, value := range fields {
+		value, ok := value.(string)
+		if ok && (strings.HasSuffix(name, "token") || strings.HasSuffix(name, "_key")) && strings.TrimFunc(value, pyIsSpace) != "" {
+			return true
 		}
 	}
 	return false

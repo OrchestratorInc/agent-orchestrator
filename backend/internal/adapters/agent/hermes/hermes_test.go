@@ -615,6 +615,11 @@ func TestCredentialStoreIdentityReadsNativeStores(t *testing.T) {
 		{"removed final pool credential", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openai-api":[]}}`, false, ""},
 		// The last assignment is the one Hermes keeps.
 		{"superseded env key", ".env", "OPENROUTER_API_KEY=review-dummy-key\nOPENROUTER_API_KEY=\n", false, ""},
+		{"blank env key", ".env", "OPENROUTER_API_KEY=\"   \"\n", false, ""},
+		// Hermes keeps an interior U+FEFF in the name, so this is another variable.
+		{"bom-prefixed env key", ".env", "NOTES=ordinary\n\ufeffOPENROUTER_API_KEY=sk-or-review-dummy\n", false, ""},
+		// A borrowed env-key reference stays after its source variable is gone.
+		{"secret-free pool reference", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openrouter":[{"id":"a","source":"env:OPENROUTER_API_KEY","label":"OPENROUTER_API_KEY","auth_type":"api_key","access_token":""}]}}`, false, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -671,6 +676,10 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			// Windows os.environ upper-cases names.
 			forms = append(forms, strings.ToLower(key)+"=native\n")
+			// Python's full upper-casing expands the U+FB06 "st" ligature.
+			if strings.Contains(key, "ST") {
+				forms = append(forms, strings.Replace(strings.ToLower(key), "st", "\ufb06", 1)+"=native\n")
+			}
 		}
 		for _, form := range forms {
 			if err := os.WriteFile(filepath.Join(home, ".env"), []byte(form), 0o600); err != nil {
@@ -681,12 +690,40 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			}
 		}
 	}
-	// A home redirect would load another, unchecked .env.
-	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_HOME="+t.TempDir()+"\n"), 0o600); err != nil {
+	// A home or managed-scope redirect would load another, unchecked .env.
+	for _, key := range []string{"HERMES_HOME", "HERMES_MANAGED_DIR"} {
+		if err := os.WriteFile(filepath.Join(home, ".env"), []byte(key+"="+t.TempDir()+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := hooks(); err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s in .env accepted: %v", key, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(home, ".env")); err != nil {
 		t.Fatal(err)
 	}
-	if err := hooks(); err == nil || !strings.Contains(err.Error(), "HERMES_HOME") {
-		t.Fatalf("HERMES_HOME in .env accepted: %v", err)
+	// A source install's project .env loads with override when the home
+	// .env is absent.
+	if err := os.MkdirAll(filepath.Join(home, "hermes-agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "hermes-agent", ".env"), []byte("HERMES_LANGUAGE=de\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := hooks(); err == nil || !strings.Contains(err.Error(), "HERMES_LANGUAGE") {
+		t.Fatalf("project .env override accepted: %v", err)
+	}
+	if err := os.Remove(filepath.Join(home, "hermes-agent", ".env")); err != nil {
+		t.Fatal(err)
+	}
+	// HERMES_MANAGED_DIR resolves against the session workspace.
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".ao-review-managed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	managed := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", WorkspacePath: workspace, Env: map[string]string{"HERMES_HOME": home, "HERMES_MANAGED_DIR": ".ao-review-managed"}, SystemPrompt: "AO"}
+	if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
+		t.Fatalf("workspace-relative managed scope accepted: %v", err)
 	}
 	// Malformed encodings are refused: Hermes's replacement-character and
 	// latin-1 fallbacks can still apply assignments.

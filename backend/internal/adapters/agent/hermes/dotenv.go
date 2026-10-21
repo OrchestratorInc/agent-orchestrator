@@ -11,6 +11,9 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // Python's Unicode whitespace (str.isspace, and \s in a str pattern), which
@@ -135,24 +138,30 @@ func hermesDotenvText(raw []byte) (string, bool) {
 
 // dotenvEnvironment is the environment the bindings leave behind: the last
 // assignment of each name wins, as when Hermes applies them with override.
-// Names are keyed by nativeEnvName.
+// Names are keyed by processEnvName.
 func dotenvEnvironment(bindings []dotenvBinding) map[string]string {
 	env := make(map[string]string, len(bindings))
 	for _, binding := range bindings {
-		env[nativeEnvName(binding.key)] = binding.value
+		env[processEnvName(binding.key)] = binding.value
 	}
 	return env
 }
 
-// nativeEnvName is the variable a dotenv key sets in Hermes's process. A
-// leading U+FEFF can be dropped by a later utf-8-sig read once Hermes rewrites
-// the file, and Windows os.environ upper-cases names.
-func nativeEnvName(key string) string {
-	key = strings.TrimLeft(key, "\ufeff")
+// processEnvName is the variable a dotenv key sets in Hermes's process:
+// Windows os.environ applies Python's full str.upper to names, which also
+// expands ligatures such as U+FB06 to "ST".
+func processEnvName(key string) string {
 	if runtime.GOOS == "windows" {
-		key = strings.ToUpper(key)
+		return cases.Upper(language.Und).String(key)
 	}
 	return key
+}
+
+// guardedEnvName is processEnvName for a refusal check: a leading U+FEFF is
+// dropped too, since a later utf-8-sig read can strip it once Hermes rewrites
+// the file. Never use it as positive evidence.
+func guardedEnvName(key string) string {
+	return processEnvName(strings.TrimLeft(key, "\ufeff"))
 }
 
 // pyIsSpace is Python's str.isspace: Unicode White_Space plus the ASCII

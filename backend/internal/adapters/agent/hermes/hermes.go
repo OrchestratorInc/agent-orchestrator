@@ -635,29 +635,26 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && strings.TrimSpace(string(b)) != "" && strings.TrimSpace(string(b)) != "default" {
 		return fmt.Errorf("hermes: sticky native profiles are not supported; clear active_profile or select the default native profile")
 	}
+	// Hermes resolves HERMES_MANAGED_DIR against its working directory, the
+	// session workspace.
 	for _, managed := range []string{os.Getenv("HERMES_MANAGED_DIR"), cfg.Env["HERMES_MANAGED_DIR"], "/etc/hermes"} {
-		if managed != "" {
-			if st, e := os.Stat(managed); e == nil && st.IsDir() {
-				return fmt.Errorf("hermes: managed native configuration is not supported by the additive instruction adapter")
-			}
+		if managed = strings.TrimSpace(managed); managed == "" {
+			continue
+		}
+		if !filepath.IsAbs(managed) && cfg.WorkspacePath != "" {
+			managed = filepath.Join(cfg.WorkspacePath, managed)
+		}
+		if st, e := os.Stat(managed); e == nil && st.IsDir() {
+			return fmt.Errorf("hermes: managed native configuration is not supported by the additive instruction adapter")
 		}
 	}
-	// Hermes loads <HERMES_HOME>/.env with override before reading these, so a
-	// value there would silently replace AO's instructions or chrome language,
-	// or move Hermes to a home AO has not checked.
-	envFile := filepath.Join(home, ".env")
-	bindings, err := dotenvBindings(envFile)
-	if err != nil {
-		return err
-	}
-	for _, binding := range bindings {
-		switch key := nativeEnvName(binding.key); key {
-		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
-			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
-		case "HERMES_LANGUAGE":
-			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, envFile)
-		case "HERMES_HOME":
-			return fmt.Errorf("hermes: %s in %s would move Hermes away from the home AO checked; set HERMES_HOME in AO's environment instead", key, envFile)
+	// Hermes loads <HERMES_HOME>/.env with override, and a source install's
+	// project .env too (with override when the home file is absent), so a value
+	// there would silently replace AO's instructions or chrome language, or
+	// move Hermes to a home or managed scope AO has not checked.
+	for _, envFile := range []string{filepath.Join(home, ".env"), filepath.Join(home, "hermes-agent", ".env")} {
+		if err := refuseDotenvOverrides(envFile); err != nil {
+			return err
 		}
 	}
 	cfg.Env["HERMES_HOME"] = home
@@ -719,6 +716,24 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
+}
+
+func refuseDotenvOverrides(envFile string) error {
+	bindings, err := dotenvBindings(envFile)
+	if err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		switch key := guardedEnvName(binding.key); key {
+		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
+			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
+		case "HERMES_LANGUAGE":
+			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, envFile)
+		case "HERMES_HOME", "HERMES_MANAGED_DIR":
+			return fmt.Errorf("hermes: %s in %s would move Hermes away from the configuration AO checked; set it in AO's environment instead", key, envFile)
+		}
+	}
+	return nil
 }
 
 func nativeOverlay(config map[string]any) string {
