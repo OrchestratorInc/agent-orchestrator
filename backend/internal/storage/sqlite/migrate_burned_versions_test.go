@@ -210,6 +210,7 @@ var shippedMigrations = map[int64]string{
 	213: "0213_session_stale_binary.sql",
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
+
 	// Fork-local migrations live in the reserved 9000+ range so a sync rebase
 	// can never renumber them onto a number upstream will claim. See
 	// migrate_fork_reserved_range_test.go for why.
@@ -218,8 +219,7 @@ var shippedMigrations = map[int64]string{
 	9011: "9011_gateway_entries.sql",
 	9012: "9012_review_run_publication.sql",
 	9013: "9013_app_settings_process_inventory.sql",
-
-	20261020173311321: "20261020173311321_preview_poll_sessions.sql",
+	9014: "9014_preview_poll_sessions.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
