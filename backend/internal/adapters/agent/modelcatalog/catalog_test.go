@@ -27,6 +27,24 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	}
 }
 
+// OpenCode 2.0.14 exits 0 with no output the first time `models` runs in a
+// folder, so every new project started with a failed, empty catalog.
+func TestOpenCodeV2RetriesEmptyFirstRunInNewFolder(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "opencode2")
+	script := "#!/bin/sh\nif [ ! -f seen ]; then : > seen; exit 0; fi\nprintf 'anthropic/claude-opus-5-5\\n'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"HOME": t.TempDir(), "XDG_CACHE_HOME": t.TempDir(), "XDG_CONFIG_HOME": t.TempDir()}
+	catalog, err := discoverCommandCatalog(context.Background(), "opencode-v2", binary, t.TempDir(), env, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "anthropic/claude-opus-5-5" {
+		t.Fatalf("models = %#v, want the second run's list", catalog.Models)
+	}
+}
+
 func TestNormalizeShowsConcreteNameForDefaultCatalogModel(t *testing.T) {
 	got := normalize([]ports.AgentModelInfo{
 		{ID: "opus", Label: "Opus (default)"},
