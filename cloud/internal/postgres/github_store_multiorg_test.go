@@ -379,6 +379,13 @@ func TestCompleteGitHubInstallationNamesOwnerUnderLegacyUnique(t *testing.T) {
 	if err := goose.UpToContext(ctx, migrateDB, "migrations", 54); err != nil {
 		t.Fatalf("apply migrations through 00054: %v", err)
 	}
+	// The store reads columns later migrations add (00081's access scope);
+	// add them here without dropping the legacy unique constraint under test.
+	if _, err := migrateDB.ExecContext(ctx, `ALTER TABLE ao_github_installations
+		ADD COLUMN access_scope TEXT NOT NULL DEFAULT 'installation',
+		ADD COLUMN scope_user_id UUID`); err != nil {
+		t.Fatalf("add access scope columns to the legacy schema: %v", err)
+	}
 
 	pool, err := pgxpool.New(ctx, schemaURL)
 	if err != nil {

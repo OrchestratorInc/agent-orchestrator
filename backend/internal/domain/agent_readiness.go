@@ -1,6 +1,12 @@
 package domain
 
-import "time"
+import (
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
 
 // AgentInstallationState is the normalized result of locating a harness CLI.
 type AgentInstallationState string
@@ -111,6 +117,151 @@ type AgentAuthenticationObservation struct {
 	AttemptedAt *time.Time               `json:"attemptedAt" format:"date-time"`
 	ReasonCode  string                   `json:"reasonCode"`
 	Reason      string                   `json:"reason"`
+	// Account names the account the check observed, when the harness reports
+	// one. It is display-only and present only with authorized or configured.
+	Account     *AgentAccountIdentity `json:"account,omitempty"`
+	Diagnostics []AgentAuthDiagnostic `json:"diagnostics,omitempty"`
+}
+
+// AgentAccountMethod is how a harness is signed in.
+type AgentAccountMethod string
+
+const (
+	// AgentAccountMethodAccount is a sign-in to the provider's account.
+	AgentAccountMethodAccount AgentAccountMethod = "account"
+	// AgentAccountMethodAPIKey is an API key.
+	AgentAccountMethodAPIKey AgentAccountMethod = "api_key"
+	// AgentAccountMethodToken is an OAuth, setup or session token supplied
+	// without an account profile, such as CLAUDE_CODE_OAUTH_TOKEN.
+	AgentAccountMethodToken AgentAccountMethod = "token"
+)
+
+// AgentCredentialSourceKind is where a harness's credential was found.
+type AgentCredentialSourceKind string
+
+const (
+	// AgentCredentialSourceEnvironment is an environment variable.
+	AgentCredentialSourceEnvironment AgentCredentialSourceKind = "environment"
+	// AgentCredentialSourceFile is a credential or config file.
+	AgentCredentialSourceFile AgentCredentialSourceKind = "file"
+	// AgentCredentialSourceCommand is the harness's own status command.
+	AgentCredentialSourceCommand AgentCredentialSourceKind = "command"
+	// AgentCredentialSourceKeychain is the operating system's keychain.
+	AgentCredentialSourceKeychain AgentCredentialSourceKind = "keychain"
+)
+
+// AgentAccountIdentity is what a harness reports about its signed-in account.
+// Every field is optional. None of it proves the credential works, and none of
+// it is provider or storage identity: no account ids, tokens or paths.
+type AgentAccountIdentity struct {
+	Email        string `json:"email,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Organization string `json:"organization,omitempty"`
+	Plan         string `json:"plan,omitempty"`
+	// Provider is the model provider an API key or login is for, when the
+	// harness supports several (e.g. "zai-coding-plan").
+	Provider string             `json:"provider,omitempty"`
+	Method   AgentAccountMethod `json:"method,omitempty" enum:"account,api_key,token"`
+	// SourceKind and Source name the evidence the check relied on: a variable
+	// name, a home-relative file path or a command. Never a credential value.
+	SourceKind AgentCredentialSourceKind `json:"sourceKind,omitempty" enum:"environment,file,command,keychain"`
+	Source     string                    `json:"source,omitempty"`
+}
+
+// EnvironmentSource names an environment variable as the credential source.
+func EnvironmentSource(name string) AgentAccountIdentity {
+	return AgentAccountIdentity{SourceKind: AgentCredentialSourceEnvironment, Source: name}
+}
+
+// CommandSource names the status command that reported the login, by the
+// command's base name and arguments.
+func CommandSource(binary string, args ...string) AgentAccountIdentity {
+	return AgentAccountIdentity{SourceKind: AgentCredentialSourceCommand, Source: strings.Join(append([]string{filepath.Base(binary)}, args...), " ")}
+}
+
+// KeychainSource names the operating system keychain as the source.
+func KeychainSource() AgentAccountIdentity {
+	return AgentAccountIdentity{SourceKind: AgentCredentialSourceKeychain}
+}
+
+// WithMethod returns a copy with the sign-in method set.
+func (a AgentAccountIdentity) WithMethod(method AgentAccountMethod) AgentAccountIdentity {
+	a.Method = method
+	return a
+}
+
+// Merge fills fields a leaves empty from other.
+func (a AgentAccountIdentity) Merge(other AgentAccountIdentity) AgentAccountIdentity {
+	if a.Email == "" {
+		a.Email = other.Email
+	}
+	if a.Name == "" {
+		a.Name = other.Name
+	}
+	if a.Organization == "" {
+		a.Organization = other.Organization
+	}
+	if a.Plan == "" {
+		a.Plan = other.Plan
+	}
+	if a.Provider == "" {
+		a.Provider = other.Provider
+	}
+	if a.Method == "" {
+		a.Method = other.Method
+	}
+	if a.SourceKind == "" {
+		a.SourceKind, a.Source = other.SourceKind, other.Source
+	}
+	return a
+}
+
+// maxAccountIdentityRunes bounds each display field; 254 is the longest
+// deliverable email address.
+const maxAccountIdentityRunes = 254
+
+// Sanitized trims each field, drops values with control characters or past
+// the length bound, and returns nil when nothing displayable remains.
+func (a AgentAccountIdentity) Sanitized() *AgentAccountIdentity {
+	clean := AgentAccountIdentity{
+		Email:        displayAccountField(a.Email),
+		Name:         displayAccountField(a.Name),
+		Organization: displayAccountField(a.Organization),
+		Plan:         displayAccountField(a.Plan),
+		Provider:     displayAccountField(a.Provider),
+	}
+	switch a.Method {
+	case AgentAccountMethodAccount, AgentAccountMethodAPIKey, AgentAccountMethodToken:
+		clean.Method = a.Method
+	}
+	switch a.SourceKind {
+	case AgentCredentialSourceEnvironment, AgentCredentialSourceFile, AgentCredentialSourceCommand:
+		if source := displayAccountField(a.Source); source != "" {
+			clean.SourceKind, clean.Source = a.SourceKind, source
+		}
+	case AgentCredentialSourceKeychain:
+		clean.SourceKind = a.SourceKind
+	}
+	if !strings.Contains(clean.Email, "@") {
+		clean.Email = ""
+	}
+	if clean == (AgentAccountIdentity{}) {
+		return nil
+	}
+	return &clean
+}
+
+func displayAccountField(value string) string {
+	value = strings.TrimSpace(value)
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maxAccountIdentityRunes {
+		return ""
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return ""
+		}
+	}
+	return value
 }
 
 // AgentReadinessSnapshot is the daemon-owned readiness view for one harness.

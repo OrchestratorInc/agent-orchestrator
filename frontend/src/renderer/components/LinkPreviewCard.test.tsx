@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppLink } from "./AppLink";
+import { AppBrowserLinkContext, AppLink } from "./AppLink";
+import { LinkPreviewCard } from "./LinkPreviewCard";
+import { aoBridge } from "../lib/bridge";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
@@ -19,6 +21,35 @@ afterEach(() => {
 });
 
 describe("AppLink link preview", () => {
+	it("opens the original URL from the preview title and domain using the chat browser context", async () => {
+		const originalUrl = "https://click.example.com/original";
+		const open = vi.fn();
+		getMock.mockResolvedValue({ data: { url: "https://redirect.example.com/", title: "Clickable title" } });
+		render(<AppBrowserLinkContext.Provider value={open}><AppLink href={originalUrl}>docs</AppLink></AppBrowserLinkContext.Provider>);
+		fireEvent.pointerOver(screen.getByRole("link", { name: "docs" }), { pointerType: "mouse" });
+		const title = await screen.findByRole("link", { name: "Clickable title" });
+		expect(title).toHaveAttribute("href", originalUrl);
+		fireEvent.click(title);
+		fireEvent.click(screen.getByRole("link", { name: "redirect.example.com" }));
+		expect(open.mock.calls).toEqual([[originalUrl], [originalUrl]]);
+	});
+
+	it.each([{}, { ctrlKey: true }, { metaKey: true }, { altKey: true }])("opens externally when no browser is available or modifiers are used: %j", (modifiers) => {
+		const open = vi.fn();
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<LinkPreviewCard url={url} preview={{ url, title: "Open page" }} onBrowserOpen={Object.keys(modifiers).length ? open : undefined} />);
+		fireEvent.click(screen.getByRole("link", { name: "Open page" }), modifiers);
+		expect(external).toHaveBeenCalledExactlyOnceWith(url);
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	it("keeps the domain clickable when the preview has no title", () => {
+		const open = vi.fn();
+		render(<LinkPreviewCard url={url} preview={{ url }} onBrowserOpen={open} />);
+		fireEvent.click(screen.getByRole("link", { name: "example.com" }));
+		expect(open).toHaveBeenCalledExactlyOnceWith(url);
+	});
+
 	it("fetches and shows the preview card on hover", async () => {
 		getMock.mockResolvedValue({
 			data: {

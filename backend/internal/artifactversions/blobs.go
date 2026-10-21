@@ -18,7 +18,8 @@ import (
 // the blobs directory is the remainder of an interrupted write.
 const incomingPrefix = "incoming-"
 
-var errTooLarge = errors.New("artifact file exceeds the version size limit")
+// ErrTooLarge reports a file over the version size limit.
+var ErrTooLarge = errors.New("artifact file exceeds the version size limit")
 
 // blobsDir is the blob store's directory, relative to the artifact directory.
 var blobsDir = filepath.Join(sessionartifacts.VersionsDir, "blobs")
@@ -45,7 +46,7 @@ func blobPath(sum string) string {
 
 // stage copies src into a temporary file in the store while hashing it, so
 // the stored bytes are exactly the hashed ones. Content larger than limit is
-// discarded and reported as errTooLarge.
+// discarded and reported as ErrTooLarge.
 func (b blobStore) stage(src io.Reader, limit int64) (stagedBlob, error) {
 	if err := b.root.MkdirAll(blobsDir, 0o755); err != nil {
 		return stagedBlob{}, err
@@ -60,7 +61,7 @@ func (b blobStore) stage(src io.Reader, limit int64) (stagedBlob, error) {
 		err = closeErr
 	}
 	if err == nil && n > limit {
-		err = errTooLarge
+		err = ErrTooLarge
 	}
 	if err != nil {
 		_ = b.root.Remove(tmp)
@@ -138,4 +139,24 @@ func (b blobStore) sweep() error {
 		}
 	}
 	return nil
+}
+
+// read returns the blob named by sum, refusing one larger than limit.
+func (b blobStore) read(sum string, limit int64) ([]byte, error) {
+	if len(sum) != sha256.Size*2 {
+		return nil, fs.ErrNotExist
+	}
+	f, err := b.root.Open(blobPath(sum))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, ErrTooLarge
+	}
+	return data, nil
 }

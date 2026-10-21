@@ -1,4 +1,4 @@
-import { Check, Keyboard, Pencil, Plus, RotateCcw, Search, X } from "lucide-react";
+import { Check, Keyboard, Pencil, Plus, RotateCcw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-maps";
@@ -19,9 +19,11 @@ import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { SettingsRow } from "./SettingsRow";
+import { SettingsSearch } from "./SettingsSearch";
+import { SettingsSection } from "./SettingsSection";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -82,9 +84,11 @@ function definition(id: AppShortcutId) {
 
 export function KeyboardShortcutsContent({
 	active,
+	titleHidden,
 	isMac = isMacPlatform(),
 }: {
 	active: boolean;
+	titleHidden?: boolean;
 	isMac?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -96,6 +100,8 @@ export function KeyboardShortcutsContent({
 	const [recording, setRecordingState] = useState<RecordingState | null>(null);
 	const [conflict, setConflict] = useState<ConflictState | null>(null);
 	const [confirmResetAll, setConfirmResetAll] = useState(false);
+	const [resettingAll, setResettingAll] = useState(false);
+	const [resetAllError, setResetAllError] = useState<string | null>(null);
 	const [toast, setToast] = useState<ToastState | null>(null);
 	const toastTimerRef = useRef<number | undefined>(undefined);
 	const activeRef = useRef(active);
@@ -298,206 +304,198 @@ export function KeyboardShortcutsContent({
 
 	return (
 		<>
-			<div className="relative flex flex-col gap-3">
-				<div className="sticky top-0 z-10 -mt-[18px] flex flex-col gap-3 bg-(--color-bg-primary) pb-2 pt-[18px]">
-					<label className="flex h-9! min-w-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
-						<Search
-							className="size-4 shrink-0 text-settings-muted"
-							aria-hidden="true"
-						/>
-						<Input
-							type="search"
-							className="h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-settings-label outline-none ring-0 placeholder:text-settings-muted focus-visible:ring-0"
-							placeholder={t("shortcut.searchPlaceholder")}
-							value={query}
-							onChange={(event) => setQuery(event.target.value)}
-						/>
-					</label>
-				</div>
-
-				<div className="flex flex-col gap-2">
-					{filteredShortcuts.map((shortcut) => {
-						const bindings = effectiveShortcutBindings(shortcut.id, isMac, overrides);
-						const modified = Object.hasOwn(overrides, shortcut.id);
-						const isRecording = recording?.id === shortcut.id;
-						return (
-							<div
-								className={cn(
-									"flex min-h-(--size-settings-row) items-center rounded-lg bg-(--color-bg-settings-row) px-0 py-3",
-									isRecording && "bg-settings-row-hover",
-								)}
-								key={shortcut.id}
-							>
-								<div className="flex min-w-0 flex-1 items-center gap-3">
-									<div className="min-w-0 flex-1">
-										<div className="flex items-center gap-2">
-											<span className="text-sm font-medium text-settings-label">{shortcutLabel(shortcut.id, t)}</span>
-											{modified ? (
-												<span className="rounded-full bg-settings-menu-selected px-2 py-0.5 text-micro text-settings-muted">
-													{t("shortcut.modified")}
-												</span>
-											) : null}
-										</div>
-										<span className="text-caption text-settings-muted">{shortcutCategoryLabel(shortcut.category, t)}</span>
-									</div>
-
-									{shortcut.customizable === false ? (
-										<span className="ml-auto text-caption text-settings-muted">{t("shortcut.fixedIndexed")}</span>
-									) : isRecording ? (
-										<div className="ml-auto flex min-w-52 items-center gap-2 rounded-md border border-(--color-settings-accent) px-3 py-2 text-caption text-settings-label">
-											<Keyboard className="size-icon-base animate-pulse" aria-hidden="true" />
-											{t("shortcut.pressRecording")}
-										</div>
-									) : (
-										<div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-											{bindings.length === 0 ? (
-												<span className="text-caption text-settings-muted">{t("shortcut.unassigned")}</span>
-											) : (
-												bindings.map((candidate, index) => (
-													<span
-														className="inline-flex items-center rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input)"
-														key={`${candidate.key}-${index}`}
-													>
-														<kbd className="px-2 py-1.5 font-mono text-caption text-settings-label">
-															{shortcutBindingLabel(candidate, isMac)}
-														</kbd>
-														<Tooltip>
-															<TooltipTrigger asChild>
-																<button
-																	type="button"
-																	className="mr-1 inline-flex size-5 items-center justify-center rounded text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-																	aria-label={t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(candidate, isMac), name: shortcutLabel(shortcut.id, t) })}
-																	onClick={() => void handleRemoveBinding(shortcut.id, index)}
-																>
-																	<X className="size-3" aria-hidden="true" />
-																</button>
-															</TooltipTrigger>
-															<TooltipContent>{t("shortcut.remove")}</TooltipContent>
-														</Tooltip>
-													</span>
-												))
-											)}
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<button
-														type="button"
-														className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-														aria-label={t("shortcut.changeAria", { name: shortcutLabel(shortcut.id, t) })}
-														onClick={() => void beginRecording({ id: shortcut.id, mode: "replace" })}
-													>
-														<Pencil className="size-icon-base" aria-hidden="true" />
-													</button>
-												</TooltipTrigger>
-												<TooltipContent>{t("shortcut.change")}</TooltipContent>
-											</Tooltip>
-											{bindings.length < 2 ? (
-												<Tooltip>
-													<TooltipTrigger asChild>
-														<button
-															type="button"
-															className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-															aria-label={t("shortcut.addAltAria", { name: shortcutLabel(shortcut.id, t) })}
-															onClick={() => void beginRecording({ id: shortcut.id, mode: "add" })}
-														>
-															<Plus className="size-icon-base" aria-hidden="true" />
-														</button>
-													</TooltipTrigger>
-													<TooltipContent>{t("shortcut.add")}</TooltipContent>
-												</Tooltip>
-											) : null}
-											{modified ? (
-												<Tooltip>
-													<TooltipTrigger asChild>
-														<button
-															type="button"
-															className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-															aria-label={t("shortcut.resetAria", { name: shortcutLabel(shortcut.id, t) })}
-															onClick={() => void handleResetBinding(shortcut.id)}
-														>
-															<RotateCcw className="size-icon-base" aria-hidden="true" />
-														</button>
-													</TooltipTrigger>
-													<TooltipContent>{t("shortcut.reset")}</TooltipContent>
-												</Tooltip>
-											) : null}
-										</div>
-									)}
-								</div>
-							</div>
-						);
-					})}
-					{filteredShortcuts.length === 0 ? (
-						<p className="py-8 text-center text-sm text-settings-muted">{t("shortcut.noMatching")}</p>
-					) : null}
-				</div>
-
-				<div className="flex items-center gap-3 pt-2">
-					{confirmResetAll ? (
-						<>
-							<span className="mr-auto text-caption text-settings-muted">{t("shortcut.resetAllConfirm")}</span>
-							<Button type="button" variant="footer" className="rounded-md" onClick={() => setConfirmResetAll(false)}>
-								{t("confirm.cancel")}
-							</Button>
+			<SettingsSection
+				title={t("settings.keyboardShortcuts")}
+				titleHidden={titleHidden}
+				grouped
+				toolbar={
+					<SettingsSearch
+						aria-label={t("shortcut.searchPlaceholder")}
+						placeholder={t("shortcut.searchPlaceholder")}
+						value={query}
+						onChange={setQuery}
+						trailing={
 							<Button
 								type="button"
-								variant="footer-primary"
-								className="rounded-md"
-								onClick={() => {
-									void resetAll().then(() => {
-										setConfirmResetAll(false);
-										showToast({ title: t("shortcut.restoredDefaults") });
-									});
-								}}
+								variant="ghost"
+								size="sm"
+								className="text-settings-muted hover:text-settings-label"
+								disabled={Object.keys(overrides).length === 0}
+								onClick={() => setConfirmResetAll(true)}
 							>
+								<RotateCcw aria-hidden="true" />
 								{t("shortcut.resetAll")}
 							</Button>
-						</>
-					) : (
-						<Button
-							type="button"
-							variant="footer"
-							className="rounded-md"
-							disabled={Object.keys(overrides).length === 0}
-							onClick={() => setConfirmResetAll(true)}
+						}
+					/>
+				}
+			>
+				{filteredShortcuts.map((shortcut) => {
+					const bindings = effectiveShortcutBindings(shortcut.id, isMac, overrides);
+					const modified = Object.hasOwn(overrides, shortcut.id);
+					const isRecording = recording?.id === shortcut.id;
+					return (
+						<SettingsRow
+							className={cn(isRecording && "bg-settings-row-hover")}
+							key={shortcut.id}
+							label={
+								<span className="flex items-center gap-2">
+									{shortcutLabel(shortcut.id, t)}
+									{modified ? (
+										<span className="rounded-full bg-settings-menu-selected px-2 py-0.5 text-micro text-settings-muted">
+											{t("shortcut.modified")}
+										</span>
+									) : null}
+								</span>
+							}
+							description={shortcutCategoryLabel(shortcut.category, t)}
 						>
-							<RotateCcw className="size-icon-base" aria-hidden="true" />
-							{t("shortcut.resetAll")}
-						</Button>
-					)}
-				</div>
+							{shortcut.customizable === false ? (
+								<span className="ml-auto text-xs text-settings-muted">{t("shortcut.fixedIndexed")}</span>
+							) : isRecording ? (
+								<div className="ml-auto flex min-w-52 items-center gap-2 rounded-md border border-(--color-settings-accent) px-3 py-2 text-caption text-settings-label">
+									<Keyboard className="size-icon-base animate-pulse" aria-hidden="true" />
+									{t("shortcut.pressRecording")}
+								</div>
+							) : (
+								<div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+									{bindings.length === 0 ? (
+										<span className="text-xs text-settings-muted">{t("shortcut.unassigned")}</span>
+									) : (
+										bindings.map((candidate, index) => (
+											<span
+												className="inline-flex items-center rounded-md bg-(--color-bg-settings-input)"
+												key={`${candidate.key}-${index}`}
+											>
+												<kbd className="px-2 py-1.5 font-mono text-caption text-settings-label">
+													{shortcutBindingLabel(candidate, isMac)}
+												</kbd>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<button
+															type="button"
+															className="mr-1 inline-flex size-5 items-center justify-center rounded text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
+															aria-label={t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(candidate, isMac), name: shortcutLabel(shortcut.id, t) })}
+															onClick={() => void handleRemoveBinding(shortcut.id, index)}
+														>
+															<X className="size-3" aria-hidden="true" />
+														</button>
+													</TooltipTrigger>
+													<TooltipContent>{t("shortcut.remove")}</TooltipContent>
+												</Tooltip>
+											</span>
+										))
+									)}
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<button
+												type="button"
+												className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
+												aria-label={t("shortcut.changeAria", { name: shortcutLabel(shortcut.id, t) })}
+												onClick={() => void beginRecording({ id: shortcut.id, mode: "replace" })}
+											>
+												<Pencil className="size-icon-base" aria-hidden="true" />
+											</button>
+										</TooltipTrigger>
+										<TooltipContent>{t("shortcut.change")}</TooltipContent>
+									</Tooltip>
+									{bindings.length < 2 ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													type="button"
+													className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
+													aria-label={t("shortcut.addAltAria", { name: shortcutLabel(shortcut.id, t) })}
+													onClick={() => void beginRecording({ id: shortcut.id, mode: "add" })}
+												>
+													<Plus className="size-icon-base" aria-hidden="true" />
+												</button>
+											</TooltipTrigger>
+											<TooltipContent>{t("shortcut.add")}</TooltipContent>
+										</Tooltip>
+									) : null}
+									{modified ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													type="button"
+													className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
+													aria-label={t("shortcut.resetAria", { name: shortcutLabel(shortcut.id, t) })}
+													onClick={() => void handleResetBinding(shortcut.id)}
+												>
+													<RotateCcw className="size-icon-base" aria-hidden="true" />
+												</button>
+											</TooltipTrigger>
+											<TooltipContent>{t("shortcut.reset")}</TooltipContent>
+										</Tooltip>
+									) : null}
+								</div>
+							)}
+						</SettingsRow>
+					);
+				})}
+				{filteredShortcuts.length === 0 ? (
+					<div className="settings-row-bar text-sm text-settings-muted">{t("shortcut.noMatching")}</div>
+				) : null}
+			</SettingsSection>
 
-				{toast ? (
-					<div
-						className="pointer-events-auto sticky bottom-2 z-10 ml-auto flex w-[min(24rem,100%)] items-start gap-3 rounded-xl border border-(--color-border-settings-dialog) bg-settings-dialog px-4 py-3 shadow-[var(--shadow-settings-dialog)]"
-						role="status"
-						aria-live="polite"
-						aria-atomic="true"
-					>
-						<Check className="mt-0.5 size-icon-base shrink-0 text-success" aria-hidden="true" />
-						<div className="min-w-0 flex-1">
-							<p className="text-sm font-medium text-settings-label">{toast.title}</p>
-							{toast.body ? <p className="mt-0.5 text-caption text-settings-muted">{toast.body}</p> : null}
-						</div>
-						{toast.undo ? (
-							<button
-								type="button"
-								className="text-caption font-medium text-settings-label hover:underline"
-								onClick={() => void toast.undo?.()}
-							>
-								{t("shortcut.undo")}
-							</button>
-						) : null}
+			{toast ? (
+				<div
+					className="pointer-events-auto sticky bottom-2 z-10 ml-auto flex w-[min(24rem,100%)] items-start gap-3 rounded-xl border border-(--color-border-settings-dialog) bg-settings-dialog px-4 py-3 shadow-[var(--shadow-settings-dialog)]"
+					role="status"
+					aria-live="polite"
+					aria-atomic="true"
+				>
+					<Check className="mt-0.5 size-icon-base shrink-0 text-success" aria-hidden="true" />
+					<div className="min-w-0 flex-1">
+						<p className="text-sm font-medium text-settings-label">{toast.title}</p>
+						{toast.body ? <p className="mt-0.5 text-caption text-settings-muted">{toast.body}</p> : null}
+					</div>
+					{toast.undo ? (
 						<button
 							type="button"
-							className="text-settings-muted hover:text-settings-label"
-							aria-label={t("shortcut.dismissNotification")}
-							onClick={() => setToast(null)}
+							className="text-caption font-medium text-settings-label hover:underline"
+							onClick={() => void toast.undo?.()}
 						>
-							<X className="size-icon-base" aria-hidden="true" />
+							{t("shortcut.undo")}
 						</button>
-					</div>
-				) : null}
-			</div>
+					) : null}
+					<button
+						type="button"
+						className="text-settings-muted hover:text-settings-label"
+						aria-label={t("shortcut.dismissNotification")}
+						onClick={() => setToast(null)}
+					>
+						<X className="size-icon-base" aria-hidden="true" />
+					</button>
+				</div>
+			) : null}
+
+			<ConfirmDialog
+				open={confirmResetAll}
+				title={t("shortcut.resetAll")}
+				description={t("shortcut.resetAllConfirm")}
+				confirmLabel={t("shortcut.resetAll")}
+				destructive
+				busy={resettingAll}
+				error={resetAllError}
+				onOpenChange={(next) => {
+					setConfirmResetAll(next);
+					if (!next) setResetAllError(null);
+				}}
+				onConfirm={() => {
+					if (resettingAll) return;
+					setResettingAll(true);
+					setResetAllError(null);
+					resetAll()
+						.then(() => {
+							setConfirmResetAll(false);
+							showToast({ title: t("shortcut.restoredDefaults") });
+						})
+						.catch(() => setResetAllError(t("shortcut.resetAllFailed")))
+						.finally(() => setResettingAll(false));
+				}}
+			/>
 
 			<ConfirmDialog
 				open={conflict !== null}

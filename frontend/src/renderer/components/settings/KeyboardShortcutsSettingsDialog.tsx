@@ -2,7 +2,7 @@ import { Check, Keyboard, Pencil, Plus, RotateCcw, Search, X } from "lucide-reac
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-maps";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
 	APP_SHORTCUTS,
 	effectiveShortcutBindings,
@@ -61,7 +61,7 @@ function definition(id: AppShortcutId) {
 	return APP_SHORTCUTS.find((shortcut) => shortcut.id === id);
 }
 
-export function KeyboardShortcutsSettingsDialog({
+export const KeyboardShortcutsSettingsDialog = memo(function KeyboardShortcutsSettingsDialog({
 	open,
 	onOpenChange,
 	isMac = isMacPlatform(),
@@ -549,4 +549,4 @@ export function KeyboardShortcutsSettingsDialog({
 			/>
 		</>
 	);
-}
+});

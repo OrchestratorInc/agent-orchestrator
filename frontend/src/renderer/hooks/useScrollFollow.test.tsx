@@ -1,6 +1,20 @@
 import { renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useScrollFollow } from "./useScrollFollow";
+
+const motion = vi.hoisted(() => {
+	vi.stubEnv("MODE", "development");
+	return { reduced: true };
+});
+vi.mock("motion/react", () => ({ useReducedMotion: () => motion.reduced }));
+
+let now = 100_000;
+beforeEach(() => {
+	now = 100_000;
+	motion.reduced = true;
+	vi.spyOn(performance, "now").mockImplementation(() => now);
+});
+afterEach(() => vi.restoreAllMocks());
 
 function viewport({ scrollHeight, clientHeight, scrollTop }: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
 	const node = document.createElement("div");
@@ -50,17 +64,46 @@ describe("useScrollFollow", () => {
 	});
 
 	it("keeps repeated upward reader intent authoritative during virtualized streamed growth", () => {
-		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		motion.reduced = false;
+		const node = viewport({ scrollHeight: 4800, clientHeight: 800, scrollTop: 4000 });
+		const scrollTo = vi.fn();
+		node.scrollTo = scrollTo;
 		const { result } = renderHook(() => useScrollFollow(() => node));
 
-		result.current.hold(10_000);
-		node.scrollTop = 0;
-		result.current.hold(10_000);
-		expect(result.current.isOwnScroll(0)).toBe(false);
+		result.current.glideToEnd();
+		expect(node.scrollTo).toHaveBeenCalledWith({ top: 4000, behavior: "smooth" });
+		now += 100;
+		node.scrollTop = 3200;
+		result.current.hold(10_000, 4000);
+		result.current.hold(10_000, 3200);
+		expect(result.current.isOwnScroll(3200)).toBe(false);
 
-		Object.defineProperty(node, "scrollHeight", { configurable: true, value: 4300 });
+		Object.defineProperty(node, "scrollHeight", { configurable: true, value: 5100 });
+		scrollTo.mockClear();
 		result.current.followEnd();
-		expect(node.scrollTop).toBe(0);
+		expect(node.scrollTop).toBe(3200);
+		expect(node.scrollTo).not.toHaveBeenCalled();
+	});
+
+	it("cancels a genuine recent smooth aim before classifying repeated reader input", () => {
+		motion.reduced = false;
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 2000 });
+		let top = 2000;
+		const writes = vi.fn((value: number) => { top = value; });
+		Object.defineProperty(node, "scrollTop", { configurable: true, get: () => top, set: writes });
+		node.scrollTo = vi.fn();
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.glideToEnd();
+		expect(node.scrollTo).toHaveBeenCalledWith({ top: 3200, behavior: "smooth" });
+		now += 100;
+		top = 2800;
+		result.current.hold(250);
+		expect(writes.mock.calls).toEqual([[2801], [2800]]);
+		expect(result.current.isFlying()).toBe(false);
+		top = 2400;
+		result.current.hold(250);
+		expect(writes.mock.calls).toEqual([[2801], [2800]]);
+		expect(result.current.isOwnScroll(2400)).toBe(false);
 	});
 
 	it("keeps a genuine virtualizer adjustment app-owned after nested reader intent", () => {

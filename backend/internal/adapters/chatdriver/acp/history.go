@@ -24,6 +24,11 @@ type refreshableConversation struct {
 	*conversation
 	loadMu      sync.Mutex
 	loadRequest acpsdk.LoadSessionRequest
+	// closeBeforeReload closes the session before every session/load after the
+	// first, for agents that refuse to load a session this connection already
+	// holds. See Config.CloseSessionBeforeReload.
+	closeBeforeReload bool
+	loaded            bool
 }
 
 var _ ports.ChatHistoryRefresher = (*refreshableConversation)(nil)
@@ -45,6 +50,11 @@ func (c *refreshableConversation) loadHistory(ctx context.Context) (acpsdk.LoadS
 		return acpsdk.LoadSessionResponse{}, err
 	}
 
+	if c.loaded && c.closeBeforeReload {
+		if _, err := c.conn.CloseSession(ctx, acpsdk.CloseSessionRequest{SessionId: c.loadRequest.SessionId}); err != nil {
+			return acpsdk.LoadSessionResponse{}, fmt.Errorf("close ACP session before reload: %w", err)
+		}
+	}
 	c.beginHistoryReplay(string(c.loadRequest.SessionId))
 	response, err := c.conn.LoadSession(ctx, c.loadRequest)
 	if err != nil {
@@ -57,6 +67,7 @@ func (c *refreshableConversation) loadHistory(ctx context.Context) (acpsdk.LoadS
 		c.abortHistoryReplay()
 		return acpsdk.LoadSessionResponse{}, err
 	}
+	c.loaded = true
 	return response, nil
 }
 
@@ -284,10 +295,12 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 	if messageID == "" {
 		if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
-		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" {
+		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" && !c.history.turnHasProvider {
 			// An absent message id cannot describe a reliable boundary. Keep
 			// contiguous chunks together; conforming agents (including Claude) send
-			// stable UUIDs, so this is only a compatibility fallback.
+			// stable UUIDs, so this is only a compatibility fallback. Once the agent
+			// has answered, the next user chunk is a new prompt: merging id-less
+			// turns broke every checkpoint match on a Terminal to Chat switch.
 			messageID = c.history.turnUserID
 		} else {
 			c.history.fallbackID++

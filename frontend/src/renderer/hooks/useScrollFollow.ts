@@ -87,10 +87,10 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	 * left the end. Used for wheel and key intent: the scroll it causes (if any) then
 	 * decides, so a gesture consumed by a nested scroller never unpins the log.
 	 */
-	const hold = useCallback((ms: number) => {
+	const hold = useCallback((ms: number, from?: number) => {
 		const continuingIntent = performance.now() < holdUntil.current && readerIntentFrom.current != null;
 		cancel();
-		if (!continuingIntent) readerIntentFrom.current = getNode()?.scrollTop ?? null;
+		if (!continuingIntent) readerIntentFrom.current = from ?? getNode()?.scrollTop ?? null;
 		holdUntil.current = performance.now() + ms;
 	}, [cancel, getNode]);
 

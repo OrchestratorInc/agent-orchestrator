@@ -90,7 +90,7 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onF
 			{previewOpen && webLink && !previewQuery.isError && (
 				<HoverCardContent collisionPadding={8}>
 					{previewQuery.data ? (
-						<LinkPreviewCard url={href} preview={previewQuery.data} />
+						<LinkPreviewCard url={href} preview={previewQuery.data} onBrowserOpen={openBrowser} />
 					) : (
 						<LinkPreviewCardLoading />
 					)}

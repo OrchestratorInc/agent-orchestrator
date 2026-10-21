@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getApiBaseUrl } from "../lib/api-client";
 import { useHostConnection } from "../hooks/useHostConnection";
+import { IMAGE_CHECKERBOARD, isRasterImagePath } from "../lib/image-files";
 import { cn } from "../lib/utils";
 import type { WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 
@@ -9,14 +10,7 @@ type WorkspaceFileStatus = WorkspaceFileSummary["status"];
 type ImageDiffSide = "before" | "after";
 
 /** Matches the image extensions supported by the daemon's blob endpoint. */
-export function isWorkspaceImagePath(path: string): boolean {
-	return /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
-}
-
-// A light checkerboard so transparent pixels read as transparent instead of
-// borrowing the panel background.
-const CHECKERBOARD =
-	"repeating-conic-gradient(color-mix(in srgb, currentColor 8%, transparent) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px";
+export const isWorkspaceImagePath = isRasterImagePath;
 
 // workspaceImageUrl points an <img> straight at the daemon's blob route. The
 // route sets no-store, so `version` — the file detail's load timestamp — is what
@@ -120,7 +114,7 @@ function ImageDiffPane({
 					{size ? t("files.imageDimensions", { height: size.height, width: size.width }) : null}
 				</span>
 			</figcaption>
-			<div className="grid min-h-24 place-items-center p-3 text-passive" style={{ background: CHECKERBOARD }}>
+			<div className="grid min-h-24 place-items-center p-3 text-passive" style={{ background: IMAGE_CHECKERBOARD }}>
 				{failed ? (
 					<p className="text-center text-xs text-muted-foreground">{t("files.imagePreviewFailed")}</p>
 				) : (

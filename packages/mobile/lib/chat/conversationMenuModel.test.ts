@@ -12,7 +12,7 @@ describe("conversation overflow menu", () => {
 		});
 
 		expect(sections).toEqual([
-			{ title: "Workspace", actions: ["shell", "preview", "pull_requests"] },
+			{ title: "Workspace", actions: ["files", "shell", "preview", "pull_requests"] },
 			{ title: "Conversation", actions: ["map", "refresh", "settings", "rename", "pin", "compact"] },
 			{ title: "Agent", actions: ["terminal_ui", "reload_mcp"] },
 			// Last, and alone: the only entry here that destroys something.

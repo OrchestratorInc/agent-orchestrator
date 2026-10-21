@@ -29,6 +29,10 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 	if err != nil {
 		return worker.ChatModelsResponse{}, err
 	}
+	if command.Path == claudeCodeBinary {
+		// List models with the Claude Code that will run them.
+		command.Path = EnsureClaudeCode(ctx)
+	}
 	process := exec.CommandContext(ctx, adapter)
 	configureProviderProcess(process)
 	process.Dir = command.Dir
@@ -220,15 +224,38 @@ func claudeModesFromOptions(options []acp.SessionConfigOption, modes *acp.Sessio
 
 func claudeModelCatalog(models []worker.ChatModel, model, effort string, provider []agentcreds.Model, options []acp.SessionConfigOption, modes *acp.SessionModeState) worker.ChatModelsResponse {
 	for i := range models {
-		for _, offered := range provider {
-			if offered.ID == models[i].ID {
-				if offered.DisplayName != "" {
-					models[i].DisplayName = offered.DisplayName
-				}
-				models[i].Efforts = append([]string(nil), offered.Efforts...)
-				break
+		if offered, ok := providerModelFor(models[i], provider); ok {
+			if offered.ID == models[i].ID && offered.DisplayName != "" {
+				models[i].DisplayName = offered.DisplayName
 			}
+			models[i].Efforts = append([]string(nil), offered.Efforts...)
 		}
 	}
 	return worker.ChatModelsResponse{Models: models, Model: model, ReasoningEffort: effort, Modes: claudeModesFromOptions(options, modes)}
+}
+
+// providerModelFor finds the provider model behind a Claude ACP choice. An
+// alias such as "opus" has no provider ID of its own, but Claude ACP describes
+// what it resolves to ("Opus 5.5 · Best for everyday, complex tasks"), and the
+// provider names that model "Claude Opus 5.5". Without this match an alias,
+// the usual pick, would carry no effort levels and Chat would hide the effort
+// control whenever one is selected.
+func providerModelFor(model worker.ChatModel, provider []agentcreds.Model) (agentcreds.Model, bool) {
+	for _, offered := range provider {
+		if offered.ID == model.ID {
+			return offered, true
+		}
+	}
+	resolved, _, _ := strings.Cut(model.Description, "·")
+	resolved = strings.TrimSpace(resolved)
+	if resolved == "" {
+		return agentcreds.Model{}, false
+	}
+	for _, offered := range provider {
+		name := strings.TrimSpace(offered.DisplayName)
+		if strings.EqualFold(name, resolved) || strings.EqualFold(name, "Claude "+resolved) {
+			return offered, true
+		}
+	}
+	return agentcreds.Model{}, false
 }

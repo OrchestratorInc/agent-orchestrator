@@ -110,6 +110,7 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 					// native conversation id independently of its selected model.
 					rec.IsTerminated = operation != "native_resume" && operation != "chat_resume"
 					rec.Activity.State = domain.ActivityExited
+					runtime.exitedLaunches = map[string]bool{rec.Metadata.RuntimeLaunchID: true}
 					rec.Metadata.AgentSessionID = "native-model-test"
 					if operation == "saved_prompt" {
 						rec.Metadata.AgentSessionID = ""

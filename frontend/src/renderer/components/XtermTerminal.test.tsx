@@ -2713,17 +2713,15 @@ describe("XtermTerminal", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("requires Ctrl for a session link while an application captures mouse input", () => {
+	it("opens a session link on a plain click while an application captures mouse input", () => {
 		const onSessionLinkOpen = vi.fn();
 		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 		const handler = (state.lastTerminal!.options.linkHandler as {
 			activate: (event: MouseEvent, uri: string) => void;
 		}).activate;
-		handler({ ctrlKey: false } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
-		handler({ ctrlKey: true } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).toHaveBeenCalledTimes(1);
+		handler({ ctrlKey: false, metaKey: false } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
 	it("routes malformed AO OSC links to in-app feedback without external dispatch", () => {
