@@ -542,16 +542,35 @@ func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 	return ""
 }
 
-// sourceModified asks git whether a checkout has modified tracked files.
-// known is false when git cannot answer, including when the repository git
-// finds is not rooted at the checkout itself.
+// sourceModified asks git whether a checkout has modified tracked files, or
+// an untracked (including ignored) English catalog in the bundled locales or
+// plugins directories Hermes reads from the checkout. known is false when
+// git cannot answer, including when the repository git finds is not rooted
+// at the checkout itself.
 func sourceModified(ctx context.Context, root string) (modified, known bool) {
 	top, ok := runGit(ctx, root, "rev-parse", "--show-toplevel")
 	if !ok || !sameDir(top, root) {
 		return false, false
 	}
 	status, ok := runGit(ctx, root, "status", "--porcelain", "--untracked-files=no")
-	return status != "", ok
+	if !ok {
+		return false, false
+	}
+	if status != "" {
+		return true, true
+	}
+	// Without --exclude-standard, --others also lists ignored files.
+	untracked, ok := runGit(ctx, root, "ls-files", "--others", "--", "locales", "plugins")
+	if !ok {
+		return false, false
+	}
+	for _, path := range strings.Split(untracked, "\n") {
+		dir, name := filepath.Split(filepath.FromSlash(path))
+		if englishLocaleFile.MatchString(name) && filepath.Base(filepath.Clean(dir)) == "locales" {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 func sameDir(a, b string) bool {

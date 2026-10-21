@@ -1607,6 +1607,41 @@ func TestSourceCleanlinessIgnoresInheritedGitContextAndCache(t *testing.T) {
 	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("cached confirmation reused for a modified source checkout")
 	}
+	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: Working\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An untracked or ignored English catalog in the checkout's bundled
+	// locales or plugins is loaded natively without touching tracked files.
+	for _, rel := range []string{"locales/en.tui.yaml", "plugins/pack/locales/en.yaml"} {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cli: {}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
+			t.Errorf("untracked %s accepted", rel)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(rel+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
+			t.Errorf("ignored %s accepted", rel)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "locales", "de.yaml"), []byte("cli: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, why, _ := probeNativeVersion(t.Context(), launcher); !ok {
+		t.Fatalf("untracked non-English catalog refused: %s", why)
+	}
+	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW LOCAL BUSY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// AO's own git context must not supply another tree's cleanliness.
 	t.Setenv("GIT_WORK_TREE", clean)
 	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
