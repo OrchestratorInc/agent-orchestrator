@@ -99,7 +99,10 @@ read_fork_suffixes() {
 # номер 9000+ автоматически (с warning'ом).
 CANONICAL_LIST="add_user_config:9001
 session_provider_stamp:9006
-gateway_entries:9011"
+gateway_entries:9011
+review_run_publication:9012
+app_settings_process_inventory:9013
+preview_poll_sessions:9014"
 
 is_fork_suffix() {
   printf '%s\n' "$FORK_SUFFIXES" | grep -qx "$1"
@@ -167,6 +170,7 @@ MAX_NUM="$(ls "$MIG_DIR"/*.sql | sed 's|.*/||' | sed 's|_.*||' \
 MOVES=""        # "old_file new_file" по строке
 REMOVES=""      # byte-identical дубли
 LIST_STRIPS=""  # суффиксы, которые надо убрать из forkLocalMigrations
+AUTO_NEXT=""    # следующий свободный авто-канонический 9000+ (см. блок ниже)
 
 for f in $OURS; do
   # Имя без номера И без .sql — ровно в том виде, в каком суффиксы записаны
@@ -192,11 +196,18 @@ for f in $OURS; do
   if [ -n "$FORK_SUFFIXES" ] && printf '%s\n' "$FORK_SUFFIXES" | grep -qx "$suffix"; then
     target="$(canonical_for "$suffix" || true)"
     if [ -z "$target" ]; then
-      # Авто-канонический номер: максимум по занятым 9000+ + 1.
-      reserved_max="$(ls "$MIG_DIR"/*.sql | sed 's|.*/||' | sed 's|_.*||' \
-        | sed 's|^0*||' | grep -E '^[0-9]+$' | awk '$1 >= 9000' | sort -n | tail -1)"
-      [ -z "$reserved_max" ] && reserved_max=9000
-      target=$((reserved_max + 1))
+      # Авто-канонический номер: максимум по занятым 9000+ + 1; каждому
+      # следующему без-канонному суффиксу — следующий номер, иначе все
+      # получают один и тот же «max+1» и ломают ledger дублями (инцидент
+      # 2026-10-21: три суффикса → один номер 20261020173311322).
+      if [ -z "$AUTO_NEXT" ]; then
+        reserved_max="$(ls "$MIG_DIR"/*.sql | sed 's|.*/||' | sed 's|_.*||' \
+          | sed 's|^0*||' | grep -E '^[0-9]+$' | awk '$1 >= 9000' | sort -n | tail -1)"
+        [ -z "$reserved_max" ] && reserved_max=9000
+        AUTO_NEXT=$((reserved_max + 1))
+      fi
+      target=$AUTO_NEXT
+      AUTO_NEXT=$((AUTO_NEXT + 1))
       echo "!! суффикс '$suffix' в forkLocalMigrations, но без канона в CANONICAL_LIST — присваиваю $target, добавь в CANONICAL_LIST." >&2
     fi
     cur=$((10#$num))
