@@ -462,7 +462,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
 	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
-	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
@@ -473,7 +472,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
-	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
@@ -1658,13 +1656,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => {
 		if (!hasInspector) return;
 		const current = useUiStore.getState().inspectorSessions[uiSessionId];
-		if (browserOnly) {
-			if (terminated && current?.browserUnseen) setBrowserUnseen(uiSessionId, false);
-			return;
-		}
+		if (browserOnly) return;
 		if (!hasBrowserContent) {
 			if (current?.browserContentRevealed) setBrowserContentRevealed(uiSessionId, false);
-			else if (current?.browserUnseen) setBrowserUnseen(uiSessionId, false);
 			return;
 		}
 		if (current?.browserContentRevealed) return;
@@ -1676,18 +1670,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		previewRevision,
 		uiSessionId,
 		setBrowserContentRevealed,
-		setBrowserUnseen,
 		terminated,
 	]);
 
 	const revealBrowserPanel = useCallback(() => {
 		setBrowserContentRevealed(uiSessionId, true);
-		setBrowserUnseen(uiSessionId, false);
 		if (browserIsVisible(uiSessionId, browserPoppedOut)) return;
 		setFilesPoppedOut(false);
 		transitionInspectorView("browser");
 		setInspectorOpenForSession(uiSessionId, true);
-	}, [browserPoppedOut, uiSessionId, setBrowserContentRevealed, setBrowserUnseen, transitionInspectorView, setInspectorOpenForSession]);
+	}, [browserPoppedOut, uiSessionId, setBrowserContentRevealed, transitionInspectorView, setInspectorOpenForSession]);
 
 	useEffect(() => {
 		if (!hasInspector) return;
@@ -1754,14 +1746,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setInspectorOpenForSession,
 		revealBrowserPanel,
 	]);
-
-	// Opening Browser consumes the pending activity indicator, including the
-	// case where the inspector was collapsed while already parked on Browser.
-	useEffect(() => {
-		if (hasInspector && browserIsVisible(uiSessionId, browserPoppedOut)) {
-			setBrowserUnseen(uiSessionId, false);
-		}
-	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
 	const handleToggleInspector = useCallback(() => {
 		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
@@ -2173,16 +2157,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								variant="icon"
 							>
 								{browserOnly ? (
-									<span className="relative inline-flex">
-										<Globe2 aria-hidden="true" className="size-icon-md" />
-										{!isInspectorOpen && browserUnseen ? (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-												data-testid="orchestrator-browser-unseen-indicator"
-											/>
-										) : null}
-									</span>
+									<Globe2 aria-hidden="true" className="size-icon-md" />
 								) : (
 									<PanelRight className="size-icon-md" aria-hidden="true" />
 								)}

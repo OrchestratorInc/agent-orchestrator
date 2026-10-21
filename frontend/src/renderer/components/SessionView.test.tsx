@@ -863,10 +863,6 @@ function inspectorOpen(sessionId: string): boolean {
 	return inspectorIsOpen(useUiStore.getState().inspectorSessions, sessionId);
 }
 
-function browserUnseen(sessionId: string): boolean {
-	return Boolean(useUiStore.getState().inspectorSessions[sessionId]?.browserUnseen);
-}
-
 function inspectorButton(): HTMLElement {
 	const button = screen.getByText("pop browser").closest("button");
 	if (!button) throw new Error("missing inspector button");
@@ -5118,15 +5114,13 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-orch")).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
 		// Quiet by default: passive agent activity after the user closes the
-		// panel neither reopens it nor badges the Browser tab.
+		// panel does not reopen it.
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(screen.queryByTestId("orchestrator-browser-unseen-indicator")).not.toBeInTheDocument();
 		browserViewState.agentBrowserActive = false;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(screen.queryByTestId("orchestrator-browser-unseen-indicator")).not.toBeInTheDocument();
 	});
 
 	it("reveals the orchestrator Browser when the agent first uses it", () => {
@@ -5492,7 +5486,6 @@ describe("SessionView", () => {
 		expect(screen.getByText("terminal center")).toBeInTheDocument();
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
-		expect(browserUnseen("sess-1")).toBe(false);
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
@@ -5507,7 +5500,6 @@ describe("SessionView", () => {
 
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	it("keeps Summary on session entry and reveals Browser only for later preview work", () => {
@@ -5523,12 +5515,10 @@ describe("SessionView", () => {
 
 		rerender(<SessionView sessionId="sess-2" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-2")).toBe(false);
 
 		secondWorker.previewRevision = 2;
 		rerender(<SessionView sessionId="sess-2" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
-		expect(browserUnseen("sess-2")).toBe(false);
 	});
 
 	it.each([false, true])("keeps the empty Browser selected after its final tab closes (popped out: %s)", (poppedOut) => {
@@ -5560,7 +5550,6 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
-		expect(browserUnseen("sess-1")).toBe(false);
 
 		// The same start event remains in the hook when the user closes Browser.
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
@@ -5582,7 +5571,6 @@ describe("SessionView", () => {
 		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "passive-1" };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	it("reveals a fast open command even when React only renders its finished event", () => {
@@ -5682,7 +5670,6 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-2")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).not.toHaveAttribute("inert");
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-2")).toBe(false);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 	});
 
@@ -5697,14 +5684,12 @@ describe("SessionView", () => {
 
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-1" />);
-		expect(browserUnseen("sess-1")).toBe(false);
 
 		// Quiet by default: agent activity is not a human-feedback signal, so
 		// leaving Browser during a running command must not badge the tab.
 		act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
 
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	it("does not glow for preview or agent activity while Browser is visible as a popout", () => {
@@ -5721,7 +5706,6 @@ describe("SessionView", () => {
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-1" />);
 
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	it("does not let a previous session's popout consume the destination session's preview glow", () => {
@@ -5746,7 +5730,6 @@ describe("SessionView", () => {
 
 		rerender(<SessionView sessionId="sess-2" />);
 
-		expect(browserUnseen("sess-2")).toBe(false);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 	});
 
@@ -5758,7 +5741,6 @@ describe("SessionView", () => {
 		worker.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
-		expect(browserUnseen("sess-1")).toBe(false);
 
 		act(() => {
 			useUiStore.getState().setInspectorView("sess-1", "summary");
@@ -5771,7 +5753,6 @@ describe("SessionView", () => {
 
 		expect(inspectorOpen("sess-1")).toBe(false);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(false);
 
 		worker.previewUrl = "http://localhost:3000/";
 		worker.previewRevision = 3;
@@ -5779,7 +5760,6 @@ describe("SessionView", () => {
 
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	// Regression: a terminated session's `previewUrl` is a stale DB fact —
@@ -5808,7 +5788,6 @@ describe("SessionView", () => {
 		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action: "open", phase: "started", commandId: "terminated-1" };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	// Quiet by default: agent-browser commands (fill, click, snapshot, …) are
@@ -5821,6 +5800,5 @@ describe("SessionView", () => {
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-1" />);
 
-		expect(browserUnseen("sess-1")).toBe(false);
 	});
 });

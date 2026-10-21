@@ -47,7 +47,6 @@ import {
 	deleteNotification,
 	fetchNotificationsPage,
 	getCachedNotifications,
-	getCachedUnreadCount,
 	isNotificationsCacheFromClear,
 	keepLatestNotificationsPage,
 	markAllCachedNotificationsRead,
@@ -200,7 +199,11 @@ describe("notification cache helpers", () => {
 		expect(mergeUnreadNotification(qc, notification())).toBe(false);
 
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toHaveLength(1);
-		expect(getCachedUnreadCount(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toBe(1);
+		expect(
+			getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey)).every(
+				(item) => item.status === "unread",
+			),
+		).toBe(true);
 	});
 
 	// Opening the panel acknowledges what it rendered; history keeps the rows.
@@ -214,7 +217,11 @@ describe("notification cache helpers", () => {
 
 		markAllCachedNotificationsRead(qc, ["ntf_1"]);
 
-		expect(getCachedUnreadCount(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toBe(0);
+		expect(
+			getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey)).filter(
+				(item) => item.status === "unread",
+			),
+		).toHaveLength(0);
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey))).toEqual([
 			expect.objectContaining({ id: "ntf_1", status: "read" }),
 		]);
@@ -238,7 +245,11 @@ describe("notification cache helpers", () => {
 		markAllCachedNotificationsRead(qc, []);
 
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toEqual([]);
-		expect(getCachedUnreadCount(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toBe(0);
+		expect(
+			getCachedNotifications(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey)).filter(
+				(item) => item.status === "unread",
+			),
+		).toHaveLength(0);
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey))).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ id: "ntf_1", status: "read" }),
@@ -275,7 +286,7 @@ describe("notification cache helpers", () => {
 
 		const cache = qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey);
 		expect(cache?.pages[0]?.nextCursor).toBe("older");
-		expect(getCachedUnreadCount(cache)).toBe(1);
+		expect(cache?.pages[0]?.unreadCount).toBe(1);
 		expect(getCachedNotifications(cache).every((item) => item.status === "read")).toBe(true);
 
 		// The still-unread row past the loaded page arrives on the next page and
@@ -328,11 +339,15 @@ describe("notification cache helpers", () => {
 
 		const unread = qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey);
 		expect(unread?.pages[0]?.nextCursor).toBe("older-unread");
-		expect(getCachedUnreadCount(unread)).toBe(0);
+		expect(
+			getCachedNotifications(unread).filter((item) => item.status === "unread"),
+		).toHaveLength(0);
 		expect(getCachedNotifications(unread)).toHaveLength(NOTIFICATION_PAGE_SIZE);
 
 		const recent = qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey);
-		expect(getCachedUnreadCount(recent)).toBe(0);
+		expect(
+			getCachedNotifications(recent).filter((item) => item.status === "unread"),
+		).toHaveLength(0);
 		expect(getCachedNotifications(recent).find((item) => item.id === "ntf_101")?.status).toBe("read");
 	});
 
@@ -353,7 +368,7 @@ describe("notification cache helpers", () => {
 				(item) => item.id === "old",
 			)?.title,
 		).toBe("updated");
-		expect(getCachedUnreadCount(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toBe(2);
+		expect(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey)?.pages[0]?.unreadCount).toBe(2);
 	});
 
 	it("caps and rebases the cache when live events grow the newest page past 100", () => {
@@ -395,7 +410,6 @@ describe("notification cache helpers", () => {
 		expect(getCachedNotifications(unread)).toEqual([
 			expect.objectContaining({ id: "ntf_1", status: "unread", resolvedAt: "2026-06-16T11:00:00Z" }),
 		]);
-		expect(getCachedUnreadCount(unread)).toBe(1);
 		expect(unread?.pages[0]?.unresolvedCount).toBe(0);
 
 		const recent = qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey);
