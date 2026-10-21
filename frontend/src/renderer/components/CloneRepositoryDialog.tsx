@@ -4,6 +4,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
+import type { CloneProgress } from "../hooks/usePreparedClone";
+import type { MessageKey } from "../i18n/messages";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -21,6 +23,7 @@ export type CloneRepositorySelection = CloneRepositoryDetails & {
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
+	cloning = false,
 	disabled,
 	error,
 	onBack,
@@ -30,11 +33,13 @@ export default function CloneRepositoryDialog({
 	onError,
 	onChooseRemoteDestination,
 	open,
+	progress = null,
 	remote = false,
 	shake: externalShake = false,
 	existingProjectPaths = [],
 	value,
 }: {
+	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
 	onBack: () => void;
@@ -44,6 +49,7 @@ export default function CloneRepositoryDialog({
 	onError?: (message: string) => void;
 	onChooseRemoteDestination?: () => void;
 	open: boolean;
+	progress?: CloneProgress | null;
 	remote?: boolean;
 	shake?: boolean;
 	existingProjectPaths?: readonly string[];
@@ -362,12 +368,21 @@ export default function CloneRepositoryDialog({
 								) : null}
 							</div>
 
+							{cloning ? <CloneProgressReport progress={progress} repository={repositoryName} /> : null}
+
 						</div>
 
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
-								<Button type="submit" variant="primary" disabled={!canContinue}>
-									{t("createProject.cloneContinue")}
+								<Button type="submit" variant="primary" disabled={!canContinue || cloning}>
+									{cloning ? (
+										<>
+											<LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+											{t("createProject.cloning")}
+										</>
+									) : (
+										t("createProject.cloneContinue")
+									)}
 								</Button>
 							</div>
 						</div>
@@ -376,6 +391,101 @@ export default function CloneRepositoryDialog({
 			</Dialog.Portal>
 		</Dialog.Root>
 	);
+}
+
+// Phase labels keyed by the schema's phase union, so a new backend phase fails
+// typecheck instead of rendering a raw key.
+const clonePhaseLabelKeys: Record<CloneProgress["phase"], MessageKey> = {
+	connecting: "createProject.clonePhase.connecting",
+	enumerating: "createProject.clonePhase.enumerating",
+	counting: "createProject.clonePhase.counting",
+	compressing: "createProject.clonePhase.compressing",
+	receiving: "createProject.clonePhase.receiving",
+	resolving: "createProject.clonePhase.resolving",
+	updating: "createProject.clonePhase.updating",
+	finalizing: "createProject.clonePhase.finalizing",
+};
+
+// Live git progress for the clone the dialog just submitted: phase, per-phase
+// percent, and the transfer statistics git last reported. With no snapshot yet
+// (first poll pending, or an older daemon without the route) it degrades to
+// the plain busy label.
+function CloneProgressReport({ progress, repository }: { progress: CloneProgress | null; repository: string | null }) {
+	const { t } = useTranslation();
+	const phaseLabel = progress ? t(clonePhaseLabelKeys[progress.phase]) : t("createProject.cloning");
+	const percent = progress ? Math.min(100, Math.max(0, Math.round(progress.percent))) : 0;
+	const stats: string[] = [];
+	if (progress?.transferredBytes) {
+		stats.push(t("createProject.cloneProgressTransferred", { size: formatTransferBytes(progress.transferredBytes) }));
+	}
+	if (progress?.speedBytesPerSecond) {
+		stats.push(t("createProject.cloneProgressSpeed", { speed: formatTransferBytes(progress.speedBytesPerSecond) }));
+	}
+	const etaSeconds = cloneEtaSeconds(progress);
+	if (etaSeconds !== null) {
+		stats.push(t("createProject.cloneProgressEta", { eta: formatEta(etaSeconds) }));
+	}
+
+	return (
+		<div className="space-y-1.5" data-testid="clone-progress">
+			<div className="flex items-baseline justify-between gap-3">
+				<span className="min-w-0 truncate text-[13px] font-medium text-foreground">{phaseLabel}</span>
+				{progress && (percent > 0 || progress.phase === "finalizing") ? (
+					<span className="shrink-0 text-[12px] tabular-nums text-[var(--color-text-import-muted)]">{percent}%</span>
+				) : null}
+			</div>
+			<div
+				aria-label={t("createProject.cloneProgressLabel", { repository: repository ?? "" })}
+				aria-valuemax={100}
+				aria-valuemin={0}
+				aria-valuenow={percent > 0 ? percent : undefined}
+				className="h-1 overflow-hidden rounded-full bg-muted"
+				role="progressbar"
+			>
+				<div
+					className="h-full rounded-full bg-status-working transition-[width] motion-reduce:transition-none"
+					style={{ width: `${percent}%` }}
+				/>
+			</div>
+			{stats.length > 0 ? (
+				<p className="text-pretty text-[12px] leading-5 tabular-nums text-[var(--color-text-import-muted)]">
+					{stats.join(" · ")}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * Estimated seconds remaining, derived the way git's own percent line works:
+ * the transferred byte count is a fraction of the transfer equal to the
+ * percent, so the remaining bytes over the current rate gives the ETA. Null
+ * whenever the math would divide by an unknown.
+ */
+export function cloneEtaSeconds(progress: CloneProgress | null | undefined): number | null {
+	if (!progress) return null;
+	const percent = progress.percent ?? 0;
+	const transferred = progress.transferredBytes ?? 0;
+	const speed = progress.speedBytesPerSecond ?? 0;
+	if (percent <= 0 || percent >= 100 || transferred <= 0 || speed <= 0) return null;
+	const estimatedTotalBytes = transferred / (percent / 100);
+	return Math.max(0, (estimatedTotalBytes - transferred) / speed);
+}
+
+export function formatEta(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+	if (seconds < 60) return `${Math.round(seconds)}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function formatTransferBytes(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+	const value = bytes / 1024 ** exponent;
+	return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
 }
 
 function RepositoryOwnerIcon({

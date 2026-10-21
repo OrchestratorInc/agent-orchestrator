@@ -28,6 +28,7 @@ func (c *ProjectsController) Register(r chi.Router) {
 	r.Post("/projects", c.add)
 	r.Post("/projects/clone", c.clone)
 	r.Post("/projects/clone/prepare", c.prepareClone)
+	r.Get("/projects/clone/progress", c.cloneProgress)
 	r.Post("/projects/clone/cleanup", c.cleanupPreparedClone)
 	r.Post("/projects/initialize", c.initialize)
 	r.Get("/projects/{id}", c.get)
@@ -53,6 +54,25 @@ func (c *ProjectsController) prepareClone(w http.ResponseWriter, r *http.Request
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// cloneProgress answers lightweight polling from clients that are waiting on
+// an in-flight POST /projects/clone/prepare.
+func (c *ProjectsController) cloneProgress(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/projects/clone/progress")
+		return
+	}
+	query := r.URL.Query()
+	progress, err := c.Mgr.CloneProgress(r.Context(), projectsvc.CloneProgressQuery{
+		RemoteURL:         query.Get("remoteUrl"),
+		DestinationParent: query.Get("destinationParent"),
+	})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, progress)
 }
 
 func (c *ProjectsController) cleanupPreparedClone(w http.ResponseWriter, r *http.Request) {

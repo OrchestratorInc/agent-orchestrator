@@ -1,6 +1,10 @@
 package project
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import (
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
 
 // GetResult is the discriminated result returned by Service.Get.
 type GetResult struct {
@@ -42,6 +46,28 @@ type ClonePreparationResult struct {
 type ClonePreparationCleanupInput struct {
 	Path          string `json:"path" minLength:"1"`
 	PreparationID string `json:"preparationId" minLength:"1"`
+}
+
+// CloneProgressQuery identifies a running clone by the same inputs the client
+// sent to prepare, so the daemon can derive the matching progress entry.
+type CloneProgressQuery struct {
+	RemoteURL         string `json:"remoteUrl" minLength:"1"`
+	DestinationParent string `json:"destinationParent" minLength:"1"`
+}
+
+// CloneProgress is the latest observed state of one in-flight clone. Phase is
+// the git progress section currently running; Percent, items, bytes, and speed
+// are the most recent values git reported for that phase (zero when git has
+// not reported them yet).
+type CloneProgress struct {
+	Phase               string    `json:"phase" enum:"connecting,enumerating,counting,compressing,receiving,resolving,updating,finalizing"`
+	Percent             float64   `json:"percent"`
+	ItemsDone           uint64    `json:"itemsDone,omitempty"`
+	ItemsTotal          uint64    `json:"itemsTotal,omitempty"`
+	TransferredBytes    uint64    `json:"transferredBytes,omitempty"`
+	SpeedBytesPerSecond float64   `json:"speedBytesPerSecond,omitempty"`
+	StartedAt           time.Time `json:"startedAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 // InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.

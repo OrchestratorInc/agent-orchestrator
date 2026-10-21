@@ -1,7 +1,14 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import CloneRepositoryDialog, { joinCloneDestination, repositoryNameFromGitUrl, sameProjectPath } from "./CloneRepositoryDialog";
+import CloneRepositoryDialog, {
+	cloneEtaSeconds,
+	formatEta,
+	formatTransferBytes,
+	joinCloneDestination,
+	repositoryNameFromGitUrl,
+	sameProjectPath,
+} from "./CloneRepositoryDialog";
 
 function cloneDialogProps(
 	overrides: Partial<React.ComponentProps<typeof CloneRepositoryDialog>> = {},
@@ -269,5 +276,88 @@ describe("clone repository input", () => {
 		await act(async () => resolvePicker?.("/stale/path"));
 
 		expect(onChange).not.toHaveBeenCalled();
+	});
+});
+
+describe("clone progress", () => {
+	it("stays quiet when no clone is running", async () => {
+		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+		renderCloneDialog();
+
+		expect(screen.queryByTestId("clone-progress")).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+	});
+
+	it("shows the busy state without fabricated numbers before the first snapshot", () => {
+		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+		renderCloneDialog({ cloning: true, disabled: true });
+
+		const region = screen.getByTestId("clone-progress");
+		expect(within(region).getByText("Cloning...")).toBeInTheDocument();
+		expect(within(region).getByRole("progressbar")).toBeInTheDocument();
+		expect(within(region).queryByText(/transferred/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cloning..." })).toBeDisabled();
+	});
+
+	it("renders phase, percent, and transfer statistics from the latest snapshot", () => {
+		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+		renderCloneDialog({
+			cloning: true,
+			disabled: true,
+			progress: {
+				phase: "receiving",
+				percent: 45,
+				itemsDone: 1234,
+				itemsTotal: 2748,
+				transferredBytes: 2 * 1024 * 1024,
+				speedBytesPerSecond: 1.5 * 1024 * 1024,
+				startedAt: "2026-10-12T00:00:00Z",
+				updatedAt: "2026-10-12T00:00:01Z",
+			},
+		});
+
+		expect(screen.getByText("Receiving objects")).toBeInTheDocument();
+		expect(screen.getByText("45%")).toBeInTheDocument();
+		expect(screen.getByText("2.0 MB transferred · 1.5 MB/s · 2s left")).toBeInTheDocument();
+		const bar = screen.getByRole("progressbar", { name: "Cloning web-app" });
+		expect(bar).toHaveAttribute("aria-valuenow", "45");
+	});
+});
+
+describe("clone progress helpers", () => {
+	const snapshot = (overrides: Partial<Parameters<typeof cloneEtaSeconds>[0] & Record<string, unknown>> = {}) => ({
+		phase: "receiving",
+		percent: 50,
+		transferredBytes: 1024 * 1024,
+		speedBytesPerSecond: 1024 * 1024,
+		...overrides,
+	}) as Parameters<typeof cloneEtaSeconds>[0];
+
+	it("estimates the remaining seconds from git's percent and rate", () => {
+		// 1 MiB at 50% means a 2 MiB transfer; 1 MiB remains at 1 MiB/s.
+		expect(cloneEtaSeconds(snapshot())).toBe(1);
+	});
+
+	it("returns null while the size or rate is unknown", () => {
+		expect(cloneEtaSeconds(null)).toBeNull();
+		expect(cloneEtaSeconds(snapshot({ percent: 0 }))).toBeNull();
+		expect(cloneEtaSeconds(snapshot({ percent: 100 }))).toBeNull();
+		expect(cloneEtaSeconds(snapshot({ transferredBytes: 0 }))).toBeNull();
+		expect(cloneEtaSeconds(snapshot({ speedBytesPerSecond: 0 }))).toBeNull();
+	});
+
+	it("formats durations compactly", () => {
+		expect(formatEta(0)).toBe("0s");
+		expect(formatEta(45)).toBe("45s");
+		expect(formatEta(250)).toBe("4m 10s");
+		expect(formatEta(3720)).toBe("1h 2m");
+	});
+
+	it("formats transfer sizes the way downloads do", () => {
+		expect(formatTransferBytes(0)).toBe("0 B");
+		expect(formatTransferBytes(512)).toBe("512 B");
+		expect(formatTransferBytes(2 * 1024)).toBe("2.0 KB");
+		expect(formatTransferBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+		expect(formatTransferBytes(3 * 1024 * 1024 * 1024)).toBe("3.0 GB");
 	});
 });
