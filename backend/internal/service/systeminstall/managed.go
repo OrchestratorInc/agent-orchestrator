@@ -116,8 +116,17 @@ func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	return record, true
 }
 
+// managedCLINames fixes the executable a managed install puts in bin/ for
+// targets whose resolved binary has another name. OpenCode v2 resolves its own
+// opencode-v2 launcher but installs bin/opencode, and the Copilot resolver
+// follows the npm loader to its platform binary (copilot-darwin-arm64).
+var managedCLINames = map[Target]string{
+	TargetOpencodeV2: "opencode",
+	TargetCopilot:    "copilot",
+}
+
 // managedCLIName is the executable name sessions launch, taken from the
-// binary AO resolved before the update.
+// binary AO resolved before the update. managedCLINames overrides it.
 func managedCLIName(baseline *installedBaseline) string {
 	if baseline == nil || baseline.path == "" {
 		return ""
@@ -199,22 +208,15 @@ func nextManagedDir(versionsDir string) string {
 // running session uses is touched; on any failure the new directory is
 // removed and the current release stays as it was.
 func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *installedBaseline, env []string, out io.Writer) error {
-	cli := managedCLIName(baseline)
+	cli := managedCLINames[plan.Target]
+	if cli == "" {
+		cli = managedCLIName(baseline)
+	}
 	if cli == "" {
 		// A reinstall has no baseline; it repairs the copy AO already manages.
 		if record, ok := s.readManagedRecord(plan.Target); ok {
 			cli = record.CLI
 		}
-	}
-	// V1 and V2 share the native executable name but have distinct managed
-	// launchers. A v2 launcher baseline must still install bin/opencode.
-	if plan.Target == TargetOpencodeV2 {
-		cli = "opencode"
-	}
-	// The Copilot resolver follows the npm loader to its platform binary
-	// (copilot-darwin-arm64), but packages and sessions use bin/copilot.
-	if plan.Target == TargetCopilot {
-		cli = "copilot"
 	}
 	if cli == "" {
 		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")

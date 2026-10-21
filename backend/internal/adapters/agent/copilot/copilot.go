@@ -185,6 +185,9 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if managed, ok := binaryutil.ManagedBinary("copilot"); ok {
+		if native := copilotManagedNativeBinary(managed); native != "" {
+			return native, nil
+		}
 		return managed, nil
 	}
 
@@ -258,6 +261,25 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	}
 
 	return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
+}
+
+// copilotManagedNativeBinary is the native binary behind a managed npm copy's
+// loader launcher, reached through current so the path still follows updates.
+func copilotManagedNativeBinary(launcher string) string {
+	current, ok := binaryutil.ManagedCurrentDir(launcher, "copilot")
+	if !ok {
+		return ""
+	}
+	native := copilotNativeBinaryForLoader(launcher)
+	release, err := filepath.EvalSymlinks(current)
+	if native == "" || err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(release, native)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.Join(current, rel)
 }
 
 func copilotNativeBinaryForLoader(path string) string {
