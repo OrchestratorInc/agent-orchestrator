@@ -57,8 +57,10 @@ const (
 	// an agent prompt would execute it as shell input.
 	SuppressedExited
 	// SuppressedAwaitingUser means the session awaits the human — blocked on a
-	// permission decision (Deliver and Nudge), or waiting at the prompt for
-	// the next instruction (Nudge only).
+	// permission decision (Deliver and Nudge), or waiting at the prompt for the
+	// next instruction (Nudge always; Deliver only on a harness whose
+	// waiting_input cannot be proven a genuine composer — see
+	// SetWaitingInputComposerGate).
 	SuppressedAwaitingUser
 	// SuppressedBusy means the session is mid-turn on a harness that cannot
 	// safely steer an active turn (coordination writes only).
@@ -113,6 +115,12 @@ type Guard struct {
 
 	startupGateMu           sync.RWMutex
 	startupSignalGatesInput func(domain.AgentHarness) bool
+
+	// waitingInputComposerMu guards waitingInputComposerSafe, the adapter
+	// capability predicate declaring that a harness's waiting_input prompt is
+	// a genuine idle composer rather than a masked permission decision.
+	waitingInputComposerMu   sync.RWMutex
+	waitingInputComposerSafe func(domain.AgentHarness) bool
 }
 
 var _ ports.AgentMessenger = (*Guard)(nil)
@@ -134,7 +142,29 @@ func (g *Guard) refuseDeliver(rec domain.SessionRecord) (Outcome, bool) {
 	if rec.Activity.State == domain.ActivityBlocked {
 		return SuppressedAwaitingUser, true
 	}
+	// waiting_input suppresses only when the harness cannot prove the prompt
+	// is a genuine idle composer. Harnesses with no hook that could clear a
+	// blocked state (codex, agy, primeagent — every adapter opting out of
+	// ports.BlockedActivitySignaler) mask their permission-request dialogs AS
+	// waiting_input, so a user send there would paste onto the hidden decision
+	// dialog and its trailing Enter would answer it on the user's behalf — an
+	// unrecoverable action that must surface as a typed error instead of
+	// silent ambiguity (issue #34). An unwired gate keeps the legacy
+	// always-deliverable behavior.
+	if rec.Activity.State == domain.ActivityWaitingInput && !g.waitingInputIsComposer(rec.Harness) {
+		return SuppressedAwaitingUser, true
+	}
 	return SuppressedUnknown, false
+}
+
+// waitingInputIsComposer resolves the adapter capability at the write boundary.
+// A nil predicate means "no adapter contract known" and keeps every
+// waiting_input prompt deliverable, exactly as before the gate existed.
+func (g *Guard) waitingInputIsComposer(harness domain.AgentHarness) bool {
+	g.waitingInputComposerMu.RLock()
+	safe := g.waitingInputComposerSafe
+	g.waitingInputComposerMu.RUnlock()
+	return safe == nil || safe(harness)
 }
 
 func (g *Guard) refuseNudge(rec domain.SessionRecord) (Outcome, bool) {
@@ -174,6 +204,20 @@ func (g *Guard) SetStartupSignalGate(pred func(domain.AgentHarness) bool) {
 	g.startupGateMu.Unlock()
 }
 
+// SetWaitingInputComposerGate supplies the adapter capability predicate that
+// decides whether a harness's waiting_input prompt is a genuine idle composer
+// a user message may address. It must answer true only for harnesses that
+// report a permission dialog AS blocked (ports.BlockedActivitySignaler);
+// harnesses that mask the dialog as waiting_input answer false — today codex,
+// agy, and primeagent — so Deliver refuses there with SuppressedAwaitingUser
+// and the caller sees a typed error instead of a paste landing on the hidden
+// decision. A nil predicate restores the legacy always-deliverable behavior.
+func (g *Guard) SetWaitingInputComposerGate(pred func(domain.AgentHarness) bool) {
+	g.waitingInputComposerMu.Lock()
+	g.waitingInputComposerSafe = pred
+	g.waitingInputComposerMu.Unlock()
+}
+
 // Send satisfies ports.AgentMessenger so a Guard can sit in for the raw
 // messenger. It applies the Deliver policy but FOLDS a suppressed outcome into
 // nil: a caller that learns only "did Send error?" cannot tell that the write
@@ -190,9 +234,11 @@ func (g *Guard) Send(ctx context.Context, id domain.SessionID, msg string) error
 
 // Deliver writes a user-initiated message (or its Enter-only re-submit: an
 // empty msg) into a live agent. Its activity-specific policy refuses when the
-// session is blocked on a pending decision — waiting_input does NOT suppress, because an agent
-// sitting at an idle prompt is exactly where a user message (or the Enter that
-// submits its unsent draft) belongs.
+// session is blocked on a pending decision. waiting_input suppresses when the
+// harness cannot prove the prompt is a genuine idle composer (a masked
+// permission decision — see SetWaitingInputComposerGate); on harnesses that
+// report dialogs AS blocked, an agent sitting at an idle prompt is exactly
+// where a user message (or the Enter that submits its unsent draft) belongs.
 func (g *Guard) Deliver(ctx context.Context, id domain.SessionID, msg string) (Outcome, error) {
 	return g.send(ctx, id, msg, g.refuseDeliver)
 }

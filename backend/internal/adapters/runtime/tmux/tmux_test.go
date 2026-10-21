@@ -1985,6 +1985,97 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	}
 }
 
+// -- SendMessage paste-contract tests (issue #34) --
+
+// TestSendMessagePastesMultilineViaBracketedBuffer pins the bracketed-paste
+// delivery contract for multi-line messages: a multi-line ao send must reach
+// the pane as ONE bracketed paste — not as raw keystrokes whose embedded \n
+// bytes each parser reads differently (claude's parser absorbs them, codex's
+// crossterm maps a raw \n to Ctrl+J outside the paste contract, so the wrapped
+// prompt never lands as one accepted turn and ao send stays silent).
+// paste-buffer -p is the conditional itself: tmux's server wraps only panes
+// whose application enabled ?2004 and inserts byte-identical keystrokes
+// otherwise, so no pane probe is needed.
+func TestSendMessagePastesMultilineViaBracketedBuffer(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	message := "<ao-session-delivery id=\"x\">\nline-one\nline-two\n</ao-session-delivery>"
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, message); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if len(fr.calls) != 3 {
+		t.Fatalf("calls = %d, want 3 (set-buffer, paste-buffer, Enter)", len(fr.calls))
+	}
+	if got := fr.calls[0].args; len(got) != 5 || got[0] != "set-buffer" || got[1] != "-b" ||
+		!strings.HasPrefix(got[2], "ao-send-") || got[3] != "--" {
+		t.Fatalf("set-buffer args = %#v, want set-buffer -b ao-send-* -- <buffer>", got)
+	}
+	bufferName := fr.calls[0].args[2]
+	if fr.calls[0].args[4] != message {
+		t.Fatalf("set-buffer payload = %q, want the full message verbatim", fr.calls[0].args[4])
+	}
+	if got, want := fr.calls[1].args, []string{"paste-buffer", "-b", bufferName, "-d", "-p", "-r", "-t", "sess-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("paste-buffer args = %#v, want %#v", got, want)
+	}
+	if got, want := fr.calls[2].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Enter args = %#v, want %#v", got, want)
+	}
+	for _, call := range fr.calls[:2] {
+		if call.args[0] == "send-keys" {
+			t.Fatalf("keystroke send-keys leaked into the paste path: %#v", call.args)
+		}
+	}
+}
+
+// TestSendMessagePastesStagesLargeBuffersInChunks pins the chunked staging
+// contract: every staged piece stays within r.chunkSize so no set-buffer argv
+// approaches the kernel's per-argument ceiling, and the pieces append (-a)
+// into one buffer that pastes as a single bracketed envelope.
+func TestSendMessagePastesStagesLargeBuffersInChunks(t *testing.T) {
+	r, fr := newTestRuntime(5)
+	message := "aaaaa\nbbbb\ncc"
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, message); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	// chunks() splits on bytes (rune-aligned): "aaaaa"=5, "\nbbbb"=5, "\ncc"=2
+	// => 3 staged pieces + paste + Enter.
+	if len(fr.calls) != 5 {
+		t.Fatalf("calls = %d, want 5 (3 staged pieces, paste-buffer, Enter)", len(fr.calls))
+	}
+	bufferName := fr.calls[0].args[2]
+	wantPieces := []string{"aaaaa", "\nbbbb", "\ncc"}
+	for i, piece := range wantPieces {
+		wantArgs := []string{"set-buffer", "-b", bufferName, "--", piece}
+		if i > 0 {
+			wantArgs = []string{"set-buffer", "-b", bufferName, "-a", "--", piece}
+		}
+		if got := fr.calls[i].args; !reflect.DeepEqual(got, wantArgs) {
+			t.Fatalf("staged piece %d args = %#v, want %#v", i, got, wantArgs)
+		}
+	}
+	if got, want := fr.calls[3].args, []string{"paste-buffer", "-b", fr.calls[0].args[2], "-d", "-p", "-r", "-t", "sess-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("paste-buffer args = %#v, want %#v", got, want)
+	}
+}
+
+// TestSendMessageKeystrokesForSingleLineEvenWithBracketedPaste keeps single-line
+// sends byte-identical to the established keystroke path: without embedded \n
+// there is no parser divergence to paper over, so no paste staging round-trip.
+func TestSendMessageKeystrokesForSingleLineEvenWithBracketedPaste(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "status?"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if countCalls(fr, "set-buffer") != 0 || countCalls(fr, "paste-buffer") != 0 {
+		t.Fatalf("single-line send staged a paste buffer; want the keystroke path")
+	}
+	if len(fr.calls) != 2 {
+		t.Fatalf("calls = %d, want 2 (chunk + Enter)", len(fr.calls))
+	}
+	if got, want := fr.calls[0].args, sendKeysLiteralArgs("sess-1", "status?"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("chunk args = %#v, want %#v", got, want)
+	}
+}
+
 // TestSendMessageEnterSurvivesCallerCancel pins the detached-Enter contract:
 // once the chunks are pasted, a caller cancellation landing in the pre-Enter
 // pause must NOT abandon the send — the pasted draft would sit unsubmitted and

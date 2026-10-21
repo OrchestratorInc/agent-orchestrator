@@ -243,6 +243,72 @@ func TestGuard_TUIWithoutStartupCapabilityAllowsDelivery(t *testing.T) {
 	}
 }
 
+// TestGuard_DeliverRefusesMaskedWaitingInput pins the user-send diagnostics
+// contract for harnesses whose waiting_input is a masked permission decision
+// rather than a genuine idle composer (codex, agy, primeagent — every adapter
+// opting out of ports.BlockedActivitySignaler): a user send must be
+// refused as SuppressedAwaitingUser so ao send returns a typed error instead of
+// pasting into the hidden dialog where the trailing Enter would answer the
+// decision on the user's behalf. Harnesses that report dialogs AS blocked keep
+// today's behavior — their waiting_input is a real composer and user messages
+// belong there.
+func TestGuard_DeliverRefusesMaskedWaitingInput(t *testing.T) {
+	// EmitsBlockedActivity semantics: true for claude-class (dialog is reported
+	// as blocked, so waiting_input is a real composer), false for codex-class.
+	blockedAware := func(domain.AgentHarness) bool { return true }
+	dialogMasking := func(domain.AgentHarness) bool { return false }
+	cases := []struct {
+		name   string
+		gate   func(domain.AgentHarness) bool
+		want   Outcome
+		wantNS int
+	}{
+		{"claude-class composer delivered", blockedAware, Sent, 1},
+		{"codex-class masked dialog refused", dialogMasking, SuppressedAwaitingUser, 0},
+		{"unwired guard keeps legacy delivery", nil, Sent, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msgr := &fakeMessenger{}
+			g := New(&fakeStore{rec: record(domain.ActivityWaitingInput, false), ok: true}, msgr, nil)
+			g.SetWaitingInputComposerGate(tc.gate)
+			got, err := g.Deliver(context.Background(), "s1", "status?")
+			if err != nil {
+				t.Fatalf("Deliver: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("outcome = %v, want %v", got, tc.want)
+			}
+			if len(msgr.sent) != tc.wantNS {
+				t.Fatalf("messenger sends = %d, want %d", len(msgr.sent), tc.wantNS)
+			}
+		})
+	}
+}
+
+// TestGuard_DeliverMaskedWaitingInputDoesNotTouchIdleAndActive pins that the
+// masked-waiting-input refusal never narrows the ordinary deliverable states:
+// an idle codex composer (Stop hook → idle) and an active turn stay writable,
+// which is what keeps normal ao send to a codex worker working.
+func TestGuard_DeliverMaskedWaitingInputDoesNotTouchIdleAndActive(t *testing.T) {
+	refusesAll := func(domain.AgentHarness) bool { return false }
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityActive} {
+		msgr := &fakeMessenger{}
+		g := New(&fakeStore{rec: record(state, false), ok: true}, msgr, nil)
+		g.SetWaitingInputComposerGate(refusesAll)
+		got, err := g.Deliver(context.Background(), "s1", "hello")
+		if err != nil {
+			t.Fatalf("Deliver at %s: %v", state, err)
+		}
+		if got != Sent {
+			t.Fatalf("Deliver at %s: outcome = %v, want Sent", state, got)
+		}
+		if len(msgr.sent) != 1 {
+			t.Fatalf("Deliver at %s: messenger sends = %d, want 1", state, len(msgr.sent))
+		}
+	}
+}
+
 func TestGuard_StoreErrorFailsClosed(t *testing.T) {
 	msgr := &fakeMessenger{}
 	g := New(&fakeStore{err: errors.New("db locked")}, msgr, nil)
