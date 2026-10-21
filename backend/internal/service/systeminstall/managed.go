@@ -197,7 +197,8 @@ func nextManagedDir(versionsDir string) string {
 const (
 	switchFailed = "Installed, but could not switch to it."
 	// After current moved, new sessions already run the new release.
-	setupFailed = "Switched to the new version, but could not finish setting it up."
+	setupFailed  = "Switched to the new version, but could not finish setting it up."
+	recordFailed = "Switched to the new version, but could not record it."
 )
 
 // runManagedInstall installs the update into a new release directory,
@@ -312,7 +313,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 				// every release is kept until no session that may have
 				// launched meanwhile is left.
 				keep = true
-				return installFailed(switchFailed, errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr)))
+				return installFailed(recordFailed, errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr)))
 			}
 			settle()
 			return installFailed(switchFailed, recordErr)

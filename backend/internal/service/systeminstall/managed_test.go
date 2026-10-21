@@ -262,6 +262,47 @@ func TestManagedUpdateFailureKeepsPathsOutOfTheNotice(t *testing.T) {
 	}
 }
 
+func TestManagedInstallCommandFailureIsSummarized(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.failInstall = true
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != "The install command failed." || !strings.Contains(job.Output, "npm failed") {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestManagedProbeWithoutAVersionIsNotACrash(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	commands := f.s.commands
+	f.s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, err := io.WriteString(stdout, "usage: codex [options]\n")
+			return err
+		}
+		return commands.Run(ctx, argv, stdout, stderr)
+	})
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != "The new codex did not report its version." || !strings.Contains(job.Output, "usage: codex") {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestSetupFailureAfterTheSwitchSaysTheSwitchHappened(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	// A directory where managed.json goes makes its write fail after current
+	// has moved to the new release.
+	if err := os.MkdirAll(filepath.Join(f.root, "codex", "managed.json", "blocker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != setupFailed {
+		t.Fatalf("job = %+v", job)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v1") {
+		t.Fatalf("current = %q, want the new release", target)
+	}
+}
+
 func TestFailedRecordSwitchesBackToThePreviousRelease(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
