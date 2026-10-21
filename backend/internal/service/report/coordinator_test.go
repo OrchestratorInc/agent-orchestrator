@@ -144,6 +144,92 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	}
 }
 
+// TestCoordinatorPiggybackLostClaimDoesNotReplayBatch reproduces the issue #101
+// replay cycle: a long turn's claim is stolen past the lease window (daemon
+// restart requeue), the concurrent RunDue path redelivers the batch, and the
+// chat turn's late acknowledgment must not report success. The acknowledged
+// batch must not be injected into a following user message again.
+func TestCoordinatorPiggybackLostClaimDoesNotReplayBatch(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("info", "worker", now, now, "context"))
+	delivery := &coordinatorDelivery{}
+	tokens := []string{"chat-token", "due-token"}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, NewToken: func() string { return tokens[0] }})
+
+	batch, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(batch.Reports) != 1 || batch.Token != "chat-token" {
+		t.Fatalf("prepare = %#v, err = %v", batch, err)
+	}
+	injected := batch.AppendToUserMessage("hello")
+	if !strings.Contains(injected, "context") {
+		t.Fatalf("expected the batch injected into the turn: %q", injected)
+	}
+
+	// The lease window lapses: a daemon restart requeues the stolen claim.
+	store.requeue()
+
+	// The concurrent RunDue path claims with a fresh token and delivers once.
+	tokens[0] = "due-token"
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 {
+		t.Fatalf("deliveries = %d, want exactly one", len(delivery.submissions))
+	}
+
+	// The acknowledged batch cannot be injected into a following turn.
+	next, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(next.Reports) != 0 {
+		t.Fatalf("replayed prepare = %#v, err = %v", next, err)
+	}
+	if again := next.AppendToUserMessage("next turn"); again != "next turn" {
+		t.Fatalf("replayed injection = %q", again)
+	}
+
+	// The late acknowledgment of the stolen claim must not be a silent success.
+	if err := c.AcceptPiggyback(context.Background(), batch); err == nil {
+		t.Fatal("lost-claim acknowledgment succeeded silently")
+	}
+	if c.LostAcknowledgements() != 1 {
+		t.Fatalf("lost acknowledgements = %d, want 1", c.LostAcknowledgements())
+	}
+	if c.Redeliveries() != 1 {
+		t.Fatalf("redeliveries = %d, want 1", c.Redeliveries())
+	}
+}
+
+// TestCoordinatorBusyClaimBlocksRunDue pins the no-crash path: while a piggyback
+// turn holds its claim, a concurrent RunDue delivers nothing, and the healthy
+// acknowledgment still succeeds.
+func TestCoordinatorBusyClaimBlocksRunDue(t *testing.T) {
+	now := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("info", "worker", now, now, "context"))
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, NewToken: func() string { return "chat-token" }})
+
+	batch, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(batch.Reports) != 1 {
+		t.Fatalf("prepare = %#v, err = %v", batch, err)
+	}
+	delay, err := c.RunDue(context.Background())
+	if err != nil || delay >= 0 {
+		t.Fatalf("RunDue while claimed should find nothing due: delay = %v, err = %v", delay, err)
+	}
+	if len(delivery.submissions) != 0 || c.Redeliveries() != 0 {
+		t.Fatalf("claimed batch redelivered: %v", delivery.submissions)
+	}
+	if err := c.AcceptPiggyback(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if remaining, err := c.RunDue(context.Background()); err != nil || remaining >= 0 {
+		t.Fatalf("RunDue after ack should stay idle: delay = %v, err = %v", remaining, err)
+	}
+}
+
 type coordinatorStore struct {
 	mu         sync.Mutex
 	now        time.Time
@@ -210,12 +296,26 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 				continue
 			}
 			s.reports[i].DeliveryBatchID = batchID
+			s.reports[i].DeliveryAttempts++
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
 			claimed = append(claimed, s.reports[i])
 		}
 	}
 	sortReports(claimed)
 	return claimed, nil
+}
+
+// requeue mirrors the daemon-startup RequeueClaimedReports recovery: every
+// claimed report returns to pending with a cleared token while its durable
+// delivery_batch_id survives.
+func (s *coordinatorStore) requeue() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.reports {
+		if s.reports[i].DeliveryState == domain.ReportClaimed {
+			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportPending, "", time.Time{}
+		}
+	}
 }
 func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) (int, error) {
 	s.mu.Lock()

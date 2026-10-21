@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,9 @@ type Coordinator struct {
 	retryDelay time.Duration
 	wake       chan struct{}
 	mu         sync.Mutex
+	// Telemetry for the issue #101 replay cycle: claims that re-deliver a batch
+	// (delivery attempt > 1) and acknowledgments whose token no longer holds it.
+	redeliveries, lostAcknowledgements atomic.Int64
 }
 
 // CoordinatorDeps configures durable scheduling and delivery.
@@ -144,6 +148,25 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	}
 }
 
+// ErrReportBatchLost reports an acknowledgment whose claim token no longer
+// holds the batch: a daemon restart requeue or another path already owns it.
+// Treating it as success silently re-delivers the batch on the next turn.
+var ErrReportBatchLost = errors.New("report batch claim no longer holds the reports")
+
+// ackBatch completes only the delivery attempt holding token. A zero-row
+// acknowledgment means the claim was lost and must not pass as success.
+func (c *Coordinator) ackBatch(ctx context.Context, projectID domain.ProjectID, token string) error {
+	rows, err := c.store.AcknowledgeReportBatch(ctx, projectID, token, c.now().UTC())
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		c.lostAcknowledgements.Add(1)
+		return fmt.Errorf("%w: project %s token %s", ErrReportBatchLost, projectID, token)
+	}
+	return nil
+}
+
 func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
 	target, ok, err := c.activeOrchestrator(ctx, projectID)
 	if err != nil {
@@ -181,8 +204,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
 		return c.release(ctx, batch, err)
 	}
-	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
-	return err
+	return c.ackBatch(ctx, batch.ProjectID, batch.Token)
 }
 
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {
@@ -218,12 +240,34 @@ func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (Pr
 		if lookupErr == nil && found {
 			reports[i].SessionDisplayName = strings.TrimSpace(session.DisplayName)
 		}
+		if reports[i].DeliveryAttempts > 1 {
+			// A batch whose delivery attempt exceeds one has been claimed before:
+			// a release retry, or a stolen claim recovered after a daemon restart.
+			c.redeliveries.Add(1)
+		}
 	}
 	batchID := ""
 	if len(reports) > 0 {
 		batchID = reports[0].DeliveryBatchID
 	}
 	return PreparedBatch{ProjectID: projectID, Token: token, ID: batchID, Reports: reports}, err
+}
+
+// Redeliveries counts claims that re-deliver a batch after a previous attempt.
+func (c *Coordinator) Redeliveries() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.redeliveries.Load()
+}
+
+// LostAcknowledgements counts acknowledgments whose claim token no longer holds
+// the batch, so the caller believed a delivery completed that did not.
+func (c *Coordinator) LostAcknowledgements() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.lostAcknowledgements.Load()
 }
 
 // PreparePiggyback claims pending reports for the active Chat orchestrator.
@@ -247,8 +291,7 @@ func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) 
 	if len(batch.Reports) == 0 {
 		return nil
 	}
-	_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
-	return err
+	return c.ackBatch(ctx, batch.ProjectID, batch.Token)
 }
 
 // ReleasePiggyback makes a batch retryable when the combined turn was refused.
