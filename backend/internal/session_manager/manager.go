@@ -63,6 +63,10 @@ var (
 	// selected harness's catalog and the harness does not accept arbitrary model
 	// ids. The API maps it to a 400.
 	ErrUnsupportedModel = errors.New("session: model is not supported by the selected harness")
+	// ErrTerminalUnsupported means a terminal launch was requested for a
+	// harness that runs in Chat only. Unlike ports.ErrChatUnsupported it must
+	// not prompt a terminal retry. The API maps it to a 400.
+	ErrTerminalUnsupported = errors.New("session: terminal mode is not supported by the selected harness")
 	// ErrScratchBranchUnsupported means a caller tried to force git branch
 	// semantics onto a scratch project.
 	ErrScratchBranchUnsupported = errors.New("session: scratch projects do not support branches")
@@ -1014,14 +1018,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if _, ok := m.agents.Agent(cfg.Harness); !ok {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
 	}
-	// Unreal Agent has no terminal interface or interactive approval channel.
-	// Selecting the harness therefore supplies its only valid launch defaults;
-	// an explicit caller-supplied mode or permission remains authoritative and
-	// is rejected normally when the harness cannot honor it.
-	if cfg.Harness == domain.HarnessUnreal {
-		if !cfg.RequestedMode.Valid() {
-			cfg.RequestedMode = domain.SessionModeChat
+	// A chat-only harness has no terminal interface, so Chat is its only mode
+	// and a terminal request is refused before any durable state exists.
+	if cfg.Harness.ChatOnly() {
+		if cfg.RequestedMode == domain.SessionModeTUI {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s supports Chat only", ErrTerminalUnsupported, cfg.Harness)
 		}
+		cfg.RequestedMode = domain.SessionModeChat
+	}
+	// Unreal Agent has no interactive approval channel either, so selecting it
+	// supplies bypass permissions by default; an explicit caller-supplied
+	// permission remains authoritative and is rejected normally when the
+	// harness cannot honor it.
+	if cfg.Harness == domain.HarnessUnreal {
 		if cfg.AgentConfig.Permissions == "" {
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}
@@ -1050,17 +1059,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if err := m.chat.PreflightChat(ctx, cfg.Harness, agentConfig.Permissions); err != nil {
+		} else if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, agentlaunch.MergeEnv(project.Config.Env, nil)); err != nil {
 			fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
 				errors.Is(err, ports.ErrChatDriverUnavailable) ||
 				errors.Is(err, ports.ErrChatDriverIncompatible) ||
 				errors.Is(err, ports.ErrChatAuthRequired)
 			if modeExplicitlyRequested || !fallbackAllowed ||
 				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", agentlaunch.RedactError(err, project.Config.Env))
 			}
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
-				"harness", cfg.Harness, "error", err)
+				"harness", cfg.Harness, "error", agentlaunch.RedactError(err, project.Config.Env))
 			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {
@@ -2386,6 +2395,10 @@ func resolvedModelForMetadata(harness domain.AgentHarness, effective, adapter po
 // static catalog. Dynamic catalogs and direct-entry agents defer authoritative
 // model validation to the selected agent at launch time.
 func validateSpawnModel(harness domain.AgentHarness, model string) error {
+	if harness == domain.HarnessDockerAgent && strings.HasPrefix(strings.TrimSpace(model), "model:") {
+		return nil
+	}
+
 	if modelcatalog.Accepts(string(harness), model) {
 		return nil
 	}

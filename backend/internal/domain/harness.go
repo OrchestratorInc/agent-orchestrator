@@ -42,6 +42,7 @@ const (
 	HarnessDeepSeek    AgentHarness = "deepseek-harness"
 	HarnessOpenHands   AgentHarness = "openhands"
 	HarnessCommandCode AgentHarness = "command-code"
+	HarnessDockerAgent AgentHarness = "docker-agent"
 	// HarnessFake is retained for existing test fixtures and historical session
 	// rows, but is not user-selectable.
 	HarnessFake AgentHarness = "fake"
@@ -56,7 +57,13 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessDeepSeek, HarnessOpenHands,
-	HarnessCommandCode, HarnessMemcode,
+	HarnessCommandCode, HarnessDockerAgent, HarnessMemcode,
+}
+
+// ChatOnly reports whether h has no terminal interface, so every session on it
+// runs in Chat.
+func (h AgentHarness) ChatOnly() bool {
+	return h == HarnessUnreal || h == HarnessDockerAgent
 }
 
 // IsKnown reports whether h is one of the supported harnesses.

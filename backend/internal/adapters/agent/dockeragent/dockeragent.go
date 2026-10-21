@@ -1,0 +1,141 @@
+// Package dockeragent provides metadata for the user-installed Docker Agent.
+// Only its native ACP Chat interface is supported by AO.
+package dockeragent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// ConfigEnv selects an existing native YAML configuration. AO never rewrites it.
+// Without it, AO generates a private default configuration per session.
+const ConfigEnv = "AO_DOCKER_AGENT_CONFIG"
+
+// Plugin supplies installation discovery and configuration metadata for Chat.
+type Plugin struct{ agentbase.Base }
+
+// New returns the Docker Agent metadata plugin.
+func New() *Plugin { return &Plugin{} }
+
+var _ adapters.Adapter = (*Plugin)(nil)
+var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentBinaryResolver = (*Plugin)(nil)
+var _ ports.AgentAuthChecker = (*Plugin)(nil)
+
+// Manifest describes the native standalone harness.
+func (*Plugin) Manifest() adapters.Manifest {
+	return adapters.Manifest{ID: "docker-agent", Name: "Docker Agent", Description: "User-installed Docker Agent, native ACP Chat only.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
+}
+
+// GetConfigSpec exposes native configured model choices, not arbitrary model IDs.
+func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
+	return agentbase.ModelConfigSpec(ctx, "Native ACP model option (default or model:<configured-name>); configuration selected with AO_DOCKER_AGENT_CONFIG.")
+}
+
+// GetLaunchCommand refuses terminal execution rather than fabricating a TUI.
+func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("docker agent is available in Chat mode only")
+}
+
+// ResolveBinary selects the standalone binary; Docker Desktop is not required.
+func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
+	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "Docker Agent", Names: []string{"docker-agent"}, WinNames: []string{"docker-agent.exe"}, UnixPaths: []string{"/usr/local/bin/docker-agent", "/opt/homebrew/bin/docker-agent", "/home/linuxbrew/.linuxbrew/bin/docker-agent"}, UnixHomePaths: [][]string{{".local", "bin", "docker-agent"}}})
+}
+
+// AuthStatus reports configuration, not remote authorization: a selected native
+// config, or a provider key AO's default config can use.
+func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if strings.TrimSpace(os.Getenv(ConfigEnv)) != "" || len(DefaultModels(nil)) > 0 {
+		return ports.AgentAuthStatusConfigured, nil
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+// providerModels are the models offered per provider key: Docker Agent's own
+// suggestions, with Google's -latest aliases so Gemini defaults do not retire.
+// The first available model becomes the default; all are offered.
+var providerModels = []struct {
+	keys     []string
+	provider string
+	models   []string
+}{
+	{[]string{"ANTHROPIC_API_KEY"}, "anthropic", []string{"claude-sonnet-4-6"}},
+	{[]string{"OPENAI_API_KEY"}, "openai", []string{"gpt-5.6", "gpt-5.6-luna"}},
+	{[]string{"GOOGLE_API_KEY", "GEMINI_API_KEY"}, "google", []string{"gemini-flash-lite-latest", "gemini-flash-latest"}},
+}
+
+// DefaultModel is one entry of AO's default Docker Agent configuration.
+type DefaultModel struct{ Name, Provider, Model string }
+
+// lookupKey reads key from env, falling back to the process environment.
+func lookupKey(env map[string]string, key string) string {
+	value, ok := env[key]
+	if !ok {
+		value = os.Getenv(key)
+	}
+	return strings.TrimSpace(value)
+}
+
+// ProviderEnv returns launch overlays for keys AO accepts under another name:
+// Docker Agent's google provider reads GOOGLE_API_KEY, so a GEMINI_API_KEY
+// alone is passed on under that name.
+func ProviderEnv(env map[string]string) map[string]string {
+	overlay := map[string]string{}
+	if lookupKey(env, "GOOGLE_API_KEY") == "" {
+		if gemini := lookupKey(env, "GEMINI_API_KEY"); gemini != "" {
+			overlay["GOOGLE_API_KEY"] = gemini
+		}
+	}
+	return overlay
+}
+
+// DefaultModels lists the models AO's default configuration can use with the
+// provider keys present in env (falling back to the process environment).
+func DefaultModels(env map[string]string) []DefaultModel {
+	var out []DefaultModel
+	for _, entry := range providerModels {
+		available := false
+		for _, key := range entry.keys {
+			available = available || lookupKey(env, key) != ""
+		}
+		if !available {
+			continue
+		}
+		for _, model := range entry.models {
+			out = append(out, DefaultModel{Name: model, Provider: entry.provider, Model: model})
+		}
+	}
+	return out
+}
+
+// DefaultConfig renders AO's Docker Agent configuration for users who have
+// not selected their own with AO_DOCKER_AGENT_CONFIG.
+func DefaultConfig(env map[string]string) ([]byte, error) {
+	models := DefaultModels(env)
+	if len(models) == 0 {
+		return nil, errors.New("docker agent needs a provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY or GEMINI_API_KEY) or " + ConfigEnv)
+	}
+	var b strings.Builder
+	b.WriteString("# Generated by Agent Orchestrator. Set " + ConfigEnv + " to use your own.\nmodels:\n")
+	for _, m := range models {
+		fmt.Fprintf(&b, "  %s:\n    provider: %s\n    model: %s\n", m.Name, m.Provider, m.Model)
+	}
+	fmt.Fprintf(&b, "agents:\n  root:\n    model: %s\n    description: Coding assistant\n", models[0].Name)
+	b.WriteString("    instruction: You are a coding assistant. Work in the session working directory.\n")
+	b.WriteString("    toolsets:\n      - type: filesystem\n      - type: shell\n")
+	return []byte(b.String()), nil
+}

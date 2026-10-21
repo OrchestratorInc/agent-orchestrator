@@ -15826,6 +15826,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - fake
           type: string
@@ -16526,6 +16527,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - cloudflared
           type: string
@@ -19781,6 +19783,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           type: string
         issueId:

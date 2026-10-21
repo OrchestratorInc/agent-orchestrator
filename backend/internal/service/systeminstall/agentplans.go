@@ -49,6 +49,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetDockerAgent: "https://docs.docker.com/ai/docker-agent/getting-started/installation/",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -266,6 +267,15 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		plans = []Plan{s.planUV(target, "openhands")}
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
+		}
+	case TargetDockerAgent:
+		// Docker publishes the standalone CLI as a Homebrew formula; AO installs
+		// and updates to its latest release (Chat admits v1.150.0 or newer).
+		manual := manualPlan(target, "Install the latest official standalone Docker Agent binary (v1.150.0 or newer). Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planBrew(target, "docker-agent"), manual}
+		} else {
+			plans = []Plan{manual}
 		}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {

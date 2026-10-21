@@ -37,6 +37,7 @@ export const AGENT_OPTIONS = [
 	"deepseek-harness",
 	"openhands",
 	"command-code",
+	"docker-agent",
 	"memcode",
 ] as const;
 
@@ -85,6 +86,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"deepseek-harness": "DeepSeek",
 	openhands: "OpenHands",
 	"command-code": "Command Code",
+	"docker-agent": "Docker Agent",
 	memcode: "memcode",
 };
 

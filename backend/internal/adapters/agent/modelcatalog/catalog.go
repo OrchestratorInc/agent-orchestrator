@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -157,6 +158,8 @@ func Base(agentID string) ports.AgentModelCatalog {
 	now := time.Now().UTC()
 	entryMode := customModelEntryMode(agentID)
 	switch agentID {
+	case "docker-agent":
+		return catalog(agentID, "native-default", entryMode, now, model("default", "Agent default", true))
 	case "muse":
 		return catalog(agentID, "official-catalog", entryMode, now,
 			model("muse-spark", "Muse Spark", true),
@@ -235,7 +238,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "docker-agent", "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -694,7 +697,8 @@ func discoverACPOptionCatalog(
 				label = id
 			}
 			provider := strings.TrimSpace(choice.Group)
-			if provider == "" {
+			// Docker Agent values name native config entries, not providers.
+			if provider == "" && request.AgentID != "docker-agent" {
 				if prefix, _, ok := strings.Cut(id, "/"); ok {
 					provider = prefix
 				}
@@ -719,8 +723,8 @@ func hasDiscoverySource(agentID string) bool {
 	switch agentID {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
-	// configuration catalog for Cline, DeepSeek Harness, and Devin.
-	case "claude-code", "codex", "deepseek-harness", "devin":
+	// configuration catalog for Cline, DeepSeek Harness, Devin, and Docker Agent.
+	case "claude-code", "codex", "deepseek-harness", "devin", "docker-agent":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
@@ -870,6 +874,9 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)
 	}
+	if agentID == "docker-agent" {
+		return "config=" + dockerAgentDiscoveryFingerprint(env)
+	}
 	if agentID == "deepseek-harness" {
 		// Not routed through configDiscoveryFingerprint: the profile is what the
 		// ACP session reads, not a catalog AO parses itself, so the harness has
@@ -886,6 +893,24 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		return "default=" + configured
 	}
 	return ""
+}
+
+// dockerAgentDiscoveryFingerprint covers what selects Docker Agent's models:
+// the user's config file when one is selected, otherwise which provider keys
+// AO's generated default can use. It hashes key names only, never values.
+func dockerAgentDiscoveryFingerprint(env map[string]string) string {
+	config, ok := env[dockeragent.ConfigEnv]
+	if !ok {
+		config = os.Getenv(dockeragent.ConfigEnv)
+	}
+	if config = strings.TrimSpace(config); config != "" {
+		return "file:" + config + ":" + fingerprintConfigPaths([]string{config})
+	}
+	names := make([]string, 0, 4)
+	for _, m := range dockeragent.DefaultModels(env) {
+		names = append(names, m.Provider+"/"+m.Name)
+	}
+	return "default:" + strings.Join(names, ",")
 }
 
 func claudeCodeDiscoveryFingerprint(ctx context.Context, workingDir string, env map[string]string) string {
