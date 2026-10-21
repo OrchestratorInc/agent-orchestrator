@@ -114,12 +114,20 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 // credentialStoreIdentity finds a credential in AO's environment, then Hermes's
 // <HERMES_HOME>/.env (API keys) or auth.json (OAuth). Values are never read out.
 func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, bool) {
-	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, hermesCredentialEnv...); name != "" {
-		return domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), true
-	}
 	home, err := ResolveHome(nil)
 	if err != nil {
 		return domain.AgentAccountIdentity{}, false
+	}
+	// Hermes loads its home .env with override, so a key it assigns, even to
+	// empty, replaces the one AO's environment would pass down.
+	bindings, _ := dotenvBindings(filepath.Join(home, ".env"))
+	assigned := dotenvEnvironment(bindings)
+	inherited := slices.DeleteFunc(slices.Clone(hermesCredentialEnv), func(name string) bool {
+		_, ok := assigned[processEnvName(name)]
+		return ok
+	})
+	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, inherited...); name != "" {
+		return domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), true
 	}
 	if path := filepath.Join(home, ".env"); envFileHasCredential(path) {
 		return authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey), true

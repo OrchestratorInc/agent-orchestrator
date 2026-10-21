@@ -725,6 +725,50 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
 		t.Fatalf("workspace-relative managed scope accepted: %v", err)
 	}
+	// The filesystem follows a symlink before "..", unlike filepath.Join.
+	if runtime.GOOS != "windows" {
+		external := t.TempDir()
+		for _, dir := range []string{"target", "managed"} {
+			if err := os.Mkdir(filepath.Join(external, dir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(filepath.Join(external, "target"), filepath.Join(workspace, "link")); err != nil {
+			t.Fatal(err)
+		}
+		managed.Env = map[string]string{"HERMES_HOME": home, "HERMES_MANAGED_DIR": "link/../managed"}
+		if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
+			t.Fatalf("symlinked managed scope accepted: %v", err)
+		}
+	}
+	// .op.env bootstraps the environment before the managed scope is read.
+	if err := os.WriteFile(filepath.Join(home, ".op.env"), []byte("HERMES_MANAGED_DIR="+t.TempDir()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := hooks(); err == nil || !strings.Contains(err.Error(), "HERMES_MANAGED_DIR") {
+		t.Fatalf(".op.env managed scope accepted: %v", err)
+	}
+	if err := os.Remove(filepath.Join(home, ".op.env")); err != nil {
+		t.Fatal(err)
+	}
+	// The source checkout stays under the default home when HERMES_HOME moves.
+	userHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(userHome, ".hermes", "hermes-agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userHome, ".hermes", "hermes-agent", ".env"), []byte("HERMES_LANGUAGE=de\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	separate := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HOME": userHome, "USERPROFILE": userHome, "LOCALAPPDATA": filepath.Join(userHome, ".hermes"), "HERMES_HOME": t.TempDir()}, SystemPrompt: "AO"}
+	if runtime.GOOS == "windows" {
+		separate.Env["LOCALAPPDATA"] = userHome
+		if err := os.Rename(filepath.Join(userHome, ".hermes"), filepath.Join(userHome, "hermes")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := New().GetAgentHooks(t.Context(), separate); err == nil || !strings.Contains(err.Error(), "HERMES_LANGUAGE") {
+		t.Fatalf("installed checkout's project .env accepted: %v", err)
+	}
 	// Malformed encodings are refused: Hermes's replacement-character and
 	// latin-1 fallbacks can still apply assignments.
 	for _, form := range []string{
@@ -894,6 +938,65 @@ func TestConfirmedIdentityFollowsLinkedWorktreeRevision(t *testing.T) {
 	git(worktree, "commit", "-q", "--allow-empty", "-m", "two")
 	if identityConfirmed(launcher) {
 		t.Fatal("confirmation survived a commit in a linked worktree")
+	}
+}
+
+func TestConfirmedIdentityFollowsWrapperSourceRevision(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell wrapper")
+	}
+	t.Setenv("HERMES_HOME", t.TempDir())
+	// A checkout installed outside HERMES_HOME (install.sh --dir).
+	src := t.TempDir()
+	refs := filepath.Join(src, ".git", "refs", "heads")
+	for _, dir := range []string{refs, filepath.Join(src, ".hermes", "bin")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(src, ".git", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(refs, "main"), "1111111111111111111111111111111111111111\n")
+	write(filepath.Join(src, ".hermes", "bin", "hermes"), "#!/bin/sh\n")
+	wrapper := filepath.Join(t.TempDir(), "hermes")
+	write(wrapper, "#!/bin/sh\nexec "+filepath.Join(src, ".hermes", "bin", "hermes")+" \"$@\"\n")
+	if got, want := launcherSourceRoot(wrapper), filepath.Clean(src); got != want {
+		resolved, _ := filepath.EvalSymlinks(want)
+		if got != resolved {
+			t.Fatalf("launcherSourceRoot = %q, want %q", got, want)
+		}
+	}
+	rememberIdentity(wrapper)
+	if !identityConfirmed(wrapper) {
+		t.Fatal("fresh confirmation not reused")
+	}
+	write(filepath.Join(refs, "main"), "2222222222222222222222222222222222222222\n")
+	if identityConfirmed(wrapper) {
+		t.Fatal("confirmation survived a commit in the wrapper's source checkout")
+	}
+}
+
+func TestInheritedCredentialClearedByHomeDotenv(t *testing.T) {
+	for _, key := range hermesCredentialEnv {
+		t.Setenv(key, "")
+	}
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-review-dummy-key")
+	if _, found := credentialStoreIdentity(t.Context()); !found {
+		t.Fatal("inherited key without a home .env not found")
+	}
+	// Hermes loads its home .env with override.
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("OPENROUTER_API_KEY=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if identity, found := credentialStoreIdentity(t.Context()); found {
+		t.Fatalf("key cleared by home .env reported: %+v", identity)
 	}
 }
 

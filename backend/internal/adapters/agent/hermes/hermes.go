@@ -10,11 +10,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,18 +180,122 @@ func currentIdentity(path string) (binaryIdentity, bool) {
 	if err != nil {
 		return binaryIdentity{}, false
 	}
-	return binaryIdentity{target: target, size: st.Size(), modTime: st.ModTime(), revision: installRevision()}, true
+	return binaryIdentity{target: target, size: st.Size(), modTime: st.ModTime(), revision: installRevision(path)}, true
 }
 
-// installRevision names the commit of the official source installation under
-// HERMES_HOME, which the published launchers forward to. Homebrew installs are
-// already distinguished by their versioned Cellar target.
-func installRevision() string {
+// installRevision names the commit of the source checkout a launcher runs,
+// falling back to the official installation under HERMES_HOME. Homebrew
+// installs are already distinguished by their versioned Cellar target.
+func installRevision(launcher string) string {
+	if root := launcherSourceRoot(launcher); root != "" {
+		return gitHead(root)
+	}
 	home, err := ResolveHome(nil)
 	if err != nil {
 		return ""
 	}
 	return gitHead(filepath.Join(home, "hermes-agent"))
+}
+
+// launcherSourceRoot follows the official source launchers to the checkout
+// they run: the public wrapper is `exec <root>/.hermes/bin/hermes "$@"`, and
+// a venv console script lives in <root>/venv/bin or <root>/.venv/bin. Hermes
+// takes its project .env from that checkout. It returns "" when the launcher
+// is not one of these, such as a Homebrew bottle.
+func launcherSourceRoot(launcher string) string {
+	path := launcher
+	for range 4 {
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return ""
+		}
+		bin := filepath.Dir(target)
+		switch parent := filepath.Base(filepath.Dir(bin)); {
+		case filepath.Base(bin) == "bin" && parent == ".hermes",
+			filepath.Base(bin) == "bin" && (parent == "venv" || parent == ".venv"),
+			filepath.Base(bin) == "Scripts" && parent == "venv":
+			return filepath.Dir(filepath.Dir(bin))
+		}
+		next := wrapperTarget(target)
+		if next == "" {
+			return ""
+		}
+		path = next
+	}
+	return ""
+}
+
+// wrapperTarget reads the program a published `#!/bin/sh` wrapper execs.
+func wrapperTarget(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b := make([]byte, 4096)
+	n, _ := f.Read(b)
+	text := string(b[:n])
+	if !strings.HasPrefix(text, "#!/bin/sh\n") {
+		return ""
+	}
+	for _, line := range strings.Split(text, "\n")[1:] {
+		rest, ok := strings.CutPrefix(line, "exec ")
+		if !ok {
+			continue
+		}
+		// shlex.join quotes a path containing shell metacharacters.
+		if quoted, ok := strings.CutPrefix(rest, "'"); ok {
+			program, _, ok := strings.Cut(quoted, "'")
+			if !ok {
+				return ""
+			}
+			return program
+		}
+		program, _, _ := strings.Cut(rest, " ")
+		return program
+	}
+	return ""
+}
+
+// sourceRoots are the checkouts whose project .env Hermes may load: those
+// the installed launchers run, plus the official installer's checkout under
+// both the effective and the default home.
+func sourceRoots(home string, env map[string]string) []string {
+	roots := []string{filepath.Join(home, "hermes-agent")}
+	defaultEnv := maps.Clone(env)
+	if defaultEnv == nil {
+		defaultEnv = map[string]string{}
+	}
+	defaultEnv["HERMES_HOME"] = ""
+	if root, err := ResolveHome(defaultEnv); err == nil {
+		roots = append(roots, filepath.Join(root, "hermes-agent"))
+	}
+	for _, launcher := range installedLaunchers() {
+		if root := launcherSourceRoot(launcher); root != "" {
+			roots = append(roots, root)
+		}
+	}
+	slices.Sort(roots)
+	return slices.Compact(roots)
+}
+
+// installedLaunchers are the launcher locations ResolveBinary considers.
+func installedLaunchers() []string {
+	launchers := customHomeCandidates()
+	if runtime.GOOS == "windows" {
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			launchers = append(launchers, filepath.Join(local, "hermes", "bin", "hermes.exe"), filepath.Join(local, "hermes", "bin", "hermes.cmd"), filepath.Join(local, "hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"))
+		}
+		return launchers
+	}
+	launchers = append(launchers, "/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes")
+	if userHome, err := os.UserHomeDir(); err == nil {
+		launchers = append(launchers,
+			filepath.Join(userHome, ".local", "bin", "hermes"),
+			filepath.Join(userHome, ".hermes", "hermes-agent", ".hermes", "bin", "hermes"),
+			filepath.Join(userHome, ".hermes", "hermes-agent", ".venv", "bin", "hermes"))
+	}
+	return launchers
 }
 
 // gitHead reads a checkout's HEAD commit without running git: a detached SHA,
@@ -641,8 +747,10 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		if managed = strings.TrimSpace(managed); managed == "" {
 			continue
 		}
+		// Not filepath.Join: lexical cleaning would fold "link/.." where the
+		// filesystem follows the symlink first.
 		if !filepath.IsAbs(managed) && cfg.WorkspacePath != "" {
-			managed = filepath.Join(cfg.WorkspacePath, managed)
+			managed = cfg.WorkspacePath + string(filepath.Separator) + managed
 		}
 		if st, e := os.Stat(managed); e == nil && st.IsDir() {
 			return fmt.Errorf("hermes: managed native configuration is not supported by the additive instruction adapter")
@@ -652,7 +760,13 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	// project .env too (with override when the home file is absent), so a value
 	// there would silently replace AO's instructions or chrome language, or
 	// move Hermes to a home or managed scope AO has not checked.
-	for _, envFile := range []string{filepath.Join(home, ".env"), filepath.Join(home, "hermes-agent", ".env")} {
+	// The project root follows the installed checkout, not HERMES_HOME, and
+	// .op.env bootstraps the environment before the managed scope is read.
+	envFiles := []string{filepath.Join(home, ".env"), filepath.Join(home, ".op.env")}
+	for _, root := range sourceRoots(home, cfg.Env) {
+		envFiles = append(envFiles, filepath.Join(root, ".env"))
+	}
+	for _, envFile := range envFiles {
 		if err := refuseDotenvOverrides(envFile); err != nil {
 			return err
 		}
