@@ -25,9 +25,14 @@ INSERT INTO notifications_next (
     id, session_id, project_id, pr_url, type, title, body, status,
     created_at, resolved_at, dismissed_at, source_key
 )
-SELECT id, session_id, project_id, pr_url, type, title, body, status,
-       created_at, resolved_at, dismissed_at, source_key
-FROM notifications;
+SELECT n.id, n.session_id, n.project_id, n.pr_url, n.type, n.title, n.body, n.status,
+       n.created_at, n.resolved_at, n.dismissed_at, n.source_key
+FROM notifications n
+-- The legacy table did not enforce these foreign keys, so live databases hold
+-- notifications for sessions that no longer exist; inserting them into the
+-- FK-enforced rebuild fails the whole migration on boot. Drop those rows:
+-- they describe deleted sessions and nothing can resolve them.
+WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.id = n.session_id);
 
 DROP TABLE notifications;
 ALTER TABLE notifications_next RENAME TO notifications;
