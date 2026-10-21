@@ -32,7 +32,9 @@ export async function prepareTriage(stateEnv: NodeJS.ProcessEnv): Promise<Triage
 	let stderr = Buffer.alloc(0);
 	const logFailure = (reason: string) => {
 		let detail = stderr.toString("utf8");
-		for (const value of Object.values(stateEnv).filter((value): value is string => !!value).sort((a, b) => b.length - a.length)) {
+		// Redact values of at least eight characters that may be secrets or private paths.
+		// Keep short flags readable in diagnostics.
+		for (const value of Object.values(stateEnv).filter((value): value is string => typeof value === "string" && value.length >= 8).sort((a, b) => b.length - a.length)) {
 			detail = detail.replaceAll(value, "[redacted]");
 		}
 		// stdout contains the prompt; spawn error messages may echo environment values.

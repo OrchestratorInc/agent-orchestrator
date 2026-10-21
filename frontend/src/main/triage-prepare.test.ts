@@ -74,6 +74,14 @@ describe("prepareTriage", () => {
 		expect((await result).ok).toBe(false);
 		expect(console.error).toHaveBeenCalledExactlyOnceWith("Report a problem prepare failed: exit 1; stderr: could not collect diagnostics check permissions");
 	});
+	it("keeps short environment values readable while redacting long tokens", async () => {
+		const env = { NO_COLOR: "1", GH_TOKEN: "fake-long-token-123456789" };
+		const result = prepareTriage(env);
+		child.stderr.write(`exit status 1; token ${env.GH_TOKEN}`);
+		child.emit("close", 1);
+		expect((await result).ok).toBe(false);
+		expect(console.error).toHaveBeenCalledExactlyOnceWith("Report a problem prepare failed: exit 1; stderr: exit status 1; token [redacted]");
+	});
 	it("handles spawn failures", async () => {
 		const result = prepare(); child.stderr.write("spawn diagnostic"); child.emit("error", new Error("ENOENT")); child.emit("close", -1);
 		expect((await result).ok).toBe(false);
