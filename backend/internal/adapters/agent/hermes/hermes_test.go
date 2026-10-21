@@ -1647,3 +1647,39 @@ func TestStructuredPersonalityRendersLikeNative(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeHomeWithParentComponentIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX symlink layout")
+	}
+	t.Setenv("HERMES_BUNDLED_LOCALES", "")
+	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
+	base, target := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, "deep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(target, "native"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(target, "deep"), filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	hooks := func(env map[string]string) error {
+		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"})
+	}
+	// Natively link/.. is target, not base.
+	if err := hooks(map[string]string{"HERMES_HOME": base + "/link/../native"}); err == nil {
+		t.Error("explicit home through link/.. accepted")
+	}
+	if err := hooks(map[string]string{"HERMES_HOME": "", "HOME": t.TempDir(), "HERMES_DATA_DIR_SUFFIX": "/../native"}); err == nil {
+		t.Error("data-dir suffix with .. accepted")
+	}
+	// An ordinary symlinked home is preserved.
+	if err := os.Symlink(filepath.Join(target, "native"), filepath.Join(base, "home")); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"HERMES_HOME": filepath.Join(base, "home")}
+	if err := hooks(env); err != nil || env["HERMES_HOME"] != filepath.Join(base, "home") {
+		t.Errorf("symlinked home: %q, %v", env["HERMES_HOME"], err)
+	}
+}

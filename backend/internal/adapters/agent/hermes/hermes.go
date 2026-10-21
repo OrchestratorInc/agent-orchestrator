@@ -721,6 +721,11 @@ func ResolveHome(env map[string]string) (string, error) {
 	if !filepath.IsAbs(home) {
 		return "", fmt.Errorf("hermes: native home %q must be an absolute path; set HERMES_HOME or HOME to an absolute directory", home)
 	}
+	// Hermes follows a symlink before "..", where filepath.Clean folds it
+	// lexically and would name a different directory.
+	if slices.Contains(strings.FieldsFunc(home, func(r rune) bool { return r == '/' || r == filepath.Separator }), "..") {
+		return "", fmt.Errorf("hermes: native home %q contains a \"..\" component; set HERMES_HOME or HOME to a path without it", home)
+	}
 	return filepath.Clean(home), nil
 }
 
@@ -741,13 +746,14 @@ func nativeHomeFrom(lookup envLookup, get func(string) string) (string, error) {
 			}
 			local = filepath.Join(home, "AppData", "Local")
 		}
-		return filepath.Join(local, "hermes"+suffix), nil
+		return local + string(filepath.Separator) + "hermes" + suffix, nil
 	}
 	home, err := expandPOSIXUser("~", lookup)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".hermes"+suffix), nil
+	// Not filepath.Join: ResolveHome must see a ".." the suffix introduces.
+	return home + string(filepath.Separator) + ".hermes" + suffix, nil
 }
 
 // expandNativePath applies Hermes's HERMES_HOME expansion,
