@@ -51,14 +51,23 @@ export function isSupportedLocale(value: string): value is SupportedLocale {
   return (SUPPORTED_LOCALES as readonly string[]).includes(value);
 }
 
+/**
+ * Finds a cookie value that is one of `allowed`. Self-contained, with no
+ * imports, so the root layout can inline it into the head script.
+ */
+export function findCookieValue(cookie: string, name: string, allowed: readonly string[]): string | null {
+  const parts = cookie.split(";");
+  for (let i = 0; i < parts.length; i++) {
+    const separator = parts[i].indexOf("=");
+    if (separator === -1 || parts[i].slice(0, separator).trim() !== name) continue;
+    const value = parts[i].slice(separator + 1).trim();
+    return allowed.indexOf(value) > -1 ? value : null;
+  }
+  return null;
+}
+
 /** The locale saved by the language switcher, or English when none is saved. */
 export function readLocaleCookie(cookie: string): SupportedLocale {
-  for (const part of cookie.split(";")) {
-    const [name, value = ""] = part.trim().split("=");
-    if (name === LOCALE_COOKIE) {
-      // Supported values never need decoding; anything else is ignored.
-      return isSupportedLocale(value) ? value : DEFAULT_LOCALE;
-    }
-  }
-  return DEFAULT_LOCALE;
+  const value = findCookieValue(cookie, LOCALE_COOKIE, SUPPORTED_LOCALES);
+  return value && isSupportedLocale(value) ? value : DEFAULT_LOCALE;
 }

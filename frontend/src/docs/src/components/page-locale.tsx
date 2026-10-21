@@ -2,7 +2,7 @@
 
 import { useLingui } from "@lingui/react";
 import { msg } from "@lingui/core/macro";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { DEFAULT_LOCALE } from "@/i18n/locales";
 
 /** Points out that the article is English when the interface is not. */
@@ -18,14 +18,22 @@ export function EnglishArticleNotice() {
 
 /**
  * Keeps the tab title in the interface language. The prerendered title is
- * English. `title` is shown as given, so pass it already translated if needed.
+ * `${source} | Agent Orchestrator Docs`; `title` is the name to show instead,
+ * already translated (defaults to `source`).
  */
-export function LocalizedTitle({ title }: { title: string }) {
+export function LocalizedTitle({ source, title = source }: { source: string; title?: string }) {
   const { i18n } = useLingui();
+  const written = useRef<string | null>(null);
   useEffect(() => {
+    const english = `${source} | Agent Orchestrator Docs`;
     const localized = i18n._(msg`${title} | Agent Orchestrator Docs`);
+    // Only replace this page's own title (English, or our earlier
+    // translation), never another page's that a navigation just wrote.
     const apply = () => {
-      if (document.title !== localized) document.title = localized;
+      const current = document.title;
+      if (current === localized || (current !== english && current !== written.current)) return;
+      document.title = localized;
+      written.current = localized;
     };
     // The framework writes the English title after hydration and on
     // navigation. Watch only the <title> element, and the head's direct
@@ -45,6 +53,6 @@ export function LocalizedTitle({ title }: { title: string }) {
     watchTitle();
     apply();
     return () => observer.disconnect();
-  }, [i18n, title]);
+  }, [i18n, source, title]);
   return null;
 }

@@ -50,9 +50,6 @@ export function Providers({ children }: { children: ReactNode }) {
     if (!isSupportedLocale(next)) return;
     document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
     setSaved(next);
-    // The page does not navigate, so close the language menu the way
-    // pressing Escape would.
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   }, []);
 
   return (

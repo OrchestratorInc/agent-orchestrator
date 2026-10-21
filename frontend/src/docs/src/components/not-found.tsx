@@ -8,7 +8,7 @@ export function NotFound() {
   const { t } = useLingui();
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col items-start justify-center gap-4 px-4">
-      <LocalizedTitle title={t`Page not found`} />
+      <LocalizedTitle source="Page not found" title={t`Page not found`} />
       <h1 className="text-2xl font-semibold text-foreground">
         <Trans>Page not found</Trans>
       </h1>

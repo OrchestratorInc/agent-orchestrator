@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { NotFound } from "@/components/not-found";
 
 export const metadata: Metadata = {
-  title: "Page Not Found | Agent Orchestrator Docs",
+  title: "Page not found | Agent Orchestrator Docs",
   robots: { index: false },
 };
 

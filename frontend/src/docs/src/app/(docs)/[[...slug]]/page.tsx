@@ -17,7 +17,7 @@ export default async function Page(props: PageProps<"/[[...slug]]">) {
   // The articles are English whatever the interface language is.
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
-      <LocalizedTitle title={page.data.title} />
+      <LocalizedTitle source={page.data.title} />
       <DocsTitle lang="en">{page.data.title}</DocsTitle>
       <DocsDescription lang="en">{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
       <EnglishArticleNotice />

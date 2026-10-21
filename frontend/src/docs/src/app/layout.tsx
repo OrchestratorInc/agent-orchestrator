@@ -2,7 +2,7 @@ import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Providers } from "@/components/providers";
-import { LOCALE_COOKIE, SUPPORTED_LOCALES } from "@/i18n/locales";
+import { findCookieValue, LOCALE_COOKIE, SUPPORTED_LOCALES } from "@/i18n/locales";
 import { COMPANY } from "../lib/constants";
 import "./global.css";
 
@@ -14,8 +14,9 @@ export const metadata: Metadata = {
 };
 
 // Sets <html lang> from the saved language before first paint, ahead of
-// hydration, so assistive tech and the browser see the right language.
-const SET_LANG = `try{var m=document.cookie.match(/(?:^|; )${LOCALE_COOKIE}=([^;]*)/);var l=m&&m[1];if(${JSON.stringify(SUPPORTED_LOCALES)}.indexOf(l)>-1)document.documentElement.lang=l}catch(e){}`;
+// hydration, so assistive tech and the browser see the right language. It
+// inlines the same parser the interface uses to read the cookie.
+const SET_LANG = `try{var l=(${findCookieValue.toString()})(document.cookie,${JSON.stringify(LOCALE_COOKIE)},${JSON.stringify(SUPPORTED_LOCALES)});if(l)document.documentElement.lang=l}catch(e){}`;
 
 export default function Layout({ children }: { children: ReactNode }) {
   return (

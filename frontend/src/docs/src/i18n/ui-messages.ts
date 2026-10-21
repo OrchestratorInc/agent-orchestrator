@@ -4,8 +4,6 @@ import { msg } from "@lingui/core/macro";
 // Strings rendered by the docs framework's own components, keyed the way its
 // translation provider looks them up: the English text, then its notes.
 const FRAMEWORK_MESSAGES: Record<string, MessageDescriptor> = {
-  "Choose a language(language switcher)": msg({ message: "Choose a language", context: "language switcher" }),
-  "Choose a language(language switcher)(aria-label)": msg({ message: "Choose a language", context: "language switcher" }),
   "Close Search(search dialog)(aria-label)": msg({ message: "Close search", context: "search dialog" }),
   "Close Sidebar(aria-label)": msg({ message: "Close sidebar", context: "sidebar" }),
   "Close Sidebar(sidebar)(aria-label)": msg({ message: "Close sidebar", context: "sidebar" }),
