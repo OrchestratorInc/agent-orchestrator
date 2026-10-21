@@ -934,7 +934,10 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		// Unknown auth may offer login without making it an update prerequisite.
+		if (authentication === "unknown") expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
+		else expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
 		// A configured credential reads as connected; an unknown one claims nothing.
 		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
@@ -1604,6 +1607,37 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("unreal-agent");
 		expect(await within(row).findByText("Configured")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+	});
+
+	it.each(["unknown", "configured"] as const)("keeps Pool native setup reachable without claiming verified auth: %s", async (authentication) => {
+		const readiness = { agents: [agentReadiness("pool", "Poolside Pool", { authentication })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{
+				agentId: "pool", action: "setup", launchMode: "terminal", available: true,
+				displayCommand: "pool login", logoutCommand: "pool logout",
+			}] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "pool", action: "setup", guidance: "Native Poolside login",
+				terminal: { handleId: "shellterm-pool-setup", title: "Set up Poolside Pool" },
+			} } as never;
+			return { data: readiness } as never;
+		});
+
+		renderSection();
+		const row = await findAgentRow("pool");
+		const setup = await within(row).findByRole("button", { name: authentication === "configured" ? "Open setup" : "Set up" });
+		expect(within(row).getAllByText(authentication === "configured" ? "Configured" : "Unknown").length).toBeGreaterThan(0);
+		expect(within(row).queryByText("Connected")).not.toBeInTheDocument();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+		await userEvent.click(setup);
+		await within(row).findByTestId("inline-terminal-body");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "pool" } } });
 	});
 
 	it("shows cached readiness while silently refreshing when the page opens", async () => {

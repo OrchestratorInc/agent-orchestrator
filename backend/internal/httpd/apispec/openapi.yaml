@@ -15827,6 +15827,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - pool
           - fake
           type: string
         approvalMode:
@@ -16527,6 +16528,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - pool
           - cloudflared
           type: string
         updatedAt:
@@ -19782,6 +19784,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - pool
           type: string
         issueId:
           type: string

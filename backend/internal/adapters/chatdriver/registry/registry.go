@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pool"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/agyacp"
@@ -40,6 +41,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodev2acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/piacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/poolacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/qwenacp"
 	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -123,6 +125,8 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	add(copilotacp.New(copilotPlugin, log), copilotPlugin)
 	agyPlugin := agy.New()
 	add(agyacp.New(agyPlugin, log), agyPlugin)
+	poolPlugin := pool.New()
+	add(poolacp.New(poolPlugin, log), poolPlugin)
 	return r
 }
 

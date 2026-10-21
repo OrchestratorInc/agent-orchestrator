@@ -155,3 +155,17 @@ func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 		t.Fatalf("plugin data dir/env = %q, %#v", plugin.dataDir, launch.Env)
 	}
 }
+
+func TestBindingPreflightRejectsUnavailableProviderBeforeDiscovery(t *testing.T) {
+	sentinel := errors.New("provider requires Unix")
+	cfg := buildConfig(fakePlugin{binErr: ports.ErrAgentBinaryNotFound}, Config{
+		Harness:   domain.HarnessClaudeCode,
+		Preflight: func(context.Context) error { return sentinel },
+		Configure: func(context.Context, acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+			return nil, nil, nil
+		},
+	}, nil)
+	if err := cfg.Probe(context.Background()); !errors.Is(err, ports.ErrChatDriverUnavailable) || !errors.Is(err, sentinel) {
+		t.Fatalf("Probe error = %v, want prerequisite failure before binary discovery", err)
+	}
+}

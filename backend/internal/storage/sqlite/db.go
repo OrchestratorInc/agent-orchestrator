@@ -2187,9 +2187,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsPool := !strings.Contains(schema, "'pool'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMemcode {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMemcode && !needsPool {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2317,6 +2318,11 @@ WHERE type = 'table' AND name = 'sessions'`,
 			return fmt.Errorf("schema repair: widen sessions harness constraint: %w", err)
 		}
 	}
+	if needsPool {
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''pool'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: add Pool: %w", err)
+		}
+	}
 	if _, err := db.Exec(`PRAGMA writable_schema = RESET`); err != nil {
 		return fmt.Errorf("schema repair: reparse sessions harness constraint: %w", err)
 	}
@@ -2360,6 +2366,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'pool'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Pool")
 	}
 	return nil
 }

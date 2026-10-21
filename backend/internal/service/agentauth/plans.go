@@ -58,6 +58,7 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
+	plan("pool", ActionSetup, "Log in to Poolside Pool", []string{"pool", "login"}, "Native Poolside login; standalone providers use the documented environment settings. Configured credentials are not verified authorization.", "https://docs.poolside.ai/get-started/log-in"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
@@ -180,6 +181,8 @@ func logoutCommand(agentID string) []string {
 		return []string{"cursor-agent", "logout"}
 	case "opencode", "opencode-v2":
 		return []string{"opencode", "auth", "logout"}
+	case "pool":
+		return []string{"pool", "logout"}
 	case "amp":
 		return []string{"amp", "logout"}
 	case "auggie":

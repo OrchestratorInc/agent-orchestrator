@@ -50,10 +50,14 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
-	Harness      domain.AgentHarness
-	Capabilities ports.ChatCapabilities
-	Probe        func(context.Context) error
-	Launch       func(context.Context, LaunchConfig) (Launch, error)
+	// ValidateSessionReady checks native context before completed prompt publication.
+	// Some providers initialize a fresh session lazily on its first prompt.
+	// Live host adoption preserves the original process context and skips it.
+	ValidateSessionReady func(context.Context, LaunchConfig, string) error
+	Harness              domain.AgentHarness
+	Capabilities         ports.ChatCapabilities
+	Probe                func(context.Context) error
+	Launch               func(context.Context, LaunchConfig) (Launch, error)
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -324,6 +328,7 @@ func (d *Driver) openNewSession(
 		settings.Approval, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
 		conv.legacyWire.modelState(), resp.Modes,
 	)
+	d.bindSessionValidation(conv, launchCfg, string(resp.SessionId))
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
 	}
@@ -547,6 +552,7 @@ func (d *Driver) resumeSession(
 		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
 		conv.legacyWire.modelState(), modes,
 	)
+	d.bindSessionValidation(conv, launchCfg, cfg.ProviderConversationID)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
 	// Standing context is process input, not transcript history, so a resumed
 	// conversation must receive it again even though the provider recovers the
@@ -802,6 +808,12 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityElicitation] = true
 	caps[ports.ChatCapabilityNestedAgents] = true
 	caps[ports.ChatCapabilityTerminalOutput] = true
+	// An adapter's explicit scope opt-out wins over protocol declarations.
+	for capability, enabled := range configured {
+		if !enabled {
+			caps[capability] = false
+		}
+	}
 	return caps
 }
 
@@ -879,4 +891,21 @@ func normalizeACPLoadError(operation string, err error) error {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)
 	}
 	return normalizeACPError(operation, err)
+}
+
+// bindSessionValidation prevents a failed native context hook from being
+// reported as a completed turn. It is observational, not a tool security gate.
+func (d *Driver) bindSessionValidation(conv *conversation, cfg LaunchConfig, id string) {
+	if d.cfg.ValidateSessionReady == nil {
+		return
+	}
+	previous := conv.promptResponseFailure
+	conv.promptResponseFailure = func(resp acpsdk.PromptResponse) error {
+		if previous != nil {
+			if err := previous(resp); err != nil {
+				return err
+			}
+		}
+		return d.cfg.ValidateSessionReady(context.Background(), cfg, id)
+	}
 }

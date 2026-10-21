@@ -1014,6 +1014,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if _, ok := m.agents.Agent(cfg.Harness); !ok {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
 	}
+	// Pool is Chat-only. Make its only admitted mode explicit before preflight
+	// so unavailable Chat cannot fall back to a terminal or allocate a row.
+	if cfg.Harness == domain.HarnessPool {
+		if cfg.RequestedMode == domain.SessionModeTUI {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: Pool requires Chat mode", ports.ErrChatUnsupported)
+		}
+		cfg.RequestedMode = domain.SessionModeChat
+	}
 	// Unreal Agent has no terminal interface or interactive approval channel.
 	// Selecting the harness therefore supplies its only valid launch defaults;
 	// an explicit caller-supplied mode or permission remains authoritative and
@@ -2307,6 +2315,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	}
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
+	}
+	if harness == domain.HarnessPool && merged.Permissions == "" {
+		merged.Permissions = ports.PermissionModeDefault
 	}
 	// A project may carry a model from its previous worker harness. Memcode
 	// accepts only its native catalog; leave an incompatible inherited choice

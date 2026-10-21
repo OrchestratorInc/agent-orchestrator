@@ -35,6 +35,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
+		domain.HarnessPool,
 	} {
 		if !r.SupportsChat(harness) {
 			t.Errorf("%s has no chat driver", harness)

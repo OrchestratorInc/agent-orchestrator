@@ -40,6 +40,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openhands"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pool"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
@@ -91,6 +92,7 @@ func Constructors() []adapters.Adapter {
 		mimocode.New(),
 		memcode.New(),
 		deepseekharness.New(),
+		pool.New(),
 	}
 }
 

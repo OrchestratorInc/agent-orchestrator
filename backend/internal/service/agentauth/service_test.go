@@ -434,3 +434,26 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 		})
 	}
 }
+
+func TestPoolSetupAndLogoutUseResolvedNativeBinary(t *testing.T) {
+	t.Parallel()
+	for _, logout := range []bool{false, true} {
+		opener := &recordingTerminalOpener{}
+		svc := New(foundExecutable("pool"), opener)
+		var result StartResult
+		var err error
+		wantAction, wantCommand, wantTitle := ActionSetup, "login", "Log in to Poolside Pool"
+		if logout {
+			wantAction, wantCommand, wantTitle = ActionLogout, "logout", "Log out of Poolside Pool"
+			result, err = svc.Logout(context.Background(), "pool")
+		} else {
+			result, err = svc.Start(context.Background(), "pool")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Action != wantAction || opener.calls != 1 || opener.input.Title != wantTitle || !reflect.DeepEqual(opener.input.Argv, []string{"/test/bin/pool", wantCommand}) {
+			t.Fatalf("Pool action = %+v, terminal = %+v", result, opener.input)
+		}
+	}
+}
