@@ -178,11 +178,20 @@ func (s *Service) resolveManagedBinRel(releaseDir, method, cli string) (string, 
 }
 
 // searchNodeModulesBins returns the absolute path of the first regular file
-// named after one of names in a node_modules/.bin directory under
+// named after one of names in a node_modules/.bin directory at or under
 // nodeModules, at most depth node_modules levels deep; "" when there is none.
+// npm hoists non-conflicting dependencies and links their bins into the
+// level's own .bin, so that is checked first; a nested package's .bin appears
+// only on a version conflict.
 func searchNodeModulesBins(nodeModules string, names []string, depth int) string {
 	if depth == 0 {
 		return ""
+	}
+	for _, name := range names {
+		bin := filepath.Join(nodeModules, ".bin", name)
+		if info, err := os.Stat(bin); err == nil && info.Mode().IsRegular() {
+			return bin
+		}
 	}
 	entries, err := os.ReadDir(nodeModules)
 	if err != nil {
@@ -208,15 +217,8 @@ func searchNodeModulesBins(nodeModules string, names []string, depth int) string
 			}
 		}
 		for _, pkg := range pkgs {
-			pkgDir := filepath.Join(base, pkg)
-			for _, name := range names {
-				bin := filepath.Join(pkgDir, "node_modules", ".bin", name)
-				if info, err := os.Stat(bin); err == nil && info.Mode().IsRegular() {
-					return bin
-				}
-			}
-			// Transitive dependencies.
-			if found := searchNodeModulesBins(filepath.Join(pkgDir, "node_modules"), names, depth-1); found != "" {
+			// Transitive dependencies; the recursion checks each level's .bin first.
+			if found := searchNodeModulesBins(filepath.Join(base, pkg, "node_modules"), names, depth-1); found != "" {
 				return found
 			}
 		}

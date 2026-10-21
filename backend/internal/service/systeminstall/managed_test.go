@@ -228,6 +228,33 @@ func TestManagedUpdateFindsACLIBinaryADependencyShips(t *testing.T) {
 	}
 }
 
+// npm hoists non-conflicting dependencies and links their bins into the
+// release's top node_modules/.bin; a nested package's own .bin appears only
+// on a version conflict.
+func TestManagedUpdateFindsAHoistedDependencyBin(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		spec := command.Argv[len(command.Argv)-1]
+		version := spec[strings.LastIndex(spec, "@")+1:]
+		binRel := filepath.Join("lib", "node_modules", ".bin", "codex")
+		if err := os.MkdirAll(filepath.Join(prefix, filepath.Dir(binRel)), 0o755); err != nil {
+			return err
+		}
+		// The fake binary's content is its version; the probe below reads it.
+		return os.WriteFile(filepath.Join(prefix, binRel), []byte(version+"\n"), 0o755)
+	})
+
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusSucceeded {
+		t.Fatalf("managed update with a hoisted dependency bin = %+v", job)
+	}
+	binRel := filepath.Join("lib", "node_modules", ".bin", "codex")
+	if record, ok := f.s.readManagedRecord(TargetCodex); !ok || record.BinRel != binRel {
+		t.Fatalf("record.BinRel = %q, %t; want %q", record.BinRel, ok, binRel)
+	}
+}
+
 func TestManagedUpdateRunsAlongsideSessionsOnEveryPlatform(t *testing.T) {
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		s := newTestService(goos, "npm")
