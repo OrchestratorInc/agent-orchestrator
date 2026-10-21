@@ -32,12 +32,14 @@ PRAGMA writable_schema = RESET;
 -- +goose StatementEnd
 
 -- +goose Down
+-- Harness repair may insert later harnesses after MiniMax Code instead of
+-- before 'fake', so remove the entry wherever it sits in the list.
 -- +goose StatementBegin
 PRAGMA writable_schema = ON;
 -- +goose StatementEnd
 -- +goose StatementBegin
 UPDATE sqlite_master
-SET sql = replace(sql, '''minimax-code'', ''fake''))', '''fake''))')
+SET sql = replace(sql, ', ''minimax-code''', '')
 WHERE type = 'table' AND name = 'sessions';
 -- +goose StatementEnd
 -- +goose StatementBegin

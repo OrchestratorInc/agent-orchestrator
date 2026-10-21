@@ -63,3 +63,32 @@ func TestMigrationAllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testing.T
 		})
 	}
 }
+
+// Harness repair can place Memcode after MiniMax Code when a foreign 0202
+// receipt skipped Memcode's SQL; rollback must still remove MiniMax Code.
+func TestMiniMaxCodeDownAfterHarnessRepair(t *testing.T) {
+	for _, skippedMemcode := range []bool{false, true} {
+		name := "canonical"
+		if skippedMemcode {
+			name = "foreign_0202_receipt"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := openMigratedDatabaseCopy(t, 200)
+			if skippedMemcode {
+				mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (202, 1)`)
+			}
+			if err := migrate(db); err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+			assertAppliedMigrations(t, db, miniMaxCodeMigrationVersion)
+			downTo(t, db, 200)
+			var after string
+			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(after, "'minimax-code'") || !strings.Contains(after, "'command-code'") {
+				t.Fatalf("harness constraint after rollback to 200: %s", after)
+			}
+		})
+	}
+}
