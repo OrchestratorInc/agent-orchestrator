@@ -10,6 +10,8 @@
 // `{chatConversation}` to the file that owns the driver's conversation turns
 // (Claude's lives in the shared ACP package).
 
+import { CHANNEL_CAUSES } from "./audit_instructions.mjs";
+
 const HARNESS_DIRS = Object.freeze({
   "claude-code": { tui: "claudecode", chat: "claudeacp", reviewer: "claudecode", chatConversation: "backend/internal/adapters/chatdriver/acp/conversation.go" },
   codex: { tui: "codex", chat: "codexappserver", reviewer: "codex", chatConversation: "backend/internal/adapters/chatdriver/codexappserver/conversation.go" },
@@ -72,14 +74,16 @@ export const CAPABILITIES = Object.freeze([
   },
   {
     id: "instructions",
-    title: "System prompt, AO rules and project AGENTS.md",
-    surface: "tui",
+    title: "System prompt delivery, AO rules and project AGENTS.md",
+    surface: "tui+chat",
     support: { "claude-code": "yes", codex: "yes" },
-    gates: ["hidden_ao_instructions", "project_agents_md", "tui_system_prompt_file", "system_prompt_restore"],
+    gates: ["hidden_ao_instructions", "project_agents_md", "tui_system_prompt_file", "instruction_channel", "system_prompt_restore", "instruction_channel_restore", "chat_instruction_channel", "chat_system_prompt_restore"],
     inspect: [
       "backend/internal/session_manager/prompt.go",
       "backend/internal/session_manager/manager.go",
       "backend/pkg/agentruntime/command.go",
+      "backend/internal/adapters/chatdriver/{chat}/driver.go",
+      ".agents/skills/ao-agent-harness/scripts/audit_instructions.mjs",
     ],
   },
   {
@@ -353,6 +357,10 @@ const GATE_HINTS = Object.freeze({
   hidden_ao_instructions: { expected: "provider used the token from project agentRules (system prompt)", causes: ["system prompt flag not passed (append-system-prompt / model_instructions_file)", "agentRules not written into system.md"] },
   project_agents_md: { expected: "provider used the token from project AGENTS.md", causes: ["CLI does not read AGENTS.md (Claude reads CLAUDE.md)", "worktree missing the committed AGENTS.md"] },
   tui_system_prompt_file: { expected: "<data>/prompts/<session>/system.md exists and carries the project agentRules", causes: ["prompt writer skipped this harness", "agentRules not merged into the system prompt"] },
+  instruction_channel: { expected: "the CLI receives the session system prompt through the declared channel (flag in argv, protocol param, config file, or last-resort rule/plugin file)", causes: ["system.md generated but never passed to the CLI", "rule/config file written outside the path the CLI reads", "no channel declared or available"] },
+  instruction_channel_restore: { expected: "after Kill and restore the CLI receives the regenerated prompt with the fresh rules", causes: ["restore argv omits the system-prompt flag", "rule/config artifact not rewritten on restore", "system.md not regenerated on restore"] },
+  chat_instruction_channel: { expected: "the Chat driver delivers the system prompt through its channel and the agent uses it", causes: ["session parameter not sent at session/new", "plugin/rule file not passed (--plugin-dir) or not auto-applied"] },
+  chat_system_prompt_restore: { expected: "instructions changed after Kill are used by the restored Chat conversation", causes: ["native history replays the old system prompt and the driver does not resend the new one on session/load", "artifact not rewritten before restore", "project config write failed"] },
   ao_skill_pointer: { expected: "<data>/skills/using-ao/SKILL.md exists and system.md points at it", causes: ["skill assets not installed at daemon boot", "aoSkillPointer omitted for this harness"] },
   second_message: { expected: "POST /sessions/{id}/send makes the provider add secondMessageToken", causes: ["send rejected while not idle", "keystrokes delivered but not submitted", "UserPromptSubmit hook not firing"] },
   tui_hooks_installed: { expected: "AO hook commands are installed for the session", causes: ["hook installer skipped the worktree", "hook file written outside the worktree", "launch argv missing hook -c flags"] },
@@ -457,13 +465,20 @@ export function daemonLogExcerpt(logs, { sessionId = null, agent = null, max = 2
   return picked.slice(-max).map((line) => line.slice(0, 600));
 }
 
-export function diagnoseGate(item, { agent = null, sessionId = null, daemonLogs = "" } = {}) {
+const INSTRUCTION_GATES = new Set(["hidden_ao_instructions", "system_prompt_restore", "tui_system_prompt_file", "instruction_channel", "instruction_channel_restore", "chat_instructions", "chat_instruction_channel", "chat_system_prompt_restore"]);
+
+export function diagnoseGate(item, { agent = null, sessionId = null, daemonLogs = "", instructionChannel = undefined } = {}) {
   if (!item || item.status === "PASS") return undefined;
   const capability = capabilityForGate(item.name);
   const hint = GATE_HINTS[item.name] ?? {};
   const support = capability && agent ? capability.support?.[agent] ?? "unknown" : "unknown";
   const observed = [item.reason, ...observedFromEvidence(item.evidence)].filter(Boolean);
   const causes = [...(hint.causes ?? [])];
+  // The likeliest cause of an instruction failure depends on how AO delivers
+  // the prompt to this harness; a flag hint is wrong for a rule-file harness.
+  if (INSTRUCTION_GATES.has(item.name) && CHANNEL_CAUSES[instructionChannel]) {
+    causes.unshift(`${instructionChannel} channel: ${CHANNEL_CAUSES[instructionChannel]}`);
+  }
   if (support === "yes" && item.status === "UNSUPPORTED") {
     causes.unshift(`AO declares ${capability.id} for ${agent}; an UNSUPPORTED result here is a regression`);
   }

@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { authenticationAction, createEvidenceStore, redactOutput, sanitizeEvidence } from "./audit_evidence.mjs";
 import { CAPABILITIES, capabilityMatrix, diagnoseGate } from "./audit_capabilities.mjs";
 import { buildFixLoop, classifyFailure, compareAttempts, shellQuote } from "./audit_fixloop.mjs";
+import { instructionSpec } from "./audit_instructions.mjs";
 import { IFACE_GATES, SUITES, auditChatSuite, auditExtras, auditInterfaceSwitch, notRunGates } from "./audit_suites.mjs";
 export { createEvidenceStore } from "./audit_evidence.mjs";
 
@@ -2126,11 +2127,11 @@ function suiteNotRun(suites, reason) {
 // Runs the selected capability suites after the TUI lifecycle and folds their
 // gates into the result. Extras and the interface switch reuse the lifecycle's
 // session; the Chat suite creates its own session in the same project.
-export async function runCapabilitySuites({ baseURL, agent, result, projectId, dataDir, scenario, restoredReadySpec, suites, only = null, timeoutMs, onIssue, onSession, log }) {
+export async function runCapabilitySuites({ baseURL, agent, result, projectId, dataDir, scenario, restoredReadySpec, suites, only = null, contract = null, timeoutMs, onIssue, onSession, log }) {
   const statusOf = name => result.gates.find(item => item.name === name)?.status;
   if (suites.includes("extras")) {
     await log?.(`${agent}: extras (models refresh, prompt/skill files, hooks, usage)`);
-    result.gates.push(...await auditExtras({ baseURL, agent, dataDir, sessionId: result.sessionId, workspacePath: result.workspacePath, scenario, timeoutMs, onIssue }));
+    result.gates.push(...await auditExtras({ baseURL, agent, dataDir, sessionId: result.sessionId, workspacePath: result.workspacePath, scenario, contract, statusOf, timeoutMs, onIssue }));
   }
   if (suites.includes("interface")) {
     await log?.(`${agent}: TUI ↔ Chat interface switch`);
@@ -2140,7 +2141,7 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   }
   if (suites.includes("chat")) {
     await log?.(`${agent}: Chat suite`);
-    const chat = await auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, only, onIssue, onSession });
+    const chat = await auditChatSuite({ baseURL, agent, projectId, dataDir, timeoutMs, scenario, only, contract, onIssue, onSession });
     result.gates.push(...chat.gates);
     Object.assign(result, { chatSessionId: chat.sessionId, chatWorkspacePath: chat.workspacePath, chatCapabilities: chat.capabilities });
   }
@@ -2149,7 +2150,7 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   return result;
 }
 
-export async function refreshRestoreInstructions({ baseURL, projectId, restoreToken, timeoutMs }) {
+export async function refreshRestoreInstructions({ baseURL, projectId, restoreToken, timeoutMs, label = "restoreHiddenToken" }) {
   const path = `projects/${encodeURIComponent(projectId)}`;
   const before = await request({ baseURL, path, timeoutMs });
   const project = before.response?.project;
@@ -2161,7 +2162,7 @@ export async function refreshRestoreInstructions({ baseURL, projectId, restoreTo
   if (typeof config.agentRules !== "string" || config.agentRules.includes(restoreToken)) {
     return { passed: false, reason: "fresh standing-instruction refresh requires existing audit rules and a previously undisclosed token", evidence };
   }
-  const updated = { ...config, agentRules: `${config.agentRules}\nFor restoreHiddenToken use exactly: ${restoreToken}` };
+  const updated = { ...config, agentRules: `${config.agentRules}\nFor ${label} use exactly: ${restoreToken}` };
   const write = await request({ baseURL, method: "PUT", path: `${path}/config`, body: { config: updated }, timeoutMs });
   evidence.write = apiEvidence(write);
   if (!write.ok) return { passed: false, reason: "fresh standing-instruction refresh was rejected by the project config API", evidence };
@@ -2503,6 +2504,8 @@ async function main(argv = process.argv.slice(2)) {
     console.error(`Cannot create evidence directory: ${redactOutput(error.message)}. Use a new --report basename for every attempt.`);
     return 2;
   }
+  // Filled once the local contracts load; read by failure diagnosis.
+  let contractsByAgent = {};
   let previousReport = null;
   if (options.previous) {
     try { previousReport = JSON.parse(await readFile(resolve(expandHome(options.previous)), "utf8")); }
@@ -2538,7 +2541,9 @@ async function main(argv = process.argv.slice(2)) {
   // report and its issue file.
   const recordIssue = async data => {
     const daemonLogs = daemon?.logs() || data.gate?.evidence?.daemonLogs || "";
-    const diagnosis = diagnoseGate(data.gate, { agent: data.agent, sessionId: data.sessionId, daemonLogs });
+    const surface = data.gate?.name?.startsWith("chat_") ? "chat" : "tui";
+    const instructionChannel = data.agent ? instructionSpec(data.agent, contractsByAgent[data.agent], surface)?.channel : undefined;
+    const diagnosis = diagnoseGate(data.gate, { agent: data.agent, sessionId: data.sessionId, daemonLogs, instructionChannel });
     if (diagnosis) {
       const previous = previousReport?.results?.find(item => item.agent === data.agent)?.gates?.find(item => item.name === data.gate.name) ?? null;
       diagnosis.failureClass = classifyFailure({ ...data.gate, diagnosis }, { previous });
@@ -2598,6 +2603,7 @@ async function main(argv = process.argv.slice(2)) {
     let localContracts;
     try { localContracts = await loadLocalContracts(options.localContract); }
     catch (error) { invalidInput = true; throw error; }
+    contractsByAgent = localContracts;
     report.localContract = options.localContract ? resolve(expandHome(options.localContract)) : null;
     stage = "host_preflight";
     report.host = await hostPreflight({ root, repoRoot: options.repoRoot, aoPath: options.aoPath, captureCommand: options.captureCommand });
@@ -2685,7 +2691,7 @@ async function main(argv = process.argv.slice(2)) {
         }
         const suiteArgs = {
           baseURL: daemon.baseURL, agent, projectId: setup.projectId, dataDir: daemon.dataDir, scenario,
-          restoredReadySpec: localContract?.restoredReady, suites, only: scope?.focus ?? null, timeoutMs, onIssue: recordIssue,
+          restoredReadySpec: localContract?.restoredReady, suites, only: scope?.focus ?? null, contract: localContract, timeoutMs, onIssue: recordIssue,
           onSession: ({ sessionId }) => sessions.set(sessionId, agent),
           log: message => evidence.log(`[${index + 1}/${selected.length}] ${message}`),
         };

@@ -31,9 +31,12 @@ const byName = (gates) => Object.fromEntries(gates.map((item) => [item.name, ite
 
 // A small in-memory AO Chat session: turns complete synchronously and apply
 // "set key = value" edits to the proof file, approvals wait for a decision.
-function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt", "resume"], providerAfterRestore = null } = {}) {
+// `replayOldPrompt` models a driver that restores native history but never
+// resends the system prompt, so rules changed after Kill are ignored.
+function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt", "resume"], providerAfterRestore = null, replayOldPrompt = false } = {}) {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "ao-suite-ws-")));
-  const state = { mode: "chat", terminated: false, controller: "ready", turns: [], activities: [], messages: [], files: {}, clientIds: new Set(), settings: { model: "m1", reasoningEffort: "low" }, history: "", provider: "conv-1" };
+  const state = { mode: "chat", terminated: false, controller: "ready", turns: [], activities: [], messages: [], files: {}, clientIds: new Set(), settings: { model: "m1", reasoningEffort: "low" }, history: "", provider: "conv-1",
+    rules: `For hiddenInstructionToken use exactly: ${scenario.hiddenInitialToken}`, sessionRules: "" };
   let turnSeq = 0;
   const finishTurn = (status = "completed") => { state.turns.at(-1).state = status; };
   const proof = () => JSON.parse(state.files["AO_AUDIT_CHAT_PROOF.json"] ?? "{}");
@@ -50,6 +53,7 @@ function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt",
       const next = proof();
       for (const match of text.matchAll(/(\w+) = ("[^"]*"|true|false)/g)) next[match[1]] = JSON.parse(match[2]);
       if (text.includes("set chatHistoryRecall to the history-only token")) next.chatHistoryRecall = state.history;
+      if (text.includes("chatRestoreInstructionToken")) next.chatRestoreInstructionToken = /chatRestoreHiddenToken use exactly: (\S+)/.exec(state.sessionRules)?.[1] ?? null;
       state.files["AO_AUDIT_CHAT_PROOF.json"] = JSON.stringify(next);
     }
     finishTurn();
@@ -60,6 +64,7 @@ function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt",
     if (method === "POST" && path === "sessions") {
       const initial = /request token: (\S+)/.exec(body.prompt)[1];
       state.history = /History-only token[^:]*: (\S+)/.exec(body.prompt)[1];
+      state.sessionRules = state.rules;
       state.files["AO_AUDIT_CHAT_PROOF.json"] = JSON.stringify({ cwd: workspace, initialPromptToken: initial, initialPromptExecutions: 1, hiddenInstructionToken: scenario.hiddenInitialToken, projectAgentsToken: scenario.agentsToken });
       turnSeq += 1;
       state.turns.push({ id: "t0", state: "completed", requestedAt: "now" });
@@ -93,8 +98,11 @@ function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt",
     }
     if (path === "usage/sessions/chat-1") return json(200, { sessionId: "chat-1", incomplete: false, totals: { inputTokens: 10, outputTokens: 2 }, harnesses: [] });
     if (path === "sessions/chat-1/kill") { state.terminated = true; return json(200, { ok: true }); }
+    if (path === "projects/p") return json(200, { project: { id: "p", config: { agentRules: state.rules } } });
+    if (path === "projects/p/config") { state.rules = body.config.agentRules; return json(200, { project: { id: "p", config: body.config } }); }
     if (path === "sessions/chat-1/restore") {
       state.terminated = false;
+      if (!replayOldPrompt) state.sessionRules = state.rules;
       if (providerAfterRestore) state.provider = providerAfterRestore;
       return json(200, { restoreMode: "native" });
     }
@@ -134,7 +142,7 @@ test("Chat suite drives spawn, follow-up, settings, approvals and restore agains
     const gates = byName(result.gates);
     for (const name of ["chat_spawn", "chat_controller_ready", "chat_initial_turn", "chat_instructions", "chat_followup", "chat_idempotent_send",
       "chat_models", "chat_settings", "chat_usage", "chat_post_interrupt_continuation", "chat_approval_reject", "chat_approval_approve",
-      "chat_kill", "chat_restore", "chat_restore_continuation"]) {
+      "chat_kill", "chat_restore", "chat_restore_continuation", "chat_instruction_channel", "chat_system_prompt_restore"]) {
       assert.equal(gates[name].status, "PASS", `${name}: ${gates[name].reason}`);
     }
     // Claude's MCP status, skills, steer and compaction are conditional: absent
@@ -242,4 +250,19 @@ test("extras checks prompt, skill and Claude hook files on disk", async () => {
   assert.equal(gates.ao_skill_pointer.status, "PASS");
   assert.equal(gates.tui_hooks_installed.status, "PASS");
   assert.equal(gates.tui_usage_recorded.status, "PASS");
+});
+
+test("restored Chat that replays the old system prompt fails chat_system_prompt_restore with the cause (Tau, Neovate, Mastra)", async () => {
+  const restorePath = withFakeSqlite("conv-1");
+  try {
+    const fake = fakeChatDaemon({ replayOldPrompt: true });
+    const result = await withFetch(fake.handler, (baseURL) => auditChatSuite({
+      baseURL, agent: "codex", projectId: "p", dataDir: tmpdir(), timeoutMs: 2_000, scenario, only: new Set(["chat_system_prompt_restore"]),
+    }));
+    const gates = byName(result.gates);
+    assert.equal(gates.chat_restore_continuation.status, "PASS", "history itself was restored");
+    assert.equal(gates.chat_system_prompt_restore.status, "FAIL");
+    assert.match(gates.chat_system_prompt_restore.reason, /replaying the old system prompt/);
+    assert.match(fake.state.rules, /chatRestoreHiddenToken use exactly: AO_CHAT_RESTORE_HIDDEN_/, "fresh rules were written after Kill");
+  } finally { restorePath(); }
 });

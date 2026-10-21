@@ -49,6 +49,7 @@ const TOKEN_GATES = new Set([
 // or history, so they are AO bugs from the first failure.
 const DELIVERY_GATES = new Set([
   "hidden_ao_instructions", "project_agents_md", "system_prompt_restore", "chat_instructions",
+  "instruction_channel", "instruction_channel_restore", "chat_instruction_channel", "chat_system_prompt_restore",
   "history_file_continuity", "chat_restore_continuation", "iface_chat_continuation",
 ]);
 
@@ -68,7 +69,7 @@ export function classifyFailure(item, { previous = null, knownUpstream = null } 
   const body = text(item);
   if (item.status !== "NOT_RUN" && knownUpstream?.[item.name]) return "unsupported_upstream";
   if (item.status === "NOT_RUN") {
-    if (CONTRACT_TEXT.test(body) && /missing/i.test(body)) return "contract";
+    if (CONTRACT_TEXT.test(body) && /missing|does not declare|is required/i.test(body)) return "contract";
     return "prerequisite";
   }
   if (item.userAction || item.name === "authentication" || item.evidence?.authenticationRequired || NEEDS_USER_TEXT.test(body)) return "needs_user";

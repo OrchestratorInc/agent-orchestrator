@@ -76,6 +76,10 @@ fix:
 
 ```json
 "surfaces": ["chat"],
+"instructions": {
+  "tui": { "channel": "none" },
+  "chat": { "channel": "rule-file", "artifact": "{dataDir}/cursor/acp-plugins/{sessionIdSha256}/rules/ao-standing.mdc" }
+},
 "modelSelection": "text",
 "knownUpstream": {
   "cancellation": "stakpak/agent#767: v0.3.88 kills only the immediate child; fixed in an unreleased build"
@@ -90,6 +94,28 @@ fix:
   the stray session is cleaned up. Use `surfaces` for Chat-only harnesses such
   as ZCode, Pool and Docker Agent, where the TUI-only runner previously produced
   a wall of `BLOCKED` rows.
+- `instructions` says how AO's standing instructions (the system prompt)
+  reach the CLI. Give one `{ channel, artifact }` for both surfaces, or one per
+  surface under `tui` and `chat`. Codex and Claude Code default to `flag` (TUI)
+  and `protocol` (Chat). Choose the first channel the native CLI supports:
+
+  | Channel | Delivery | Where it applies |
+  | --- | --- | --- |
+  | `flag` | A system-prompt flag or file argument. The runner reads the session process's argv and checks that `system.md` carries the current rules. | TUI |
+  | `protocol` | A Chat session parameter. | Chat |
+  | `config` | A native config or env file the CLI loads additively. | Either |
+  | `rule-file` | **Last resort** (the Cursor ACP pattern): a session-scoped rule or plugin file the CLI auto-applies. | Either |
+  | `none` | Nothing reaches the CLI. Always a `FAIL` that names this ladder. | — |
+
+  - `config` and `rule-file` need an `artifact` path template. It can use
+    `{dataDir}`, `{workspace}`, `{sessionId}` and `{sessionIdSha256}`.
+  - The runner checks that the artifact exists and carries the current rules
+    (it must be rewritten on restore).
+  - An artifact inside the worktree must be invisible to git, so the agent
+    cannot commit private instructions.
+  - If the artifact is correct but the token never shows up, the CLI did not
+    load it. Prove the discovery path with a direct native run before blaming
+    the model.
 - `modelSelection: "text"` declares free-form model entry, for a harness with no
   native model list. `ao_models_api` passes only when AO also reports
   `selectionMode: "text"`. The catalog cross-check is then `UNSUPPORTED`.

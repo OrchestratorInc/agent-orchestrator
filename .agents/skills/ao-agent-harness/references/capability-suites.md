@@ -17,14 +17,14 @@ are recorded as `NOT_RUN` with the prerequisite that stopped them.
 
 | Suite | Session | Gates | What proves it |
 | --- | --- | --- | --- |
-| `extras` | The lifecycle's TUI session; no provider turn | `ao_models_refresh`, `model_efforts`, `tui_system_prompt_file`, `ao_skill_pointer`, `tui_hooks_installed`, `tui_usage_recorded` | Catalog refresh returns models with valid `efforts`/`defaultEffort`. `<data>/prompts/<id>/system.md` carries the project agentRules token. `<data>/skills/using-ao/SKILL.md` exists and `system.md` points at it. Claude's worktree `.claude/settings.local.json` wires `ao hooks claude-code`; for Codex (hooks are launch `-c` flags), the hook-delivered native id is persisted. `GET /usage/sessions/{id}` reports tokens. |
+| `extras` | The lifecycle's TUI session; no provider turn | `ao_models_refresh`, `model_efforts`, `tui_system_prompt_file`, `instruction_channel`, `instruction_channel_restore`, `ao_skill_pointer`, `tui_hooks_installed`, `tui_usage_recorded` | Catalog refresh returns models with valid `efforts`/`defaultEffort`. `<data>/prompts/<id>/system.md` carries the project agentRules token. `<data>/skills/using-ao/SKILL.md` exists and `system.md` points at it. Claude's worktree `.claude/settings.local.json` wires `ao hooks claude-code`; for Codex (hooks are launch `-c` flags), the hook-delivered native id is persisted. `GET /usage/sessions/{id}` reports tokens. |
 | `interface` | The restored TUI session, after `post_restore_message` passes | `iface_status`, `iface_tui_to_chat`, `iface_chat_continuation`, `iface_chat_to_tui`, `iface_tui_continuation` | `GET /sessions/{id}/interface-transition` offers Chat. A `drain` transition reaches `phase: completed` with `session.mode: chat`. The first Chat turn recalls the TUI history-only token. Switching back reaches `mode: tui`. After the native ready cue, the TUI keeps the Chat edits and answers. |
 | `chat` | A new `mode: chat` session in the same project | see below | Conversation snapshot, proof file in the Chat worktree, sqlite `sessions.provider_conversation_id`, and the cancellation process witness. |
 
 Chat gates, in order:
 
 1. `chat_spawn` proves AO created the Chat session. It fails if AO silently created a TUI session instead.
-2. `chat_controller_ready`, `chat_initial_turn` and `chat_instructions` prove that the initial prompt ran once in the worktree, using the agentRules and `AGENTS.md` tokens.
+2. `chat_controller_ready`, `chat_initial_turn` and `chat_instructions` prove that the initial prompt ran once in the worktree, using the agentRules and `AGENTS.md` tokens. `chat_instruction_channel` proves how the system prompt got there, through the contract's `instructions` channel (see [local CLI contract](local-cli-contract.md#interface-model-mode-and-known-upstream-limits)).
 3. `chat_mcp_servers` proves the AO MCP server is listed in the snapshot.
 4. `chat_turn_lifecycle`, `chat_followup` and `chat_idempotent_send` prove the turn ran (running → completed, streaming recorded), its edit landed, and a repeated `clientMessageId` returns `duplicate: true` without a new turn.
 5. `chat_models` and `chat_settings` prove the model list works and a model/effort change persists. The settings read back from the snapshot and the `conversations.reasoning_effort` column.
@@ -32,7 +32,7 @@ Chat gates, in order:
 7. `chat_steer` proves a steer lands in the running turn. Without the `steer` capability, AO must refuse the steer.
 8. `chat_interrupt` and `chat_post_interrupt_continuation` use the same PID and kernel-start witness as TUI cancellation. They prove the turn ended `interrupted`/`cancelled`, no late side effect appeared, and the next turn works.
 9. `chat_approval_reject` and `chat_approval_approve` run with `accept-edits`. They prove a pending approval appears, the offered reject/allow decision is delivered, the side effect matches the decision, and nothing ran before the decision. Approval mode returns to bypass afterwards.
-10. `chat_kill`, `chat_restore` and `chat_restore_continuation` prove the same `provider_conversation_id` before and after restore, and that the restored Chat recalls the history-only token.
+10. `chat_kill`, `chat_restore` and `chat_restore_continuation` prove the same `provider_conversation_id` before and after restore, and that the restored Chat recalls the history-only token. `chat_system_prompt_restore` writes new standing instructions after Kill and requires the restored conversation to use them, not the old prompt replayed from history.
 11. `chat_compact` proves `compactedAt` appears and the conversation still answers.
 
 ## Statuses

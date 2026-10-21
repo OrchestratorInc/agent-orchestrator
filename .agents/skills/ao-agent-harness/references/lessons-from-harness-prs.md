@@ -76,6 +76,26 @@ belong in the adapter's design and tests.
     a typed refusal.
   - Add native effort support to the effort allowlist
     **(touchpoint: `effort-gate`)**.
+- **Instruction channel.**
+  - Decide how the system prompt reaches the CLI before writing the adapter,
+    and declare it in the contract's `instructions` **(automated delivery
+    check)**. Take the first rung of the ladder that the CLI supports:
+    1. A native system-prompt flag or file argument, such as Claude
+       `--append-system-prompt-file` or Codex `-c model_instructions_file=`.
+    2. A Chat session parameter, such as ACP `_meta.systemPrompt` or Codex
+       developer instructions.
+    3. A native config or env file that the CLI loads additively.
+    4. **Last resort, when nothing else exists:** a session-scoped rule or
+       plugin file the CLI auto-applies. This is the Cursor ACP pattern:
+       `--plugin-dir` with an `alwaysApply` rule.
+       - Keep the file under the AO data dir, or git-excluded.
+       - Rewrite it on restore and remove it on kill.
+       - Prove with fresh and restored tokens that the CLI really loads it.
+         Cursor ignored AO's rule file in the 27 Sep retest.
+    5. If no rung works, fail closed and say so. Never append private
+       instructions to the visible user prompt.
+  - Generating `system.md` is not delivery. Cursor TUI generated one and
+    passed it nowhere.
 - **Instructions.**
   - Seed a conflicting native `.env`/config and confirm AO's standing
     instructions still win. Hermes's native dotenv overrode them.
