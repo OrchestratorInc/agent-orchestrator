@@ -18,7 +18,7 @@ const (
 	conPTYPasteInputProtocolVersion = 3
 )
 
-// Message type constants.
+// Message type constants. Values must match pty-host.ts MSG_* constants exactly.
 const (
 	MsgTerminalData       byte = 0x01 // host -> client: raw PTY output
 	MsgTerminalInput      byte = 0x02 // client -> host: raw keystrokes

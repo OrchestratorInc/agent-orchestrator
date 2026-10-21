@@ -94,3 +94,23 @@ func TestQuoteImagePathsInNoteText(t *testing.T) {
 		t.Fatalf("quoteImagePaths() =\n%q\nwant\n%q", got, want)
 	}
 }
+
+func TestCoordinatorWaitCountsOnlyUnacknowledgedDeliveries(t *testing.T) {
+	// Fast retries while a permission dialog was open must not make the first
+	// real unacknowledged delivery wait the maximum.
+	now := time.Date(2026, 10, 21, 1, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI}}
+	store.add(reportAt("r1", "worker", now, now, "note"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("session awaiting a decision")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	for range 10 {
+		_, _ = c.RunDue(context.Background())
+		now = now.Add(5 * time.Second)
+	}
+	delivery.submitErr = fmt.Errorf("send: %w", domain.ErrReportDeliveryUnacknowledged)
+	_, _ = c.RunDue(context.Background())
+	if r := store.reports[0]; !r.AvailableAt.Equal(now.Add(15 * time.Second)) {
+		t.Fatalf("next try at %v, want %v (after %d claims)", r.AvailableAt, now.Add(15*time.Second), r.DeliveryAttempts)
+	}
+}

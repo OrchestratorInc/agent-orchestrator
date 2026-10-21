@@ -11,6 +11,7 @@ import (
 	"net"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -95,8 +96,9 @@ func clientSendMessage(addr, message string) error {
 	return err
 }
 
-// clientSendPaste sends message as one MsgPasteInput frame, pauses, then sends
-// Enter. The host marks it as a bracketed paste when the program asked for one.
+// clientSendPaste sends message as one MsgPasteInput frame, waits while the
+// host writes it at the usual pacing plus the usual pause, then sends Enter.
+// The host marks it as a bracketed paste when the program asked for one.
 // Requires a host at conPTYPasteInputProtocolVersion or later.
 func clientSendPaste(addr, message string) error {
 	conn, err := dialHost(addr, dialTimeout)
@@ -111,7 +113,8 @@ func clientSendPaste(addr, message string) error {
 	if _, err := conn.Write(frame); err != nil {
 		return err
 	}
-	time.Sleep(ptyInputEnterDelay)
+	chunks := (utf8.RuneCountInString(message) + ptyInputChunkRunes - 1) / ptyInputChunkRunes
+	time.Sleep(time.Duration(max(chunks-1, 0))*ptyInputChunkDelay + ptyInputEnterDelay)
 	enter, err := EncodeMessage(MsgTerminalInput, []byte("\r"))
 	if err != nil {
 		return err

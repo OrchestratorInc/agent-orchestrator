@@ -51,6 +51,10 @@ type Coordinator struct {
 	retryDelay time.Duration
 	wake       chan struct{}
 	mu         sync.Mutex
+	// unacked counts, per batch id, deliveries that were typed but never
+	// acknowledged. Guarded by mu. It is not persisted: after a restart the
+	// wait starts again from its shortest step.
+	unacked map[string]int64
 }
 
 // CoordinatorDeps configures durable scheduling and delivery.
@@ -73,7 +77,7 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.RetryDelay <= 0 {
 		d.RetryDelay = 5 * time.Second
 	}
-	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1)}
+	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1), unacked: map[string]int64{}}
 }
 
 // Wake asks the coordinator to inspect durable scheduling state.
@@ -185,6 +189,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 		return c.release(ctx, batch, err)
 	}
+	delete(c.unacked, batch.ID)
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
 }
@@ -268,32 +273,28 @@ func (c *Coordinator) ReleasePiggyback(ctx context.Context, batch PreparedBatch,
 // again, so the wait grows with every attempt instead of repeating every few
 // seconds (#6931).
 func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause error) error {
-	next := c.now().UTC().Add(reportRetryWait(batch.attempts()))
+	if c.unacked == nil {
+		c.unacked = map[string]int64{}
+	}
+	c.unacked[batch.ID]++
+	next := c.now().UTC().Add(reportRetryWait(c.unacked[batch.ID]))
 	if _, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, next, cause.Error()); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause
 }
 
-// reportRetryWait is 15s after the first unacknowledged attempt, doubling each
-// time up to 10 minutes.
-func reportRetryWait(attempts int64) time.Duration {
+// reportRetryWait is 15s after the first unacknowledged delivery, doubling
+// each time up to 10 minutes.
+func reportRetryWait(failures int64) time.Duration {
 	const first, limit = 15 * time.Second, 10 * time.Minute
-	if attempts <= 1 {
+	if failures <= 1 {
 		return first
 	}
-	if attempts > 7 {
+	if failures > 7 {
 		return limit
 	}
-	return min(first<<(attempts-1), limit)
-}
-
-func (b PreparedBatch) attempts() int64 {
-	var most int64
-	for _, report := range b.Reports {
-		most = max(most, report.DeliveryAttempts)
-	}
-	return most
+	return min(first<<(failures-1), limit)
 }
 
 func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause error) error {

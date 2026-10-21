@@ -165,3 +165,15 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
+
+func TestPasteWritesKeepThePacedChunks(t *testing.T) {
+	text := strings.Repeat("x", 1100)
+	plain := pasteWrites(text, false)
+	if len(plain) != 3 || len(plain[0]) != 512 || strings.Join(plain, "") != text {
+		t.Fatalf("plain writes = %d parts, first %d bytes; want 3 parts of up to 512 runes", len(plain), len(plain[0]))
+	}
+	bracketed := pasteWrites(text, true)
+	if len(bracketed) != 3 || strings.Join(bracketed, "") != "\x1b[200~"+text+"\x1b[201~" {
+		t.Fatalf("bracketed writes = %d parts; want 3 parts that join to one paste", len(bracketed))
+	}
+}

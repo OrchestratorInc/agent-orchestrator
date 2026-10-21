@@ -40,10 +40,10 @@ func ReportDeliveryID(message string) (string, bool) {
 // wrapDelivery adds a check of the body to the envelope. Terminals can drop,
 // reorder, or insert text while a long prompt is typed, and other text (such
 // as the user's unsent draft) can end up in front of the envelope. The check
-// lets the hook accept an envelope wherever it appears, but only when its body
-// arrived whole.
+// lets the hook accept an envelope that is not at the start, but only when its
+// body arrived whole.
 func wrapDelivery(tag, id, message string) string {
-	return fmt.Sprintf("<%s id=\"%s\" check=\"%s\">\n%s\n</%s>", tag, id, deliveryCheck(message), message, tag)
+	return fmt.Sprintf("<%s id=%q check=%q>\n%s\n</%s>", tag, id, deliveryCheck(message), message, tag)
 }
 
 // deliveryCheck hashes the body with whitespace removed, so harmless changes
@@ -62,20 +62,37 @@ func deliveryCheck(body string) string {
 func deliveryID(message, tag string) (string, bool) {
 	message = strings.TrimSpace(message)
 	open := "<" + tag + ` id="`
-	start := strings.Index(message, open)
-	if start < 0 {
-		return "", false
+	for from := 0; ; {
+		at := strings.Index(message[from:], open)
+		if at < 0 {
+			return "", false
+		}
+		at += from
+		if id, ok := envelopeAt(message, at, open, "</"+tag+">"); ok {
+			return id, true
+		}
+		from = at + len(open)
 	}
-	rest := message[start+len(open):]
+}
+
+// envelopeAt reads the envelope that opens at message[at:]. AO pastes a
+// checked envelope last, so it must end the prompt and its body must match
+// its check; text in front of it (such as the user's unsent draft) is allowed,
+// while an envelope quoted in the middle of a human prompt is not. An
+// envelope without a check (written before it existed) cannot prove its body
+// is whole, so it keeps the old rule: trusted only at the start.
+func envelopeAt(message string, at int, open, closeTag string) (string, bool) {
+	rest := message[at+len(open):]
 	end := strings.IndexByte(rest, '"')
 	if end <= 0 || end > 128 || !validDeliveryID(rest[:end]) {
 		return "", false
 	}
 	id, rest := rest[:end], rest[end:]
 	if strings.HasPrefix(rest, `">`) {
-		// An envelope without a check (written before it existed) cannot prove
-		// its body is whole, so it keeps the old rule: trusted only at the start.
-		return id, start == 0
+		if at != 0 {
+			return "", false
+		}
+		return id, true
 	}
 	const checkAttr = `" check="`
 	if !strings.HasPrefix(rest, checkAttr) {
@@ -86,8 +103,7 @@ func deliveryID(message, tag string) (string, bool) {
 		return "", false
 	}
 	check, body := rest[:deliveryCheckLen], rest[deliveryCheckLen+2:]
-	closeAt := strings.LastIndex(body, "</"+tag+">")
-	if closeAt < 0 || deliveryCheck(body[:closeAt]) != check {
+	if !strings.HasSuffix(body, closeTag) || deliveryCheck(strings.TrimSuffix(body, closeTag)) != check {
 		return "", false
 	}
 	return id, true

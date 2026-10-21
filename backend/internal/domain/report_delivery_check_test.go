@@ -66,3 +66,35 @@ func TestSessionDeliveryUsesTheSameCheck(t *testing.T) {
 		t.Fatalf("tail fragment = %q, true; want rejected", got)
 	}
 }
+
+func TestReportDeliveryEnvelopeMustEndThePrompt(t *testing.T) {
+	whole := WrapReportDelivery(testDeliveryBatchID, testDeliveryBody)
+	// A human prompt that quotes an earlier report is still a human prompt.
+	if got, ok := ReportDeliveryID("what does this mean? " + whole + " please explain"); ok {
+		t.Fatalf("quoted envelope = %q, true; want rejected", got)
+	}
+}
+
+func TestReportDeliveryAcceptsTheLastOfTwoCopies(t *testing.T) {
+	// An earlier copy was left unsent in the composer and a retry pasted a
+	// second copy behind it.
+	whole := WrapReportDelivery(testDeliveryBatchID, testDeliveryBody)
+	if got, ok := ReportDeliveryID(whole + "\n" + whole); !ok || got != testDeliveryBatchID {
+		t.Fatalf("two copies = %q, %v; want accepted", got, ok)
+	}
+}
+
+func TestReportDeliveryBodyMayContainTags(t *testing.T) {
+	// A worker reporting on AO itself may quote AO's own markup.
+	body := "fixed the parser for <ao-report-delivery id=\"x\"> and </ao-report-delivery>"
+	if got, ok := ReportDeliveryID(WrapReportDelivery(testDeliveryBatchID, body)); !ok || got != testDeliveryBatchID {
+		t.Fatalf("body with tags = %q, %v; want accepted", got, ok)
+	}
+}
+
+func TestRejectedLegacyEnvelopeReturnsNoID(t *testing.T) {
+	legacy := "<ao-report-delivery id=\"" + testDeliveryBatchID + "\">\nbody\n</ao-report-delivery>"
+	if got, ok := ReportDeliveryID("draft " + legacy); ok || got != "" {
+		t.Fatalf("ReportDeliveryID() = %q, %v; want \"\", false", got, ok)
+	}
+}
