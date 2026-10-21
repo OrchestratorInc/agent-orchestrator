@@ -903,17 +903,17 @@ func TestConfirmedIdentityFollowsInstallRevision(t *testing.T) {
 	}
 	write(launcher, "#!/bin/sh\n")
 	rememberIdentity(launcher)
-	if !identityConfirmed(launcher) {
+	if !identityConfirmed(t.Context(), launcher) {
 		t.Fatal("fresh confirmation not reused")
 	}
 	// A source update moves the checkout without touching the launcher.
 	write(filepath.Join(gitDir, "main"), "2222222222222222222222222222222222222222\n")
-	if identityConfirmed(launcher) {
+	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("confirmation survived an installation revision change")
 	}
 	rememberIdentity(launcher)
 	forgetIdentity(launcher)
-	if identityConfirmed(launcher) {
+	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("a rejected probe left the launcher confirmed")
 	}
 }
@@ -944,12 +944,12 @@ func TestConfirmedIdentityFollowsLinkedWorktreeRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	rememberIdentity(launcher)
-	if !identityConfirmed(launcher) {
+	if !identityConfirmed(t.Context(), launcher) {
 		t.Fatal("fresh confirmation not reused")
 	}
 	// Branch refs of a linked worktree live in the shared git directory.
 	git(worktree, "commit", "-q", "--allow-empty", "-m", "two")
-	if identityConfirmed(launcher) {
+	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("confirmation survived a commit in a linked worktree")
 	}
 }
@@ -985,11 +985,11 @@ func TestConfirmedIdentityFollowsWrapperSourceRevision(t *testing.T) {
 		}
 	}
 	rememberIdentity(wrapper)
-	if !identityConfirmed(wrapper) {
+	if !identityConfirmed(t.Context(), wrapper) {
 		t.Fatal("fresh confirmation not reused")
 	}
 	write(filepath.Join(refs, "main"), "2222222222222222222222222222222222222222\n")
-	if identityConfirmed(wrapper) {
+	if identityConfirmed(t.Context(), wrapper) {
 		t.Fatal("confirmation survived a commit in the wrapper's source checkout")
 	}
 }
@@ -1038,7 +1038,7 @@ func TestApostropheWrapperResolvesSourceRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	rememberIdentity(opaque)
-	if identityConfirmed(opaque) {
+	if identityConfirmed(t.Context(), opaque) {
 		t.Fatal("unresolvable wrapper reused a cached confirmation")
 	}
 }
@@ -1417,5 +1417,185 @@ func TestReleaseBannerRefusesModifiedSourceCheckout(t *testing.T) {
 	}
 	if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
 		t.Fatal("modified source checkout accepted under a release banner")
+	}
+}
+
+func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
+	t.Setenv("HERMES_BUNDLED_LOCALES", "")
+	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
+	hooks := func(home, workspace string, env map[string]string) error {
+		if env == nil {
+			env = map[string]string{}
+		}
+		env["HERMES_HOME"] = home
+		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", WorkspacePath: workspace, Env: env, SystemPrompt: "AO"})
+	}
+	pack := func(lang string) string {
+		t.Helper()
+		dir := t.TempDir()
+		for path, content := range map[string]string{
+			"plugin.yaml":               "name: review-pack\nversion: 1.0.0\nprovides_locales: [" + lang + "]\n",
+			"locales/" + lang + ".yaml": "cli:\n  tui:\n    placeholder_busy: Working - please wait\n",
+		} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	link := func(target, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	// Native discovery follows a symlinked plugin directory.
+	home := t.TempDir()
+	link(pack("en"), filepath.Join(home, "plugins", "review-pack"))
+	if err := hooks(home, "", nil); err == nil {
+		t.Error("symlinked English plugin pack accepted")
+	}
+	home = t.TempDir()
+	link(pack("de"), filepath.Join(home, "plugins", "review-pack"))
+	if err := hooks(home, "", nil); err != nil {
+		t.Errorf("symlinked German plugin pack refused: %v", err)
+	}
+	// HERMES_BUNDLED_PLUGINS is another plugin root, relative to the workspace.
+	bundled := t.TempDir()
+	link(pack("en"), filepath.Join(bundled, "review-pack"))
+	if err := hooks(t.TempDir(), "", map[string]string{"HERMES_BUNDLED_PLUGINS": bundled}); err == nil {
+		t.Error("English pack under HERMES_BUNDLED_PLUGINS accepted")
+	}
+	workspace := t.TempDir()
+	link(bundled, filepath.Join(workspace, "review-plugins"))
+	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_PLUGINS": "review-plugins"}); err == nil {
+		t.Error("relative HERMES_BUNDLED_PLUGINS accepted")
+	}
+	// Unset (t.Setenv above restores it), so a secret source cannot gap-fill it.
+	if err := os.Unsetenv("HERMES_BUNDLED_PLUGINS"); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	if err := hooks(t.TempDir(), "", env); err != nil {
+		t.Fatal(err)
+	}
+	if value, pinned := env["HERMES_BUNDLED_PLUGINS"]; !pinned || value != "" {
+		t.Errorf("HERMES_BUNDLED_PLUGINS not pinned empty: %q, %v", value, pinned)
+	}
+	// HERMES_BUNDLED_LOCALES resolves against the session workspace.
+	workspace = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "review-catalog"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_LOCALES": "review-catalog"}); err == nil {
+		t.Error("workspace-relative HERMES_BUNDLED_LOCALES accepted")
+	}
+	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_LOCALES": "missing-catalog"}); err != nil {
+		t.Errorf("missing HERMES_BUNDLED_LOCALES refused although Hermes ignores it: %v", err)
+	}
+}
+
+func TestStandingInstructionResidualsFollowNativeConfig(t *testing.T) {
+	t.Setenv("HERMES_BUNDLED_LOCALES", "")
+	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
+	t.Setenv("AO_REVIEW_UNUSED_NAME", "renamed")
+	for config, refused := range map[string]bool{
+		// Hermes expands values, not keys: an unused literal key selects nothing.
+		"display:\n  personality: helpful\npersonalities:\n  \"${AO_REVIEW_UNUSED_NAME}\": Unselected static prompt\n": false,
+		"display:\n  personality: \"${AO_REVIEW_UNUSED_NAME}\"\n":                                                      true,
+		// Explicit binary renders as b'...' natively.
+		"agent:\n  system_prompt: !!binary SGVsbG8=\n": true,
+		"agent:\n  system_prompt: \"b'Hello'\"\n":      false,
+		"agent:\n  system_prompt: !!str yes\n":         false,
+		// One strict-true source opens startup; the rest are fetched on truthiness.
+		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: 'yes'\n    override_existing: true\n": true,
+		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: 1\n    override_existing: true\n":     true,
+		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: 0\n    override_existing: true\n":     false,
+		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: false\n":                              false,
+		"secrets:\n  bitwarden:\n    enabled: 'yes'\n    override_existing: true\n":                                                              false,
+	} {
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := map[string]string{"HERMES_HOME": home}
+		err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"})
+		if (err != nil) != refused {
+			t.Errorf("%q: err = %v, want refused=%v", config, err, refused)
+		}
+	}
+}
+
+func TestDefaultHomeThatMovesWhenPinnedIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX default home")
+	}
+	t.Setenv("HERMES_BUNDLED_LOCALES", "")
+	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
+	for suffix, refused := range map[string]bool{"-dev": false, "-dev ": true, "-$USER": true} {
+		env := map[string]string{"HERMES_HOME": "", "HOME": t.TempDir(), "HERMES_DATA_DIR_SUFFIX": suffix}
+		err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"})
+		if (err != nil) != refused {
+			t.Errorf("suffix %q: err = %v, want refused=%v", suffix, err, refused)
+		}
+	}
+}
+
+func TestSourceCleanlinessIgnoresInheritedGitContextAndCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell launcher")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	root, clean := t.TempDir(), t.TempDir()
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	launcher := filepath.Join(root, ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2 (2026.9.24)'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: Working\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(root, "init", "-q", "-b", "main")
+	git(root, "add", "en.yaml")
+	git(root, "commit", "-q", "-m", "release")
+	git(clean, "clone", "-q", root, ".")
+	if ok, why, _ := probeNativeVersion(t.Context(), launcher); !ok {
+		t.Fatalf("clean release checkout rejected: %s", why)
+	}
+	rememberIdentity(launcher)
+	t.Cleanup(func() { forgetIdentity(launcher) })
+	if !identityConfirmed(t.Context(), launcher) {
+		t.Fatal("fresh confirmation not reused")
+	}
+	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW LOCAL BUSY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A tracked edit changes neither the launcher nor HEAD.
+	if identityConfirmed(t.Context(), launcher) {
+		t.Fatal("cached confirmation reused for a modified source checkout")
+	}
+	// AO's own git context must not supply another tree's cleanliness.
+	t.Setenv("GIT_WORK_TREE", clean)
+	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
+	if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
+		t.Fatal("inherited GIT_WORK_TREE made a modified checkout look clean")
 	}
 }

@@ -76,7 +76,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	timedOut := false
 	var unconfirmed []string
 	validate := func(ctx context.Context, path string) bool {
-		if identityConfirmed(path) {
+		if identityConfirmed(ctx, path) {
 			return true
 		}
 		// Retry once: a probe can fail transiently on a loaded machine.
@@ -391,7 +391,7 @@ func gitDirs(checkout string) (gitDir, commonDir string) {
 	return gitDir, commonDir
 }
 
-func identityConfirmed(path string) bool {
+func identityConfirmed(ctx context.Context, path string) bool {
 	current, ok := currentIdentity(path)
 	if !ok {
 		return false
@@ -399,12 +399,23 @@ func identityConfirmed(path string) bool {
 	// A shell wrapper whose source checkout AO cannot name could forward to
 	// changed code with no visible revision, so it is always re-probed.
 	// Homebrew's versioned Cellar target already names its release.
-	if !inCellar(current.target) && isShellScript(current.target) && launcherSourceRoot(path) == "" {
+	root := launcherSourceRoot(path)
+	if !inCellar(current.target) && isShellScript(current.target) && root == "" {
 		return false
 	}
 	remembered, found := confirmedIdentities.Load(path)
 	entry, ok := remembered.(confirmedIdentity)
-	return found && ok && entry.binaryIdentity == current && time.Since(entry.at) < confirmedIdentityTTL
+	if !found || !ok || entry.binaryIdentity != current || time.Since(entry.at) >= confirmedIdentityTTL {
+		return false
+	}
+	// A tracked edit changes neither the launcher nor HEAD; the probe's
+	// clean-source condition must still hold when its result is reused.
+	if root != "" {
+		if modified, known := sourceModified(ctx, root); known && modified {
+			return false
+		}
+	}
+	return true
 }
 
 func inCellar(path string) bool {
@@ -532,19 +543,35 @@ func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 }
 
 // sourceModified asks git whether a checkout has modified tracked files.
-// known is false when git cannot answer.
+// known is false when git cannot answer, including when the repository git
+// finds is not rooted at the checkout itself.
 func sourceModified(ctx context.Context, root string) (modified, known bool) {
+	top, ok := runGit(ctx, root, "rev-parse", "--show-toplevel")
+	if !ok || !sameDir(top, root) {
+		return false, false
+	}
 	status, ok := runGit(ctx, root, "status", "--porcelain", "--untracked-files=no")
 	return status != "", ok
 }
 
+func sameDir(a, b string) bool {
+	a, errA := filepath.EvalSymlinks(a)
+	b, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && filepath.Clean(a) == filepath.Clean(b)
+}
+
 // runGit runs a read-only git query in a checkout without taking optional
 // locks, so it cannot strand an index.lock in the user's installation.
+// AO's own GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...)
+// would redirect the query to another repository, so none are inherited.
 func runGit(ctx context.Context, root string, args ...string) (string, bool) {
 	gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(gitCtx, "git", append([]string{"--no-optional-locks", "-C", root}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(strings.ToUpper(kv), "GIT_")
+	})
+	cmd.Env = append(env, "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err == nil
 }
@@ -887,6 +914,14 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err != nil {
 		return err
 	}
+	// AO pins the home it checks as an explicit HERMES_HOME, which Hermes strips
+	// and expands, unlike the default home's literal data-dir suffix. Refuse a
+	// home that pinning would move.
+	pinned := maps.Clone(cfg.Env)
+	pinned["HERMES_HOME"] = home
+	if again, err := ResolveHome(pinned); err != nil || again != home {
+		return fmt.Errorf("hermes: native home %q changes when set as HERMES_HOME (Hermes strips and expands it); remove surrounding whitespace or $ from HERMES_DATA_DIR_SUFFIX", home)
+	}
 	if filepath.Base(filepath.Dir(home)) == "profiles" {
 		return fmt.Errorf("hermes: named native profiles are not supported by this initial rendered-composer integration")
 	}
@@ -948,7 +983,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	cfg.Env["HERMES_LANGUAGE"] = "en"
 	// Pin the scope and locale redirects AO checked as unset, so a secret
 	// source's gap-fill cannot introduce them after these checks.
-	for _, name := range []string{"HERMES_MANAGED_DIR", "HERMES_BUNDLED_LOCALES"} {
+	for _, name := range []string{"HERMES_MANAGED_DIR", "HERMES_BUNDLED_LOCALES", "HERMES_BUNDLED_PLUGINS"} {
 		if _, ok := childEnvLookup(cfg.Env)(name); !ok {
 			cfg.Env[name] = ""
 		}
@@ -1010,11 +1045,25 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 // Hermes's English chrome (agent/i18n.py, i18n_layers.py): a sealed bundle
 // named by HERMES_BUNDLED_LOCALES, the profile overlay
 // <HERMES_HOME>/locales/en[.<surface>].yaml, and declarative plugin language
-// packs under the user or project plugin directories.
+// packs under the user, project or HERMES_BUNDLED_PLUGINS plugin directories.
+// Relative overrides resolve against Hermes's working directory, the session
+// workspace, as they do natively.
 func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) error {
+	childPath := func(path string) (string, bool) {
+		if filepath.IsAbs(path) {
+			return path, true
+		}
+		if cfg.WorkspacePath == "" {
+			return "", false
+		}
+		// Not filepath.Join: lexical cleaning would fold "link/.." where the
+		// filesystem follows the symlink first.
+		return cfg.WorkspacePath + string(filepath.Separator) + path, true
+	}
 	for _, bundled := range []string{os.Getenv("HERMES_BUNDLED_LOCALES"), cfg.Env["HERMES_BUNDLED_LOCALES"]} {
 		if bundled = pyStrip(bundled); bundled != "" {
-			if st, err := os.Stat(bundled); err == nil && st.IsDir() {
+			path, ok := childPath(bundled)
+			if st, err := os.Stat(path); !ok || err == nil && st.IsDir() {
 				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome AO reads; unset it for AO sessions")
 			}
 		}
@@ -1024,27 +1073,24 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 	if cfg.WorkspacePath != "" {
 		pluginRoots = append(pluginRoots, filepath.Join(cfg.WorkspacePath, ".hermes", "plugins"))
 	}
+	// get_bundled_plugins_dir uses the raw value whenever it is non-empty.
+	for _, bundled := range []string{os.Getenv("HERMES_BUNDLED_PLUGINS"), cfg.Env["HERMES_BUNDLED_PLUGINS"]} {
+		if bundled == "" {
+			continue
+		}
+		path, ok := childPath(bundled)
+		if !ok {
+			return fmt.Errorf("hermes: relative HERMES_BUNDLED_PLUGINS %q cannot be inspected without a session workspace", bundled)
+		}
+		pluginRoots = append(pluginRoots, path)
+	}
 	for _, root := range pluginRoots {
 		// A plugin tree AO cannot read could hold a pack it never saw.
-		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				if path == root && errors.Is(err, os.ErrNotExist) {
-					return filepath.SkipDir
-				}
-				return err
-			}
-			if d.IsDir() {
-				if rel, _ := filepath.Rel(root, path); strings.Count(rel, string(filepath.Separator)) > 3 {
-					return filepath.SkipDir
-				}
-				if d.Name() == "locales" {
-					dirs = append(dirs, path)
-				}
-			}
-			return nil
-		}); err != nil {
+		found, err := localeDirs(root, 0)
+		if err != nil {
 			return fmt.Errorf("hermes: cannot inspect plugin language packs under %s: %w", root, err)
 		}
+		dirs = append(dirs, found...)
 	}
 	for _, dir := range dirs {
 		entries, _ := os.ReadDir(dir)
@@ -1057,6 +1103,37 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 	return nil
 }
 
+// localeDirs lists the locales directories in a plugin tree. Like Hermes's
+// plugin discovery (Path.is_dir), it follows directory symlinks; the depth
+// bound covers flat and category layouts and stops symlink cycles.
+func localeDirs(dir string, depth int) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if depth == 0 && errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var dirs []string
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if st, err := os.Stat(path); err != nil || !st.IsDir() {
+			continue
+		}
+		if entry.Name() == "locales" {
+			dirs = append(dirs, path)
+		}
+		if depth < 3 {
+			nested, err := localeDirs(path, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			dirs = append(dirs, nested...)
+		}
+	}
+	return dirs, nil
+}
+
 // englishLocaleFile is an i18n_layers locale file for language "en".
 var englishLocaleFile = regexp.MustCompile(`^en(?:\.(?:core|tui|desktop))?\.ya?ml$`)
 
@@ -1064,11 +1141,21 @@ var englishLocaleFile = regexp.MustCompile(`^en(?:\.(?:core|tui|desktop))?\.ya?m
 // secrets:, applied after the dotenv layers) that may override variables AO
 // sets. Bitwarden and 1Password override by default; a source configured
 // with override_existing: false only fills unset names, which AO pins.
+// Startup applies sources only when one has enabled exactly true
+// (env_loader.py), then fetches every source whose enabled is truthy
+// (SecretSource.is_enabled).
 func refuseSecretSources(config map[string]any) error {
 	secrets, _ := config["secrets"].(map[string]any)
+	if !slices.ContainsFunc(slices.Collect(maps.Values(secrets)), func(v any) bool {
+		source, ok := v.(map[string]any)
+		enabled, isBool := yaml11Bool(source["enabled"])
+		return ok && isBool && enabled
+	}) {
+		return nil
+	}
 	for name, source := range secrets {
 		source, ok := source.(map[string]any)
-		if enabled, _ := yaml11Bool(source["enabled"]); !ok || !enabled {
+		if !ok || !pyTruthy(source["enabled"]) {
 			continue
 		}
 		if override, isBool := yaml11Bool(source["override_existing"]); !isBool || override {
@@ -1102,13 +1189,14 @@ func refuseDotenvOverrides(envFile string) error {
 }
 
 // referencesEnv reports whether a parsed YAML value holds a ${VAR} reference.
+// Hermes expands string values only, so mapping keys are not inspected.
 func referencesEnv(value any) bool {
 	switch v := value.(type) {
 	case string:
 		return strings.Contains(v, "${")
 	case map[string]any:
-		for key, item := range v {
-			if strings.Contains(key, "${") || referencesEnv(item) {
+		for _, item := range v {
+			if referencesEnv(item) {
 				return true
 			}
 		}
@@ -1143,8 +1231,8 @@ func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool)
 		for _, src := range []any{config["personalities"], agent["personalities"]} {
 			if m, ok := src.(map[string]any); ok {
 				for k, v := range m {
-					// A name that interpolates or retypes could select another definition.
-					envRef = envRef || strings.Contains(k, "${")
+					// Hermes expands values, never keys, so a ${VAR} name stays
+					// literal; a name that retypes could select another definition.
 					untyped = untyped || strings.HasPrefix(k, yaml11Sentinel)
 					definitions[pyLower(pyStrip(k))] = v
 				}
@@ -1518,6 +1606,48 @@ func yaml11Bool(v any) (value, ok bool) {
 	return false, false
 }
 
+// pyTruthy is Python's bool() of a value decoded by unmarshalYAML11 as
+// Hermes's YAML 1.1 loader would type it.
+func pyTruthy(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case float64:
+		return v != 0
+	case string:
+		word, marked := strings.CutPrefix(v, yaml11Sentinel)
+		if !marked {
+			return v != ""
+		}
+		if value, ok := yaml11Bool(v); ok {
+			return value
+		}
+		switch word {
+		case "~", "null", "Null", "NULL":
+			return false
+		}
+		// A number is false only when every digit is zero.
+		if yaml11Number.MatchString(word) {
+			digits := strings.TrimLeft(word, "+-")
+			digits = strings.TrimPrefix(strings.TrimPrefix(digits, "0x"), "0b")
+			digits, _, _ = strings.Cut(strings.ToLower(digits), "e")
+			return strings.Trim(digits, "0_.:") != ""
+		}
+		return true
+	case map[string]any:
+		return len(v) > 0
+	case []any:
+		return len(v) > 0
+	}
+	return true
+}
+
+var yaml11Number = regexp.MustCompile(`^[-+]?(?:0b[01_]+|0x[0-9a-fA-F_]+|[0-9][0-9_:]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|\.[0-9_]+(?:[eE][-+]?[0-9]+)?)$`)
+
 // unmarshalYAML11 decodes YAML like yaml.Unmarshal, but marks every plain
 // scalar that YAML 1.1 types as non-string with yaml11Sentinel, so callers
 // can tell where Hermes would see a bool, null, number or date.
@@ -1533,6 +1663,11 @@ func unmarshalYAML11(b []byte, out any) error {
 			return
 		}
 		seen[n] = true
+		// yaml.v3 decodes an explicit !!binary (or unknown) tag as a Go string,
+		// where Hermes sees bytes and renders str() as b'...'.
+		if n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle != 0 && !slices.Contains([]string{"!!str", "!!int", "!!float", "!!bool", "!!null"}, n.ShortTag()) {
+			n.Tag, n.Style, n.Value = "!!str", yaml.DoubleQuotedStyle, yaml11Sentinel+n.Tag+" "+n.Value
+		}
 		if n.Kind == yaml.ScalarNode && n.Style == 0 && n.Value != "" {
 			switch tag, nonString := n.ShortTag(), yaml11NonString.MatchString(n.Value); {
 			case tag == "!!str" && nonString:
