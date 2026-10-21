@@ -1156,7 +1156,7 @@ func TestSpawnEffortSurfacesDaemonUnsupportedEffort(t *testing.T) {
 			_, _ = io.WriteString(w, authorizedAgentsJSON("gemini"))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, `{"error":"invalid","code":"UNSUPPORTED_EFFORT","message":"effort is only supported for codex, claude-code, and command-code agents","requestId":"req-1"}`)
+			_, _ = io.WriteString(w, `{"error":"invalid","code":"UNSUPPORTED_EFFORT","message":"effort is only supported for codex, claude-code, command-code, and kiro agents","requestId":"req-1"}`)
 		default:
 			http.NotFound(w, r)
 		}

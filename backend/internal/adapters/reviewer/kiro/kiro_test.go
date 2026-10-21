@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -26,11 +27,12 @@ func TestReviewCommandBuildsReadOnlyInteractiveTUI(t *testing.T) {
 		Prompt:           "Read and follow /ao/task.md",
 		SystemPromptFile: systemPath,
 		TaskPromptRoot:   promptRoot,
+		Config:           domain.AgentConfig{Effort: " high "},
 	})
 	if err != nil {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
-	if want := []string{"kiro-cli", "chat", "--agent", reviewerAgentName}; !slices.Equal(spec.Argv, want) {
+	if want := []string{"kiro-cli", "chat", "--agent", reviewerAgentName, "--effort", "high"}; !slices.Equal(spec.Argv, want) {
 		t.Fatalf("argv = %#v, want %#v", spec.Argv, want)
 	}
 	joined := strings.Join(spec.Argv, " ")
@@ -97,12 +99,18 @@ func TestReviewCommandBuildsReadOnlyInteractiveTUI(t *testing.T) {
 
 func TestReviewCommandPreflightDoesNotCreateConfig(t *testing.T) {
 	r := &Reviewer{resolveBinary: func(context.Context) (string, error) { return "kiro-cli", nil }}
-	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{WorkspacePath: t.TempDir()})
+	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{
+		WorkspacePath: t.TempDir(),
+		Config:        domain.AgentConfig{Effort: "medium"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if spec.WorkingDirectory != "" || spec.InitialMessage != "" {
 		t.Fatalf("preflight spec = %+v", spec)
+	}
+	if want := []string{"kiro-cli", "chat", "--agent", reviewerAgentName, "--effort", "medium"}; !slices.Equal(spec.Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", spec.Argv, want)
 	}
 }
 

@@ -61,27 +61,19 @@ func (p *Plugin) Manifest() adapters.Manifest {
 }
 
 // GetConfigSpec reports the per-project agent config keys Kiro understands:
-// a model override. Kiro already forwards agentConfig.Model into its
-// workspace-local custom agent config (see setKiroAgentDefaults in
-// hooks.go); this declares that support so it is discoverable/validated
-// through the config-spec surface, matching claude-code and codex.
+// a model override and a reasoning-effort override. Kiro already forwards
+// agentConfig.Model into its workspace-local custom agent config (see
+// setKiroAgentDefaults in hooks.go); effort is passed to `kiro-cli chat
+// --effort`. This declares both so they are discoverable/validated through the
+// config-spec surface, matching claude-code and codex.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.ConfigSpec{}, err
-	}
-	return ports.ConfigSpec{
-		Fields: []ports.ConfigField{
-			{
-				Key:         "model",
-				Type:        ports.ConfigFieldString,
-				Description: "Model override written into Kiro's workspace-local agent config.",
-			},
-		},
-	}, nil
+	return agentbase.ModelEffortConfigSpec(ctx,
+		"Model override written into Kiro's workspace-local agent config.",
+		"Reasoning effort override passed to `kiro-cli chat --effort`.")
 }
 
 // GetLaunchCommand builds the argv to start a new Kiro session:
-// `kiro-cli chat [--agent ao] --agent ao [trust flags] [-- <prompt>]`.
+// `kiro-cli chat --agent ao [--effort <level>] [trust flags] [-- <prompt>]`.
 //
 // The prompt is passed as a positional argument after `--` so a leading "-" is
 // not read as a flag for non-worker launches. Worker prompts are sent after
@@ -98,6 +90,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 
 	cmd = []string{binary, "chat"}
 	cmd = append(cmd, "--agent", kiroAgentName)
+	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--effort")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 
 	prompt := cfg.Prompt
@@ -144,9 +137,9 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing Kiro session:
-// `kiro-cli chat --no-interactive --resume-id <agentSessionId> [trust flags]`.
-// ok is false when the hook-derived native session id has not landed yet, so
-// callers can fall back to fresh launch behavior.
+// `kiro-cli chat --agent ao --resume-id <agentSessionId> [--effort <level>]
+// [trust flags]`. ok is false when the hook-derived native session id has not
+// landed yet, so callers can fall back to fresh launch behavior.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -163,6 +156,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	cmd = make([]string, 0, 8)
 	cmd = append(cmd, binary, "chat", "--agent", kiroAgentName, "--resume-id", agentSessionID)
+	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--effort")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	return cmd, true, nil
 }
