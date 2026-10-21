@@ -96,8 +96,8 @@ func (s *Store) UpdateCodexAccountSwitch(ctx context.Context, rec domain.CodexAc
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateCodexAccountSwitchPhase(ctx, gen.UpdateCodexAccountSwitchPhaseParams{
 		NextPhase: string(rec.Phase), FailureCode: rec.FailureCode,
-		CredentialsCommittedAt: timePtrToNull(rec.CredentialsCommittedAt),
-		UpdatedAt:              rec.UpdatedAt.UTC(), CompletedAt: timePtrToNull(rec.CompletedAt),
+		CredentialsCommittedAt: timePtrToNullTime(rec.CredentialsCommittedAt),
+		UpdatedAt:              rec.UpdatedAt.UTC(), CompletedAt: timePtrToNullTime(rec.CompletedAt),
 		ID: rec.ID, ExpectedPhase: string(expected),
 	})
 	if err != nil {
@@ -110,8 +110,8 @@ func codexAccountSwitchFromGen(row gen.CodexAccountSwitch) domain.CodexAccountSw
 	return domain.CodexAccountSwitch{
 		ID: row.ID, SourceKind: domain.CodexAccountSwitchSourceKind(row.SourceKind), SourceAccountID: row.SourceAccountID, TargetAccountID: row.TargetAccountID,
 		Phase: domain.CodexAccountSwitchPhase(row.Phase), FailureCode: row.FailureCode,
-		CredentialsCommittedAt: nullTimeToPtr(row.CredentialsCommittedAt),
-		CreatedAt:              row.CreatedAt, UpdatedAt: row.UpdatedAt, CompletedAt: nullTimeToPtr(row.CompletedAt),
+		CredentialsCommittedAt: nullTimeToTimePtr(row.CredentialsCommittedAt),
+		CreatedAt:              row.CreatedAt, UpdatedAt: row.UpdatedAt, CompletedAt: nullTimeToTimePtr(row.CompletedAt),
 		IdempotencyKey: row.IdempotencyKey,
 	}
 }

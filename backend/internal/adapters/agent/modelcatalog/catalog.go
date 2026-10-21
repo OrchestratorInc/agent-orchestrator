@@ -428,6 +428,14 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	}
 	if request.CredentialType == "" && (hasLocalProviderCatalog(request.AgentID) || browseProviderCredentials[request.AgentID] != nil) {
 		// Replace older task-only snapshots through the normal background refresh.
+		if listsRunnableModels(request.AgentID) {
+			// Snapshots from before RunnableModels lack it.
+			return fingerprint + ":shared-providers-v1:runnable-v1"
+		}
+		if request.AgentID == "pi" || request.AgentID == "kimchi" {
+			// Snapshots from before Pi's thinking levels were read lack them.
+			return fingerprint + ":shared-providers-v1:thinking-v2"
+		}
 		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
@@ -482,6 +490,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
+		// The model command lists what it can run; the provider cache, every model.
+		if listsRunnableModels(agentID) {
+			for _, model := range normalize(models) {
+				base.RunnableModels = append(base.RunnableModels, model.ID)
+			}
+		}
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
 		base.Providers = append(base.Providers, reported.Providers...)
@@ -605,7 +619,8 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		normalized = append(normalized, ports.AgentModelInfo{
 			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
-			Inputs: modelInputs(item.Inputs),
+			SupportsFast: item.FastTier != "",
+			Inputs:       modelInputs(item.Inputs),
 		})
 	}
 	if len(normalized) == 0 {
@@ -799,7 +814,12 @@ const discoveryErrorDetailMax = 500
 // summary lands after any progress noise; whitespace is collapsed so the result
 // is a single log-friendly line.
 func discoveryErrorDetail(output []byte) string {
-	cleaned := strings.Join(strings.Fields(ansiPattern.ReplaceAllString(string(output), "")), " ")
+	plain := ansiPattern.ReplaceAllString(string(output), "")
+	// A Node CLI that crashed ends on its stack; the error is the line above it.
+	if line := thrownErrorLine(plain); line != "" {
+		plain = line
+	}
+	cleaned := strings.Join(strings.Fields(plain), " ")
 	if cleaned == "" {
 		return ""
 	}
@@ -807,6 +827,25 @@ func discoveryErrorDetail(output []byte) string {
 		cleaned = "…" + string(runes[len(runes)-discoveryErrorDetailMax:])
 	}
 	return cleaned
+}
+
+// thrownErrorPattern is the line a crashed Node or Python CLI names its error on.
+var thrownErrorPattern = regexp.MustCompile(`(?m)^\s*(?:Uncaught )?(?:[A-Z][A-Za-z]*)?(?:Error|Exception): .+$`)
+
+// stackFramePattern is a line of a stack trace.
+var stackFramePattern = regexp.MustCompile(`(?m)^\s+at \S`)
+
+// thrownErrorLine is the last such line of output that ends on a stack trace,
+// or "" when output is not a crash.
+func thrownErrorLine(output string) string {
+	if !stackFramePattern.MatchString(output) {
+		return ""
+	}
+	matches := thrownErrorPattern.FindAllString(output, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(matches[len(matches)-1])
 }
 
 // BinaryVersion returns a short non-sensitive executable-metadata fingerprint
@@ -1406,6 +1445,9 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			}
 			if len(previous.Inputs) == 0 {
 				previous.Inputs = item.Inputs
+			}
+			if len(previous.Efforts) == 0 {
+				previous.Efforts = item.Efforts
 			}
 			previous.IsDefault = previous.IsDefault || item.IsDefault
 			byID[item.ID] = previous

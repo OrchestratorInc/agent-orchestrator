@@ -221,13 +221,13 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, created_at, handoff_note
 ) VALUES (
     sqlc.arg(id), sqlc.arg(conversation_id), sqlc.narg(session_id),
     sqlc.arg(provider_conversation_id), sqlc.narg(parent_branch_id),
     sqlc.narg(fork_after_turn_id), sqlc.narg(replaced_turn_id),
     sqlc.narg(replacement_turn_id), sqlc.arg(fork_after_sequence), sqlc.arg(strategy),
-    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at)
+    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at), sqlc.arg(handoff_note)
 );
 
 -- name: InsertReviewConversationBranch :exec
@@ -521,15 +521,8 @@ WHERE id = ?;
 -- offset, so a multi-byte character here silently corrupts later queries.
 -- name: UpdateConversationTurnSettings :exec
 UPDATE conversations
-SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
+SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, auto_compact_window = ?, updated_at = ?
 WHERE id = ?;
-
--- An agent switch starts a new provider/model scope. Clear only the source
--- harness choices; approval posture is AO-owned and remains applicable.
--- name: ResetConversationAgentOverridesForSession :exec
-UPDATE conversations
-SET model = NULL, reasoning_effort = NULL, updated_at = ?
-WHERE current_session_id = ?;
 
 -- Token position for the conversation, latest wins.
 --

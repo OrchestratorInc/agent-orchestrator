@@ -23,6 +23,7 @@ import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
 	useConversation,
+	ProviderSwitchFailed,
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
@@ -893,6 +894,56 @@ describe("conversation branching commands", () => {
 		for (const [, options] of postMock.mock.calls.slice(1)) {
 			expect(options.headers).toEqual({ "X-AO-Attachment-Upload": "1" });
 		}
+	});
+
+	it("sends a message with its agent switch in one request", async () => {
+		const switched = new Headers({ "X-AO-Provider-Switched": "1" });
+		postMock
+			.mockResolvedValueOnce({ data: { status: "ok", message: { turnId: "turn-9", state: "running", duplicate: false } }, error: undefined, response: new Response() })
+			.mockResolvedValueOnce({ data: undefined, error: { code: "PROVIDER_SWITCH_busy" }, response: new Response(null, { status: 409 }) })
+			.mockResolvedValueOnce({ data: undefined, error: { code: "SESSION_NOT_FOUND" }, response: new Response(null, { status: 404, headers: switched }) });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex", model: "gpt-6" };
+
+		await act(async () => {
+			await expect(result.current.send({ text: "first turn", clientMessageId: "m1", providerSwitch })).resolves
+				.toMatchObject({ turnId: "turn-9" });
+		});
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/provider-switch", expect.objectContaining({
+			body: expect.objectContaining({ ...providerSwitch, message: { text: "first turn", clientMessageId: "m1" } }),
+		}));
+
+		// Refused: the message never left.
+		await act(async () => {
+			await expect(result.current.send({ text: "again", clientMessageId: "m2", providerSwitch })).rejects
+				.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The switch notice reports it; the composer does not show it twice.
+		expect(result.current.error).toBeUndefined();
+		// Switched, then the send failed: an ordinary send failure.
+		await act(async () => {
+			const failure = await result.current.send({ text: "later", clientMessageId: "m3", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+			expect(failure).toMatchObject({ code: "SESSION_NOT_FOUND" });
+		});
+	});
+
+	it("does not call a switch refused when no clear answer came back", async () => {
+		postMock
+			.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE" }, response: new Response(null, { status: 502 }) })
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex" };
+		// A remote daemon's gateway gave up, but the daemon may still switch and send.
+		await act(async () => {
+			const failure = await result.current.send({ text: "a", clientMessageId: "m1", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The request never got an answer.
+		await act(async () => {
+			const failure = await result.current.send({ text: "b", clientMessageId: "m2", providerSwitch }).catch((error) => error);
+			expect(failure).toBeInstanceOf(TypeError);
+		});
 	});
 
 	it("threads caller-owned idempotency ids through send, steer, and inline edit", async () => {
