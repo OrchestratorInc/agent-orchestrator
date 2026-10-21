@@ -1,7 +1,6 @@
 import { getBreadcrumbItems } from "fumadocs-core/breadcrumb";
 import type { SupportedLocale } from "@/i18n/locales";
 import { localePath, withTrailingSlash } from "@/i18n/paths";
-import { visibleProductName } from "./branding";
 import { COMPANY } from "./constants";
 import { docsTree } from "./docs-tree";
 
@@ -41,10 +40,19 @@ export function absoluteUrl(path: string): string {
   return `${COMPANY.DOCS_URL}${path}`;
 }
 
+// The name search engines and link previews show, with the names the
+// product is also searched by.
+export const BRAND = "Orchestrator.inc";
+const ALTERNATE_NAMES = ["Agent Orchestrator", "AO"];
+
+/** The site name, e.g. in `og:site_name`. */
+export const SITE_NAME = `${BRAND} Docs`;
+
 const organization = {
   "@type": "Organization",
   "@id": `${COMPANY.MARKETING_URL}/#organization`,
-  name: COMPANY.NAME,
+  name: BRAND,
+  alternateName: ALTERNATE_NAMES,
   url: COMPANY.MARKETING_URL,
   logo: `${COMPANY.MARKETING_URL}/ao-logo.svg`,
   sameAs: [COMPANY.GITHUB_URL],
@@ -53,7 +61,8 @@ const organization = {
 const website = {
   "@type": "WebSite",
   "@id": `${COMPANY.DOCS_URL}/#website`,
-  name: `${COMPANY.NAME} Docs`,
+  name: SITE_NAME,
+  alternateName: ALTERNATE_NAMES.map((name) => `${name} Docs`),
   url: absoluteUrl("/"),
   publisher: { "@id": organization["@id"] },
 };
@@ -71,7 +80,7 @@ type Article = {
  * then each folder that has its own page, then the article itself.
  */
 function breadcrumbs({ title, url, locale }: Article) {
-  const trail = [{ name: `${COMPANY.NAME} Docs`, url: localePath("/", locale) }];
+  const trail = [{ name: SITE_NAME, url: localePath("/", locale) }];
   for (const item of getBreadcrumbItems(url, docsTree(locale))) {
     if (item.url && typeof item.name === "string") trail.push({ name: item.name, url: withTrailingSlash(item.url) });
   }
@@ -82,7 +91,7 @@ function breadcrumbs({ title, url, locale }: Article) {
     itemListElement: trail.map((item, index) => ({
       "@type": "ListItem",
       position: index + 1,
-      name: visibleProductName(item.name),
+      name: item.name,
       item: absoluteUrl(item.url),
     })),
   };
@@ -95,15 +104,14 @@ function breadcrumbs({ title, url, locale }: Article) {
 export function articleStructuredData(article: Article) {
   const url = absoluteUrl(withTrailingSlash(article.url));
   const isHome = article.slugs.length === 0;
-  const title = visibleProductName(article.title);
   return {
     "@context": "https://schema.org",
     "@graph": [
       {
         "@type": "TechArticle",
         "@id": `${url}#article`,
-        headline: title,
-        description: article.description && visibleProductName(article.description),
+        headline: article.title,
+        description: article.description,
         url,
         inLanguage: article.locale,
         image: absoluteUrl(ogImagePath(article.slugs)),
