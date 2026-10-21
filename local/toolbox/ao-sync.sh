@@ -67,7 +67,9 @@ cd "$REPO_ROOT"
 echo "==> репо: $REPO_ROOT (ветка: $(git rev-parse --abbrev-ref HEAD))"
 
 # 1. Guard: рабочее дерево обязано быть чистым — иначе merge может всё смешать.
-if [ -n "$(git status --porcelain)" ]; then
+#    Леджер апстрим-дельты исключён: его пишет сам скрипт во время синка, грязь
+#    по нему — штатное состояние между прогонами (резюме после конфликта).
+if [ -n "$(git status --porcelain | grep -v -- 'local/toolbox/ao-upstream-ledger.txt')" ]; then
   echo "!! Рабочее дерево не чистое. Закоммить/застэшь изменения и запусти снова." >&2
   git status --short >&2
   exit 1
@@ -724,6 +726,7 @@ printf '%s\n' "$CURRENT_DUPES" > "$DUPES_CACHE"
 echo "=========================================="
 echo "==> синк готов. main = $(git rev-parse --short HEAD): $(git rev-list --count --no-merges origin/main..HEAD) коммитов дельты + $(git rev-list --count --merges origin/main..HEAD) merge-коммитов поверх origin/main."
 echo "    Точка отката (состояние ДО синка): git reset --hard $BACKUP_TAG"
+echo "    Леджер апстрим-дельты обновлён — закоммить local/toolbox/ao-upstream-ledger.txt."
 echo "    Дальше вручную (merge историю не переписывает — push обычный fast-forward):"
 echo "      git push fork main"
 echo "      ~/bin/rebuild-ao.sh"

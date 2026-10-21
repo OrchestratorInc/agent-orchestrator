@@ -6,3 +6,12 @@
 4d175a54b97a2bd443cefb5db5a75be7a026f347 skipped fix(awake): не применим без скипнутой feat 91b5eee23e (правит useStayAwake.ts, созданный фичей)
 6dcb6f2a66aa9a52e845d70c9f0969aeacffb850 skipped fix(prompt): по содержанию изменение текста системного промпта, не багфикс — решение владельца 2026-10-21
 e2e9b797b525ac535bc7685461aea4c8000401f8 skipped fix(kanban): по содержанию UX-полировка артефакт-листов, не багфикс — решение владельца 2026-10-21
+91b5eee23ec48ee18873f6b9f2761534a4c2f68a skipped feat(awake): move Stay Awake to a sidebar toggle shared with Connect Mobile (#6903)
+0bdb6a846672ec6529c340d659a5b8362b68b7ce skipped feat(mobile): stream desktop browser in Preview (#6127)
+8fbec789517cb2b4ae979f81bde63f8a3242f643 taken fix(cline): stop PreToolUse pinning sessions to needs_input (#6435)
+b1b2a690eb66488ebc00e6426c3d8d05ce77e063 skipped feat: add usage-limit recovery and auto-resume at reset (#6717)
+a81554709860a7f915dc8bb942e373e892ad178b taken fix(editor): flatten the open-workspace menu (#6977)
+c2cf620fda3e62ae06e7bf2c78c228b0cefae94e taken fix(cloud): wait for the user after a failed Setup instead of re-running it (#6961)
+0358e96642d7381a87389c5552a1ce36d7133905 taken fix: show a failed Setup the same way in cloud and local, say what went wrong, and allow 30 minutes per step (#6976)
+5ad319c5c42be0c54a06feeb502f31489fa8aff2 taken fix(chat): preserve question and answer history (#6943)
+10d15d6744599d4017c8b3623c45eed939062403 skipped feat(remote-hosts): let this computer link itself to your AO account (#6974)
