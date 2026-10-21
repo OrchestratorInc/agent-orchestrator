@@ -18,3 +18,6 @@ c2cf620fda3e62ae06e7bf2c78c228b0cefae94e taken fix(cloud): wait for the user aft
 10d15d6744599d4017c8b3623c45eed939062403 skipped feat(remote-hosts): let this computer link itself to your AO account (#6974)
 ea4a5ee123c8f3ef15b38979d25d659648dcbfa2 taken fix(cloud): start a cloud task in the default session mode (#6978) — закрыт вручную, union-резолюция TaskComposer.tsx (1fde1f280a)
 e152ec1a3221c30ee81d4e1beda509589efdeca0 pending fix(models): show cached catalogs while refreshing in background (#6898) — конфликт с role-тредингом дельты, решение: axisrow/agent-orchestrator#105
+30723c0be55edde1a012a4cd3d25039c43002e26 skipped feat(mobile): add a session Files screen with a diff viewer and line feedback (#6922)
+3a0c3b21e2489a74b614f2a4408da1922c31f008 taken fix(kanban): show Interrupted on a card after the agent is stopped (#6999) — закрыт вручную, union Store/fakeStore (073b3657fd)
+0c11049ce0bc1613428e67cc28bfc6fb09c68acd pending fix(cloud): feedback round: live Setup/Cleanup logs, PR opener, error idle, auto-mode dialog, and bugs (#6901) — пришёл в апстриме 2026-10-21 после старта синка; пограничный «fix» (polish-раунд), конфликты 11 файлов (8 i18n, TerminalPane, daemon.go, claudecode.go) — классификация владельца
