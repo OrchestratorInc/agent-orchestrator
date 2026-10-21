@@ -66,6 +66,8 @@ func TestAmpSettingsAuthStatusUnknownWithEmptyAPIKey(t *testing.T) {
 }
 
 func TestAmpUsageAuthStatusAuthorizedWhenSignedIn(t *testing.T) {
+	// Without this the machine's own Amp login answers before `amp usage`.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("AMP_API_KEY", "")
 	t.Setenv("AMP_SETTINGS_FILE", filepath.Join(t.TempDir(), "missing-settings.json"))
 	restore := mockAmpAuthProbeRunner(t, func(_ context.Context, name string, arg ...string) ([]byte, error) {

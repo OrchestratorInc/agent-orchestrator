@@ -347,7 +347,7 @@ func newDaemonCommand() *cobra.Command {
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return daemon.Run()
+			return daemon.Run(Version)
 		},
 	}
 }

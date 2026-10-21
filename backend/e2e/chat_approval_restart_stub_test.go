@@ -22,7 +22,16 @@ func TestFakeApprovalACP(t *testing.T) {
 		return
 	}
 	logPath := os.Getenv("AO_E2E_ACP_CALLS")
+	var pending []string
+	classified, background := false, false
 	record := func(method string) {
+		if !classified {
+			pending = append(pending, method)
+			return
+		}
+		if background {
+			return
+		}
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			os.Exit(2)
@@ -37,6 +46,9 @@ func TestFakeApprovalACP(t *testing.T) {
 		var frame struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params struct {
+				Cwd string `json:"cwd"`
+			} `json:"params"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &frame) != nil {
 			continue
@@ -47,6 +59,16 @@ func TestFakeApprovalACP(t *testing.T) {
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", promptID)
 			continue
 		}
+		if frame.Method == "session/new" {
+			// Cosmetic naming uses a disposable background workspace. The restart
+			// assertions below count only the durable worker's provider calls.
+			classified = true
+			background = strings.Contains(filepath.ToSlash(frame.Params.Cwd), "/background-tasks/")
+			for _, method := range pending {
+				record(method)
+			}
+			pending = nil
+		}
 		record(frame.Method)
 		switch frame.Method {
 		case "initialize":
@@ -54,6 +76,11 @@ func TestFakeApprovalACP(t *testing.T) {
 		case "session/new", "session/load", "session/resume":
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fake-provider-session"}}`+"\n", frame.ID)
 		case "session/prompt":
+			if background {
+				_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-provider-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\"title\":\"Request approval\",\"slug\":\"approval-restart\"}"}}}}`)
+				_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", frame.ID)
+				continue
+			}
 			promptID = append(promptID[:0], frame.ID...)
 			record("session/request_permission")
 			_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fake-provider-session","toolCall":{"toolCallId":"tool-1","title":"Approve restart","kind":"edit"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}`)
@@ -214,10 +241,22 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"sessions"`
 	}
-	var retry spawned
-	status, err := restarted.call("POST", "/sessions", req, &retry)
-	if err != nil || status != http.StatusCreated || retry.Session.ID == "" {
-		t.Fatalf("first-start retry did not create a session: status=%d err=%v session=%q\n%s", status, err, retry.Session.ID, restarted.tailLog())
+	var retry struct {
+		spawned
+		Error json.RawMessage `json:"error"`
+	}
+	// Workspace cleanup runs after the listener binds. An incomplete-key 409
+	// may briefly precede cleanup; retrying the same key must eventually succeed.
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		status, err := restarted.call("POST", "/sessions", req, &retry)
+		if err == nil && status == http.StatusCreated && retry.Session.ID != "" {
+			break
+		}
+		if err != nil || status != http.StatusConflict || time.Now().After(deadline) {
+			t.Fatalf("first-start retry did not create a session: status=%d err=%v apiError=%s session=%q", status, err, retry.Error, retry.Session.ID)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	restarted.mustCall("GET", "/sessions", http.StatusOK, nil, &sessions)
 	if len(sessions.Sessions) != 1 || sessions.Sessions[0].ID != retry.Session.ID {

@@ -41,6 +41,7 @@ export function ReadOnlyFileView({
 	scope = "combined",
 	sessionId,
 	hostId,
+	imageUrl,
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
@@ -53,6 +54,8 @@ export function ReadOnlyFileView({
 	scope?: WorkspaceDiffScope;
 	sessionId: string;
 	hostId?: string;
+	/** Where to load an image file from, when not the workspace blob route (an artifact's raw URL). */
+	imageUrl?: string;
 	side?: "before" | "after";
 }) {
 	const { t } = useTranslation();
@@ -98,7 +101,7 @@ export function ReadOnlyFileView({
 					<img
 						alt={detail.path}
 						className="max-h-[70vh] max-w-full object-contain"
-						src={workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
+						src={imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
 					/>
 				</div>
 			);

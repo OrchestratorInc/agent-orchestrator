@@ -13,53 +13,32 @@ import (
 func (s *Store) UserModelCatalogSession(
 	ctx context.Context,
 	principal domain.Principal,
-	provider string,
+	orgID, provider string,
 ) (string, string, error) {
 	var connectionUpdatedAt time.Time
-	orgIDs := make([]string, 0)
 	if err := s.withUser(ctx, principal.UserID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx,
-			`SELECT updated_at
-			FROM ao_user_provider_connections
-			WHERE user_id = $1 AND provider = $2 AND label = 'default'
-			  AND validation_state = 'valid'`,
-			principal.UserID, provider,
-		).Scan(&connectionUpdatedAt); err != nil {
-			return err
-		}
-		rows, err := tx.Query(ctx,
-			`SELECT org_id::text
-			FROM ao_org_memberships
-			WHERE user_id = $1 AND status = 'active'`,
-			principal.UserID,
-		)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var orgID string
-			if err := rows.Scan(&orgID); err != nil {
-				return err
-			}
-			orgIDs = append(orgIDs, orgID)
-		}
-		return rows.Err()
+		return tx.QueryRow(ctx,
+			`SELECT connection.updated_at
+			FROM ao_user_provider_connections connection
+			WHERE connection.user_id = $1 AND connection.provider = $2
+			  AND connection.label = 'default' AND connection.validation_state = 'valid'
+			  AND EXISTS (
+				SELECT 1 FROM ao_org_memberships membership
+				WHERE membership.user_id = $1 AND membership.org_id = $3
+				  AND membership.status = 'active'
+			  )`,
+			principal.UserID, provider, orgID,
+		).Scan(&connectionUpdatedAt)
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", "", ErrNotFound
 		}
 		return "", "", err
 	}
-
-	var orgID, sessionID string
-	var sessionUpdatedAt time.Time
-	for _, candidateOrgID := range orgIDs {
-		var candidateSessionID string
-		var candidateUpdatedAt time.Time
-		err := s.withOrg(ctx, candidateOrgID, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx,
-				`SELECT session.id::text, session.updated_at
+	var sessionID string
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT session.id::text
 			FROM ao_sessions session
 			WHERE session.org_id = $1
 			  AND session.created_by_user_id = $2
@@ -67,39 +46,31 @@ func (s *Store) UserModelCatalogSession(
 			  AND session.created_at >= $4
 			  AND session.is_terminated = false
 			  AND EXISTS (
-				SELECT 1
-				FROM ao_org_memberships membership
-				WHERE membership.org_id = session.org_id
-				  AND membership.user_id = $2
-				  AND membership.status = 'active'
+				SELECT 1 FROM ao_sandboxes sandbox
+				WHERE sandbox.session_id = session.id AND sandbox.org_id = session.org_id
+				  AND sandbox.desired_state = 'running'
 			  )
 			  AND EXISTS (
-				SELECT 1
-				FROM ao_worker_connections worker
+				SELECT 1 FROM ao_org_memberships membership
+				WHERE membership.org_id = session.org_id
+				  AND membership.user_id = $2 AND membership.status = 'active'
+			  )
+			  AND EXISTS (
+				SELECT 1 FROM ao_worker_connections worker
 				WHERE worker.session_id = session.id
 				  AND worker.org_id = session.org_id
 				  AND worker.disconnected_at IS NULL
 			  )
 			ORDER BY session.updated_at DESC, session.id DESC
 			LIMIT 1`,
-				candidateOrgID, principal.UserID, provider, connectionUpdatedAt,
-			).Scan(&candidateSessionID, &candidateUpdatedAt)
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return "", "", err
-		}
-		if sessionID == "" || candidateUpdatedAt.After(sessionUpdatedAt) ||
-			(candidateUpdatedAt.Equal(sessionUpdatedAt) && candidateSessionID > sessionID) {
-			orgID = candidateOrgID
-			sessionID = candidateSessionID
-			sessionUpdatedAt = candidateUpdatedAt
-		}
-	}
-	if sessionID == "" {
+			orgID, principal.UserID, provider, connectionUpdatedAt,
+		).Scan(&sessionID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", err
 	}
 	return orgID, sessionID, nil
 }

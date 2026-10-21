@@ -20,11 +20,12 @@ describe("BrowserProfilesSection", () => {
 
 	it("loads profiles and wires create, rename, clear, and delete actions", async () => {
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [profile] })),
+			list: vi.fn(async () => ({ profiles: [profile], defaultProfileId: null })),
 			create: vi.fn(async (name: string) => ({ ...profile, id: "22222222-2222-4222-8222-222222222222", name })),
 			rename: vi.fn(async (input: { id: string; name: string }) => ({ ...profile, ...input })),
 			clear: vi.fn(async () => undefined),
 			delete: vi.fn(async () => undefined),
+			setDefault: vi.fn(async () => undefined),
 			discoverImportSources: vi.fn(async () => ({ sources: [] })),
 			import: vi.fn(async () => ({ sourceName: "", entries: [] })),
 			onImportProgress: vi.fn(() => () => undefined),
@@ -64,13 +65,40 @@ describe("BrowserProfilesSection", () => {
 		await waitFor(() => expect(bridge.delete).toHaveBeenCalledWith(profile.id));
 	});
 
-	it("cancels an inline rename with Escape and keeps the saved name", async () => {
+	it("sets and unsets a profile as the default", async () => {
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [profile] })),
+			list: vi.fn(async () => ({ profiles: [profile], defaultProfileId: null })),
 			create: vi.fn(),
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
+			setDefault: vi.fn(async () => undefined),
+			discoverImportSources: vi.fn(async () => ({ sources: [] })),
+			import: vi.fn(async () => ({ sourceName: "", entries: [] })),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		originalBridge = window.ao!.browserProfiles;
+		window.ao!.browserProfiles = bridge;
+
+		render(<BrowserProfilesSection />);
+		await userEvent.click(await screen.findByRole("button", { name: "Actions for Work" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Set Work as default" }));
+		await waitFor(() => expect(bridge.setDefault).toHaveBeenCalledWith(profile.id));
+		expect(await screen.findByText("Work (Default)")).toBeInTheDocument();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Actions for Work" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Unset Work as default" }));
+		await waitFor(() => expect(bridge.setDefault).toHaveBeenCalledWith(null));
+	});
+
+	it("cancels an inline rename with Escape and keeps the saved name", async () => {
+		const bridge: AoBridge["browserProfiles"] = {
+			list: vi.fn(async () => ({ profiles: [profile], defaultProfileId: null })),
+			create: vi.fn(),
+			rename: vi.fn(),
+			clear: vi.fn(),
+			delete: vi.fn(),
+			setDefault: vi.fn(async () => undefined),
 			discoverImportSources: vi.fn(async () => ({ sources: [] })),
 			import: vi.fn(async () => ({ sourceName: "", entries: [] })),
 			onImportProgress: vi.fn(() => () => undefined),
@@ -100,6 +128,7 @@ describe("BrowserProfilesSection", () => {
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
+			setDefault: vi.fn(),
 			discoverImportSources: vi.fn(async () => ({ sources: [] })),
 			import: vi.fn(async () => ({ sourceName: "", entries: [] })),
 			onImportProgress: vi.fn(() => () => undefined),

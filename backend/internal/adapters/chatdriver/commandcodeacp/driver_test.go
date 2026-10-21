@@ -71,6 +71,24 @@ func TestConfigureForwardsModel(t *testing.T) {
 	}
 }
 
+// TestConfigureNeverPassesModFlag locks issue #6784: `cmd acp` accepts
+// --mod/--mod-option but silently never loads the mod (verified on
+// v1.82.4/v1.83.0: the same sentinel mod logs under `cmd -p --mod` and logs
+// nothing under `cmd acp --mod`). Passing the flag would look configured while
+// staying inert, so configure must never emit it; standing context rides
+// sessionPreamble instead.
+func TestConfigureNeverPassesModFlag(t *testing.T) {
+	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	for _, banned := range []string{"--mod", "--mod-option"} {
+		if slices.Contains(args, banned) {
+			t.Fatalf("args %v include %s, which `cmd acp` accepts but silently ignores (issue #6784)", args, banned)
+		}
+	}
+}
+
 // TestConfigureNeverPassesSystemPromptFlag guards against re-adding a
 // system-prompt launch flag: `cmd acp` accepts no such flag (v1.79.x rejects
 // `--append-system-prompt` with "unknown option" and exits before the host

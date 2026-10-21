@@ -444,21 +444,29 @@ func TestBillingModeHidesPlansWhenTheyDoNotApply(t *testing.T) {
 		t.Fatalf("contract: %+v", body)
 	}
 	store.mode = domain.BillingModeSelfServe
-	coderOnly := New(Options{Store: store, SandboxProvider: "coder", Billing: &BillingOptions{
+	dockerOnly := New(Options{Store: store, SandboxProvider: "docker", Billing: &BillingOptions{
 		Stripe: stripe, WebhookSecret: webhookSecret, PriceIDs: map[string]string{"starter": billingPriceID},
 	}})
-	if body := getBillingSummary(t, coderOnly); body.BillingMode != domain.BillingModeOff || len(body.Plans) != 0 {
+	if body := getBillingSummary(t, dockerOnly); body.BillingMode != domain.BillingModeOff || len(body.Plans) != 0 {
 		t.Fatalf("no billed provider offered: %+v", body)
-	}
-	gated := New(Options{Store: store, AvailableSandboxProviders: []string{"coder", "freestyle"},
-		CapabilityGatedProviders: []string{"freestyle"}, Billing: &BillingOptions{
-			Stripe: stripe, WebhookSecret: webhookSecret, PriceIDs: map[string]string{"starter": billingPriceID},
-		}})
-	if body := getBillingSummary(t, gated); body.BillingMode != domain.BillingModeOff {
-		t.Fatalf("freestyle not entitled: %+v", body)
 	}
 	if stripe.prices != 0 {
 		t.Fatalf("priced plans nobody is shown: %d Stripe calls", stripe.prices)
+	}
+	// Coder is billed for an organization without the coder capability, so
+	// plans apply even with Coder alone, whether or not the deployment gates it.
+	coderUngated := New(Options{Store: store, SandboxProvider: "coder", Billing: &BillingOptions{
+		Stripe: stripe, WebhookSecret: webhookSecret, PriceIDs: map[string]string{"starter": billingPriceID},
+	}})
+	if body := getBillingSummary(t, coderUngated); body.BillingMode != domain.BillingModeSelfServe {
+		t.Fatalf("coder billed without the capability on an ungated deployment: %+v", body)
+	}
+	coderGated := New(Options{Store: store, SandboxProvider: "coder", AvailableSandboxProviders: []string{"coder"},
+		CapabilityGatedProviders: []string{"coder"}, Billing: &BillingOptions{
+			Stripe: stripe, WebhookSecret: webhookSecret, PriceIDs: map[string]string{"starter": billingPriceID},
+		}})
+	if body := getBillingSummary(t, coderGated); body.BillingMode != domain.BillingModeSelfServe {
+		t.Fatalf("coder billed without the capability: %+v", body)
 	}
 }
 

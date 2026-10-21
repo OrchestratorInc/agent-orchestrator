@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -240,15 +241,44 @@ type CleanupSessionsQuery struct {
 	Project string `query:"project,omitempty" description:"Project id filter. When omitted, clean terminated sessions across all projects."`
 }
 
+// ArtifactFileQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}/artifact-files.
+type ArtifactFileQuery struct {
+	Path string `query:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+}
+
+// UpdateArtifactFileRequest replaces one listed artifact file after verifying
+// that the viewer's loaded copy is still current.
+type UpdateArtifactFileRequest struct {
+	Path                    string `json:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+	Content                 string `json:"content" description:"The file's new UTF-8 text content."`
+	ExpectedFileFingerprint string `json:"expectedFileFingerprint" description:"Hex SHA-256 of the file content the edit started from."`
+}
+
+// ArtifactFileResponse describes an artifact file after a write.
+type ArtifactFileResponse struct {
+	Path            string `json:"path"`
+	Size            int64  `json:"size"`
+	FileFingerprint string `json:"fileFingerprint" description:"Hex SHA-256 of the file's content."`
+}
+
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
+	Snapshot        bool   `query:"snapshot,omitempty" description:"Read the immutable review snapshot instead of the live worktree."`
+	Branch          string `query:"branch,omitempty" description:"Local or remote-tracking branch to read without checkout."`
+	PRNumber        int    `query:"prNumber,omitempty" description:"Associated pull request number."`
+	SourceURL       string `query:"sourceUrl,omitempty" description:"Associated pull request URL."`
+	ExpectedTipSHA  string `query:"expectedTipSha,omitempty" description:"Pinned source tip for snapshot reads. Must remain reachable from the selected source."`
+	ExpectedBaseSHA string `query:"expectedBaseSha,omitempty" description:"Pinned comparison base for snapshot reads."`
+	CommitSHAs      string `query:"commitShas,omitempty" description:"Comma-separated selected commit SHAs."`
+
 	Path string `query:"path" description:"Session-worktree-relative file path."`
 	// Section scopes the diff to one git-state section (see WorkspaceFileSections):
-	// staged compares the index against HEAD, unstaged compares the worktree
-	// against the index. A file can carry independent changes in both. Omit (or
-	// pass committed/untracked) to diff the worktree against the compare base,
-	// as before this field existed.
-	Section   string `query:"section,omitempty" enum:"committed,staged,unstaged,untracked" description:"Git-state section the file was opened from (see WorkspaceFileSections). staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base."`
+	// uncommitted compares the worktree against HEAD, staged compares the index
+	// against HEAD, unstaged compares the worktree against the index. A file can
+	// carry independent changes in both staged and unstaged. Omit (or pass
+	// committed/untracked) to diff the worktree against the compare base, as
+	// before this field existed.
+	Section   string `query:"section,omitempty" enum:"uncommitted,committed,staged,unstaged,untracked" description:"Git-state section the file was opened from (see WorkspaceFileSections). uncommitted diffs the worktree against HEAD; staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base."`
 	CommitSHA string `query:"commitSha,omitempty" description:"Exact commit SHA to read as an immutable committed-scope snapshot."`
 }
 
@@ -262,6 +292,15 @@ type UpdateWorkspaceFileRequest struct {
 
 // WorkspaceFileBlobQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file/blob.
 type WorkspaceFileBlobQuery struct {
+	Snapshot        bool   `query:"snapshot,omitempty" description:"Read the immutable review snapshot instead of the live worktree."`
+	Branch          string `query:"branch,omitempty" description:"Local or remote-tracking branch to read without checkout."`
+	PRNumber        int    `query:"prNumber,omitempty" description:"Associated pull request number."`
+	SourceURL       string `query:"sourceUrl,omitempty" description:"Associated pull request URL."`
+	ExpectedTipSHA  string `query:"expectedTipSha,omitempty" description:"Pinned source tip for snapshot reads. Must remain reachable from the selected source."`
+	ExpectedBaseSHA string `query:"expectedBaseSha,omitempty" description:"Pinned comparison base for snapshot reads."`
+	CommitSHAs      string `query:"commitShas,omitempty" description:"Comma-separated selected commit SHAs."`
+
+	CommitSHA string `query:"commitSha,omitempty" description:"Selected commit SHA."`
 	// The handler rejects a missing path with WORKSPACE_PATH_REQUIRED, so mark it
 	// required: query params carry no json tag, and requiredFromJSONTag only
 	// derives `required` from those.
@@ -272,12 +311,28 @@ type WorkspaceFileBlobQuery struct {
 
 // WorkspaceFileRevisionQuery selects one text-capable comparison side.
 type WorkspaceFileRevisionQuery struct {
+	Snapshot         bool   `query:"snapshot,omitempty" description:"Read the selected immutable comparison, including an empty commit range."`
 	Path             string `query:"path" required:"true" description:"Session-worktree-relative file path."`
-	Scope            string `query:"scope,omitempty" enum:"combined,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
+	Scope            string `query:"scope,omitempty" enum:"combined,uncommitted,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
 	Side             string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
 	WorkspaceVersion string `query:"workspaceVersion,omitempty" description:"Opaque workspace snapshot token used for consistency checks."`
 	ExpectedRevision string `query:"expectedRevision,omitempty" description:"Opaque revision token used for optimistic consistency checks."`
-	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
+	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas."`
+	CommitSHAs       string `query:"commitShas,omitempty" description:"Comma-separated full SHAs (max 250) whose combined changes are compared. Requires the committed scope."`
+	Branch           string `query:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Requires the committed scope."`
+	PRNumber         int    `query:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree. Requires the committed scope."`
+	SourceURL        string `query:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string `query:"expectedTipSha,omitempty" description:"The branch or pull request view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string `query:"expectedBaseSha,omitempty" description:"The branch or pull request view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+}
+
+// WorkspaceHistoryQuery selects whose history GET
+// /api/v1/sessions/{sessionId}/workspace/history reads. With neither branch
+// nor prNumber it reads the checked-out worktree.
+type WorkspaceHistoryQuery struct {
+	Branch    string `query:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Read from revisions only; nothing is checked out."`
+	PRNumber  int    `query:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree."`
+	SourceURL string `query:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
 }
 
 // PRFilesQuery selects the associated pull request when multiple providers or
@@ -316,6 +371,16 @@ type WorkspaceResolveQuery struct {
 
 // WorkspaceTreeQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/tree.
 type WorkspaceTreeQuery struct {
+	Filter          string `query:"filter,omitempty" description:"Case-insensitive path search across the selected snapshot."`
+	CommitSHA       string `query:"commitSha,omitempty" description:"Selected commit SHA."`
+	Snapshot        bool   `query:"snapshot,omitempty" description:"Read the immutable review snapshot instead of the live worktree."`
+	Branch          string `query:"branch,omitempty" description:"Local or remote-tracking branch to read without checkout."`
+	PRNumber        int    `query:"prNumber,omitempty" description:"Associated pull request number."`
+	SourceURL       string `query:"sourceUrl,omitempty" description:"Associated pull request URL."`
+	ExpectedTipSHA  string `query:"expectedTipSha,omitempty" description:"Pinned source tip for snapshot reads. Must remain reachable from the selected source."`
+	ExpectedBaseSHA string `query:"expectedBaseSha,omitempty" description:"Pinned comparison base for snapshot reads."`
+	CommitSHAs      string `query:"commitShas,omitempty" description:"Comma-separated selected commit SHAs."`
+
 	Path string `query:"path,omitempty" description:"Directory path relative to the session workspace root. Empty or omitted lists the root."`
 }
 
@@ -324,6 +389,7 @@ type WorkspaceTreeQuery struct {
 // is one directory level of the full worktree — tracked and
 // untracked-but-not-ignored — for lazily expanding a file explorer.
 type ListWorkspaceTreeResponse struct {
+	Snapshot  bool                 `json:"snapshot,omitempty" description:"True only when the tree was read from the requested immutable snapshot."`
 	SessionID domain.SessionID     `json:"sessionId"`
 	Path      string               `json:"path"`
 	Entries   []WorkspaceTreeEntry `json:"entries"`
@@ -418,7 +484,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -594,10 +660,47 @@ type WorkspaceManifestResponse struct {
 // header. It is intentionally separate from the first-paint manifest.
 type WorkspaceHistoryResponse struct {
 	SessionID        domain.SessionID         `json:"sessionId"`
+	View             WorkspaceViewResponse    `json:"view"`
 	Commits          []WorkspaceCommitSummary `json:"commits"`
 	CommitsTruncated bool                     `json:"commitsTruncated,omitempty"`
-	Ahead            *int                     `json:"ahead,omitempty"`
-	Behind           *int                     `json:"behind,omitempty"`
+	RangeSummary     *WorkspaceSummary        `json:"rangeSummary,omitempty" description:"Totals for All commits. Views only."`
+	Ahead            *int                     `json:"ahead,omitempty" description:"Checked-out view only."`
+	Behind           *int                     `json:"behind,omitempty" description:"Checked-out view only."`
+}
+
+// WorkspaceViewResponse describes whose history a workspace read covers.
+type WorkspaceViewResponse struct {
+	Kind      sessionsvc.WorkspaceViewKind  `json:"kind" enum:"checked_out,branch,pull_request"`
+	Name      string                        `json:"name,omitempty" description:"Branch name, or the pull request's source branch."`
+	TipSHA    string                        `json:"tipSha,omitempty" description:"Fence a later view read with it as expectedTipSha."`
+	BaseSHA   string                        `json:"baseSha,omitempty" description:"Set only in since_base mode. Fence a later view read with it as expectedBaseSha."`
+	BaseRef   string                        `json:"baseRef,omitempty"`
+	RangeMode sessionsvc.WorkspaceRangeMode `json:"rangeMode" enum:"since_base,recent" description:"since_base lists the commits since baseSha; recent lists the newest 50 first-parent commits of a default branch, or of a branch with no default branch to measure from."`
+}
+
+// WorkspaceBranchesResponse lists the branches a session's review can read.
+type WorkspaceBranchesResponse struct {
+	SessionID     domain.SessionID          `json:"sessionId"`
+	Supported     bool                      `json:"supported" description:"False for scratch sessions, which have no Git history."`
+	DefaultBranch string                    `json:"defaultBranch,omitempty"`
+	Branches      []WorkspaceBranchResponse `json:"branches" description:"The checked-out row first, then the rest newest first; at most 200 rows."`
+	Truncated     bool                      `json:"truncated"`
+}
+
+// WorkspaceBranchResponse is one branch a review can read. A local branch
+// with a pull request is only annotated with it; a pull request whose source
+// branch is not local gets a row of its own.
+type WorkspaceBranchResponse struct {
+	Kind       sessionsvc.WorkspaceBranchKind `json:"kind" enum:"local,remote,pull_request" description:"local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view."`
+	Name       string                         `json:"name" description:"Branch name, the pull request's source branch, or empty for a detached HEAD."`
+	TipSHA     string                         `json:"tipSha,omitempty"`
+	UpdatedAt  *time.Time                     `json:"updatedAt,omitempty" description:"The tip's committer time, or the pull request's last update."`
+	CheckedOut bool                           `json:"checkedOut"`
+	Detached   bool                           `json:"detached,omitempty"`
+	IsDefault  bool                           `json:"isDefault"`
+	PRNumber   int                            `json:"prNumber,omitempty"`
+	PRURL      string                         `json:"prUrl,omitempty" description:"Pass as sourceUrl with prNumber to read a pull_request row."`
+	PRTitle    string                         `json:"prTitle,omitempty"`
 }
 
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.
@@ -613,14 +716,16 @@ type ListPRFilesResponse struct {
 }
 
 // WorkspaceFileSections groups a session workspace's changed files by git
-// state: staged (index vs HEAD), unstaged (worktree vs index), untracked, and
-// committed (HEAD vs the compare base). A partially staged file can appear in
-// both staged and unstaged.
+// state: uncommitted (worktree vs HEAD, untracked files included), staged
+// (index vs HEAD), unstaged (worktree vs index), untracked, and committed
+// (HEAD vs the compare base). A partially staged file can appear in both
+// staged and unstaged, but only once in uncommitted.
 type WorkspaceFileSections struct {
-	Staged    []WorkspaceFileSummary `json:"staged"`
-	Unstaged  []WorkspaceFileSummary `json:"unstaged"`
-	Untracked []WorkspaceFileSummary `json:"untracked"`
-	Committed []WorkspaceFileSummary `json:"committed"`
+	Uncommitted []WorkspaceFileSummary `json:"uncommitted" description:"Worktree vs HEAD, untracked files included. Always present; a response without it comes from an older daemon."`
+	Staged      []WorkspaceFileSummary `json:"staged"`
+	Unstaged    []WorkspaceFileSummary `json:"unstaged"`
+	Untracked   []WorkspaceFileSummary `json:"untracked"`
+	Committed   []WorkspaceFileSummary `json:"committed"`
 }
 
 // WorkspaceCommitSummary is one commit between the compare base and HEAD.
@@ -655,6 +760,7 @@ type WorkspaceFileSummary struct {
 
 // WorkspaceFileResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileResponse struct {
+	Historical       bool                            `json:"historical,omitempty" description:"True only for a read-only revision, never a live worktree file."`
 	SessionID        domain.SessionID                `json:"sessionId"`
 	Path             string                          `json:"path"`
 	PreviousPath     string                          `json:"previousPath,omitempty"`
@@ -679,12 +785,52 @@ type WorkspaceFileResponse struct {
 
 // WorkspaceDiffRequest requests renderer-independent unified patches.
 type WorkspaceDiffRequest struct {
-	Scope            string   `json:"scope" enum:"combined,committed,staged,unstaged,untracked"`
+	Scope            string   `json:"scope" enum:"combined,uncommitted,committed,staged,unstaged,untracked"`
 	Paths            []string `json:"paths" minItems:"1" maxItems:"100"`
 	ContextLines     int      `json:"contextLines" minimum:"0" maximum:"20"`
 	IgnoreWhitespace bool     `json:"ignoreWhitespace"`
 	WorkspaceVersion string   `json:"workspaceVersion,omitempty"`
-	CommitSHA        string   `json:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
+	CommitSHA        string   `json:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas."`
+	CommitSHAs       []string `json:"commitShas,omitempty" maxItems:"250" description:"Full SHAs whose combined changes are compared. Requires the committed scope."`
+	Branch           string   `json:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Requires the committed scope."`
+	PRNumber         int      `json:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree. Requires the committed scope."`
+	SourceURL        string   `json:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string   `json:"expectedTipSha,omitempty" description:"The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string   `json:"expectedBaseSha,omitempty" description:"The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+}
+
+// WorkspaceCommitSelectionRequest asks for the combined changed files of
+// ticked commits in a view, or of its whole range.
+type WorkspaceCommitSelectionRequest struct {
+	Branch           string   `json:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree."`
+	PRNumber         int      `json:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree."`
+	SourceURL        string   `json:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string   `json:"expectedTipSha,omitempty" description:"The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string   `json:"expectedBaseSha,omitempty" description:"The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+	CommitSHAs       []string `json:"commitShas" maxItems:"250" description:"Full SHAs. Empty = the whole range (All commits)."`
+	WorkspaceVersion string   `json:"workspaceVersion,omitempty" description:"Fence for checked-out selections."`
+}
+
+// WorkspaceCommitSelectionResponse is the combined changed-file set of a
+// commit selection. Commits that cannot be combined are not an error: the
+// response has combinable false, no files, and a conflict.
+type WorkspaceCommitSelectionResponse struct {
+	SessionID  domain.SessionID                 `json:"sessionId"`
+	TipSHA     string                           `json:"tipSha"`
+	BaseSHA    string                           `json:"baseSha,omitempty"`
+	Contiguous bool                             `json:"contiguous" description:"True when the commits form one unbroken range."`
+	Combinable bool                             `json:"combinable"`
+	Conflict   *WorkspaceCommitConflictResponse `json:"conflict,omitempty"`
+	Files      []WorkspaceFileSummary           `json:"files"`
+	Summary    WorkspaceSummary                 `json:"summary"`
+	Truncated  bool                             `json:"truncated"`
+}
+
+// WorkspaceCommitConflictResponse names why ticked commits cannot be combined.
+type WorkspaceCommitConflictResponse struct {
+	CommitSHA string                                   `json:"commitSha" description:"The ticked commit whose changes did not apply."`
+	Paths     []string                                 `json:"paths" description:"Up to 20 paths that did not apply."`
+	Reason    sessionsvc.WorkspaceCommitConflictReason `json:"reason" enum:"conflict,unsupported_history"`
 }
 
 // WorkspaceDiffDeferredResponse describes a file omitted from an initial patch.
@@ -767,11 +913,20 @@ type DesktopWorkspaceLocationResponse struct {
 	WorkspacePath string           `json:"workspacePath"`
 }
 
+// DesktopArtifactLocationResponse is returned only by the LAN-blocked desktop
+// artifact route. Electron main consumes the absolute path and never exposes it
+// through the preload bridge.
+type DesktopArtifactLocationResponse struct {
+	SessionID   domain.SessionID `json:"sessionId"`
+	ArtifactDir string           `json:"artifactDir"`
+}
+
 // SessionPreviewResponse is the body of GET /api/v1/sessions/{sessionId}/preview.
 type SessionPreviewResponse struct {
 	SessionID  domain.SessionID `json:"sessionId"`
 	PreviewURL string           `json:"previewUrl,omitempty"`
 	Entry      string           `json:"entry,omitempty"`
+	Source     string           `json:"source,omitempty" enum:"workspace,artifact" description:"Root containing the selected static entry; omitted for external app URLs."`
 }
 
 // RenameSessionRequest is the body of PATCH /api/v1/sessions/{sessionId}.
@@ -963,19 +1118,23 @@ type StartSessionInterfaceTransitionRequest struct {
 // provider-native conversation id is intentionally not exposed: clients need
 // controller state, not an adapter implementation detail.
 type SessionInterfaceTransitionView struct {
-	ID                   string                                         `json:"id"`
-	SessionID            domain.SessionID                               `json:"sessionId"`
-	SourceMode           domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
-	TargetMode           domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
-	Policy               domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
-	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
-	Phase                domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
-	ErrorCode            string                                         `json:"errorCode,omitempty"`
-	ErrorDetail          string                                         `json:"errorDetail,omitempty"`
-	CreatedAt            time.Time                                      `json:"createdAt"`
-	UpdatedAt            time.Time                                      `json:"updatedAt"`
-	CompletedAt          *time.Time                                     `json:"completedAt,omitempty"`
-	NoticeAcknowledgedAt *time.Time                                     `json:"noticeAcknowledgedAt,omitempty"`
+	ID            string                                         `json:"id"`
+	SessionID     domain.SessionID                               `json:"sessionId"`
+	SourceMode    domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
+	TargetMode    domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
+	Policy        domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
+	HistoryPolicy domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
+	Phase         domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
+	// SourceAccountID and TargetAccountID are set when the handoff moves the
+	// agent to another provider account; the mode then stays the same.
+	SourceAccountID      string     `json:"sourceAccountId,omitempty"`
+	TargetAccountID      string     `json:"targetAccountId,omitempty"`
+	ErrorCode            string     `json:"errorCode,omitempty"`
+	ErrorDetail          string     `json:"errorDetail,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+	CompletedAt          *time.Time `json:"completedAt,omitempty"`
+	NoticeAcknowledgedAt *time.Time `json:"noticeAcknowledgedAt,omitempty"`
 }
 
 // SessionInterfaceTransitionStatusResponse is the body of GET
@@ -1081,7 +1240,7 @@ type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
 	Brief           string              `json:"brief" maxLength:"16384"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,fake"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -1376,6 +1535,8 @@ type SetActivityRequest struct {
 	SubmissionID                 string                              `json:"submissionId,omitempty" maxLength:"36" description:"AO prompt-hook context correlation UUID, when supported."`
 	TranscriptPath               string                              `json:"transcriptPath,omitempty" maxLength:"4096" description:"Read-only provider-native transcript path exposed by the hook."`
 	LaunchID                     string                              `json:"launchId,omitempty" description:"AO process generation that produced the signal."`
+	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
+	ProcessID                    int                                 `json:"processId,omitempty" minimum:"0" description:"Process id of the provider process that fired the hook (Claude's CLAUDE_PID)."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
 }
 
@@ -1700,14 +1861,16 @@ type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 // AgentModelsQuery scopes a model catalog to a project where providers may be
 // configured per workspace.
 type AgentModelsQuery struct {
-	ProjectID string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
 }
 
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a project-scoped model catalog.
 type AgentModelsRefreshQuery struct {
-	ProjectID  string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
-	Revalidate bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
+	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	Revalidate  bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
 }
 
 // AgentModelsResponse is the normalized model picker for one agent.
@@ -2032,11 +2195,17 @@ type ListAutomationRunsResponse struct {
 // AgentInstallResponse is shared by the agent harness start and status routes.
 type AgentInstallResponse = systeminstall.Job
 
+// AgentUpdateAdvisoryQuery allows an explicit user action to bypass cached version evidence.
+type AgentUpdateAdvisoryQuery struct {
+	Refresh bool `query:"refresh,omitempty" description:"Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence."`
+}
+
 // StartAgentInstallRequest selects one method returned by the installer
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
-	Method    string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
-	Operation systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall" description:"Requested operation. Defaults to install for older clients."`
+	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
+	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for
@@ -2280,9 +2449,11 @@ type MergePRRequest struct {
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
 type MergePRResponse struct {
-	OK       bool   `json:"ok"`
-	PRNumber int    `json:"prNumber"`
-	Method   string `json:"method"`
+	OK             bool           `json:"ok"`
+	PRNumber       int            `json:"prNumber"`
+	Method         string         `json:"method"`
+	State          domain.PRState `json:"state" enum:"merged"`
+	StateChangedAt time.Time      `json:"stateChangedAt"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.
@@ -2314,6 +2485,17 @@ type IdentityResponse struct {
 	APIVersion int    `json:"apiVersion"`
 }
 
+// TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
+// phone paired to this desktop identifies only a signed-in AO Cloud user ID.
+// Without one, DistinctID is the desktop install ID and stays anonymous. The
+// phone honors OptedOut. This response carries no email.
+type TelemetryIdentityResponse struct {
+	DistinctID  string `json:"distinctId"`
+	CloudUserID string `json:"cloudUserId,omitempty"`
+	GitHubLogin string `json:"githubLogin,omitempty"`
+	OptedOut    bool   `json:"optedOut"`
+}
+
 // LinkPreviewQuery selects the external page to unfurl.
 type LinkPreviewQuery struct {
 	URL string `query:"url" description:"Absolute http(s) URL of the page to preview."`
@@ -2335,7 +2517,8 @@ type LinkPreviewResponse struct {
 // regenerate endpoints. Password is populated only transiently, on enable and
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
-	Enabled bool `json:"enabled"`
+	Enabled             bool `json:"enabled"`
+	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
 	// NoPublicTunnel means the user disabled the managed public connector.
@@ -2365,14 +2548,25 @@ type MobileStatusResponse struct {
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
 // idle-sleeping while Connect Mobile is on, so a paired phone stays connected.
 type KeepAwakeStatus struct {
-	Supported  bool `json:"supported"`  // this platform can hold the machine awake (macOS)
-	Enabled    bool `json:"enabled"`    // the user turned the option on
-	Active     bool `json:"active"`     // the sleep assertion is currently held
-	HasBattery bool `json:"hasBattery"` // a laptop, where closing the lid still sleeps it
+	Supported    bool   `json:"supported"`  // this platform can hold the machine awake (macOS)
+	Enabled      bool   `json:"enabled"`    // the user turned the option on
+	Active       bool   `json:"active"`     // the sleep assertion is currently held
+	HasBattery   bool   `json:"hasBattery"` // this machine has an internal battery
+	LidClosed    bool   `json:"lidClosed,omitempty"`
+	LidSupported bool   `json:"lidSupported,omitempty"`
+	LidActive    bool   `json:"lidActive,omitempty"` // native control armed for this daemon's live lease
+	LidReason    string `json:"lidReason,omitempty"`
 }
 
 // SetKeepAwakeRequest is the body of POST /api/v1/mobile/keep-awake.
 type SetKeepAwakeRequest struct {
+	Enabled   bool  `json:"enabled"`
+	LidClosed *bool `json:"lidClosed,omitempty"`
+}
+
+// SetBrowserRemoteAccessRequest is the body of
+// POST /api/v1/mobile/browser-control.
+type SetBrowserRemoteAccessRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
@@ -2452,6 +2646,18 @@ type UnregisterPushDeviceResponse struct {
 
 /* ---- chat conversations ------------------------------------------------ */
 
+// ConversationPromptSuggestionRequest identifies the latest completed turn.
+type ConversationPromptSuggestionRequest struct {
+	TurnID string `json:"turnId"`
+}
+
+// ConversationPromptSuggestionResponse offers one optional next human message.
+type ConversationPromptSuggestionResponse struct {
+	TurnID string `json:"turnId"`
+	// Empty when there is no useful suggestion.
+	Prompt string `json:"prompt"`
+}
+
 // SetChatViewRequest renews or releases one renderer's Chat view lease.
 type SetChatViewRequest struct {
 	ViewID        string `json:"viewId"`
@@ -2484,6 +2690,8 @@ type SendConversationMessageRequest struct {
 	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+	// Continuation marks the user's request to continue an interrupted task.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 // ConversationExcerptReferenceRequest attaches verified selected transcript
@@ -2621,6 +2829,11 @@ type RetryTurnResponse struct {
 	State          domain.TurnState `json:"state,omitempty" enum:"queued,running,completed,recovered,interrupted,failed"`
 }
 
+// SetTurnAutoResumeRequest opts one usage-limited turn into a scheduled retry.
+type SetTurnAutoResumeRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // ActivateConversationBranchResponse reports the durable head after switching.
 type ActivateConversationBranchResponse struct {
 	ActiveBranchID string `json:"activeBranchId"`
@@ -2754,11 +2967,14 @@ type ConversationTurnResponse struct {
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
 	// HasRetryAttempt remains true when the attempt is outside the active branch.
-	HasRetryAttempt bool    `json:"hasRetryAttempt,omitempty"`
-	ErrorMessage    string  `json:"errorMessage,omitempty"`
-	RequestedAt     string  `json:"requestedAt"`
-	StartedAt       *string `json:"startedAt,omitempty"`
-	CompletedAt     *string `json:"completedAt,omitempty"`
+	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
+	// HasHumanPrompt includes durable human prompts outside this timeline page.
+	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
+	RequestedAt    string                          `json:"requestedAt"`
+	StartedAt      *string                         `json:"startedAt,omitempty"`
+	CompletedAt    *string                         `json:"completedAt,omitempty"`
 	// RolledBack marks a turn an undo discarded. Its messages and activities are
 	// absent from this snapshot because the agent no longer remembers them; the turn
 	// is still reported so a client can say what was taken back rather than letting
@@ -2779,6 +2995,13 @@ type ConversationTurnResponse struct {
 	// rather than a history of one: the earlier versions are the same plan with fewer
 	// steps ticked off.
 	Plan *ConversationPlanResponse `json:"plan,omitempty"`
+}
+
+// ConversationUsageLimitResponse separates a quota pause from other failures.
+type ConversationUsageLimitResponse struct {
+	ResetsAt    *string `json:"resetsAt,omitempty"`
+	AutoResume  bool    `json:"autoResume"`
+	ResumeError string  `json:"resumeError,omitempty"`
 }
 
 // ConversationPlanResponse is the agent's plan for one turn.
@@ -2844,8 +3067,11 @@ type ConversationMessageResponse struct {
 	ClientMessageID string `json:"clientMessageId,omitempty"`
 	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
-	Streaming bool   `json:"streaming"`
-	CreatedAt string `json:"createdAt"`
+	Streaming bool `json:"streaming"`
+	// Continuation is the user's one-click "continue" after stopping a turn,
+	// shown as a marker instead of a message bubble.
+	Continuation bool   `json:"continuation,omitempty"`
+	CreatedAt    string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.
@@ -2895,6 +3121,7 @@ type ConversationActivityResponse struct {
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
 type ConversationSnapshotResponse struct {
+	ContinueTurnID string `json:"continueTurnId"`
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
@@ -3198,6 +3425,8 @@ type SetConversationTitleResponse struct {
 
 // SettingsResponse is the daemon-owned preference set.
 type SettingsResponse struct {
+	// HarnessDefaults are per-harness picker preferences, keyed by harness id.
+	HarnessDefaults map[string]domain.HarnessDefault `json:"harnessDefaults,omitempty"`
 	// DefaultSessionMode applies to sessions created from now on. Changing it
 	// never alters an existing session; only an explicit interface transition can.
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
@@ -3213,6 +3442,8 @@ type SettingsResponse struct {
 	CloudOffering bool `json:"cloudOffering"`
 	// ChatHibernationEnabled is the developer-mode gate for idle Chat process shutdown.
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
+	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
+	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3234,9 +3465,21 @@ type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
 }
 
+// UpdateHarnessDefaultRequest replaces one harness's picker preference.
+type UpdateHarnessDefaultRequest struct {
+	// DisabledModels lists the model ids (each up to 256 characters) clients
+	// should leave out of their pickers. An empty list offers every catalog model.
+	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
+}
+
 // UpdateCloudOfferingRequest flips the user's cloud toggle.
 type UpdateCloudOfferingRequest struct {
 	// Enabled turns the cloud offering on or off for this machine's user.
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
+type UpdateVersionRefreshRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -3416,4 +3659,124 @@ type SideChatLaunchState struct {
 // SideLabelRequest renames a side conversation.
 type SideLabelRequest struct {
 	Label string `json:"label"`
+}
+
+// AgentAccountIDParam documents an agent account route identifier.
+type AgentAccountIDParam struct {
+	AccountID string `path:"accountId" description:"Agent account identifier; device-claude and device-codex are this computer's own logins."`
+}
+
+// AgentAccountLoginIDParam documents a sign-in operation route identifier.
+type AgentAccountLoginIDParam struct {
+	OperationID string `path:"operationId" description:"Agent account sign-in operation identifier."`
+}
+
+// AgentAccountSessionIDParam documents the session whose account is read or moved.
+type AgentAccountSessionIDParam struct {
+	SessionID string `path:"sessionId" description:"AO session identifier."`
+}
+
+// AgentAccountListQuery documents GET /agents/accounts.
+type AgentAccountListQuery struct {
+	Refresh bool `query:"refresh" description:"Read identity and limits again even when the last reading is fresh."`
+}
+
+// AgentAccountUsageQuery documents GET /agents/accounts/usage.
+type AgentAccountUsageQuery struct {
+	Days int `query:"days" minimum:"1" maximum:"90" description:"Days of usage to sum, today included. Defaults to 30."`
+}
+
+// AgentAccountResponse is one account with its latest readings.
+type AgentAccountResponse struct {
+	ID       string                      `json:"id"`
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Device marks the computer's own login, which AO launches with the CLI's
+	// config folder untouched.
+	Device    bool       `json:"device"`
+	Email     string     `json:"email,omitempty"`
+	Plan      string     `json:"plan,omitempty"`
+	Default   bool       `json:"default"`
+	SignedIn  bool       `json:"signedIn"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	// Problem says why identity or limits could not be read.
+	Problem string                     `json:"problem,omitempty"`
+	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+}
+
+// AgentAccountsResponse is the body of GET /agents/accounts.
+type AgentAccountsResponse struct {
+	Accounts []AgentAccountResponse `json:"accounts"`
+}
+
+// StartAgentAccountLoginRequest asks to add an account of a provider.
+type StartAgentAccountLoginRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+}
+
+// StartAgentAccountLoginResponse is a sign-in running in a terminal.
+type StartAgentAccountLoginResponse struct {
+	OperationID   string                            `json:"operationId"`
+	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
+	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+}
+
+// VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
+// is refused and its account names the existing one.
+type VerifyAgentAccountLoginResponse struct {
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
+	Account *AgentAccountResponse     `json:"account,omitempty"`
+}
+
+// ConsumeAgentAccountResetCreditRequest spends one Codex usage-limit reset.
+type ConsumeAgentAccountResetCreditRequest struct {
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"128"`
+}
+
+// ConsumeAgentAccountResetCreditResponse is what the provider did.
+type ConsumeAgentAccountResetCreditResponse struct {
+	Outcome domain.CodexResetCreditOutcome `json:"outcome" enum:"reset,already_redeemed,nothing_to_reset"`
+}
+
+// AgentAccountUsageResponse is each account's usage in AO sessions.
+type AgentAccountUsageResponse struct {
+	Days  int                    `json:"days"`
+	Usage []AgentAccountUsageRow `json:"usage"`
+}
+
+// AgentAccountUsageRow is one account's totals, per day and per model.
+type AgentAccountUsageRow struct {
+	AccountID    string                     `json:"accountId"`
+	InputTokens  int64                      `json:"inputTokens"`
+	OutputTokens int64                      `json:"outputTokens"`
+	CostNanos    int64                      `json:"costNanos"`
+	Daily        []AgentAccountUsageDay     `json:"daily"`
+	Models       []AgentAccountUsageByModel `json:"models"`
+}
+
+// AgentAccountUsageDay is one UTC day of an account's usage.
+type AgentAccountUsageDay struct {
+	Day       string `json:"day"`
+	Tokens    int64  `json:"tokens"`
+	CostNanos int64  `json:"costNanos"`
+}
+
+// AgentAccountUsageByModel is one model's share of an account's usage.
+type AgentAccountUsageByModel struct {
+	Model     string `json:"model"`
+	Tokens    int64  `json:"tokens"`
+	CostNanos int64  `json:"costNanos"`
+}
+
+// SessionAgentAccountsResponse is the account a session uses per provider.
+type SessionAgentAccountsResponse struct {
+	Claude string `json:"claude,omitempty"`
+	Codex  string `json:"codex,omitempty"`
+}
+
+// SwitchSessionAgentAccountRequest moves a session to another account.
+type SwitchSessionAgentAccountRequest struct {
+	AccountID string `json:"accountId" minLength:"1"`
+	// StopTurn cancels a turn in progress, for an agent stuck waiting on the old
+	// account's limit. Otherwise the move waits for the turn to finish.
+	StopTurn bool `json:"stopTurn,omitempty"`
 }

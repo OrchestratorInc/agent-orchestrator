@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +96,17 @@ func TestCloudSessionStatusUsesWorkerHeartbeatInsteadOfSessionUpdate(t *testing.
 				t.Fatalf("status = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// The create's idempotency payload marshals CreateSession whole; the coder
+// capability comes from a cache and must not be part of it.
+func TestCreateSessionIdempotencyPayloadOmitsCoderCapability(t *testing.T) {
+	payload, err := json.Marshal(CreateSession{Kind: "worker", Provider: "coder", CoderCapability: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "CoderCapability") {
+		t.Fatalf("payload = %s, want no coder capability", payload)
 	}
 }

@@ -28,12 +28,14 @@ type workspaceReviewHandlerStore struct {
 	modelSourceErr error
 	createdKind    string
 	createdPayload json.RawMessage
+	requestTimeout time.Duration
 	eventType      string
 	errorCode      string
 }
 
-func (s *workspaceReviewHandlerStore) UserModelCatalogSession(_ context.Context, _ domain.Principal, _ string) (string, string, error) {
-	return s.modelOrgID, s.modelSessionID, s.modelSourceErr
+func (s *workspaceReviewHandlerStore) UserModelCatalogSession(_ context.Context, _ domain.Principal, orgID, _ string) (string, string, error) {
+	s.modelOrgID = orgID
+	return orgID, s.modelSessionID, s.modelSourceErr
 }
 
 func (s *workspaceReviewHandlerStore) GetSession(_ context.Context, _ domain.Principal, _, _ string) (domain.Session, error) {
@@ -44,8 +46,9 @@ func (s *workspaceReviewHandlerStore) ResumeSession(_ context.Context, _ domain.
 	return domain.SandboxLifecycle{SessionID: sessionID}, nil
 }
 
-func (s *workspaceReviewHandlerStore) CreateWorkspaceRequest(_ context.Context, _ domain.Principal, orgID, sessionID, kind string, payload json.RawMessage, _ time.Duration) (domain.WorkerRequest, error) {
+func (s *workspaceReviewHandlerStore) CreateWorkspaceRequest(_ context.Context, _ domain.Principal, orgID, sessionID, kind string, payload json.RawMessage, timeout time.Duration) (domain.WorkerRequest, error) {
 	s.createdKind, s.createdPayload = kind, payload
+	s.requestTimeout = timeout
 	return domain.WorkerRequest{ID: "00000000-0000-4000-8000-000000000003", OrgID: orgID, SessionID: sessionID}, nil
 }
 
@@ -121,7 +124,7 @@ func TestListUserAgentModelsUsesCurrentUsersLiveWorker(t *testing.T) {
 		modelResponse: json.RawMessage(`{"models":[{"id":"gpt-supported","displayName":"Supported","default":true,"efforts":["low","high"]}]}`),
 	}
 	server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
-	request := workspaceReviewRequest(t, http.MethodGet, "/me/providers/codex/models", nil)
+	request := workspaceReviewRequest(t, http.MethodGet, "/orgs/"+workspaceTestOrgID+"/providers/codex/models", nil)
 	routeContext := chi.RouteContext(request.Context())
 	routeContext.URLParams.Add("agent", "codex")
 	recorder := httptest.NewRecorder()
@@ -130,6 +133,9 @@ func TestListUserAgentModelsUsesCurrentUsersLiveWorker(t *testing.T) {
 
 	if recorder.Code != http.StatusOK || store.createdKind != "chat.models" {
 		t.Fatalf("status=%d kind=%q body=%s", recorder.Code, store.createdKind, recorder.Body.String())
+	}
+	if store.modelOrgID != workspaceTestOrgID || store.requestTimeout < 30*time.Second {
+		t.Fatalf("catalog scope=%q timeout=%s, want requested org and time for worker discovery", store.modelOrgID, store.requestTimeout)
 	}
 	var response worker.ChatModelsResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
@@ -146,13 +152,16 @@ func TestListUserAgentModelsRejectsMalformedWorkerCatalog(t *testing.T) {
 		json.RawMessage(`null`),
 		json.RawMessage(`{"models":null}`),
 		json.RawMessage(`{"models":{}}`),
+		json.RawMessage(`{"models":[{"id":"","displayName":"No id"}]}`),
+		json.RawMessage(`{"models":[{"id":"one","displayName":" "}]}`),
+		json.RawMessage(`{"models":[{"id":"one","displayName":"One"},{"id":"one","displayName":"Duplicate"}]}`),
 	} {
 		store := &workspaceReviewHandlerStore{
 			modelOrgID: workspaceTestOrgID, modelSessionID: workspaceTestSessionID,
 			modelResponse: response,
 		}
 		server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
-		request := workspaceReviewRequest(t, http.MethodGet, "/me/providers/codex/models", nil)
+		request := workspaceReviewRequest(t, http.MethodGet, "/orgs/"+workspaceTestOrgID+"/providers/codex/models", nil)
 		chi.RouteContext(request.Context()).URLParams.Add("agent", "codex")
 		recorder := httptest.NewRecorder()
 
@@ -167,7 +176,7 @@ func TestListUserAgentModelsRejectsMalformedWorkerCatalog(t *testing.T) {
 func TestListUserAgentModelsDoesNotReuseCatalogAfterConnectionChange(t *testing.T) {
 	store := &workspaceReviewHandlerStore{modelSourceErr: postgres.ErrNotFound}
 	server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
-	request := workspaceReviewRequest(t, http.MethodGet, "/me/providers/codex/models", nil)
+	request := workspaceReviewRequest(t, http.MethodGet, "/orgs/"+workspaceTestOrgID+"/providers/codex/models", nil)
 	routeContext := chi.RouteContext(request.Context())
 	routeContext.URLParams.Add("agent", "codex")
 	recorder := httptest.NewRecorder()
@@ -176,6 +185,25 @@ func TestListUserAgentModelsDoesNotReuseCatalogAfterConnectionChange(t *testing.
 
 	if recorder.Code != http.StatusConflict || store.createdKind != "" || !strings.Contains(recorder.Body.String(), "MODEL_CATALOG_UNAVAILABLE") {
 		t.Fatalf("status=%d kind=%q body=%s", recorder.Code, store.createdKind, recorder.Body.String())
+	}
+}
+
+func TestListUserAgentModelsEmptyAndUnsupportedCatalogsRemainUnavailable(t *testing.T) {
+	for _, agent := range []string{"codex", "cursor", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			store := &workspaceReviewHandlerStore{modelSessionID: workspaceTestSessionID, modelResponse: json.RawMessage(`{"models":[]}`)}
+			server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+			request := workspaceReviewRequest(t, http.MethodGet, "/providers/"+agent+"/models", nil)
+			chi.RouteContext(request.Context()).URLParams.Add("agent", agent)
+			recorder := httptest.NewRecorder()
+			server.listUserAgentModels(recorder, request)
+			if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "MODEL_CATALOG_UNAVAILABLE") {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if agent != "codex" && store.createdKind != "" {
+				t.Fatalf("unsupported agent dispatched worker request %q", store.createdKind)
+			}
+		})
 	}
 }
 
@@ -196,4 +224,60 @@ func workspaceReviewRequest(t *testing.T, method, target string, body any) *http
 	routeContext.URLParams.Add("sessionId", workspaceTestSessionID)
 	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
 	return request.WithContext(context.WithValue(request.Context(), principalKey, domain.Principal{UserID: "user-1"}))
+}
+
+// ?repository= selects which checkout a workspace request is about, and is
+// left out of a checkout request, which always concerns the main repository.
+func TestWorkspaceRequestsForwardTheRepositorySelector(t *testing.T) {
+	store := &workspaceReviewHandlerStore{provider: sandbox.ProviderCoder}
+	server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+
+	recorder := httptest.NewRecorder()
+	server.getWorkspaceReviewTree(recorder, workspaceReviewRequest(t, http.MethodGet, "/workspace/tree?path=src&repository=acme/voice-calling-ai", nil))
+	if recorder.Code != http.StatusOK || string(store.createdPayload) != `{"path":"src","repository":"acme/voice-calling-ai"}` {
+		t.Fatalf("status=%d payload=%s", recorder.Code, store.createdPayload)
+	}
+
+	recorder = httptest.NewRecorder()
+	server.getWorkspaceReview(recorder, workspaceReviewRequest(t, http.MethodGet, "/workspace/review?repository=web", nil))
+	if recorder.Code != http.StatusOK || string(store.createdPayload) != `{"repository":"web"}` {
+		t.Fatalf("summary payload=%s", store.createdPayload)
+	}
+
+	recorder = httptest.NewRecorder()
+	server.getWorkspaceReview(recorder, workspaceReviewRequest(t, http.MethodGet, "/workspace/review", nil))
+	if string(store.createdPayload) != `{}` {
+		t.Fatalf("no selector payload=%s", store.createdPayload)
+	}
+
+	for _, bad := range []string{"../etc", "a/b/c", "a%20b", "..", "a/"} {
+		recorder = httptest.NewRecorder()
+		store.createdKind = ""
+		server.getWorkspaceReview(recorder, workspaceReviewRequest(t, http.MethodGet, "/workspace/review?repository="+bad, nil))
+		if recorder.Code != http.StatusBadRequest || store.createdKind != "" {
+			t.Errorf("%q: status=%d kind=%q", bad, recorder.Code, store.createdKind)
+		}
+	}
+
+	payload, ok := withWorkspaceRepository(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/workspace/checkout?repository=web", nil), "workspace.checkout", json.RawMessage(`{}`))
+	if !ok || string(payload) != `{}` {
+		t.Fatalf("checkout payload=%s", payload)
+	}
+}
+
+func TestWorkspaceRepositoriesListsTheMainCheckoutForASingleRepoSession(t *testing.T) {
+	store := &workspaceReviewHandlerStore{provider: sandbox.ProviderCoder}
+	server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+	recorder := httptest.NewRecorder()
+	server.getWorkspaceRepositories(recorder, workspaceReviewRequest(t, http.MethodGet, "/workspace/repositories?repository=web", nil))
+	if recorder.Code != http.StatusOK || store.createdKind != "workspace.review.summary" || string(store.createdPayload) != `{}` {
+		t.Fatalf("status=%d kind=%q payload=%s", recorder.Code, store.createdKind, store.createdPayload)
+	}
+	var response struct {
+		Repositories []map[string]any `json:"repositories"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || len(response.Repositories) != 1 || response.Repositories[0]["main"] != true {
+		t.Fatalf("body=%s", recorder.Body.String())
+	}
 }

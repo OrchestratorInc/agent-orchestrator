@@ -13,6 +13,42 @@ func (s *Server) getWorkspaceReview(w http.ResponseWriter, r *http.Request) {
 	s.dispatchWorkspaceReview(w, r, "workspace.review.summary", struct{}{}, &worker.WorkspaceReviewResponse{})
 }
 
+// workspaceRepositoriesResponse lists a session's repository checkouts: the
+// main one and, for a project with additional repositories, one per
+// additional repository. Each item is the worker's description of the
+// checkout ({name, repository?, branch?, main?, present}); "name" is the
+// value the other workspace endpoints take as ?repository=.
+type workspaceRepositoriesResponse struct {
+	Repositories []json.RawMessage `json:"repositories"`
+}
+
+// getWorkspaceRepositories answers from the main checkout's review summary,
+// which lists the checkouts, so it needs no request kind of its own. A
+// single-repository session (or an older worker) lists only the main checkout,
+// with an empty name: requests about it need no ?repository=.
+func (s *Server) getWorkspaceRepositories(w http.ResponseWriter, r *http.Request) {
+	orgID, sessionID, ok := workspaceRoute(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	query.Del("repository")
+	r.URL.RawQuery = query.Encode()
+	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "workspace.review.summary", json.RawMessage(`{}`))
+	if !ok {
+		return
+	}
+	var summary workspaceRepositoriesResponse
+	if err := json.Unmarshal(result, &summary); err != nil {
+		writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid workspace review response.")
+		return
+	}
+	if len(summary.Repositories) == 0 {
+		summary.Repositories = []json.RawMessage{json.RawMessage(`{"name":"","main":true,"present":true}`)}
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
 func (s *Server) getChatModels(w http.ResponseWriter, r *http.Request) {
 	s.dispatchWorkspaceReview(w, r, "chat.models", struct{}{}, &worker.ChatModelsResponse{})
 }

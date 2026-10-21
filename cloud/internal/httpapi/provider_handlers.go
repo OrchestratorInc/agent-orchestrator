@@ -54,7 +54,7 @@ type userProviderCredentialStore interface {
 }
 
 type userModelCatalogSessionStore interface {
-	UserModelCatalogSession(context.Context, domain.Principal, string) (string, string, error)
+	UserModelCatalogSession(context.Context, domain.Principal, string, string) (string, string, error)
 }
 
 type secretEncrypter interface {
@@ -464,6 +464,11 @@ func (s *Server) listUserProviderConnections(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listUserAgentModels(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	if requireUUID(orgID, "orgId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
+		return
+	}
 	agent := strings.TrimSpace(chi.URLParam(r, "agent"))
 	if !validAgentProvider(agent) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The coding agent is invalid.")
@@ -474,13 +479,17 @@ func (s *Server) listUserAgentModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Cloud model catalogs are unavailable.")
 		return
 	}
-	orgID, sessionID, err := store.UserModelCatalogSession(r.Context(), principalFrom(r), agent)
+	_, sessionID, err := store.UserModelCatalogSession(r.Context(), principalFrom(r), orgID, agent)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
-			writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "Start one task with the agent default before choosing a model.")
+			writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "No live worker matches this organization and current personal connection. Use the agent default or enter a model ID; start a task to discover worker models.")
 			return
 		}
 		s.writeStoreError(w, r, err)
+		return
+	}
+	if agent != "codex" && agent != "claude-code" {
+		writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "This agent does not support worker model discovery. Use its native default or enter a model ID.")
 		return
 	}
 	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "chat.models", json.RawMessage(`{}`))
@@ -491,6 +500,18 @@ func (s *Server) listUserAgentModels(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(result, &response); err != nil || response.Models == nil {
 		writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid model catalog.")
 		return
+	}
+	if len(response.Models) == 0 {
+		writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "The worker did not report model choices. Use the agent default or enter a model ID.")
+		return
+	}
+	seen := make(map[string]bool, len(response.Models))
+	for _, model := range response.Models {
+		if strings.TrimSpace(model.ID) == "" || strings.TrimSpace(model.DisplayName) == "" || seen[model.ID] {
+			writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid model catalog.")
+			return
+		}
+		seen[model.ID] = true
 	}
 	writeJSON(w, http.StatusOK, response)
 }

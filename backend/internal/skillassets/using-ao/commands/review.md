@@ -2,11 +2,17 @@
 
 Manage AO's native code reviewer for a worker's PR.
 
-AO's reviewer is an isolated reviewer agent, not another worker session. To get
-an adversarial review of an AO session's PR, use `ao review trigger`; never
-spawn a worker to review it. Inside a worker, the review commands default to
-the calling session (`AO_SESSION_ID`), so `ao review trigger` reviews your own
-PR. An orchestrator passes the worker's session id.
+AO's reviewer is an isolated reviewer agent for implementation PRs owned by an
+AO worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
+the review commands default to the calling session (`AO_SESSION_ID`), so
+`ao review trigger` reviews your own implementation PR. An orchestrator passes
+the implementation worker's session id.
+
+For a requested review of someone else's PR, spawn or use a normal review-only
+worker without claiming or attaching the target PR. That worker submits the
+requested provider review and comments directly. Do not run `ao review trigger`,
+create an ownership-only placeholder, or require an implementation owner just
+to review the PR.
 
 AO's review is internal. An AO approval is not a GitHub approval: it does not
 satisfy required or independent-account reviews or branch protection, and it
@@ -125,7 +131,7 @@ ao review trigger [worker-session-id] [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--session string` | Worker session id (or pass it positionally) | The calling AO session |
-| `--pr string` | Review only this PR URL, attaching it to the session first if AO does not track it yet (never from another active session) | Every eligible PR on the session |
+| `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if AO does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
 | `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |

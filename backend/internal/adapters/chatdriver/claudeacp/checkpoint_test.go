@@ -271,3 +271,238 @@ func TestNativeCheckpointIgnoresUnrelatedStringAttachmentContent(t *testing.T) {
 		t.Fatalf("boundary=%+v error=%v", got, err)
 	}
 }
+
+// Records shaped as Claude Code 2.1.303 writes them when Esc interrupts a
+// terminal turn: no Stop fires, the turn never gets an end_turn reply, and a
+// user record in the prompt's own cycle holds only the marker. A tool use cut
+// short may or may not have a (rejected) result. When the conversation resumes,
+// Claude adds a synthetic "No response requested." reply after the marker.
+func TestNativeCheckpointSettlesEscInterruptedTurns(t *testing.T) {
+	record := func(fields string) string {
+		return `{"sessionId":"native",` + fields + `}`
+	}
+	prompt := func(id, promptID, parent, text string) string {
+		return record(`"type":"user","uuid":"` + id + `","parentUuid":"` + parent + `","promptId":"` + promptID +
+			`","message":{"role":"user","content":` + jsonString(text) + `}`)
+	}
+	attachment := func(id, parent, submission string) string {
+		return record(`"type":"attachment","uuid":"` + id + `","parentUuid":"` + parent +
+			`","attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":["` +
+			domain.NativeSubmissionContext(submission) + `"]}`)
+	}
+	assistant := func(id, parent, stop, content string) string {
+		return record(`"type":"assistant","uuid":"` + id + `","parentUuid":"` + parent +
+			`","message":{"model":"claude-haiku-4-5-20251001","content":` + content + `,"stop_reason":` + stop + `}`)
+	}
+	marker := func(id, promptID, parent, text string) string {
+		return record(`"type":"user","uuid":"` + id + `","parentUuid":"` + parent + `","promptId":"` + promptID +
+			`","message":{"role":"user","content":[{"type":"text","text":"` + text + `"}]}`)
+	}
+	toolResult := func(id, promptID, parent string) string {
+		return record(`"type":"user","uuid":"` + id + `","parentUuid":"` + parent + `","promptId":"` + promptID +
+			`","message":{"role":"user","content":[{"type":"tool_result","content":"The user doesn't want to proceed with this tool use.","is_error":true,"tool_use_id":"toolu_1"}]}`)
+	}
+	synthetic := func(id, parent string) string {
+		return record(`"type":"assistant","uuid":"` + id + `","parentUuid":"` + parent +
+			`","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}],"stop_reason":"stop_sequence"}`)
+	}
+	const (
+		textInterrupt = "[Request interrupted by user]"
+		toolInterrupt = "[Request interrupted by user for tool use]"
+		toolUse       = `[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"sleep 60"}}]`
+	)
+	submitA := domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission-a", PromptID: "prompt-a", Text: "A"}
+	submitB := domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission-b", PromptID: "prompt-b", Text: "B"}
+	stopB := domain.NativeCheckpointObservation{PromptID: "prompt-b", Text: "hi"}
+	// The interrupted prompt A, up to (not including) its marker.
+	startA := []string{prompt("user-a", "prompt-a", "", "A"), attachment("attach-a", "user-a", "submission-a")}
+	// A normal turn B after the record parent.
+	thenB := func(parent string) []string {
+		return []string{
+			prompt("user-b", "prompt-b", parent, "B"), attachment("attach-b", "user-b", "submission-b"),
+			assistant("answer-b", "attach-b", `"end_turn"`, `[{"type":"text","text":"hi"}]`),
+		}
+	}
+	join := func(groups ...[]string) []string {
+		var lines []string
+		for _, group := range groups {
+			lines = append(lines, group...)
+		}
+		return lines
+	}
+	tests := []struct {
+		name       string
+		lines      []string
+		events     []domain.NativeCheckpointObservation
+		wantUser   string
+		wantAnswer string
+		wantError  string
+	}{
+		{
+			name: "interrupted while replying",
+			lines: join(startA, []string{
+				assistant("partial-a", "attach-a", "null", `[{"type":"text","text":"tick 0 tick 1 "}]`),
+				marker("marker-a", "prompt-a", "partial-a", textInterrupt),
+			}),
+			events:   []domain.NativeCheckpointObservation{submitA},
+			wantUser: "user-a", wantAnswer: "tick 0 tick 1 ",
+		},
+		{
+			name:     "interrupted before any reply",
+			lines:    join(startA, []string{marker("marker-a", "prompt-a", "attach-a", textInterrupt)}),
+			events:   []domain.NativeCheckpointObservation{submitA},
+			wantUser: "user-a",
+		},
+		{
+			name: "interrupted tool use with no tool result",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				marker("marker-a", "prompt-a", "tool-a", toolInterrupt),
+			}),
+			events:   []domain.NativeCheckpointObservation{submitA},
+			wantUser: "user-a",
+		},
+		{
+			name: "interrupted tool use with a rejected result",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				toolResult("result-a", "prompt-a", "tool-a"),
+				marker("marker-a", "prompt-a", "result-a", toolInterrupt),
+			}),
+			events:   []domain.NativeCheckpointObservation{submitA},
+			wantUser: "user-a",
+		},
+		{
+			name: "interrupted turn resumed with Claude's filler",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				marker("marker-a", "prompt-a", "tool-a", toolInterrupt),
+				synthetic("filler", "marker-a"),
+			}),
+			events:   []domain.NativeCheckpointObservation{submitA},
+			wantUser: "user-a",
+		},
+		{
+			// The repro: the interrupted turn stays in the evidence journal, so
+			// every later switch must still settle it.
+			name: "interrupt, then a normal turn",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				toolResult("result-a", "prompt-a", "tool-a"),
+				marker("marker-a", "prompt-a", "result-a", toolInterrupt),
+				synthetic("filler", "marker-a"),
+			}, thenB("filler")),
+			events:   []domain.NativeCheckpointObservation{submitA, submitB, stopB},
+			wantUser: "user-b", wantAnswer: "hi",
+		},
+		{
+			name: "interrupt, then a normal turn without filler",
+			lines: join(startA, []string{
+				assistant("partial-a", "attach-a", "null", `[{"type":"text","text":"tick"}]`),
+				marker("marker-a", "prompt-a", "partial-a", textInterrupt),
+			}, thenB("marker-a")),
+			events:   []domain.NativeCheckpointObservation{submitA, submitB, stopB},
+			wantUser: "user-b", wantAnswer: "hi",
+		},
+		{
+			name:      "turn still running a tool",
+			lines:     join(startA, []string{assistant("tool-a", "attach-a", `"tool_use"`, toolUse)}),
+			events:    []domain.NativeCheckpointObservation{submitA},
+			wantError: "observed native turn not completed",
+		},
+		{
+			name: "turn still running after its tool result",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				toolResult("result-a", "prompt-a", "tool-a"),
+			}),
+			events:    []domain.NativeCheckpointObservation{submitA},
+			wantError: "observed native turn not completed",
+		},
+		{
+			name: "turn went on after the marker",
+			lines: join(startA, []string{
+				marker("marker-a", "prompt-a", "attach-a", textInterrupt),
+				assistant("tool-a", "marker-a", `"tool_use"`, toolUse),
+			}),
+			events:    []domain.NativeCheckpointObservation{submitA},
+			wantError: "observed native turn not completed",
+		},
+		{
+			name: "tool result after the marker",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				marker("marker-a", "prompt-a", "tool-a", toolInterrupt),
+				toolResult("result-a", "prompt-a", "marker-a"),
+			}),
+			events:    []domain.NativeCheckpointObservation{submitA},
+			wantError: "observed native turn not completed",
+		},
+		{
+			// A typed prompt is recorded as a string, however it reads.
+			name: "marker text as a plain string",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				prompt("marker-a", "prompt-a", "tool-a", textInterrupt),
+			}),
+			events:    []domain.NativeCheckpointObservation{submitA},
+			wantError: "observed native turn not completed",
+		},
+		{
+			name: "marker beside another block",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				record(`"type":"user","uuid":"marker-a","parentUuid":"tool-a","promptId":"prompt-a","message":{"role":"user","content":[{"type":"text","text":"` +
+					textInterrupt + `"},{"type":"text","text":"more"}]}`),
+			}),
+			events: []domain.NativeCheckpointObservation{submitA},
+			// Not a note at all: a second user message in the prompt's cycle.
+			wantError: "ambiguous native prompt ID",
+		},
+		{
+			name: "meta record holding the marker",
+			lines: join(startA, []string{
+				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
+				record(`"type":"user","uuid":"marker-a","parentUuid":"tool-a","promptId":"prompt-a","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"` +
+					textInterrupt + `"}]}`),
+			}),
+			events:    []domain.NativeCheckpointObservation{submitA},
+			wantError: "observed native turn not completed",
+		},
+		{
+			name: "a later turn still running after an interrupt",
+			lines: join(startA, []string{
+				marker("marker-a", "prompt-a", "attach-a", textInterrupt),
+				prompt("user-b", "prompt-b", "marker-a", "B"), attachment("attach-b", "user-b", "submission-b"),
+				assistant("tool-b", "attach-b", `"tool_use"`, toolUse),
+			}),
+			events:    []domain.NativeCheckpointObservation{submitA, submitB},
+			wantError: "observed native turn not completed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := verifyCheckpointTranscript(context.Background(),
+				strings.NewReader(strings.Join(test.lines, "\n")+"\n"),
+				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: checkpointEvidence(test.events...)})
+			if test.wantError != "" {
+				if !errors.Is(err, ports.ErrChatHistoryUnsettled) || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("boundary=%+v error=%v, want %q", got, err, test.wantError)
+				}
+				return
+			}
+			if err != nil || got.UserMessageID != test.wantUser {
+				t.Fatalf("boundary=%+v error=%v, want user %s", got, err, test.wantUser)
+			}
+			wantInterrupted := test.wantUser == "user-a"
+			if got.Interrupted != wantInterrupted || got.AssistantText != test.wantAnswer {
+				t.Fatalf("boundary=%+v, want interrupted=%v answer %q", got, wantInterrupted, test.wantAnswer)
+			}
+		})
+	}
+}
+
+func jsonString(text string) string {
+	data, _ := json.Marshal(text)
+	return string(data)
+}

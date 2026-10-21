@@ -69,3 +69,42 @@ func TestSessionArtifactVersionStoreAppendsListsAndPrunes(t *testing.T) {
 		t.Fatalf("latest after delete = %+v err=%v, want none", latest, err)
 	}
 }
+
+func TestSessionArtifactVersionStoreKeepsSourceAndHarness(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Unix(0, 1_700_000_000_000_000_000).UTC()
+	var restoredFrom int64
+	add := func(sha string, source domain.ArtifactVersionSource, harness domain.AgentHarness) {
+		t.Helper()
+		_, _, err := s.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
+			SessionID: sess.ID, Path: "plan.md", SHA256: sha, Size: 1, ContentType: "text/markdown", ModTime: at, CreatedAt: at,
+			Source: source, Harness: harness, RestoredFrom: restoredFrom,
+		}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("aaa", domain.ArtifactVersionSourceUser, domain.HarnessClaudeCode)
+	restoredFrom = 1
+	add("bbb", "", "") // an unset source is the agent's, with no harness recorded
+
+	got, err := s.ListSessionArtifactVersions(ctx, sess.ID, "plan.md")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("versions = %+v err=%v", got, err)
+	}
+	if got[0].Source != domain.ArtifactVersionSourceAgent || got[0].Harness != "" {
+		t.Errorf("second = source %q harness %q, want agent and none", got[0].Source, got[0].Harness)
+	}
+	if got[0].RestoredFrom != 1 || got[1].RestoredFrom != 0 {
+		t.Errorf("restoredFrom = %d and %d, want 1 and 0", got[0].RestoredFrom, got[1].RestoredFrom)
+	}
+	if got[1].Source != domain.ArtifactVersionSourceUser || got[1].Harness != domain.HarnessClaudeCode {
+		t.Errorf("first = source %q harness %q, want user and claude-code", got[1].Source, got[1].Harness)
+	}
+}
