@@ -1,9 +1,9 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { aoBridge } from "../lib/bridge";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -13,19 +13,21 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { topbarHeaderClass } from "./TopbarButton";
-import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
+import { topbarDragStyle } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
-import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
+import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
+import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -42,7 +44,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { cloudEnabled } = useCloudGate();
 	// The org's offering decides the cloud pages: the bring-your-own-Coder page
 	// only when it includes coder, Upgrade only for self-serve billing.
-	const { hasCoder, selfServeBilling } = useCloudOffering();
+	const { customCoder, selfServeBilling } = useCloudOffering();
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -66,7 +68,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -101,6 +103,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// Scripts are project settings on local and Cloud projects alike (a Cloud
 	// session's worker runs them). Environment and cues are local-daemon
 	// features; remote hosts expose none of these.
+	// A Cloud project's repositories, where its agent starts, and the
+	// instructions added to its agents' prompts live on the control plane.
+	if (isCloudProjectSettings) {
+		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
+	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 	if (!remoteHostId && !isCloudProjectSettings) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
@@ -112,6 +120,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
+	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
 	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
 	const [pendingProjectSection, setPendingProjectSection] = useState<ProjectSettingsSection | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
@@ -127,7 +136,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -176,9 +185,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id);
 		}
-	}, [cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling, settingsModal]);
+	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
@@ -193,6 +202,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
 		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
 		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
+		setShowDiagnostics(settingsModal?.scope === "global" ? settingsModal.showDiagnostics : undefined);
 	}, [settingsModal]);
 
 	useEffect(() => {
@@ -213,6 +223,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		})
 			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
 			.catch(() => undefined);
+		// Same for Mobile: its pairing state and Keep awake are known before the
+		// page is first drawn, so nothing pops in or flips after it opens.
+		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
+		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection) => {
@@ -246,7 +260,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		cueBusy,
 		close: closeSettingsDialog,
 		title: activeLabel,
-		rootLabel: t("settings.title"),
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
@@ -263,6 +276,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
 				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
 			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
+				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
+				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
 			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
 				return isCloudProjectSettings && cloudOrgId !== undefined
 					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
@@ -274,7 +293,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} hasCoder={hasCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
 		},
 	};
 }
@@ -378,36 +397,40 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
 /**
  * Settings page rendered inside the center panel, in place of the routed page:
- * the standard app topbar carrying a "Settings / <page>" breadcrumb above a
- * centered, scrolling content column on the normal page background.
+ * no top bar, just one centered, scrolling content column on the normal page
+ * background, headed by the page's sentence-case title.
  */
 export function SettingsPane() {
-	const { t } = useTranslation();
 	const page = useContext(SettingsPageContext);
-	const paddingLeft = useTopbarPaddingLeft();
 	if (!page) return null;
 	const layer = page.active;
 	return (
-		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			<header className={cn(topbarHeaderClass, "workspace-topbar-container")} style={{ ...topbarDragStyle, paddingLeft }}>
-				<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
-					<span className="text-muted-foreground">{layer.rootLabel}</span>
-					<span aria-hidden="true" className="text-muted-foreground/50">/</span>
-					<span className="min-w-0 truncate text-foreground">{layer.title}</span>
-					{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
-				</h1>
-				<button aria-label={t("settings.close")} className="settings-close-button ml-auto shrink-0" disabled={layer.cueBusy} onClick={layer.close} style={{ WebkitAppRegion: "no-drag" } as CSSProperties} type="button">
-					<X aria-hidden="true" className="size-4" />
-				</button>
-			</header>
+		<div className="relative flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
+			  * window-drag region while content scrolls up under it to the panel edge.
+			  * The body's top padding clears it (and the fixed titlebar controls that
+			  * sit over the panel when the sidebar is closed) at rest. Controls that
+			  * scroll beneath it are no-drag (styles.css). The strip itself never takes
+			  * pointer events (the native drag region does not need them), so a click
+			  * there reaches the control under it, and it stops short of the scrollbar
+			  * so the top of the track can still be grabbed. */}
+			<div aria-hidden="true" className="pointer-events-none absolute left-0 right-2 top-0 z-10 h-toolbar" style={topbarDragStyle} />
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
+				// `relative` makes the scroller the containing block for absolutely
+				// positioned content (sr-only labels, menu triggers). Without it they
+				// escape to the shell's overflow-x-hidden wrapper, which then scrolls
+				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
-					className={cn("settings-thin-scrollbar min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 				>
-					<div className="settings-dialog-body flex w-full flex-col gap-4 px-[18px] pb-12 pt-[18px]">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
+						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
+							{entry.title}
+							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
+						</h1>
 						{entry.body()}
 					</div>
 				</div>
@@ -453,9 +476,20 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 	// while recovery settings cover the dialog, then is re-attached when it returns.
 	const [bodyHost] = useState(() => document.createElement("div"));
 	useEffect(() => { bodyHost.className = "flex min-h-0 flex-1 flex-col"; }, [bodyHost]);
+	// That portal puts the body outside the Dialog's React tree, so Radix cannot
+	// tell that a popover, menu, or picker a page opens (portalled to <body>)
+	// belongs to the dialog: a press in one reads as outside and would dismiss
+	// the dialog, dropping the pick. React still routes events through portals
+	// along the React tree, so remember each press that starts anywhere in the
+	// body's tree (the page or anything it portals) and keep the dialog open
+	// for exactly that press. A press on the backdrop never passes through here.
+	const bodyPointerDown = useRef<Event | null>(null);
 	return (
 		<>
-		{createPortal(layer.body(), bodyHost)}
+		{createPortal(
+			<div className="contents" onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
+			bodyHost,
+		)}
 		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>
 			<Dialog.Portal>
 				<Dialog.Overlay
@@ -479,6 +513,21 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						target.focus({ preventScroll: true });
 					}}
 					onCloseAutoFocus={restoreFocusOnClose}
+					onPointerDownOutside={(event) => {
+						if (event.detail.originalEvent === bodyPointerDown.current) {
+							event.preventDefault();
+							return;
+						}
+						// An open picker or menu takes the first outside click to close
+						// itself, as Escape does; the dialog closes on the next one. A
+						// tooltip is not a popup that holds the click, and neither is a
+						// picker still playing its exit animation.
+						const openPopup = Array.from(document.querySelectorAll("[data-radix-popper-content-wrapper]")).some((wrapper) =>
+							!contentRef.current?.contains(wrapper)
+							&& wrapper.firstElementChild?.getAttribute("data-state") !== "closed"
+							&& wrapper.querySelector('[role="dialog"], [role="menu"], [role="listbox"]'));
+						if (openPopup) event.preventDefault();
+					}}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;
 						// In-place edits and login flows take Escape themselves.

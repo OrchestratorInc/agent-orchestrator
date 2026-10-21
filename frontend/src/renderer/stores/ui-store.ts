@@ -4,7 +4,7 @@ import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/wi
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
-import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
+import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -39,7 +39,11 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions";
+
+/** Which failure a "Show diagnostics" shortcut is about: the job it produced,
+ * if any, and the error the user saw. */
+export type HarnessDiagnosticsRequest = { jobStartedAt?: string; error?: string };
 
 export type SettingsModal =
 	| {
@@ -51,6 +55,8 @@ export type SettingsModal =
 			harnessView?: "local" | "cloud";
 			/** Start focusAgentId's login flow as soon as the Harness page can. */
 			startLogin?: boolean;
+			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
+			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -76,8 +82,8 @@ export type InspectorSessionState = {
 	browserUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
-	/** Files tab: source shared by the docked and maximized explorers. */
-	filesSource?: FilesSource;
+	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
+	filesSelection?: FilesSelection;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
@@ -194,7 +200,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -215,7 +221,9 @@ export type UiState = {
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
-	setFilesSource: (sessionId: string, source: FilesSource) => void;
+	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
+	/** Back to the checked-out branch and the default changes. */
+	resetFilesSelection: (sessionId: string) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -419,6 +427,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
+			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo
@@ -542,13 +551,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 				},
 			};
 		}),
-	setFilesSource: (sessionId, filesSource) =>
+	setFilesSelection: (sessionId, filesSelection) =>
 		set((state) => {
 			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (current.filesSelection === filesSelection) return state;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, filesSource },
+					[sessionId]: { ...current, filesSelection },
+				},
+			};
+		}),
+	resetFilesSelection: (sessionId) =>
+		set((state) => {
+			const current = state.inspectorSessions[sessionId];
+			if (!current?.filesSelection) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, filesSelection: undefined },
 				},
 			};
 		}),

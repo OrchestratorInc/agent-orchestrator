@@ -1,16 +1,15 @@
-import { useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import type { CloudCpProject, CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpSession } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
-import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
@@ -18,7 +17,6 @@ import { requestRemoteHostsRefresh } from "./useRemoteHosts";
 import { applyOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
 import {
-	type AgentSwitchSummary,
 	type PRState,
 	type PullRequestFacts,
 	type SessionArtifact,
@@ -44,18 +42,6 @@ function placeStandaloneWorkspaceLast(workspaces: WorkspaceSummary[]): Workspace
 	const standalone = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID);
 	if (!standalone) return workspaces;
 	return [...workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID), standalone];
-}
-
-function toAgentSwitchSummary(agentSwitch: components["schemas"]["AgentSwitch"]): AgentSwitchSummary {
-	return {
-		agentHandoffStatus: agentSwitch.agentHandoffStatus,
-		errorCode: agentSwitch.errorCode,
-		fromHarness: agentSwitch.fromHarness,
-		id: agentSwitch.id,
-		state: agentSwitch.state,
-		targetHarness: agentSwitch.targetHarness,
-		updatedAt: agentSwitch.updatedAt,
-	};
 }
 
 function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRequestFacts {
@@ -132,6 +118,7 @@ export function toWorkspaceSession(
 			endedAt: step.endedAt ?? undefined,
 		})),
 		branchState: session.branchState,
+		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
 		chatProviderPreserved: session.chatProviderPreserved,
@@ -143,7 +130,6 @@ export function toWorkspaceSession(
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
 		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
-		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
 		isPinned: session.isPinned ?? false,
@@ -236,6 +222,7 @@ function toLocalWorkspaceSession(
 			endedAt: step.endedAt ?? undefined,
 		})),
 		branchState: session.branchState,
+		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
@@ -246,7 +233,6 @@ function toLocalWorkspaceSession(
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
 		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
-		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
 		isPinned: session.isPinned ?? false,
@@ -288,12 +274,8 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions")]);
 
 	if (projectsError || sessionsError) {
-		agentSwitchVisibility.setQueryHealthy("active", false, "workspaces");
-		agentSwitchVisibility.setQueryHealthy("history", false, "workspaces");
 		throw projectsError ?? sessionsError;
 	}
-	agentSwitchVisibility.setQueryHealthy("active", true, "workspaces");
-	agentSwitchVisibility.setQueryHealthy("history", true, "workspaces");
 
 	const sessions = sessionsData?.sessions ?? [];
 	const standaloneName = standaloneWorkspaceName();
@@ -514,6 +496,59 @@ type WorkspaceSubscriptionOptions = {
 	includeCloud?: boolean;
 };
 
+// How long sightings of unknown projects are gathered into one project-list
+// refetch.
+export const UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS = 500;
+
+type UnknownProjectRefetches = { asked: Set<string>; timers: Map<string, ReturnType<typeof setTimeout>> };
+// Per query client, so each client (and each test's) starts afresh.
+const unknownProjectRefetches = new WeakMap<QueryClient, UnknownProjectRefetches>();
+
+/**
+ * Refetches the cloud project list when a cloud session (from the session
+ * list, a session lookup, or a session's events) belongs to a project the
+ * cached list does not have: one created elsewhere (the API, another device,
+ * an automation) since the list was fetched, which nothing else refetches.
+ * Without it the project and its sessions stay out of the sidebar and the
+ * board until a reload. Each unknown project asks once per org, and the
+ * sightings within UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS make one refetch,
+ * so a project the list never returns (past its first page) cannot loop. A
+ * list not fetched yet is left alone: its own fetch brings the project.
+ */
+export function refetchCloudProjectsForUnknownSessions(
+	queryClient: QueryClient,
+	baseUrl: string,
+	orgId: string,
+	sessions: ReadonlyArray<Pick<CloudCpSession, "projectId">>,
+): boolean {
+	const queryKey = [...cloudProjectsQueryKey, baseUrl, orgId];
+	const projects = queryClient.getQueryData<CloudCpProject[]>(queryKey);
+	if (projects === undefined) return false;
+	const known = new Set(projects.map((project) => project.id));
+	let state = unknownProjectRefetches.get(queryClient);
+	if (!state) {
+		state = { asked: new Set(), timers: new Map() };
+		unknownProjectRefetches.set(queryClient, state);
+	}
+	let unknown = false;
+	for (const { projectId } of sessions) {
+		const marker = `${baseUrl}|${orgId}|${projectId}`;
+		if (!projectId || known.has(projectId) || state.asked.has(marker)) continue;
+		state.asked.add(marker);
+		unknown = true;
+	}
+	if (!unknown) return false;
+	const timerKey = `${baseUrl}|${orgId}`;
+	if (!state.timers.has(timerKey)) {
+		const timers = state.timers;
+		timers.set(timerKey, setTimeout(() => {
+			timers.delete(timerKey);
+			void queryClient.invalidateQueries({ queryKey, exact: true });
+		}, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS));
+	}
+	return true;
+}
+
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
@@ -523,6 +558,9 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
 		retry: 1,
+		// Projects change rarely and are not polled; returning to the app picks up
+		// one made elsewhere meanwhile, as the cloud org and offering do.
+		refetchOnWindowFocus: true,
 		queryFn: async (): Promise<CloudCpProject[]> => {
 			if (orgId === undefined) return [];
 			// First page only (control-plane max page size); pagination UI is a
@@ -604,18 +642,46 @@ export function useCloudSessionQuery(
 	orgId: string | undefined,
 	sessionId: string,
 	enabled = true,
+	// Poll like the sessions list does while the caller shows this lookup
+	// rather than the list's row (a session opened before the list has it):
+	// otherwise its lifecycle stays where it was when the view opened.
+	poll = false,
 ) {
 	const { client, ready, baseUrl } = useCloudCp();
-	return useQuery({
+	const queryClient = useQueryClient();
+	const projects = useCloudProjectsQuery({ enabled });
+	const lookup = useQuery({
 		queryKey: ["cloud-session", baseUrl, orgId ?? "", sessionId],
 		enabled: enabled && ready && orgId !== undefined && sessionId !== "",
-		retry: 1,
+		// A session the control plane does not have (deleted) is not asked for
+		// again.
+		retry: (failures, error) => failures < 1 && !isCloudNotFound(error),
+		// The poll stops once the lookup fails (a deleted session, or the
+		// control plane unreachable: a window focus refetch resumes it once it
+		// answers again) or the session is terminated, whose lifecycle no longer
+		// moves on its own.
+		refetchInterval: (query) =>
+			poll && query.state.status !== "error" && !query.state.data?.isTerminated ? 5000 : false,
 		queryFn: async (): Promise<CloudCpSession | undefined> => {
 			if (orgId === undefined) return undefined;
 			const response = await client.getSession(orgId, sessionId);
 			return response.session;
 		},
 	});
+	// A session of a project made elsewhere (opened from a link, or right after
+	// the API made it) brings that project into the list. Checked once both are
+	// in, whichever arrives last.
+	const lookedUp = lookup.data;
+	const projectsLoaded = projects.data !== undefined;
+	useEffect(() => {
+		if (orgId === undefined || !lookedUp || !projectsLoaded) return;
+		refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [lookedUp]);
+	}, [baseUrl, lookedUp, orgId, projectsLoaded, queryClient]);
+	return lookup;
+}
+
+function isCloudNotFound(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 404;
 }
 
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
@@ -629,6 +695,14 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const localData = local.data;
 	const cloudData = cloud.data;
 	const cloudSessionData = cloudSessions.data;
+	const queryClient = useQueryClient();
+	const { baseUrl: cloudBaseUrl } = useCloudCp();
+	// Checked where both lists meet, so it runs whichever arrives last: the
+	// session list can resolve before the project list on the first load.
+	useEffect(() => {
+		if (!includeCloud || !ready || orgId === undefined || cloudData === undefined || !cloudSessionData) return;
+		refetchCloudProjectsForUnknownSessions(queryClient, cloudBaseUrl, orgId, cloudSessionData);
+	}, [cloudBaseUrl, cloudData, cloudSessionData, includeCloud, orgId, queryClient, ready]);
 	const data = useMemo(() => {
 		if (!includeCloud) return localData;
 		// Local stays authoritative for loading/error semantics: cloud items only
@@ -734,6 +808,23 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 		data: local.data ?? resolvedDirectSession ?? cloudSession,
 		isLoading: local.isLoading || direct.isLoading,
 	};
+}
+
+/**
+ * The kind of project a remote session belongs to. It reads the same host list
+ * as useWorkspaceSession, from the same moment, so it adds no request.
+ */
+export function useRemoteSessionProjectKind(sessionId: string, hostId?: string): WorkspaceSummary["kind"] {
+	const selectKind = useMemo(
+		() => (workspaces: WorkspaceSummary[]) => workspaces.find((workspace) => workspace.sessions.some((session) => session.id === sessionId))?.kind,
+		[sessionId],
+	);
+	return useQuery({
+		queryKey: remoteWorkspaceQueryKey(hostId ?? ""),
+		queryFn: () => fetchRemoteWorkspaces(hostId ?? ""),
+		select: selectKind,
+		enabled: Boolean(hostId && sessionId),
+	}).data;
 }
 
 export type WorkspaceScope = {

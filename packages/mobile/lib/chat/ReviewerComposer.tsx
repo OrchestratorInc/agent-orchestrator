@@ -6,6 +6,7 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, Text
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import type { ChatImage, ChatResource } from "./types";
 
@@ -102,7 +103,7 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 		{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 		<View style={styles.row}>
 			<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
-			<TextInput accessibilityLabel="Reply to reviewer" value={text} onChangeText={setText} placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"} placeholderTextColor={t.textTertiary} multiline editable={!stopped && !submitting} style={styles.input} />
+			<TextInput accessibilityLabel="Reply to reviewer" value={text} onChangeText={setText} placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"} placeholderTextColor={t.textTertiary} {...textSelectionColors(t)} multiline editable={!stopped && !submitting} style={styles.input} />
 			{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" onPress={() => void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer."))} style={styles.stop}><Feather name="square" size={14} color={t.red} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" disabled={stopped || submitting || (!text.trim() && !attachments.length)} onPress={() => void submit()} style={[styles.send, (stopped || submitting || (!text.trim() && !attachments.length)) && styles.disabled]}>{submitting ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="arrow-up" size={18} color="#fff" />}</Pressable>}
 		</View>
 	</View>;

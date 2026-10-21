@@ -48,7 +48,9 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
+import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
@@ -101,13 +103,16 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
+/** The agent switch that runs before a send failed, so the message never left. */
+export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
+	AGENT_SWITCH_FAILED,
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -185,6 +190,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabledPlaceholder,
 	starting,
 	settings,
+	addMenuItems,
 	approval,
 	elicitation,
 	skills = [],
@@ -195,6 +201,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSteer,
 	showSteerButton,
 	onInterrupt,
+	onContinue,
 	canSteer,
 	sendPending,
 	steerPending,
@@ -227,8 +234,14 @@ export const ChatComposer = memo(function ChatComposer({
 	emptyPlaceholder,
 	promptSuggestion,
 	onSelectAnnotation,
+	sentMessages,
+	sentMessagesScope,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
+	sentMessages?: readonly string[];
+	/** The conversation branch `sentMessages` belongs to; changing it ends an open walk. */
+	sentMessagesScope?: string;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -238,6 +251,8 @@ export const ChatComposer = memo(function ChatComposer({
 		excerpts?: ChatDraftExcerptReference[],
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
+	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
+	addMenuItems?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
 	approval?: ReactNode;
 	/** A provider question, docked above the composer until it is answered. */
@@ -279,6 +294,12 @@ export const ChatComposer = memo(function ChatComposer({
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
+	/**
+	 * Pick a stopped turn back up when there is no draft to send: the same button
+	 * that stopped it continues it, like play after pause. Present only while the
+	 * latest turn is one the user stopped.
+	 */
+	onContinue?: () => Promise<unknown> | void;
 	/** A turn is actually running, so there is something to steer into. */
 	canSteer?: boolean;
 	/** A send mutation is in flight for this session. */
@@ -397,6 +418,8 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const editor = useRef<ComposerEditorHandle>(null);
 	const filePicker = useRef<HTMLInputElement>(null);
+	const addMenuTrigger = useRef<HTMLButtonElement>(null);
+	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
 	// Disabling the active editor can move focus to the document body. Remember
 	// keyboard-origin submissions so focus can return once the editor is enabled.
@@ -406,6 +429,14 @@ export const ChatComposer = memo(function ChatComposer({
 	const previousTrigger = useRef<ComposerTrigger | undefined>(undefined);
 	const triggerRef = useRef<ComposerTrigger | undefined>(undefined);
 	const automaticDeliveryRecoveryAttempted = useRef<string | undefined>(undefined);
+	/**
+	 * Up/Down recall of sent messages. The history is captured newest first when
+	 * browsing starts, so a message arriving meanwhile cannot shift the position, and
+	 * `draft` is what the editor held before, for Down to bring back. A recalled
+	 * message is never saved as the draft until it is edited: leaving mid-browse keeps
+	 * the user's own text.
+	 */
+	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -497,6 +528,7 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (restoredSessionId.current === draftScopeKey) return;
 		restoredSessionId.current = draftScopeKey;
+		historyBrowse.current = null;
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		const currentDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
 		composerRevision.current = currentDraft?.composer.revision ?? 0;
@@ -646,6 +678,20 @@ export const ChatComposer = memo(function ChatComposer({
 	const canStopTurn = Boolean(
 		willQueue && onInterrupt && !controlsDisabled && !hasDraft && !savingQueuedEdit,
 	);
+	// Typing a draft turns the button back into Send, so after a stop the user can
+	// still ask something else instead.
+	const canContinueTurn = Boolean(
+		onContinue && !canStopTurn && !controlsDisabled && !hasDraft && !savingQueuedEdit && !durableDelivery,
+	);
+	const [continuing, setContinuing] = useState(false);
+	const continueTurn = () => {
+		if (!onContinue || continuing) return;
+		setSendError(null);
+		setContinuing(true);
+		void Promise.resolve().then(onContinue)
+			.catch((error: unknown) => setSendError(apiErrorMessage(error, "Couldn't continue the turn. Try again.")))
+			.finally(() => setContinuing(false));
+	};
 	const canSteerNext =
 		Boolean(canSteer && onSteer) &&
 		!controlsDisabled &&
@@ -740,6 +786,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [autoFocus, focusEditor]);
 
 	const clearEditorView = useCallback(() => {
+		historyBrowse.current = null;
 		textRef.current = "";
 		hasTextRef.current = false;
 		setHasText(false);
@@ -773,7 +820,10 @@ export const ChatComposer = memo(function ChatComposer({
 				textRef.current = result.draft.composer.text;
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
-				if (editor.current?.getSnapshot().text !== textRef.current) editor.current?.setText(textRef.current);
+				if (editor.current?.getSnapshot().text !== textRef.current) {
+					historyBrowse.current = null;
+					editor.current?.setText(textRef.current);
+				}
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
@@ -929,6 +979,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
 		if (editor.current?.getSnapshot().text !== committedSeedText) {
+			historyBrowse.current = null;
 			editor.current?.setText(committedSeedText);
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
@@ -973,10 +1024,9 @@ export const ChatComposer = memo(function ChatComposer({
 			setDurableDelivery(delivery);
 			return;
 		}
-		const observedSteer =
-			delivery.kind === "steer" &&
-			acceptedClientMessageIds?.has(delivery.clientMessageId);
-		if (delivery.state !== "accepted" && !observedSteer) return;
+		// The chat already holds this message (or steer): it arrived though its answer was lost.
+		const observed = acceptedClientMessageIds?.has(delivery.clientMessageId);
+		if (delivery.state !== "accepted" && !observed) return;
 		if (automaticDeliveryRecoveryAttempted.current === delivery.clientMessageId) return;
 		automaticDeliveryRecoveryAttempted.current = delivery.clientMessageId;
 		acceptAndClearDurableDelivery(delivery);
@@ -1007,27 +1057,32 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}, [clearEditorView, editingQueuedTurnId]);
 
+	const persistComposerText = useCallback((text: string) => {
+		if (!draftScope) return;
+		const result = writeChatComposerText(draftScope, text);
+		if (result.ok) composerRevision.current = result.draft.composer.revision;
+		unsavedText.current = result.ok ? undefined : { text, revision: composerRevision.current };
+		// A disabled Lexical editor can still publish an internal state update
+		// while its editability changes. It must not erase the recovery notice
+		// for a durable delivery that still owns this exact composer revision.
+		if (!result.ok || !result.draft.composer.delivery) {
+			setTextDraftPersistenceError(
+				result.ok
+					? null
+					: "chat.draft.saveFailed",
+			);
+		}
+	}, [draftScope]);
+
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
+		// Editing a recalled message makes it the draft; until then the saved draft stands.
+		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
-		if (draftScope && snapshot.text !== previousText) {
-			const result = writeChatComposerText(draftScope, snapshot.text);
-			if (result.ok) composerRevision.current = result.draft.composer.revision;
-			unsavedText.current = result.ok ? undefined : { text: snapshot.text, revision: composerRevision.current };
-			// A disabled Lexical editor can still publish an internal state update
-			// while its editability changes. It must not erase the recovery notice
-			// for a durable delivery that still owns this exact composer revision.
-			if (!result.ok || !result.draft.composer.delivery) {
-				setTextDraftPersistenceError(
-					result.ok
-						? null
-						: "chat.draft.saveFailed",
-				);
-			}
-		}
+		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
 			setHasText(snapshot.hasText);
@@ -1051,7 +1106,20 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [draftScope, onQueuedDraftChange, optimisticSend]);
+	}, [onQueuedDraftChange, optimisticSend, persistComposerText]);
+	// A walk holds one branch's prompts. Once another branch or conversation is
+	// active they are abandoned history, so put the user's own draft back.
+	const walkedScope = useRef(sentMessagesScope);
+	useEffect(() => {
+		if (walkedScope.current === sentMessagesScope) return;
+		walkedScope.current = sentMessagesScope;
+		const browse = historyBrowse.current;
+		if (!browse) return;
+		historyBrowse.current = null;
+		editor.current?.setText(browse.draft, "start");
+		const snapshot = editor.current?.getSnapshot();
+		if (snapshot) onEditorChange(snapshot);
+	}, [onEditorChange, sentMessagesScope]);
 	useImperativeHandle(
 		focusRef,
 		() => ({
@@ -1082,6 +1150,9 @@ export const ChatComposer = memo(function ChatComposer({
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
+		// A recalled message is shown, not typed: moving the caret through its `/skill`
+		// must not rewrite it, which would also make it the saved draft.
+		if (historyBrowse.current) return;
 		const query = trigger.query.toLowerCase();
 		if (!query) return;
 		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
@@ -1133,6 +1204,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// Sending a recalled message makes it the message, not a history position.
+		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
 			typeof document !== "undefined" &&
 			document.activeElement?.getAttribute("aria-label") === "Message the agent";
@@ -1465,7 +1538,8 @@ export const ChatComposer = memo(function ChatComposer({
 				setDeliveryUncertain(false);
 				setDeliveryRecoveryNotice(null);
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
-				setSendError(apiErrorMessage(error));
+				// A failed agent switch is reported in its own strip above the box.
+				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
 				return;
 			}
 			setDeliveryUncertain(true);
@@ -1545,10 +1619,56 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 
+		if ((event.key === "ArrowUp" || event.key === "ArrowDown") && recallSentMessage(event.key === "ArrowUp", event)) {
+			event.preventDefault();
+			return;
+		}
+
 		if (event.key === "Escape" && editingQueuedTurnId && onCancelQueuedEdit && !queuedEditRecovery && !submitInFlight.current) {
 			event.preventDefault();
 			onCancelQueuedEdit();
 		}
+	}
+
+	/**
+	 * Up walks back through sent messages and Down forward, ending on the draft the
+	 * user had. Up starts a walk only with the caret at the very start of the text
+	 * (always true when it is empty), so the arrows still move the caret inside a
+	 * multiline draft. Every step leaves the caret at the start, where either key
+	 * continues; Down also continues from the end, after reading down a long message.
+	 */
+	function recallSentMessage(older: boolean, event: KeyboardEvent<HTMLDivElement>): boolean {
+		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isComposing) return false;
+		// A queued edit, a delivery still settling, or a disabled controller owns the text.
+		if (editingQueuedTurnId || queuedEditRecovery || disabled || submitInFlight.current || draftMutationPending) {
+			return false;
+		}
+		// A pasted image holds its place in the draft until staging fills it in.
+		if (fileAttachments.preparing || fileAttachments.hasPendingReads()) return false;
+		const caret = editor.current?.caretBoundary();
+		const browsing = historyBrowse.current;
+		if (!caret || !(caret.atStart || (browsing && !older && caret.atEnd))) return false;
+		const browse = browsing ?? (older && sentMessages?.length
+			? { entries: [...sentMessages].reverse(), index: -1, draft: textRef.current, shown: textRef.current }
+			: null);
+		if (!browse) return false;
+		const index = browse.index + (older ? 1 : -1);
+		if (index >= browse.entries.length) return false;
+		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
+		const snapshot = editor.current?.getSnapshot();
+		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
+		if (snapshot) onEditorChange(snapshot);
+		return true;
+	}
+
+	/** The image left the draft, which is held aside while a recalled message shows. */
+	function removeImageFromSavedDraft(path: string) {
+		const browse = historyBrowse.current;
+		if (!browse) return;
+		const draft = removeInlineImagePath(browse.draft, path);
+		if (draft === browse.draft) return;
+		historyBrowse.current = { ...browse, draft };
+		persistComposerText(draft);
 	}
 
 	// Images get an inline chip only beside prose that can refer to them.
@@ -1674,6 +1794,8 @@ export const ChatComposer = memo(function ChatComposer({
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
+					// Portal menus still bubble clicks here; focusing the editor would close them.
+					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
@@ -1737,7 +1859,10 @@ export const ChatComposer = memo(function ChatComposer({
 											type="button"
 											onClick={() => {
 											if (submitInFlight.current) return;
-											if (path) editor.current?.removeImage(path);
+											if (path) {
+											editor.current?.removeImage(path);
+											removeImageFromSavedDraft(path);
+										}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
@@ -1855,6 +1980,47 @@ export const ChatComposer = memo(function ChatComposer({
 										event.target.value = "";
 									}}
 								/>
+								{addMenuItems ? (
+									<OptionMenu
+										onOpenChange={(open) => {
+											// Measured on open: the panel sits on the chat box, as wide as it.
+											const button = addMenuTrigger.current;
+											const box = button?.closest("form")?.getBoundingClientRect();
+											const origin = button?.getBoundingClientRect();
+											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
+										}}
+									>
+										<OptionMenuTrigger
+											ref={addMenuTrigger}
+											showCaret={false}
+											disabled={controlsDisabled}
+											aria-label="Add"
+											title="Add files or change mode"
+											className="size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active"
+										>
+											<Plus aria-hidden="true" className="size-3.5" />
+										</OptionMenuTrigger>
+										<OptionMenuContent
+											align="start"
+											side="top"
+											sideOffset={addMenuBox?.lift}
+											alignOffset={addMenuBox?.shift}
+											avoidCollisions={false}
+											style={addMenuBox ? { width: addMenuBox.width } : undefined}
+											className="chat-settings-menu max-w-none text-[12px]!"
+										>
+											<OptionMenuLabel className="px-3 pt-1.5 pb-1 text-[11px]!">Add</OptionMenuLabel>
+											<ComposerMenuRow
+												icon={Paperclip}
+												title="Files"
+												description="Attach files to this message"
+												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												onSelect={() => filePicker.current?.click()}
+											/>
+											{addMenuItems}
+										</OptionMenuContent>
+									</OptionMenu>
+								) : (
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<span className="inline-flex">
@@ -1873,6 +2039,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</TooltipTrigger>
 									<TooltipContent side="bottom">Attach a file</TooltipContent>
 								</Tooltip>
+								)}
 							</>
 						) : null}
 						{settings}
@@ -1888,22 +2055,24 @@ export const ChatComposer = memo(function ChatComposer({
 							<TooltipTrigger asChild>
 								<span className="inline-flex">
 									<Button
-										type={canStopTurn ? "button" : "submit"}
+										type={canStopTurn || canContinueTurn ? "button" : "submit"}
 										variant="ghost"
 										size="icon-sm"
-										disabled={canStopTurn ? false : !sendActionEnabled}
-										onClick={canStopTurn ? onInterrupt : undefined}
-										aria-label={canStopTurn ? "Stop turn" : sendActionLabel}
+										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
+										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
 										className={cn(
 											"size-7 rounded-full border-transparent focus-visible:ring-ring/40",
-											canStopTurn || sendActionEnabled
-												? "bg-foreground text-background hover:bg-foreground/90 hover:text-background dark:hover:bg-foreground/90 dark:hover:text-background"
+											canStopTurn || canContinueTurn || sendActionEnabled
+												? "bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground"
 												: "bg-primary text-primary-foreground",
 										)}
 									>
 										{canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
-										) : submitting || steerPending || savingQueuedEditPending || sendPending ? (
+										) : canContinueTurn && !continuing ? (
+											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
+										) : continuing || submitting || steerPending || savingQueuedEditPending || sendPending ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
 										) : showsSteer ? (
 											<CornerUpRight aria-hidden="true" className="size-3.5" />
@@ -1913,7 +2082,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : durableDelivery ? sendActionLabel : sendHint}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : durableDelivery ? sendActionLabel : sendHint}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

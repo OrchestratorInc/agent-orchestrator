@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { authHeaders, httpBase } from "../config";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
@@ -64,12 +65,19 @@ import {
 	countActivityNodes,
 	partitionTurnItems,
 	readableConversationItems,
+	startupPlacement,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { type, space } from "../tokens";
+import { press, type, space } from "../tokens";
+import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { SessionStartupStatus } from "./SessionStartup";
+import type { SessionStartupView } from "../session/sessionStartup";
+
+/** A starting session's checklist and where it sits; see ChatSessionScreen. */
+export type TimelineStartup = { view: SessionStartupView; visible: boolean; onRetry?(): void; retrying?: boolean };
 
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
@@ -87,6 +95,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	jumpToSequence,
 	onJumpHandled,
 	answeredBelow,
+	startup,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -104,6 +113,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	 * controls that could disagree.
 	 */
 	answeredBelow?: number;
+	/** Setup progress for a session that is still starting. */
+	startup?: TimelineStartup;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -121,7 +132,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	}, []);
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
-	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
+	const openingTurnId = startup?.view.openingTurnId;
+	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
@@ -145,6 +157,16 @@ export const ChatTimeline = memo(function ChatTimeline({
 		onJumpHandled?.();
 	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
+	if (plan.kind === "empty" && startup?.visible) {
+		// No brief in the timeline (a promptless start): the checklist stands alone.
+		return (
+			<View style={styles.timelineWrap}>
+				<View style={[styles.list, styles.content]}>
+					<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+				</View>
+			</View>
+		);
+	}
 	if (plan.kind === "empty") {
 		return (
 			<View style={styles.timelineWrap}>
@@ -154,6 +176,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
+	// A checklist no loaded turn can host sits at the live edge instead.
+	const standaloneStartup = placement === "standalone" && startup ? (
+		<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+	) : null;
 	const olderControl = snapshot.hasMoreBefore ? (
 		<Pressable
 			accessibilityRole="button"
@@ -197,8 +224,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
 					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListHeaderComponent={inverted ? null : olderControl}
-				ListFooterComponent={inverted ? olderControl : null}
+				ListHeaderComponent={inverted ? standaloneStartup : olderControl}
+				ListFooterComponent={inverted ? olderControl : standaloneStartup}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -210,6 +237,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 					answeredBelow={answeredBelow}
 					workedOpen={openWorked.has(group.key)}
 					onToggleWorked={toggleWorked}
+					startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 				/>}
 			/>
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
@@ -217,7 +245,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -228,6 +256,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	answeredBelow?: number;
 	workedOpen: boolean;
 	onToggleWorked(key: string): void;
+	startup?: TimelineStartup;
 }) {
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
@@ -239,6 +268,19 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
 		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+	if (startup) {
+		// The checklist sits exactly where the Working row will, under the brief,
+		// so the handoff moves nothing.
+		const firstWork = items.findIndex((item) => !(item.kind === "message" && item.role === "user"));
+		const leading = firstWork < 0 ? items.length : firstWork;
+		// The checklist explains the wait, so the brief drops its "Queued" note.
+		const brief = items.slice(0, leading).map((item) => item.kind === "message" && item.delivery === "queued" ? { ...item, delivery: undefined } : item);
+		return <View>
+			{renderRows(brief)}
+			<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+			{renderRows(items.slice(leading))}
+		</View>;
+	}
 	const partition = partitionTurnItems(items, group.turn);
 	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
@@ -789,27 +831,57 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
-	const files = turn.diff?.files ?? [];
+	const changed = turn.diff?.files ?? [];
+	const additions = changed.reduce((sum, file) => sum + file.additions, 0);
+	const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
 	return <View style={styles.planCard}>
-		<Pressable
-			accessibilityRole="button"
-			accessibilityState={{ expanded: open }}
-			style={styles.planHeader}
-			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+		<View style={styles.changedHeader}>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityState={{ expanded: open }}
+				accessibilityLabel={`${changed.length} changed ${changed.length === 1 ? "file" : "files"}, ${additions} lines added, ${deletions} removed`}
+				style={[styles.planHeader, styles.changedToggle]}
+				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+				>
+				<Feather name="file-text" size={12} color={t.textTertiary} />
+				<Text numberOfLines={1} style={[styles.planTitle, styles.changedTitle]}>{files ? `${changed.length} ${changed.length === 1 ? "file" : "files"}` : `${changed.length} changed ${changed.length === 1 ? "file" : "files"}`}</Text>
+				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
+				<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{additions}</Text>
+				<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{deletions}</Text>
+				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
+			</Pressable>
+			{files ? <Pressable
+				accessibilityRole="button"
+				accessibilityLabel="Review changes"
+				accessibilityHint="Opens every changed file in this session"
+				hitSlop={6}
+				onPress={() => { haptics.tap(); files.openChanges(); }}
+				style={({ pressed }) => [styles.changedReview, pressed && { opacity: press.opacity }]}
 			>
-			<Feather name="file-text" size={12} color={t.textTertiary} />
-			<Text style={styles.planTitle}>{files.length} changed {files.length === 1 ? "file" : "files"}</Text>
-			{turn.state === "running" ? <><Text style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
-			<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{files.reduce((sum, file) => sum + file.additions, 0)}</Text>
-			<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{files.reduce((sum, file) => sum + file.deletions, 0)}</Text>
-			<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
-		</Pressable>
-		{open ? <View style={styles.fileBody}>{files.map((file) => <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>
-			<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
-			<Text selectable style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
-			<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
-		</View>)}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff.</Text> : null}</View> : null}
+				<Feather name="file-diff" size={12} color={t.textPrimary} />
+				<Text style={styles.changedReviewText}>Review</Text>
+			</Pressable> : null}
+		</View>
+		{open ? <View style={styles.fileBody}>{changed.map((file) => {
+			const row = <>
+				<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
+				<Text selectable={!files} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
+				<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
+				{files ? <Feather name="chevron-right" size={12} color={t.textFaint} /> : null}
+			</>;
+			return files
+				? <Pressable
+					key={`${file.oldPath}:${file.path}`}
+					accessibilityRole="button"
+					accessibilityLabel={`${file.path}, ${file.status}, ${file.additions} added, ${file.deletions} removed`}
+					accessibilityHint="Opens the diff"
+					onPress={() => { haptics.tap(); files.openFile(file.path, file.oldPath); }}
+					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && { opacity: press.opacity }]}
+				>{row}</Pressable>
+				: <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>{row}</View>;
+		})}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>{files ? "This turn changed more files than Orchestrator lists here. Review changes shows all of them." : "This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff."}</Text> : null}</View> : null}
 	</View>;
 }
 
@@ -1103,7 +1175,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
 	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
-	statusRow: { alignSelf: "flex-start", minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
+	// Full width with a rule under it, matching the desktop's Working / Worked
+	// rows and the setup checklist header, so the line holds through the handoff.
+	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
@@ -1111,6 +1185,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rollbackCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
 	planCard: { backgroundColor: t.bgSurface, borderRadius: 12, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, overflow: "hidden" },
 	planHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
+	changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
+	changedToggle: { flex: 1, minWidth: 0 },
+	changedTitle: { flexShrink: 1 },
+	changedReview: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 999, backgroundColor: t.bgElevatedHover, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
+	changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
 	planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
 	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
@@ -1121,6 +1200,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
+	fileRowTap: { minHeight: 36 },
 	fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	filePath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },

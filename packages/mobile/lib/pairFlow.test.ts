@@ -137,6 +137,19 @@ describe("pairFromCode", () => {
 		expect(d.saveHost).not.toHaveBeenCalled();
 	});
 
+	// A rejected password used to read as "Reached nothing at <LAN>": the
+	// screen only saw "verify-failed" and treated it as unreachable.
+	it("reports what the winning endpoint answered when verification fails", async () => {
+		const d = deps({
+			verify: vi.fn(async () => {
+				throw Object.assign(new Error("401 Unauthorized"), { status: 401 });
+			}),
+		});
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got).toMatchObject({ ok: false, reason: "verify-failed", status: 401, endpoint: lan });
+	});
+
 	it("reports an unusable code rather than throwing", async () => {
 		const got = await pairFromCode("definitely not a pairing code", deps());
 

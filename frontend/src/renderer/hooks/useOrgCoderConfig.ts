@@ -17,16 +17,19 @@ export const orgCoderConfigQueryKey = ["cloud-org-coder-config"] as const;
 /**
  * Read only for an org whose offering includes coder: the control plane
  * answers 403 provider_forbidden for any other org. `enabled` lets a caller
- * narrow it further.
+ * narrow it further. `orgId` reads that org's connection (for example the org
+ * a project belongs to) instead of the signed-in org's.
  */
-export function useOrgCoderConfig(enabled = true) {
+export function useOrgCoderConfig(enabled = true, orgId?: string) {
 	const { client, ready } = useCloudCp();
 	const { org } = useCloudOrg();
-	const { hasCoder } = useCloudOffering();
-	const orgId = org?.id ?? "";
+	// The org's own Coder connection exists only for an org with the coder
+	// capability; the control plane refuses the read for everyone else.
+	const { customCoder } = useCloudOffering();
+	orgId = orgId?.trim() || (org?.id ?? "");
 	return useQuery({
 		queryKey: [...orgCoderConfigQueryKey, orgId],
-		enabled: enabled && hasCoder && ready && orgId !== "",
+		enabled: enabled && customCoder && ready && orgId !== "",
 		staleTime: 60_000,
 		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> => {
 			const response = await client.getOrgCoderConfig(orgId);
@@ -34,8 +37,11 @@ export function useOrgCoderConfig(enabled = true) {
 			// config yet" case — the common state for a newly-onboarded org. A stored
 			// connection always carries a token (the PUT requires one) and the token
 			// itself is never returned, so surface its presence as tokenSet — the flag
-			// the templates catalog and the live template fetch unlock on.
-			return response.coderConfig ? { ...response.coderConfig, tokenSet: true } : null;
+			// the templates catalog and the live template fetch unlock on. An older
+			// control plane answers only orgs that may save, so absent means editable.
+			return response.coderConfig
+				? { ...response.coderConfig, tokenSet: true, editable: response.editable !== false }
+				: null;
 		},
 	});
 }

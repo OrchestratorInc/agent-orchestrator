@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Eye, FileCode2, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import { EditProvider } from "@pierre/diffs/react";
 import {
@@ -22,6 +22,7 @@ import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { fileMediaKind, type FileMediaKind } from "../lib/file-media";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { isAbsoluteFileReference } from "../lib/workspace-file-path";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
@@ -30,12 +31,14 @@ import {
 	cancelFileAnnotations,
 	FileAnnotationComposer,
 	FileAnnotationSendBar,
+	EmptyMessage,
 	PanelMessage,
 	ReviewDiffBody,
 	RetryButton,
 	type FileAnnotationModel,
 } from "./WorkspaceDiffView";
 import { ReadOnlyFileView } from "./ReadOnlyFileView";
+import { FileMediaPreview } from "./FileMediaPreview";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { AoDiffFile } from "./diffs/AoDiffFile";
 import { AO_PIERRE_FILES_REVIEW_CSS } from "./diffs/pierreTheme";
@@ -43,13 +46,16 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { MarkdownEditor } from "./MarkdownEditor";
+import { SvgFileView } from "./SvgFileView";
+import { VscodeGoToFileIcon } from "./icons/VscodeGoToFileIcon";
+import { isSvgPath } from "../lib/image-files";
 
 // Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
 // height with small text and icons so they do not dwarf the toolbar.
 const EDIT_ACTION_CLASS = "h-6 gap-1 px-2 text-xs";
 
 export type FileViewMode = FileDisplayMode;
-export type FileOpenOptions = { commitSha?: string; editing?: boolean; line?: number; mode?: FileViewMode; scope?: WorkspaceDiffScope };
+export type FileOpenOptions = { source?: FilesSource; previousPath?: string; center?: boolean; commitSha?: string; editing?: boolean; line?: number; mode?: FileViewMode; scope?: WorkspaceDiffScope };
 
 const DEFAULT_FILES_SOURCE: FilesSource = { kind: "workspace" };
 
@@ -60,7 +66,13 @@ function canRenderMarkdown(path: string, detail: WorkspaceFileDetail): boolean {
 	return !detail.deleted && !detail.binary && !detail.contentTruncated && /\.(md|markdown)$/i.test(path);
 }
 
+function canRenderSvg(path: string, detail: WorkspaceFileDetail): boolean {
+	return !detail.deleted && !detail.binary && !detail.contentTruncated && isSvgPath(path);
+}
+
 export function FileContentPane({
+	onOpenInCenter,
+	active = true,
 	annotation,
 	initialEditing = false,
 	initialLine,
@@ -81,6 +93,8 @@ export function FileContentPane({
 	toolbarHost,
 }: {
 	annotation: FileAnnotationModel;
+	onOpenInCenter?: (mode: FileViewMode) => void;
+	active?: boolean;
 	initialEditing?: boolean;
 	initialLine?: number;
 	initialMode?: FileViewMode;
@@ -113,11 +127,12 @@ export function FileContentPane({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const setFileDisplayMode = useUiStore((state) => state.setFileDisplayMode);
-	const uiSessionId = sessionUiKey(sessionId, hostId);
+	const uiSessionId = sessionUiKey(sessionId,hostId);
+ const displayModePath = source.kind === "snapshot" ? `${JSON.stringify(source)}:${path}` : path;
 	// A mode picked in the toolbar outlives the pane: switching sessions
 	// unmounts it, and coming back should not drop Rich preview.
 	const restoredMode = () =>
-		(rememberDisplayMode ? rememberedFileDisplayMode(useUiStore.getState(), uiSessionId, path, initialRequestKey) : undefined) ?? initialMode;
+		(rememberDisplayMode ? rememberedFileDisplayMode(useUiStore.getState(), uiSessionId, displayModePath, initialRequestKey) : undefined) ?? initialMode;
 	const [mode, setMode] = useState<FileViewMode>(restoredMode);
 	// An artifact has one view: its initial mode, which editing replaces until
 	// the edit is saved or cancelled. No display mode switch.
@@ -144,7 +159,7 @@ export function FileContentPane({
 		refetchOnWindowFocus: true,
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
-	const canReadLiveText = Boolean(path) && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "unstaged" || scope === "untracked");
+	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
 	const liveText = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
@@ -166,13 +181,13 @@ export function FileContentPane({
 	}, [onContentReady, query.data, sourceHighlightReady]);
 	useEffect(() => {
 		setMode(restoredMode());
-		setEditing(initialEditing);
+		setEditing(initialEditing && source.kind !== "snapshot");
 		setDraft("");
 		setSaveError("");
-	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
+	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId,displayModePath]);
 	const selectMode = (next: FileViewMode) => {
 		setMode(next);
-		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, path, next, initialRequestKey);
+		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, displayModePath!, next, initialRequestKey);
 	};
 	useEffect(() => {
 		if (initialEditing && query.data) setDraft(query.data.content);
@@ -183,7 +198,7 @@ export function FileContentPane({
 	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 	const saveEditing = useCallback(async () => {
 		const detail = query.data;
-		if (!path || !detail?.fileFingerprint || saving) return;
+		if (source.kind === "snapshot" || !path || !detail?.fileFingerprint || saving) return;
 		setSaving(true);
 		setSaveError("");
 		try {
@@ -237,7 +252,7 @@ export function FileContentPane({
 		}
 	}, [commitSha, draft, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
 	useEffect(() => {
-		if (!editing) return;
+		if (!active || !editing) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
 			if (
 				event.key.toLowerCase() !== "s"
@@ -250,11 +265,11 @@ export function FileContentPane({
 		};
 		window.addEventListener("keydown", onSaveShortcut, true);
 		return () => window.removeEventListener("keydown", onSaveShortcut, true);
-	}, [editing, hasUnsavedChanges, saveEditing, saving]);
+	}, [active, editing, hasUnsavedChanges, saveEditing, saving]);
 	const refetch = query.refetch;
 
 	if (!path) {
-		return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
+		return <EmptyMessage icon={FileText} title={t("files.explorer.selectFile")} />;
 	}
 	if (outsideWorkspace) {
 		return <PanelMessage>{t("files.error.outsideWorkspace")}</PanelMessage>;
@@ -297,33 +312,52 @@ export function FileContentPane({
 	}
 
 	const detail = query.data;
-	const renderedAvailable = canRenderMarkdown(path, detail);
-	const hasDisplayModeChoice = !singleView && (detail.status !== "unmodified" || renderedAvailable);
+	// A historical/staged view must never show the current worktree's media.
+	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
+		? fileMediaKind(path) : undefined;
+	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
+	const markdownAvailable = canRenderMarkdown(path, detail);
+	const renderedAvailable = markdownAvailable || canRenderSvg(path, detail);
+	const hasDisplayModeChoice = !singleView && !mediaOnly && (detail.status !== "unmodified" || renderedAvailable);
 	const fileName = path.split("/").pop() || path;
 	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
 	const displayDetail = newerLiveText ? { ...detail, content: liveText.data!.content, size: liveText.data!.size, fileFingerprint: liveText.data!.revision } : detail;
-	const editable = !newerLiveText && detail.editable && Boolean(detail.fileFingerprint) && !(source.kind === "artifact" && source.readOnly);
+	const editable = source.kind !== "snapshot" && !newerLiveText && detail.editable && Boolean(detail.fileFingerprint) && !(source.kind === "artifact" && source.readOnly);
 	const effectiveMode =
-		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
+		mediaOnly || (detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
+	const mediaPreview = mediaKind && !editing && effectiveMode === "file";
 	const fileView = (
-		<CompleteFileView
-			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
-			detail={displayDetail}
-			editing={editing && effectiveMode === "file"}
-			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
-			onEditChange={setDraft}
-			onContentReady={onContentReady}
-			onRevealLineConsumed={onInitialLineConsumed}
-			scope={scope}
-			sessionId={sessionId}
-			commitSha={commitSha}
-			hostId={hostId}
-			source={source}
-			markdownEditing={editing && renderedAvailable}
-		/>
+		<>
+			{source.kind === "snapshot" && detail.deleted ? (
+				<p className="px-3 py-1 text-caption text-muted-foreground" role="status" title={detail.compareBaseSha}>
+					{t("files.previousVersionAt", { revision: detail.compareBaseSha?.slice(0, 12) ?? "base" })}
+				</p>
+			) : null}
+			<CompleteFileView
+				annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
+				detail={displayDetail}
+				editing={editing && effectiveMode === "file"}
+				revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
+				onEditChange={setDraft}
+				onContentReady={onContentReady}
+				onRevealLineConsumed={onInitialLineConsumed}
+				scope={scope}
+				sessionId={sessionId}
+				commitSha={commitSha}
+				hostId={hostId}
+				source={source}
+				markdownEditing={editing && markdownAvailable}
+				mediaKind={mediaKind}
+				version={detail.mediaVersion ?? (mediaKind === "image" ? query.dataUpdatedAt : detail.fileFingerprint || detail.size)}
+			/>
+		</>
 	);
+
+	const renderedView = markdownAvailable
+		? <MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} snapshotSource={source.kind === "snapshot" ? source : undefined} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+		: <SvgFileView content={detail.content} path={path} />;
 	const beginEditing = () => {
 		setMode("file");
 		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
@@ -380,6 +414,7 @@ export function FileContentPane({
 					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
 				</div>
 			) : null}
+   {onOpenInCenter ? <Tooltip><TooltipTrigger asChild><span tabIndex={editing ? 0 : undefined}><Button aria-label={t("files.openInCenter",{path:detail.path})} disabled={editing} onClick={()=>onOpenInCenter(effectiveMode)} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{editing ? t("files.finishEditingToOpen") : t("files.openInCenter",{path:detail.path})}</TooltipContent></Tooltip> : null}
 			{editing ? (
 				<div className="flex shrink-0 items-center gap-1">
 					<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
@@ -392,8 +427,10 @@ export function FileContentPane({
 							<TooltipTrigger asChild><Button aria-label={t("files.editFile")} className="text-muted-foreground hover:text-foreground" onClick={beginEditing} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
 							<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
 						</Tooltip>
-					) : null}
-					<Tooltip>
+					) : source.kind === "snapshot" ? (
+      <Tooltip><TooltipTrigger asChild><span tabIndex={0}><Button aria-label={t("files.editFile")} disabled size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{t("files.readOnlySnapshot")}</TooltipContent></Tooltip>
+     ) : null}
+     <Tooltip>
 						<TooltipTrigger asChild>
 							<Button
 								aria-label={t("files.addFeedback")}
@@ -467,7 +504,7 @@ export function FileContentPane({
 			/>
 		);
 		return (
-			<div className="relative min-w-0">
+			<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 				{toolbarNode}
 				<EditProvider createEditor={createReviewEditor}>
 				{effectiveMode === "diff" ? (
@@ -488,7 +525,7 @@ export function FileContentPane({
 						hideFileHeader
 					/>
 				) : effectiveMode === "rendered" && renderedAvailable ? (
-					<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+					renderedView
 				) : (
 					fileView
 				)}
@@ -499,12 +536,10 @@ export function FileContentPane({
 		);
 	}
 	return (
-		<div className="relative min-w-0">
+		<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
-			{effectiveMode === "rendered" && renderedAvailable ? (
-				<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
-			) : fileView}
+			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
 			<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
@@ -521,13 +556,14 @@ function artifactOriginOf(source: FilesSource): string | undefined {
 	}
 }
 
-function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
+function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, mediaKind, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source, version }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; mediaKind?: FileMediaKind; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource; version: number | string }) {
 	const { t } = useTranslation();
-	const needsRevision = source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
+	const needsRevision = !mediaKind && source.kind !== "artifact" && source.kind !== "snapshot" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
 		enabled: needsRevision,
 	});
+	if (mediaKind && !editing) return <FileMediaPreview hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} side={detail.deleted ? "before" : "after"} version={version} />;
 	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (needsRevision && revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
 	if (needsRevision && revision.data) {
@@ -556,5 +592,18 @@ function CompleteFileView({ annotation, commitSha, detail, editing, markdownEdit
 		);
 	}
 	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
-	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	return <ReadOnlyFileView annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+}
+
+// An artifact image loads from its raw URL. The load time joins the URL so a
+// rewritten image refetches instead of showing the cached bytes.
+function artifactImageUrl(source: FilesSource, version: number | string): string | undefined {
+	if (source.kind !== "artifact" || !source.rawUrl) return undefined;
+	try {
+		const url = new URL(source.rawUrl);
+		url.searchParams.set("v", String(version));
+		return url.toString();
+	} catch {
+		return undefined;
+	}
 }

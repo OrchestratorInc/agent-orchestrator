@@ -353,6 +353,30 @@ flowchart TD
 
 ```
 
+New Git worker sessions from the desktop, CLI, or orchestrator with an initial
+prompt generate a title and task slug together
+through the selected agent's background-task driver during provisioning. This
+call overlaps worktree preparation and has a twenty-second deadline. Failure,
+invalid output, or a full four-call naming limit uses a local prompt slug;
+prompts without usable ASCII words fall back to the session ID. Git tasks use
+`ao/<slug>/root` and `worktrees/<project-id>/<slug>`, with the same numeric suffix
+on both when the folder or branch namespace is occupied. Generated slugs prefer
+two short words, allow at most three, and are capped at 24 characters. The daemon
+finalizes prepared worktrees and repairs every repository registration before setup or
+agent launch, then records the resulting paths and branches. Naming persists its
+provisioning checkpoint and a synced move journal before changing Git names.
+After an interrupted move, background reconciliation or retry verifies linked
+Git identities, finishes registration repair, and saves root and child paths
+before acknowledging the journal. Recovery refuses occupied destinations and
+sessions with a runtime or provider conversation identity. Retry resumes
+unfinished setup using the durable stages. Session IDs remain
+unchanged. Explicit CLI/API session titles are preserved while their workspaces
+receive task names. Restore uses the persisted names. Explicit branches, promptless
+sessions, Scratch sessions, and existing sessions keep their naming behavior.
+The desktop hides provisional branches until the worktree step completes and
+shows a text shimmer with a randomly selected naming label while provisioning
+is active. The label stays stable across updates while it is displayed.
+
 ### Session interface handoff
 
 An interface switch is a controller replacement inside the existing AO session,

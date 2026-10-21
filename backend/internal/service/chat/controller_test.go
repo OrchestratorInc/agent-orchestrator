@@ -75,6 +75,14 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 	})
 }
 
+func boundedSnapshotReader(st *sqlite.Store) chatsvc.SnapshotPageReader {
+	return chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, limit int64) (chatsvc.ConversationRows, error) {
+		rows, err := st.LoadConversationSnapshotPage(ctx, id, before, limit)
+		return chatsvc.ConversationRows{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch,
+			Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities}, err
+	})
+}
+
 /* ---- a fake conversation the controller can drive ---------------------- */
 
 type fakeConversation struct {
@@ -385,6 +393,12 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
+	// supports, when set, is the agent's answer to which permission modes it runs in.
+	supports func(ports.PermissionMode) bool
+}
+
+func (d fakeDriver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	return d.supports == nil || d.supports(mode)
 }
 
 type sequenceDriver struct {
@@ -868,7 +882,7 @@ func TestReviewerChatUsesItsOwnProviderHost(t *testing.T) {
 	}
 }
 
-func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
+func TestPendingProviderHandoffFreshStartUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
 	record, found, err := st.GetSession(context.Background(), testSession)
@@ -907,7 +921,7 @@ func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
 	}
 }
 
-func TestPendingAgentSwitchResumeUsesReservedProviderScope(t *testing.T) {
+func TestPendingProviderHandoffResumeUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.UTC)
 	record, found, err := st.GetSession(context.Background(), testSession)
@@ -2749,7 +2763,7 @@ func TestInterfaceHandoffDoesNotAnchorReplayBeforeProviderCoordinationBoundary(t
 	}
 
 	// This completed turn belongs to the provider that owned the session before
-	// the agent switch. The new provider receives it through hidden handoff
+	// the provider handoff. The new provider receives it through hidden handoff
 	// instructions, so its native thread cannot replay the old provider IDs.
 	created, err := st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
@@ -3177,6 +3191,16 @@ func newHarnessWithConversationAndStoreForHarness(
 ) *harness {
 	t.Helper()
 	st := openStore(t)
+	if agentHarness != domain.HarnessCodex {
+		record, found, err := st.GetSession(context.Background(), testSession)
+		if err != nil || !found {
+			t.Fatalf("read seeded session: found=%v, err=%v", found, err)
+		}
+		record.Harness = agentHarness
+		if err := st.UpdateSession(context.Background(), record); err != nil {
+			t.Fatalf("set seeded harness: %v", err)
+		}
+	}
 	base := newFakeConversation()
 	if conv == nil {
 		conv = base
@@ -3203,9 +3227,10 @@ func newHarnessWithConversationAndStoreForHarness(
 	)
 	chatStore := wrapStore(st)
 	svc := chatsvc.New(chatsvc.Options{
-		Store:    chatStore,
-		Reader:   fullSnapshotReader(st),
-		Sessions: st,
+		Store:      chatStore,
+		Reader:     fullSnapshotReader(st),
+		PageReader: boundedSnapshotReader(st),
+		Sessions:   st,
 		StopProviderHost: func(context.Context, domain.SessionID) error {
 			h.hostStops.Add(1)
 			return nil

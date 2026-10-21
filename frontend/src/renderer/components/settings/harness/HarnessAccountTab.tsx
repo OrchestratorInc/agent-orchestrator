@@ -1,11 +1,15 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { agentAccountProviderFor } from "../../../hooks/useAgentAccounts";
+import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { IdleUpdateStatus } from "./HarnessSessionsDialog";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
 import { cn } from "../../../lib/utils";
+import { useUiStore } from "../../../stores/ui-store";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
+import { AgentAccountsPanel } from "../AgentAccountsSection";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
@@ -15,7 +19,7 @@ const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState }: {
+export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
 	/** A login or logout terminal is open for any harness. */
@@ -34,9 +38,17 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 	onCloseAuth: () => void;
 	onRetryAuth: () => void;
 	onTerminalState: (state: TerminalSessionState) => void;
+	/** Lists sessions an update waits for. */
+	onViewSessions?: (inUse: HarnessInUse) => void;
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
+	// Sessions that must end first turn Update into a way to find them.
+	const blockedBy = advisoryInUse(details.advisory);
+	const updateBlocked = Boolean(blockedBy);
+	// Subscription accounts are a developer-mode preview, for local Claude Code and Codex.
+	const accountsPreview = useUiStore((state) => state.developerMode);
+	const accountProvider = accountsPreview && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// Progress reads as a solid state, not a greyed-out action.
 	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
@@ -65,8 +77,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 			</Button> : null
 		) : details.showUpdate && !details.needsLogin ? (
-			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={ACTION_CLASS} onClick={onUpdate}>
-				{t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
+			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" variant={updateBlocked ? "outline" : undefined} className={ACTION_CLASS} onClick={onUpdate}>
+				{blockedBy ? t("settings.harness.viewSessions", { count: blockedBy.count })
+					: t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
 			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={ACTION_CLASS} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 		) : null;
 	const accountAction = authBusy ? authBusyAction
@@ -93,6 +106,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				<span className="text-xs text-settings-label"><HarnessTimestamp value={details.updatedAt} /></span>
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup>
+		{job && isWaitingForIdleJob(job) ? <div className="-mt-3"><IdleUpdateStatus agentId={details.agentId} job={job} hostId={hostId} onViewSessions={(waiting) => onViewSessions?.(waiting)} /></div> : null}
 		{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 		{/* A harness with no installable method explains how it is maintained instead. */}
@@ -107,6 +121,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>
 		</HarnessDetailGroup> : null}
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} /> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}
@@ -123,12 +138,12 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 			<Button type="button" aria-expanded={diagnosticsExpanded} size="sm" variant="ghost" onClick={onToggleDiagnostics}>
 				{t(diagnosticsExpanded ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
 			</Button>
-			{diagnosticsExpanded ? <div className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
+			{diagnosticsExpanded ? <div data-harness-diagnostics="" className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
 				{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

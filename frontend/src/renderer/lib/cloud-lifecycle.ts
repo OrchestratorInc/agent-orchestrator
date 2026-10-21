@@ -71,13 +71,17 @@ const FINAL_RUNTIME_STATES = new Set(["terminated"]);
 /**
  * Startup errors the worker reports after it checked in, because it could not
  * prepare the workspace (repository checkout, the Coder connection's working
- * directory, the project's Setup commands). The agent does not start until the
- * user reopens the session, so they are final even with the runtime connected.
+ * directory or the project's working folder, the project's Setup commands), or
+ * could not start the terminal agent in it. The agent does not start until the
+ * user reopens the session or selects Retry, so they are final even with the
+ * runtime connected.
  */
 export const WORKSPACE_STARTUP_ERROR_CODES: ReadonlySet<string> = new Set([
 	"repository_checkout_failed",
 	"working_directory_unusable",
+	"working_directory_occupied",
 	"project_setup_failed",
+	"agent_start_failed",
 ]);
 
 export function isWorkspaceStartupError(code?: string): boolean {

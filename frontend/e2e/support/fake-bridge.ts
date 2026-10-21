@@ -124,6 +124,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				clipboard: {
 					writeText: async () => undefined,
 					readText: async () => "",
+					writeImage: async () => undefined,
+				},
+				chatImage: {
+					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+					save: async () => true,
 				},
 				daemon: {
 					getStatus: async () => status,
@@ -152,16 +157,20 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
-					getRuntimeState: async () => ({ connected: false }),
+					getRuntimeState: async () => ({ connected: false, connecting: false, rejected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
@@ -348,8 +357,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
+					computerName: async () => "E2E computer",
 					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+					agentBrowserUrl: async () => "",
+					externalUrl: async (_hostId: string, url: string) => url,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -371,6 +383,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
+					agentBrowserUrl: async () => "",
 				},
 			} satisfies AoBridge;
 			(window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
@@ -445,6 +458,8 @@ export type FakeAgentController = {
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
 	setTerminalHandle: (id: string, handleId: string) => void;
+	/** Moves a session to another agent, as a provider switch does. */
+	setProvider: (id: string, provider: string) => void;
 	setPreview: (id: string, previewUrl: string, previewRevision?: number) => void;
 	setBrowserError: (message: string | null) => void;
 	reconnectEventsWithReplayBacklog: (count: number) => void;
@@ -843,6 +858,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					touch(s);
 					pushWorkspaces();
 				},
+				setProvider: (id, provider) => {
+					const s = findSession(id);
+					if (!s) return;
+					s.provider = provider;
+					touch(s);
+					pushWorkspaces();
+				},
 				setPreview: (id, previewUrl, previewRevision) => {
 					const s = findSession(id);
 					if (!s) return;
@@ -990,7 +1012,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setWindowTranslucent: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
-				clipboard: { writeText: async () => undefined, readText: async () => "" },
+				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },
+				chatImage: {
+					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+					save: async () => true,
+				},
 				daemon: {
 					getStatus: async () => status,
 					start: async () => status,
@@ -1018,16 +1044,20 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
-					getRuntimeState: async () => ({ connected: false }),
+					getRuntimeState: async () => ({ connected: false, connecting: false, rejected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
@@ -1206,8 +1236,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
+					computerName: async () => "E2E computer",
 					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+					agentBrowserUrl: async () => "",
+					externalUrl: async (_hostId: string, url: string) => url,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -1229,6 +1262,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
+					agentBrowserUrl: async () => "",
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;

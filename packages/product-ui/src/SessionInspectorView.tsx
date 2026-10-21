@@ -1,4 +1,4 @@
-import { type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
@@ -119,7 +119,6 @@ export function SessionInspectorShellView({
 					"session-inspector__topbar flex h-inspector-tabs shrink-0 items-center border-b border-border-strong pl-1",
 					activeView === "browser" && "session-inspector__topbar--browser",
 				)}
-				style={{ "--inspector-tab-count": tabs.length } as CSSProperties}
 			>
 				{isVisible && tabs.length === 1 ? (
 					<span className="min-w-0 flex-1 px-2 text-sm text-passive">{tabs[0].label}</span>
@@ -215,15 +214,18 @@ export function SessionInspectorShellView({
 
 export function InspectorSection({
 	children,
+	defaultOpen = true,
 	surface = true,
 	title,
 }: {
 	children: ReactNode;
+	/** Off for reference detail the reader opens on demand (a Setup log). */
+	defaultOpen?: boolean;
 	surface?: boolean;
 	title: string;
 }) {
 	const contentId = useId();
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(defaultOpen);
 	const reduceMotion = useReducedMotion();
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
@@ -273,6 +275,7 @@ export function SessionInspectorSummaryView({
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
+	scripts,
 	usage,
 	workers,
 }: {
@@ -288,6 +291,8 @@ export function SessionInspectorSummaryView({
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
 	reviews?: ReactNode;
+	/** The project's Setup and Cleanup runs (Cloud sessions), just before the activity. */
+	scripts?: ReactNode;
 	usage?: ReactNode;
 	/**
 	 * The sessions this orchestrator spawned. Rendered first: for an
@@ -312,6 +317,7 @@ export function SessionInspectorSummaryView({
 			) : null}
 			{reviews}
 			{completion}
+			{scripts}
 			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
 			{usage}
 		</div>
@@ -327,6 +333,8 @@ export type InspectorPullRequest = PRSummaryMetadata & {
 	state: InspectorPullRequestState;
 	stateLabel: string;
 	title?: string;
+	/** owner/name, shown before the number when a session's PRs span several repositories. */
+	repositoryLabel?: string;
 	reviewDetailsAction?: ReactNode;
 };
 
@@ -344,6 +352,7 @@ export function InspectorPullRequestCardView({
 	mergeAction,
 	mergeError,
 	openLabel,
+	openedViaLabel,
 	pr,
 	pullRequestIcon,
 	statusNotice,
@@ -354,6 +363,7 @@ export function InspectorPullRequestCardView({
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
+	openedViaLabel?: string;
 	pr: InspectorPullRequest;
 	pullRequestIcon?: ReactNode;
 	statusNotice?: ReactNode;
@@ -375,7 +385,7 @@ export function InspectorPullRequestCardView({
 					href={pr.href}
 				>
 					{pullRequestIcon ?? <GitPullRequestIcon className="size-icon-sm shrink-0" />}
-					<span>PR #{pr.number}</span>
+					<span className="truncate">{pr.repositoryLabel ? `${pr.repositoryLabel} ` : ""}PR #{pr.number}</span>
 					{externalIcon ?? <ArrowUpRightIcon className="size-icon-2xs shrink-0" />}
 				</ExternalLink>
 				<span
@@ -394,6 +404,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
 			{pr.state !== "merged" ? (
@@ -539,6 +550,8 @@ export type InspectorReviewGroup = {
 	};
 	meta: string;
 	number: number;
+	/** Unique per PR; a multi-repository session can repeat a number across repositories. Defaults to the number. */
+	key?: string;
 	title: string;
 	verdict?: InspectorVerdict;
 };
@@ -621,7 +634,7 @@ export function InspectorReviewsView({
 				{groups.map((group) => (
 					<ReviewDisclosure
 						defaultOpen={false}
-						key={group.number}
+						key={group.key ?? group.number}
 						meta={group.meta}
 						title={group.title}
 						verdict={group.verdict}

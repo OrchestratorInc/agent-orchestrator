@@ -1,0 +1,4 @@
+# The image needs only the two binaries it copies.
+*
+!dist/agent-browser
+!dist/rbhost

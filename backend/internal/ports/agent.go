@@ -17,6 +17,9 @@ var (
 	// ErrAgentAuthRequired means a launch-fresh provider check rejected the
 	// credential selected by the session's cwd and environment.
 	ErrAgentAuthRequired = errors.New("agent requires authentication")
+	// ErrNativeHistoryUnavailable means an interactive native restorer has no
+	// saved conversation yet; ordinary restore may launch fresh in its workspace.
+	ErrNativeHistoryUnavailable = errors.New("agent native history unavailable")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -214,6 +217,15 @@ type AgentRuntimeLaunchEnv interface {
 	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
 }
 
+// AgentTerminalVersionRefresher opts a terminal adapter into unattended upgrades.
+// GetRestoreCommand must name the exact captured conversation, preserve its
+// model/provider, instructions and permission options, and never silently fall
+// back to a fresh conversation when that identity cannot be resumed. This is
+// independent of TUI/Chat handoff support. Absence means not audited for refresh.
+type AgentTerminalVersionRefresher interface {
+	SupportsTerminalVersionRefresh() bool
+}
+
 // AgentNativeSessionResolver is an optional capability for adapters whose
 // lifecycle protocol reports a process-local correlation id rather than the
 // durable conversation id accepted by their resume command.
@@ -294,6 +306,19 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
+// whose native conversation files live in interface-specific storage roots.
+// Session Manager calls it only after the source controller is stopped.
+type AgentInterfaceHandoffStorageBridge interface {
+	PrepareInterfaceHandoffStorage(
+		ctx context.Context,
+		session SessionRef,
+		from, to domain.SessionMode,
+		nativeConversationID string,
+		env map[string]string,
+	) error
+}
+
 // ModelSelectionMode tells clients how to render an agent's model control.
 type ModelSelectionMode string
 
@@ -337,6 +362,8 @@ type AgentModelInfo struct {
 	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// SupportsFast reports that the model can run on the provider's faster tier.
+	SupportsFast bool `json:"supportsFast,omitempty"`
 	// LastUsedAt is the latest activity of a session in scope whose current model
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.
@@ -350,11 +377,15 @@ type AgentModelCatalog struct {
 	// ConfiguredProviders names providers with credential configuration observed
 	// during discovery. Presence is not proof of authorization; absence is unknown.
 	// Only provider IDs are exposed, never credential values or source paths.
-	ConfiguredProviders []string             `json:"configuredProviders,omitempty"`
-	AgentID             string               `json:"agentId"`
-	SelectionMode       ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models              []AgentModelInfo     `json:"models"`
-	CustomModelEntry    CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	ConfiguredProviders []string `json:"configuredProviders,omitempty"`
+	// RunnableModels names the models the agent itself lists as ones it can run
+	// now, when the rest of Models come from a local catalog of every provider
+	// it knows (OpenCode's), there to browse. Empty means not known.
+	RunnableModels   []string             `json:"runnableModels,omitempty"`
+	AgentID          string               `json:"agentId"`
+	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models           []AgentModelInfo     `json:"models"`
+	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`
@@ -493,9 +524,53 @@ type AgentAfterStartPromptBuilder interface {
 	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
+// AgentAfterStartCommand selects native TUI state before AO delivers the first
+// task. Confirmation must come from the current terminal output, so an ignored
+// command cannot silently launch a task with the wrong model.
+type AgentAfterStartCommand interface {
+	AfterStartCommand(ctx context.Context, cfg LaunchConfig) (string, error)
+	AfterStartCommandApplied(cfg LaunchConfig, output string) bool
+}
+
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
 type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
+}
+
+// TurnFailure is a provider turn that ended on an error, and when it ended.
+type TurnFailure struct {
+	At      time.Time
+	Message string
+	// Interrupted marks a turn the user interrupted (Esc) rather than one
+	// that ended on an error.
+	Interrupted bool
+}
+
+// TranscriptTurnFailureDetector is implemented by adapters whose harness can
+// end a turn without firing the hook that reports the turn's end, while still
+// recording that end in its native transcript. Codex runs its Stop hook only
+// after a successful turn, and fires no Stop when Esc interrupts one; Claude
+// Code fires no hook at all for an Esc interrupt. Without this such a turn
+// left the session active until the stale-activity observer screen-proved it
+// idle.
+type TranscriptTurnFailureDetector interface {
+	// LastTurnFailure reports the newest turn end recorded in the transcript
+	// when that turn ended on an error or was interrupted and no later turn
+	// has started. ok is false for a successful or still-running turn, and
+	// for a transcript that is missing or not the harness's own.
+	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
+}
+
+// TerminalActivityOptions lets an adapter declare how the shared observer
+// should read its terminal and which native decision states it can report.
+type TerminalActivityOptions struct {
+	PreferStyledOutput bool
+	SupportsBlocked    bool
+}
+
+// TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.
+type TerminalActivityOptionsProvider interface {
+	TerminalActivityOptions() TerminalActivityOptions
 }
 
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
@@ -633,6 +708,10 @@ type ActiveTurnSteerer interface {
 // either side hard-coding the other's vocabulary.
 const MetadataKeyAgentSessionID = "agentSessionId"
 
+// MetadataKeySessionMode is the SessionRef.Metadata key that carries the
+// current session mode (e.g. "chat" or "tui").
+const MetadataKeySessionMode = "sessionMode"
+
 // MetadataKeyTitle and MetadataKeySummary are the SessionRef.Metadata keys
 // carrying a session's human title and one-line summary. They are the shared
 // vocabulary every adapter reports under, so the dashboard renders agents
@@ -676,8 +755,6 @@ const (
 
 // LaunchConfig carries inputs needed to build a new agent launch command.
 type LaunchConfig struct {
-	// Env contains runtime overrides for adapter preflight commands.
-	Env         map[string]string
 	Config      AgentConfig
 	DataDir     string
 	IssueID     string
@@ -702,6 +779,11 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Env is the environment the runtime layers over the daemon's own for this
+	// launch (the project env plus AO's variables). The session manager sets it
+	// for PreLaunch, so an adapter prepares the provider config the launched
+	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
+	Env map[string]string
 }
 
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
@@ -797,3 +879,23 @@ const (
 	PromptDeliveryAfterStart  PromptDeliveryStrategy = "after_start"
 	PromptDeliveryCustomAgent PromptDeliveryStrategy = "custom_agent"
 )
+
+// AgentInteractiveNativeRestorer requires a strict, taskless initialization after
+// runtime launch. It never exposes fresh argv as a successful ordinary resume.
+type AgentInteractiveNativeRestorer interface {
+	PrepareNativeRestore(context.Context, RestoreConfig) (NativeRestoreInitialization, error)
+}
+
+// NativeRestoreInitialization is private to one restore attempt. The manager
+// requires StyledTerminalOutputReader current viewport evidence, never raw history.
+// The adapter
+// validates native history and interprets current terminal/witness evidence;
+// the manager alone owns runtime I/O, deadlines, publication and cleanup.
+type NativeRestoreInitialization interface {
+	Argv() []string
+	LaunchEnv() map[string]string
+	ResumeInput() string
+	TargetID() string
+	Ready(context.Context, string, string) (bool, error)
+	Restored(context.Context, string, string) (bool, error)
+}

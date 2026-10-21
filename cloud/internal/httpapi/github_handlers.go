@@ -11,22 +11,27 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/go-chi/chi/v5"
 )
 
 type githubInstallationResponse struct {
-	ID                   string     `json:"id"`
-	GitHubInstallationID string     `json:"githubInstallationId"`
-	AccountLogin         string     `json:"accountLogin"`
-	AccountType          string     `json:"accountType"`
-	Status               string     `json:"status"`
-	RepositorySelection  string     `json:"repositorySelection"`
-	SyncStatus           string     `json:"syncStatus"`
-	LastSyncedAt         *time.Time `json:"lastSyncedAt,omitempty"`
-	LastError            string     `json:"lastError,omitempty"`
-	CreatedAt            time.Time  `json:"createdAt"`
-	UpdatedAt            time.Time  `json:"updatedAt"`
+	ID                   string `json:"id"`
+	GitHubInstallationID string `json:"githubInstallationId"`
+	AccountLogin         string `json:"accountLogin"`
+	AccountType          string `json:"accountType"`
+	Status               string `json:"status"`
+	RepositorySelection  string `json:"repositorySelection"`
+	// AccessScope is "installation" (the installation's whole repository
+	// selection) or "user" (only the repositories the connecting user can
+	// access on GitHub).
+	AccessScope  string     `json:"accessScope"`
+	SyncStatus   string     `json:"syncStatus"`
+	LastSyncedAt *time.Time `json:"lastSyncedAt,omitempty"`
+	LastError    string     `json:"lastError,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 type githubRepositoryResponse struct {
@@ -71,13 +76,27 @@ type claimGitHubInstallationRequest struct {
 }
 
 type createGitHubScratchProjectRequest struct {
-	DisplayName          string `json:"displayName"`
-	GitHubInstallationID string `json:"githubInstallationId"`
-	Private              *bool  `json:"private,omitempty"`
-	Orchestrator         struct {
-		Harness string `json:"harness"`
-		Prompt  string `json:"prompt,omitempty"`
-	} `json:"orchestrator"`
+	DisplayName          string                     `json:"displayName"`
+	GitHubInstallationID string                     `json:"githubInstallationId"`
+	Private              *bool                      `json:"private,omitempty"`
+	Orchestrator         scratchOrchestratorRequest `json:"orchestrator"`
+}
+
+// scratchOrchestratorRequest is a scratch project's first orchestrator.
+type scratchOrchestratorRequest struct {
+	Harness string `json:"harness"`
+	Prompt  string `json:"prompt,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface, as on a
+	// session create: with it the orchestrator starts in Chat where its
+	// harness can (without it, in the TUI), and the workers it spawns resolve
+	// their interface from this default.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
+}
+
+// validDefaultInterface reports whether the default interface is empty, tui
+// or chat.
+func (o scratchOrchestratorRequest) validDefaultInterface() bool {
+	return o.DefaultInterfaceMode == "" || domain.SessionInterface(o.DefaultInterfaceMode).Valid()
 }
 
 type githubProjectStore interface {
@@ -216,10 +235,11 @@ func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	installationIDValue := strings.TrimSpace(r.URL.Query().Get("installation_id"))
 	var err error
+	var offer *githubapp.ConnectOthersOffer
 	if installationIDValue == "" {
 		// Normal two-step completion: the setup callback already minted our PKCE
 		// OAuth state, and GitHub returned only code+state here.
-		_, err = s.github.CompleteOAuth(r.Context(), state, code)
+		_, offer, err = s.github.CompleteOAuthWithOffer(r.Context(), state, code)
 	} else {
 		// Bundled flow: a GitHub App configured to request user authorization
 		// during installation delivers installation_id + code straight here,
@@ -230,7 +250,7 @@ func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			s.githubCallbackError(w, r, postgres.ErrInvalid)
 			return
 		}
-		_, err = s.github.CompleteInstallationOAuth(r.Context(), state, code, installationID)
+		_, offer, err = s.github.CompleteInstallationOAuthWithOffer(r.Context(), state, code, installationID)
 	}
 	if err != nil {
 		s.githubCallbackError(w, r, err)
@@ -238,7 +258,37 @@ func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	if offer != nil {
+		_, _ = w.Write(s.github.InstallationOfferHTML(*offer))
+		return
+	}
 	_, _ = w.Write(s.github.InstallationCompletionHTML(true))
+}
+
+// githubConnectOthers acts on the Connect button of the installation callback
+// page, which offers the user's other GitHub accounts. The sealed grant in the
+// form is the only authority; see githubapp/connect_others.go.
+func (s *Server) githubConnectOthers(w http.ResponseWriter, r *http.Request) {
+	setGitHubCallbackHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	if err := r.ParseForm(); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write(s.github.ConnectOthersFailedHTML(postgres.ErrInvalid))
+		return
+	}
+	if err := s.github.ConfirmConnectOthers(r.Context(), r.PostForm.Get("grant")); err != nil {
+		if !errors.Is(err, postgres.ErrInvalid) && !errors.Is(err, postgres.ErrConflict) &&
+			!errors.Is(err, githubapp.ErrConnectOthersExpired) &&
+			!errors.Is(err, postgres.ErrGitHubUserScopeNeedsPersonalOrg) {
+			s.logger.Error("GitHub connect other installations", "error", err, "request_id", requestID(r))
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write(s.github.ConnectOthersFailedHTML(err))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(s.github.ConnectOthersStartedHTML())
 }
 
 func (s *Server) startGitHubUserAuthorization(
@@ -369,6 +419,13 @@ func (s *Server) listGitHubInstallations(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"installations": items})
 }
 
+func githubAccessScope(scope string) string {
+	if scope == domain.GitHubAccessScopeUser {
+		return scope
+	}
+	return domain.GitHubAccessScopeInstallation
+}
+
 func (s *Server) syncGitHubInstallation(w http.ResponseWriter, r *http.Request) {
 	orgID, installationID, ok := githubInstallationParams(w, r)
 	if !ok {
@@ -465,6 +522,7 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.DisplayName = strings.TrimSpace(request.DisplayName)
+	ok := true
 	githubRepositoryID, err := strconv.ParseInt(
 		strings.TrimSpace(request.GitHubRepositoryID),
 		10,
@@ -489,14 +547,21 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
 		return
 	}
+	if config, ok = s.prepareGitHubProjectRepos(w, r, orgID, githubRepositoryID, config); !ok {
+		return
+	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
 	if !s.validateProjectCoderParameters(w, r, orgID, config) {
 		return
 	}
-	store, ok := s.store.(githubProjectStore)
-	if !ok {
+	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
+	}
+	store, isGitHubStore := s.store.(githubProjectStore)
+	if !isGitHubStore {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")
 		return
 	}
@@ -555,7 +620,8 @@ func (s *Server) createGitHubScratchProject(
 		request.DisplayName == "" || len(request.DisplayName) > 80 ||
 		request.Orchestrator.Harness == "" ||
 		len(request.Orchestrator.Harness) > 120 ||
-		len(request.Orchestrator.Prompt) > 65536 {
+		len(request.Orchestrator.Prompt) > 65536 ||
+		!request.Orchestrator.validDefaultInterface() {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The scratch project request is invalid.")
 		return
 	}
@@ -568,7 +634,13 @@ func (s *Server) createGitHubScratchProject(
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The scratch project request is invalid.")
 		return
 	}
-	scratchConfig := json.RawMessage(`{"source":"scratch"}`)
+	scratchConfig, err := s.pinProjectProvider(
+		r.Context(), principalFrom(r), orgID, json.RawMessage(`{"source":"scratch"}`),
+	)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The scratch project could not be prepared.")
+		return
+	}
 	plan, connectionID, ok := s.scratchSessionPlan(
 		w, r, principalFrom(r), orgID, request.Orchestrator.Harness, scratchConfig,
 	)
@@ -620,10 +692,12 @@ func (s *Server) createGitHubScratchProject(
 			DisplayName:             request.DisplayName,
 			Config:                  scratchConfig,
 			Session: domain.CreateSession{
+				CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
 				Kind:                "orchestrator",
 				Harness:             request.Orchestrator.Harness,
 				DisplayName:         "Orchestrator",
 				Prompt:              request.Orchestrator.Prompt,
+				DefaultInterface:    domain.SessionInterface(request.Orchestrator.DefaultInterfaceMode),
 				Mode:                "trusted",
 				DeniedCommands:      []string{},
 				Provider:            plan.Provider,
@@ -806,6 +880,7 @@ func toGitHubInstallationResponse(
 		AccountType:          installation.AccountType,
 		Status:               status,
 		RepositorySelection:  installation.RepositorySelection,
+		AccessScope:          githubAccessScope(installation.AccessScope),
 		SyncStatus:           installation.SyncStatus,
 		LastSyncedAt:         installation.LastSyncedAt,
 		LastError:            installation.LastError,

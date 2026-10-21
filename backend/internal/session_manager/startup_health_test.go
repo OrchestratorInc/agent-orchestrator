@@ -3,6 +3,8 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -93,27 +95,43 @@ func TestStartupHealthUnavailableRuntimeProbePreservesSession(t *testing.T) {
 	}
 }
 
-func TestStartupSwitchRecoveryDoesNotLaunchStoppedSource(t *testing.T) {
-	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
-		t.Run(string(mode), func(t *testing.T) {
-			rt := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
-			m, st, _ := newSwitchTestManager(t, rt)
-			launcher := &recordingLauncher{}
-			m.chat = launcher
-			rec := st.sessions["proj-1"]
-			rec.Mode = mode
-			rec.Activity.State = domain.ActivityExited
-			st.sessions[rec.ID] = rec
-			sw := domain.AgentSwitch{ID: "startup-switch", SessionID: rec.ID, FromHarness: rec.Harness, TargetHarness: domain.HarnessCodex, State: domain.AgentSwitchSourceStopped, SourceGenerationID: "source", TargetGenerationID: "target"}
-			st.switches[sw.ID] = sw
-			if err := m.reconcileAgentSwitches(context.Background(), true); err != nil {
+func TestStartupHealthCleansOnlyUncommittedSetup(t *testing.T) {
+	for _, scenario := range []string{"clean", "dirty", "committed", "runtime", "provider", "setup-done"} {
+		t.Run(scenario, func(t *testing.T) {
+			m, st, ws, _ := newGitTaskPreparationManager(t)
+			rec, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Mode: domain.SessionModeTUI, Harness: domain.HarnessClaudeCode, ClientRequestID: "create-worker", ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning}}})
+			if err != nil {
 				t.Fatal(err)
 			}
-			if rt.created != 0 || len(launcher.started) != 0 {
-				t.Fatal("startup switch recovery launched a stopped agent")
+			root, err := ws.Create(t.Context(), ports.WorkspaceConfig{ProjectID: "mer", SessionID: rec.ID, Branch: "ao/login/root", BaseBranch: "main"})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if !st.switches[sw.ID].RequiresSourceRestore() || !m.SessionMutationInProgress(rec.ID) {
-				t.Fatal("interrupted switch must retain its explicit recovery fence")
+			rec.Metadata.WorkspacePath, rec.Metadata.Branch, rec.Metadata.WorkspaceRepoPath = root.Path, root.Branch, root.RepoPath
+			switch scenario {
+			case "dirty":
+				if err := os.WriteFile(filepath.Join(root.Path, "keep"), []byte("keep"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "committed":
+				rec.ClientRequestCommitted = true
+			case "runtime":
+				rec.Metadata.RuntimeHandleID = "live-runtime"
+			case "provider":
+				rec.Metadata.ProviderConversationID = "live-provider"
+			case "setup-done":
+				rec.ProvisionSteps[0].Status = domain.SessionProvisionStepDone
+			}
+			st.sessions[rec.ID] = rec
+			_ = m.checkSessionHealth(t.Context(), rec)
+			_, found := st.sessions[rec.ID]
+			_, pathErr := os.Stat(root.Path)
+			if scenario == "clean" {
+				if found || !errors.Is(pathErr, os.ErrNotExist) {
+					t.Fatalf("unfinished clean request remains: found=%v path=%v", found, pathErr)
+				}
+			} else if !found || pathErr != nil {
+				t.Fatalf("protected request or workspace lost: found=%v path=%v", found, pathErr)
 			}
 		})
 	}

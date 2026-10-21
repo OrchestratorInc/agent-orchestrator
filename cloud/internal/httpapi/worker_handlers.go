@@ -91,6 +91,9 @@ var workerEventTypes = map[string]struct{}{
 	// workspace.startup reports whether the worker could prepare the
 	// session's workspace; a failure becomes the session's startup error.
 	worker.WorkspaceStartupEventType: {},
+	// workspace.script.step reports one step of a Setup run with its output,
+	// live while it runs.
+	worker.ScriptStepEventType: {},
 }
 
 const (
@@ -139,7 +142,15 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch, slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder))
+	if err := s.startLaunchInTUIIfChatUnsupported(r, ticket.OrgID, &launch,
+		slices.Contains(input.Capabilities, worker.CapabilityChatStart)); err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	launchContext, err := launchContextFrom(launch, launchCapabilities{
+		resolvesWorkspacePath: slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder),
+		multiRepo:             slices.Contains(input.Capabilities, worker.CapabilityMultiRepo),
+	})
 	if err != nil {
 		s.logger.Error("build worker launch context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "BOOTSTRAP_FAILED", "The project's role instructions are invalid.")
@@ -162,6 +173,9 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+
+	_, installedCleanup := launchContext.ProjectScripts()
+	s.recordInstalledCleanup(r, ticket.OrgID, ticket.SessionID, workerID, ticket.WorkerEpoch, installedCleanup)
 
 	scopes := issuedWorkerScopes(ticket.Scopes, launch)
 	token, err := s.workerTokens.Issue(worker.Claims{
@@ -231,12 +245,21 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch, headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder))
+	// No Chat-start fallback here (startLaunchInTUIIfChatUnsupported): the
+	// worker may be live, already running the interface it started in.
+	launchContext, err := launchContextFrom(launch, launchCapabilities{
+		resolvesWorkspacePath: headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder),
+		multiRepo:             headerReportsCapability(r, worker.CapabilityMultiRepo),
+	})
 	if err != nil {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
 		return
 	}
+	// A reconnecting worker (a restart, or a reopened session refreshing its
+	// scripts) reinstalls its Cleanup hook with these commands.
+	_, installedCleanup := launchContext.ProjectScripts()
+	s.recordInstalledCleanup(r, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, installedCleanup)
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerID:  claims.WorkerID,
 		Epoch:     claims.Epoch,
@@ -244,6 +267,29 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		SessionID: claims.SessionID,
 		Launch:    launchContext,
 	})
+}
+
+// installedCleanupRecorder is the optional Store capability that stores the
+// Cleanup commands a worker was given (postgres.Store.RecordInstalledCleanupCommands).
+type installedCleanupRecorder interface {
+	RecordInstalledCleanupCommands(ctx context.Context, orgID, sessionID, workerID string, epoch int64, commands []string) error
+}
+
+// recordInstalledCleanup stores the Cleanup commands a worker is being given
+// (each led by its time limit's marker when it sets one), which it installs as
+// its Cleanup hook's commands, so a Cleanup that runs
+// them after the project's config changed is read knowing the values they
+// assign to secret-named variables. A failure only loses that knowledge
+// (the project's current Cleanup is used instead) and never fails the
+// worker's connection.
+func (s *Server) recordInstalledCleanup(r *http.Request, orgID, sessionID, workerID string, epoch int64, commands []string) {
+	recorder, ok := s.store.(installedCleanupRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordInstalledCleanupCommands(r.Context(), orgID, sessionID, workerID, epoch, commands); err != nil {
+		s.logger.Warn("record the worker's cleanup commands", "error", err, "session_id", sessionID, "request_id", requestID(r))
+	}
 }
 
 // headerReportsCapability reports whether a worker request's
@@ -257,10 +303,20 @@ func headerReportsCapability(r *http.Request, capability string) bool {
 	return false
 }
 
+// launchCapabilities is what the worker a launch context is for reported it
+// can do.
+type launchCapabilities struct {
+	// resolvesWorkspacePath is whether the worker substitutes
+	// worker.WorkspacePathPlaceholder.
+	resolvesWorkspacePath bool
+	// multiRepo is whether the worker advertised worker.CapabilityMultiRepo.
+	multiRepo bool
+}
+
 // launchContextFrom projects a stored launch spec onto the wire type shared by
-// bootstrap and reconnect. resolvesWorkspacePath is whether the worker
-// substitutes worker.WorkspacePathPlaceholder.
-func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (worker.LaunchContext, error) {
+// bootstrap and reconnect, for a worker with the given capabilities.
+func launchContextFrom(launch domain.WorkerLaunch, capabilities launchCapabilities) (worker.LaunchContext, error) {
+	resolvesWorkspacePath := capabilities.resolvesWorkspacePath
 	var agentConfig domain.ProjectAgentConfig
 	if len(launch.AgentConfig) > 0 {
 		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
@@ -271,21 +327,31 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 	if err != nil {
 		return worker.LaunchContext{}, err
 	}
-	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig)
-	// Extra repos are project-level (chosen at project setup, stored on the
-	// project config), so every session of the project clones the same set.
-	// Decoded before the prompt is built so both the project context (which
-	// makes every role aware the project is multi-repo) and the worker's clone
-	// list draw from the same source.
+	// Each step's own time limit goes beside the commands, so a worker that
+	// predates per-step limits runs the plain commands with the default.
+	timedPostCreate, timedPreRemove := domain.ProjectScripts(launch.ProjectConfig, launch.RepositoryURL)
+	postCreate, postCreateTimeouts := domain.SplitTimedScriptCommands(timedPostCreate)
+	preRemove, preRemoveTimeouts := domain.SplitTimedScriptCommands(timedPreRemove)
+	// Additional repositories are project-level (stored on the project config),
+	// so every session of the project clones the same set, on every sandbox
+	// provider. Decoded before the prompt is built so both the project context
+	// (which makes every role aware the project is multi-repo) and the worker's
+	// clone list draw from the same source.
 	var extraRepos []worker.RepoRef
 	var promptExtras []roleprompt.RepoRef
-	if coderCfg, ok := domain.DecodeProjectCoderConfig(launch.ProjectConfig); ok && len(coderCfg.ExtraRepos) > 0 {
-		extraRepos = make([]worker.RepoRef, 0, len(coderCfg.ExtraRepos))
-		promptExtras = make([]roleprompt.RepoRef, 0, len(coderCfg.ExtraRepos))
-		for _, repo := range coderCfg.ExtraRepos {
+	if repos := domain.ProjectAdditionalRepos(launch.ProjectConfig); len(repos) > 0 {
+		extraRepos = make([]worker.RepoRef, 0, len(repos))
+		promptExtras = make([]roleprompt.RepoRef, 0, len(repos))
+		for _, repo := range repos {
 			extraRepos = append(extraRepos, worker.RepoRef{URL: repo.URL, Branch: repo.Branch})
-			promptExtras = append(promptExtras, roleprompt.RepoRef{URL: repo.URL, Branch: repo.Branch})
+			promptExtras = append(promptExtras, roleprompt.RepoRef{URL: repo.URL, Branch: repo.Branch, Dir: domain.RepoDirName(repo.URL)})
 		}
+	}
+	// Only a multi-repo worker honours the start folder; an older one always
+	// starts in the main checkout, so the prompt must not claim otherwise.
+	agentStartsIn := ""
+	if capabilities.multiRepo && domain.ProjectAgentStartsIn(launch.ProjectConfig) == domain.ProjectAgentStartsInParent {
+		agentStartsIn = domain.ProjectAgentStartsInParent
 	}
 	systemPrompt := roleprompt.Build(roleprompt.Config{
 		Role:          launch.Kind,
@@ -297,10 +363,13 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		// provider, the workspace user's home and a Coder connection's working
 		// directory) and substitutes it before launching the agent. An older
 		// worker shows the prompt as is, so it gets the path it always showed.
-		WorkspacePath:     workspacePathFor(resolvesWorkspacePath),
-		AgentRules:        agentRules,
-		OrchestratorRules: orchestratorRules,
-		ExtraRepos:        promptExtras,
+		WorkspacePath:       workspacePathFor(resolvesWorkspacePath),
+		AgentRules:          agentRules,
+		OrchestratorRules:   orchestratorRules,
+		ExtraRepos:          promptExtras,
+		AgentStartsInParent: agentStartsIn == domain.ProjectAgentStartsInParent,
+		Standalone:          domain.IsStandaloneRepositoryURL(launch.RepositoryURL),
+		MultiRepoWorker:     capabilities.multiRepo,
 	})
 	return worker.LaunchContext{
 		SessionID:       launch.SessionID,
@@ -323,9 +392,13 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		RepositoryURL:   launch.RepositoryURL,
 		DefaultBranch:   launch.DefaultBranch,
 		ExtraRepos:      extraRepos,
+		AgentStartsIn:   agentStartsIn,
 		SystemPrompt:    systemPrompt,
 		PostCreate:      postCreate,
 		PreRemove:       preRemove,
+
+		PostCreateTimeoutMinutes: postCreateTimeouts,
+		PreRemoveTimeoutMinutes:  preRemoveTimeouts,
 	}, nil
 }
 
@@ -385,6 +458,12 @@ func issuedWorkerScopes(ticketScopes []string, launch domain.WorkerLaunch) []str
 }
 
 type workerContextKey struct{}
+
+// workerAgentStartedStore is the optional Store capability that says whether
+// a worker epoch started its coding agent (agent.ready, or a claimed turn).
+type workerAgentStartedStore interface {
+	WorkerAgentStarted(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error)
+}
 
 // workerAuth authenticates a live worker. A valid signature is not enough: the
 // claimed epoch must still be the session's current one, so a worker that a
@@ -702,6 +781,7 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		Body:       input.Body,
 		HeadBranch: input.HeadBranch,
 		BaseBranch: input.BaseBranch,
+		Repository: strings.Trim(strings.TrimSpace(input.Repository), "/"),
 	}
 	// Prefer the GitHub App (checkout broker) to open the PR: it uses a fresh
 	// installation token that can't go stale. Fall back to the user's PAT only when
@@ -720,9 +800,12 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-			pr, err = s.patWrites.RaisePullRequest(
-				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
-			)
+			var cloneURL string
+			if cloneURL, err = s.patPullRequestCloneURL(r.Context(), claims, grant.CloneURL, raiseInput.Repository); err == nil {
+				pr, err = s.patWrites.RaisePullRequest(
+					r.Context(), claims.OrgID, claims.SessionID, cloneURL, grant.Token, raiseInput,
+				)
+			}
 		} else if s.checkoutBroker == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
 			return
@@ -794,9 +877,17 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-			pr, err = s.patWrites.ClaimPullRequest(
-				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
-			)
+			referenced, _, parseErr := githubapp.ParsePullRequestTarget(input.Reference)
+			var cloneURL string
+			if cloneURL, err = s.patPullRequestCloneURL(r.Context(), claims, grant.CloneURL, referenced); parseErr == nil && err == nil {
+				pr, err = s.patWrites.ClaimPullRequest(
+					r.Context(), claims.OrgID, claims.SessionID, cloneURL, grant.Token, input.Reference,
+				)
+			} else if parseErr != nil {
+				err = postgres.ErrInvalid
+			} else if errors.Is(err, postgres.ErrForbidden) {
+				err = postgres.ErrInvalid
+			}
 		} else if s.checkoutBroker == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
 			return
@@ -1061,7 +1152,23 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
 			return
 		}
-		outcome.Output = activitylog.Excerpt(outcome.Output, 2048)
+		// The same redaction as each step's events (worker.RedactScriptOutput).
+		outcome.Output = activitylog.Excerpt(worker.RedactScriptOutput(outcome.Output), 2048)
+		outcome.Command = activitylog.Truncate(worker.RedactScriptOutput(outcome.Command), 512)
+		outcome.Repository = activitylog.Truncate(outcome.Repository, 256)
+		outcome.Dir = activitylog.Truncate(outcome.Dir, 1024)
+		outcome.User = activitylog.Truncate(outcome.User, 128)
+		outcome.LogPath = activitylog.Truncate(outcome.LogPath, 1024)
+		outcome.Hint = activitylog.Truncate(outcome.Hint, 512)
+		if len(outcome.Groups) > 32 {
+			outcome.Groups = outcome.Groups[:32]
+		}
+		for index, group := range outcome.Groups {
+			outcome.Groups[index] = activitylog.Truncate(group, 64)
+		}
+		if !domain.ValidScriptStepTimeoutMinutes(outcome.TimeoutMinutes) {
+			outcome.TimeoutMinutes = 0
+		}
 		logArgs := []any{
 			"org_id", claims.OrgID, "session_id", claims.SessionID, "status", outcome.Status,
 			"step", outcome.Step, "exit_code", outcome.ExitCode, "duration_ms", outcome.DurationMS,
@@ -1069,11 +1176,55 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if outcome.Status == worker.SetupSucceeded {
 			s.logger.Info("project setup finished", logArgs...)
 		} else {
-			s.logger.Warn("project setup did not succeed", append(logArgs, "output", outcome.Output)...)
+			s.logger.Warn("project setup did not succeed", append(logArgs,
+				"command", outcome.Command, "repository", outcome.Repository, "dir", outcome.Dir,
+				"user", outcome.User, "groups", strings.Join(outcome.Groups, " "),
+				"log", outcome.LogPath, "hint", outcome.Hint, "output", outcome.Output)...)
 		}
 		payload, err := json.Marshal(outcome)
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.ScriptStepEventType:
+		// A worker reports only its Setup steps: Cleanup runs while the
+		// control plane deletes the workspace, which reports those itself.
+		// The step's output is redacted again and bounded before it is kept.
+		var step worker.ScriptStepEvent
+		if err := json.Unmarshal(input.Payload, &step); err != nil ||
+			!worker.ValidScriptStepEvent(step) || step.Phase != worker.ScriptPhaseSetup {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")
+			return
+		}
+		// A worker runs Setup before its coding agent starts and never again
+		// in the same epoch, so a running step from an epoch whose agent
+		// started (it reported agent.ready, or claimed a Chat turn) is not the
+		// worker's (the agent can reach the worker's credential): it would keep
+		// the session reading as working. A step's final event is still taken,
+		// as one sent just before the agent started may land just after.
+		if step.Status == worker.ScriptStepRunning {
+			if started, ok := s.store.(workerAgentStartedStore); ok {
+				agentStarted, err := started.WorkerAgentStarted(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+				if err != nil {
+					s.writeWorkerStoreError(w, r, err)
+					return
+				}
+				if agentStarted {
+					writeError(w, r, http.StatusConflict, "AGENT_ALREADY_STARTED",
+						"This worker's coding agent already started, so its Setup is no longer running.")
+					return
+				}
+			}
+		}
+		// When the step last wrote output, by this control plane's clock.
+		step = worker.StampScriptStepOutputAt(step, time.Now())
+		payload, err := json.Marshal(worker.SanitizeScriptStepEvent(step))
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")
 			return
 		}
 		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
@@ -1094,8 +1245,12 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if startup.Status == worker.WorkspaceStartupReady {
 			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
 		} else {
-			message := activitylog.Truncate(activitylog.Redact(strings.TrimSpace(startup.Message)), 1024)
-			detail := activitylog.Excerpt(startup.Detail, 4096)
+			// The script redaction: a Setup failure's detail is its output.
+			// RedactScriptOutput strips escapes and control characters before
+			// it masks, so a colour code between a secret's name and its value
+			// never hides the pair.
+			message := activitylog.Truncate(worker.RedactScriptOutput(strings.TrimSpace(startup.Message)), 1024)
+			detail := activitylog.Excerpt(worker.RedactScriptOutput(startup.Detail), 4096)
 			s.logger.Warn("workspace startup failed in the worker",
 				"org_id", claims.OrgID, "session_id", claims.SessionID, "code", startup.Code, "message", message)
 			err = s.store.RecordWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID,
@@ -1386,4 +1541,46 @@ func workspacePathFor(resolvesWorkspacePath bool) string {
 		return worker.WorkspacePathPlaceholder
 	}
 	return worker.LegacyWorkspacePath
+}
+
+// workerExtraReposStore reads the additional repositories a session's project
+// declares (postgres.Store.WorkerSessionExtraRepos).
+type workerExtraReposStore interface {
+	WorkerSessionExtraRepos(ctx context.Context, orgID, sessionID string) ([]domain.RepoRef, error)
+}
+
+// patPullRequestCloneURL is the repository a personal-access-token pull
+// request write targets: the session's main repository (primaryCloneURL) when
+// requested is empty or names it, otherwise the project's additional
+// repository requested names (owner/name). Any other repository is
+// postgres.ErrForbidden: a session only opens pull requests in repositories it
+// checked out.
+func (s *Server) patPullRequestCloneURL(ctx context.Context, claims worker.Claims, primaryCloneURL, requested string) (string, error) {
+	if domain.IsStandaloneRepositoryURL(primaryCloneURL) {
+		// A standalone project has no repository to open pull requests in.
+		return "", postgres.ErrForbidden
+	}
+	requested = strings.Trim(strings.TrimSpace(requested), "/")
+	if requested == "" {
+		return primaryCloneURL, nil
+	}
+	if _, primary, err := domain.CanonicalGitHubRepoURL(strings.TrimSuffix(primaryCloneURL, ".git")); err == nil &&
+		strings.EqualFold(primary, requested) {
+		return primaryCloneURL, nil
+	}
+	store, ok := s.store.(workerExtraReposStore)
+	if !ok {
+		return "", postgres.ErrForbidden
+	}
+	extras, err := store.WorkerSessionExtraRepos(ctx, claims.OrgID, claims.SessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, extra := range extras {
+		canonical, fullName, err := domain.CanonicalGitHubRepoURL(extra.URL)
+		if err == nil && strings.EqualFold(fullName, requested) {
+			return canonical + ".git", nil
+		}
+	}
+	return "", postgres.ErrForbidden
 }

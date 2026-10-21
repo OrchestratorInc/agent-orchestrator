@@ -104,7 +104,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	cmd = append(cmd, binary)
+	// Keep the release immutable while AO owns refresh and retention.
+	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
 	if agentName := copilotAgentName(cfg.SessionID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
@@ -149,7 +150,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	cmd = append(cmd, binary)
+	// Keep the release immutable while AO owns refresh and retention.
+	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	// Deliberately does not forward cfg.Config.Model: --model + --resume
 	// composition is unverified against a real copilot install (see #2895
@@ -174,18 +176,22 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 
 // ResolveCopilotBinary returns the path to the copilot binary on this machine,
 // searching PATH then a handful of well-known install locations (npm global,
-// Homebrew, the VS Code extension's bundled CLI). When the resolved path is the
-// npm-loader shim, the platform-native binary is returned instead. This resolver
-// stays hand-rolled (rather than binaryutil.ResolveBinary) because of that
-// native-loader indirection.
+// Homebrew). When the resolved path is the npm-loader shim, the platform-native
+// binary is returned instead. This resolver stays hand-rolled (rather than
+// binaryutil.ResolveBinary) because of that native-loader indirection.
+//
+// VS Code's launcher is never an answer: see isVSCodeCopilotLauncher.
 func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if managed, ok := binaryutil.ManagedBinary("copilot"); ok {
+		return managed, nil
+	}
 
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"copilot.cmd", "copilot.exe", "copilot"} {
-			if path, err := exec.LookPath(name); err == nil && path != "" {
+			if path := lookCopilotOnPath(name); path != "" {
 				return path, nil
 			}
 			if err := ctx.Err(); err != nil {
@@ -216,7 +222,7 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
 	}
 
-	if path, err := exec.LookPath("copilot"); err == nil && path != "" {
+	if path := lookCopilotOnPath("copilot"); path != "" {
 		if native := copilotNativeBinaryForLoader(path); native != "" {
 			return native, nil
 		}
@@ -230,7 +236,6 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 			filepath.Join(home, ".npm", "bin", "copilot"),
 			filepath.Join(home, ".local", "bin", "copilot"),
 			filepath.Join(home, ".copilot", "bin", "copilot"),
-			filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli", "copilot"),
 		)
 		candidates = append(candidates, binaryutil.UnixPackageManagerBinCandidates(home, "copilot")...)
 		nodeManagerCandidates, err := binaryutil.UnixNodeManagerBinCandidates(ctx, home, "copilot")
@@ -241,7 +246,7 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	}
 
 	for _, candidate := range candidates {
-		if hookutil.IsExecutableFile(candidate) {
+		if hookutil.IsExecutableFile(candidate) && !isVSCodeCopilotLauncher(candidate) {
 			if native := copilotNativeBinaryForLoader(candidate); native != "" {
 				return native, nil
 			}
@@ -253,6 +258,43 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	}
 
 	return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
+}
+
+// vsCodeCopilotLauncherScript sits beside the `copilot` launcher VS Code's
+// Copilot Chat extension puts on its terminals' PATH.
+const vsCodeCopilotLauncherScript = "copilotCLIShim.js"
+
+// isVSCodeCopilotLauncher reports whether path is VS Code's launcher, which only
+// forwards to a `copilot` elsewhere on PATH and, with none, stops at "Install
+// GitHub Copilot CLI? [y/N]". It never shows that the CLI is installed.
+func isVSCodeCopilotLauncher(path string) bool {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	_, err := os.Stat(filepath.Join(filepath.Dir(path), vsCodeCopilotLauncherScript))
+	return err == nil
+}
+
+// lookCopilotOnPath is exec.LookPath that passes over VS Code's launcher and
+// keeps searching the rest of PATH for the CLI itself.
+func lookCopilotOnPath(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil || path == "" {
+		return ""
+	}
+	if !isVSCodeCopilotLauncher(path) {
+		return path
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate, err := exec.LookPath(filepath.Join(dir, name))
+		if err == nil && candidate != "" && !isVSCodeCopilotLauncher(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func copilotNativeBinaryForLoader(path string) string {
@@ -304,6 +346,13 @@ func copilotSystemPromptText(inline, file string) (string, error) {
 	return strings.TrimRight(string(data), "\n"), nil
 }
 
+// AgentProfileName is the per-session custom-agent profile AO installs for a
+// session with standing instructions, or "" when there are none. The terminal
+// launch selects it with --agent; Chat selects the same profile over ACP.
+func AgentProfileName(sessionID, systemPrompt, systemPromptFile string) string {
+	return copilotAgentName(sessionID, systemPrompt, systemPromptFile)
+}
+
 func copilotAgentName(sessionID, inlinePrompt, promptFile string) string {
 	if strings.TrimSpace(sessionID) == "" {
 		return ""
@@ -331,15 +380,23 @@ var copilotAgentNameReplacer = strings.NewReplacer(
 //	auto               -> --allow-all-tools (auto-approve every tool, still scoped paths/urls)
 //	bypass-permissions -> --allow-all (full bypass: tools, paths, urls)
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
+	*cmd = append(*cmd, ApprovalArgs(permissions)...)
+}
+
+// ApprovalArgs returns the Copilot CLI approval flags for one AO permission
+// mode, so the terminal and Chat launches share one answer to what each mode
+// allows.
+func ApprovalArgs(permissions ports.PermissionMode) []string {
 	switch ports.NormalizePermissionMode(permissions) {
-	case ports.PermissionModeDefault:
-		// No flag: defer to the user's ~/.copilot config / interactive prompts.
 	case ports.PermissionModeAcceptEdits:
-		*cmd = append(*cmd, "--allow-tool", "write")
+		return []string{"--allow-tool", "write"}
 	case ports.PermissionModeAuto:
-		*cmd = append(*cmd, "--allow-all-tools")
+		return []string{"--allow-all-tools"}
 	case ports.PermissionModeBypassPermissions:
-		*cmd = append(*cmd, "--allow-all")
+		return []string{"--allow-all"}
+	default:
+		// No flag: defer to the user's ~/.copilot config / interactive prompts.
+		return nil
 	}
 }
 
@@ -362,4 +419,12 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if trimmed := strings.TrimSpace(cfg.Model); trimmed != "" {
 		*cmd = append(*cmd, "--model", trimmed)
 	}
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

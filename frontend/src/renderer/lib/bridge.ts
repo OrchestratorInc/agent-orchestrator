@@ -65,6 +65,26 @@ export const aoBridge: AoBridge =
 				}
 			},
 			readText: async () => (navigator.clipboard?.readText ? navigator.clipboard.readText() : ""),
+			writeImage: async (bytes: Uint8Array) => {
+				await navigator.clipboard.write([new ClipboardItem({ "image/png": new Blob([new Uint8Array(bytes)], { type: "image/png" }) })]);
+			},
+		},
+		chatImage: {
+			fetch: async (url: string) => {
+				const response = await fetch(url);
+				if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+				const blob = await response.blob();
+				return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
+			},
+			save: async ({ name, bytes }: { name: string; bytes: Uint8Array }) => {
+				const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+				const link = document.createElement("a");
+				link.href = url;
+				link.download = name;
+				link.click();
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+				return true;
+			},
 		},
 		daemon: {
 			getStatus: async () => ({
@@ -96,17 +116,21 @@ export const aoBridge: AoBridge =
 		},
 		telemetry: {
 			getBootstrap: async () => null,
+			getAnalyticsOptOut: async () => false,
+			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+			onAnalyticsOptOut: () => () => undefined,
+			setCloudUser: async () => false,
+			getGithubLogin: async () => null,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: false,
 			reconnectRuntime: async () => undefined,
-			getRuntimeState: async () => ({ connected: false }),
+			getRuntimeState: async () => ({ connected: false, connecting: false, rejected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",
@@ -318,8 +342,11 @@ export const aoBridge: AoBridge =
 			remove: async () => undefined,
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
+			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+			agentBrowserUrl: async () => "",
+			externalUrl: async (_hostId: string, url: string) => url,
 		},
 		cloud: {
 			getSession: async () => null,
@@ -347,5 +374,6 @@ export const aoBridge: AoBridge =
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			agentBrowserUrl: async () => "",
 		},
 	} satisfies AoBridge);

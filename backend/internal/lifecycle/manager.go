@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
@@ -25,7 +24,7 @@ type sessionStore interface {
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	// UpdateSessionFromActivitySignal is a narrow, owner-generation-fenced
-	// write. It returns false when a concurrent lifecycle/agent-switch boundary
+	// write. It returns false when a concurrent lifecycle/controller boundary
 	// made the reducer's previously read session stale.
 	UpdateSessionFromActivitySignal(ctx context.Context, rec domain.SessionRecord, expectedRevision int64) (bool, error)
 	// UpdateSessionArtifactOutput is a narrow write touching only
@@ -105,22 +104,6 @@ type preparedChatSpawnStore interface {
 		*domain.ChatProviderHandoff,
 		func(context.Context) error,
 	) error
-}
-
-// agentSwitchSourceStopStore and agentSwitchTargetActivationStore are the
-// atomic persistence primitives used at the two agent-switch ownership
-// boundaries. They remain optional so focused lifecycle reducer fakes do not
-// need to implement the agent-switch saga; production SQLite implements both.
-type agentSwitchSourceStopStore interface {
-	ConfirmAgentSwitchSourceStopped(context.Context, domain.AgentSwitchSourceStopConfirmation) (bool, error)
-}
-
-type agentSwitchTargetActivationStore interface {
-	ActivateAgentSwitchTarget(context.Context, domain.AgentSwitchTargetActivation) (bool, error)
-}
-
-type agentSwitchChatTargetActivationStore interface {
-	ActivateChatAgentSwitchTarget(context.Context, domain.AgentSwitchChatTargetActivation) (bool, error)
 }
 
 // notificationSink is the optional lifecycle-to-notification-producer boundary.
@@ -393,8 +376,7 @@ func (m *Manager) CancelLaunch(id domain.SessionID, launchID string) {
 // ReleaseLaunch publishes that the caller has durably committed the prepared
 // generation. Hooks waiting behind PrepareLaunch may now re-read the session
 // row and pass normal generation fencing. Unlike MarkSpawned, this does not
-// rewrite session ownership; agent switching commits that ownership together
-// with its saga state in the AgentSwitchStore transaction.
+// rewrite session ownership.
 func (m *Manager) ReleaseLaunch(id domain.SessionID, launchID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -483,6 +465,12 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 			next.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: timeOr(f.ObservedAt, now)}
 			delete(m.flights, id)
 			return next, true
+		}
+		// AO destroyed this launch's terminal on purpose and kept the session
+		// (an agent exit); Resume builds a new one. Its death is not a crash.
+		if cur.Activity.State == domain.ActivityExited && currentLaunch != "" &&
+			cur.Metadata.RuntimeReleasedLaunchID == currentLaunch {
+			return cur, false
 		}
 		if !runtimeClearlyDead(f, cur.Activity, now, m.window) {
 			return cur, false
@@ -586,6 +574,8 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 		s.TranscriptPath = ""
 		s.LatestUserPrompt = ""
 		s.LatestAssistantUpdate = ""
+		s.FinalAssistantMessage = ""
+		s.TurnUserRequest = ""
 		s.ProviderTurnID = ""
 	}
 	if !s.ConversationCheckpointOrigin.Valid() {
@@ -607,39 +597,8 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 		s.LatestAssistantUpdate = ""
 		s.ProviderTurnID = ""
 	}
-	// A response or Stop hook produced by AO's optional source handoff request
-	// may contain last_assistant_message without echoing the internal prompt.
-	// From collection through source teardown, do not let that coordination
-	// response replace the latest user-facing assistant update used by the
-	// target continuation. The semantic outcome may already be received,
-	// rejected, timed out, or failed before the provider emits its final Stop
-	// hook. not_attempted/unavailable do not prove an internal request landed,
-	// so a legitimate source update remains user-facing in those states.
-	if s.LatestAssistantUpdate != "" {
-		if switchStore, ok := m.store.(ports.AgentSwitchStore); ok {
-			if active, found, err := switchStore.GetActiveAgentSwitch(ctx, id); err == nil && found {
-				internalRequestMayHaveLanded := false
-				switch active.AgentHandoffStatus {
-				case domain.AgentHandoffRequested, domain.AgentHandoffReceived, domain.AgentHandoffTimedOut,
-					domain.AgentHandoffFailed, domain.AgentHandoffRejected:
-					internalRequestMayHaveLanded = true
-				}
-				if internalRequestMayHaveLanded {
-					switch active.State {
-					case domain.AgentSwitchPreparingHandoff, domain.AgentSwitchStoppingSource:
-						s.LatestAssistantUpdate = ""
-					}
-				}
-			}
-		}
-	}
 	if !s.Valid && s.SubagentID == "" && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
 		return nil
-	}
-	if s.LaunchID != "" {
-		if err := m.stagePendingAgentSwitchNativeMetadata(ctx, id, s); err != nil {
-			return err
-		}
 	}
 	var intent *ports.NotificationIntent
 	m.mu.Lock()
@@ -658,6 +617,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 		}
 	}
 	projectionAttempts := 0
+	terminalTurnRecorded := false
 	originalSignal := s
 retryProjection:
 	s = originalSignal
@@ -738,6 +698,13 @@ retryProjection:
 		!rec.Metadata.NativeIdentityObservedAt.IsZero() && !s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt) {
 		m.mu.Unlock()
 		return nil
+	}
+	// Every ownership fence, the native thread's included, has accepted the
+	// signal. A revision retry reduces the same signal again, so the turn is
+	// recorded once.
+	if !terminalTurnRecorded && mode == domain.SessionModeTUI {
+		terminalTurnRecorded = true
+		m.recordTerminalTurn(ctx, rec, s, now)
 	}
 	resetConversationCheckpoint :=
 		nativeIdentityChanged ||
@@ -880,6 +847,16 @@ retryProjection:
 			checkpoint.LatestAssistantUpdateAt = timeOr(s.Timestamp, now)
 			checkpoint.ConversationCheckpointState = domain.ConversationCheckpointComplete
 		} else if ownerGeneration != "" && checkpointNativeID != "" {
+			if rec.Harness == domain.HarnessAgy && mode == domain.SessionModeTUI {
+				// Antigravity's documented PreInvocation and Stop hooks carry the
+				// conversation id but no user prompt or turn identity. Its Stop
+				// cannot prove a new AO checkpoint boundary, so retain the previous
+				// coherent checkpoint and let Agy's native ACP history replay prove
+				// the complete conversation at handoff. Marking this as an unresolved
+				// boundary would permanently reject every TUI-to-Chat resume.
+				s.LatestAssistantUpdate = ""
+				break
+			}
 			// A scoped Stop without its prompt boundary proves some completed turn
 			// exists, but neither text nor arrival order can identify it safely in a
 			// provider replay: repeated answers collide, and a delayed prior Stop may
@@ -1014,7 +991,15 @@ retryProjection:
 	// no_signal display status). Hook deliveries are best-effort, so the
 	// first to ARRIVE may match the seeded state — e.g. a turn's "active"
 	// POST is lost and its Stop hook lands idle on the idle-seeded row.
-	if sameState && !rec.FirstSignalAt.IsZero() {
+	// Some native CLIs only emit a post-agent boundary for tool-free turns.
+	// A scoped, newer completion is fresh idle proof even when the durable
+	// state stayed idle; otherwise terminal input permanently outlives it.
+	// Keep ordinary same-state notifications and unowned callbacks deduplicated.
+	completedIdleTurn := s.State == domain.ActivityIdle && s.Event == "post-agent" &&
+		s.LaunchID != "" && s.LaunchID == rec.Metadata.RuntimeLaunchID &&
+		s.AgentSessionID != "" && s.AgentSessionID == rec.Metadata.AgentSessionID &&
+		act.LastActivityAt.After(rec.Activity.LastActivityAt)
+	if sameState && !rec.FirstSignalAt.IsZero() && !completedIdleTurn {
 		if metadataChanged || s.Event == "user-prompt-submit" {
 			rec.UpdatedAt = now
 			applied, retry, err := project(rec)
@@ -1030,7 +1015,7 @@ retryProjection:
 				return nil
 			}
 			m.mu.Unlock()
-			return m.acknowledgeAgentSwitchTarget(ctx, id, s, now)
+			return nil
 		}
 		m.mu.Unlock()
 		return nil
@@ -1077,8 +1062,15 @@ retryProjection:
 	resolutions := needsInputResolutions(rec, next, now)
 	waitingEvents := m.waitingInputEvents(next, prevState, prevAt, now)
 	m.mu.Unlock()
-	if err := m.acknowledgeAgentSwitchTarget(ctx, id, s, now); err != nil {
-		return err
+	if prevState != domain.ActivityIdle && next.Activity.State == domain.ActivityIdle {
+		m.operationGateMu.RLock()
+		gate := m.operationGate
+		m.operationGateMu.RUnlock()
+		// A session manager that moves sessions to a new release hears of every
+		// turn that ends. It must not block.
+		if ender, ok := gate.(interface{ SessionTurnEnded(domain.SessionRecord) }); ok {
+			ender.SessionTurnEnded(next)
+		}
 	}
 	for _, ev := range waitingEvents {
 		m.emitTelemetry(ctx, ev)
@@ -1086,98 +1078,6 @@ retryProjection:
 	m.emitNotification(ctx, intent)
 	m.resolveNotifications(ctx, resolutions...)
 	return nil
-}
-
-// stagePendingAgentSwitchNativeMetadata persists provider-assigned startup
-// identity while a target hook is waiting behind PrepareLaunch. It deliberately
-// updates only the switch's retained native-session row, never the source-owned
-// session row. Once ownership transfers, ReleaseLaunch lets the same hook apply
-// its normal activity/metadata update. If the daemon crashes first, recovery
-// can still prove the target conversation is resumable.
-func (m *Manager) stagePendingAgentSwitchNativeMetadata(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
-	if s.AgentSessionID == "" && s.TranscriptPath == "" {
-		return nil
-	}
-	store, ok := m.store.(ports.AgentSwitchStore)
-	if !ok {
-		return nil
-	}
-	sw, found, err := store.GetActiveAgentSwitch(ctx, id)
-	if err != nil {
-		return err
-	}
-	if !found || sw.State != domain.AgentSwitchStartingTarget || string(sw.TargetGenerationID) != s.LaunchID || sw.TargetNativeSessionRef == nil {
-		return nil
-	}
-	if s.ExpectedHarness != "" && s.ExpectedHarness != sw.TargetHarness {
-		return nil
-	}
-	native, found, err := store.GetAgentNativeSession(ctx, *sw.TargetNativeSessionRef)
-	if err != nil {
-		return err
-	}
-	if !found || native.AOSessionID != id || native.Harness != sw.TargetHarness || native.LastGenerationID != sw.TargetGenerationID {
-		return nil
-	}
-	changed := false
-	if s.AgentSessionID != "" && native.NativeSessionID != s.AgentSessionID {
-		if native.NativeSessionID != "" {
-			return fmt.Errorf("lifecycle: target native session identity changed from %q to %q", native.NativeSessionID, s.AgentSessionID)
-		}
-		native.NativeSessionID = s.AgentSessionID
-		changed = true
-	}
-	if s.TranscriptPath != "" && native.TranscriptPath != s.TranscriptPath {
-		native.TranscriptPath = s.TranscriptPath
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	updated, err := store.UpdateAgentNativeSession(ctx, native, sw.TargetGenerationID)
-	if err != nil {
-		return err
-	}
-	if !updated {
-		return errors.New("lifecycle: target native session metadata changed concurrently")
-	}
-	return nil
-}
-
-func (m *Manager) acknowledgeAgentSwitchTarget(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal, at time.Time) error {
-	if !signal.Valid || signal.State != domain.ActivityActive || signal.Event != "user-prompt-submit" || signal.LaunchID == "" {
-		return nil
-	}
-	store, ok := m.store.(ports.AgentSwitchStore)
-	if !ok {
-		return nil
-	}
-	sw, found, err := store.GetActiveAgentSwitch(ctx, id)
-	if err != nil {
-		return fmt.Errorf("lifecycle: read active agent switch acknowledgement for %s: %w", id, err)
-	}
-	if !found || sw.State != domain.AgentSwitchDelivering {
-		return nil
-	}
-	changed, ackErr := store.AcknowledgeAgentSwitchTarget(ctx, sw.ID, id, domain.AgentGenerationID(signal.LaunchID), at)
-	if changed && ackErr == nil {
-		return nil
-	}
-	current, found, readErr := store.GetAgentSwitch(ctx, sw.ID)
-	if readErr != nil {
-		return ownership.Own(fmt.Errorf("lifecycle: read back agent switch %s acknowledgement: %w", sw.ID, readErr), ownership.OwnerAgentSwitchSaga)
-	}
-	if !found || current.State.Terminal() || current.State != domain.AgentSwitchDelivering ||
-		current.TargetGenerationID != domain.AgentGenerationID(signal.LaunchID) || current.TargetAcknowledgedAt != nil {
-		return nil
-	}
-	if ackErr != nil {
-		return ownership.Own(fmt.Errorf("lifecycle: acknowledge agent switch %s target: %w", sw.ID, ackErr), ownership.OwnerAgentSwitchSaga)
-	}
-	if changed {
-		return ownership.Own(fmt.Errorf("lifecycle: acknowledge agent switch %s target: commit was not observable", sw.ID), ownership.OwnerAgentSwitchSaga)
-	}
-	return ownership.Own(fmt.Errorf("lifecycle: acknowledge agent switch %s target: changed=false with unchanged durable predicate", sw.ID), ownership.OwnerAgentSwitchSaga)
 }
 
 // toolFlight tracks one session's in-flight tool executions and the pending
@@ -1288,7 +1188,7 @@ func cursorResolvedExecutionKey(s ports.ActivitySignal) (string, bool) {
 // gone: a definitive permission reply, a new prompt, or the end of the turn or
 // session. Generic active/tool events remain insufficient to clear blocked.
 func isTurnBoundaryEvent(event string) bool {
-	return event == "user-prompt-submit" || event == "stop" || event == "session-end" ||
+	return event == "user-prompt-submit" || event == "stop" || event == "stop-failure" || event == "interrupt" || event == "session-end" ||
 		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved" ||
 		event == "liveness-probe"
 }
@@ -1781,55 +1681,6 @@ func (m *Manager) changeControllerEpoch(
 	}
 	m.resolveNotifications(ctx, resolutions...)
 	return true, nil
-}
-
-// ConfirmAgentSwitchSourceStopped records that the source process is gone and
-// moves the switch saga across the source-stop boundary in the same store
-// transaction. Session Manager coordinates the process; Lifecycle Manager owns
-// the durable activity-state write.
-func (m *Manager) ConfirmAgentSwitchSourceStopped(
-	ctx context.Context,
-	confirmation domain.AgentSwitchSourceStopConfirmation,
-) (bool, error) {
-	writer, ok := m.store.(agentSwitchSourceStopStore)
-	if !ok {
-		return false, fmt.Errorf("lifecycle: agent-switch source-stop persistence is unavailable")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return writer.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-
-// ActivateAgentSwitchTarget atomically transfers the session owner to the
-// target process and advances the switch saga. Keeping this command on
-// Lifecycle Manager preserves the canonical write boundary without splitting
-// the store's all-or-nothing transaction.
-func (m *Manager) ActivateAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchTargetActivation,
-) (bool, error) {
-	writer, ok := m.store.(agentSwitchTargetActivationStore)
-	if !ok {
-		return false, fmt.Errorf("lifecycle: agent-switch target activation persistence is unavailable")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return writer.ActivateAgentSwitchTarget(ctx, activation)
-}
-
-// ActivateChatAgentSwitchTarget atomically transfers a stopped Chat session
-// from the fenced source generation to the structured target controller.
-func (m *Manager) ActivateChatAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchChatTargetActivation,
-) (bool, error) {
-	writer, ok := m.store.(agentSwitchChatTargetActivationStore)
-	if !ok {
-		return false, fmt.Errorf("lifecycle: Chat agent-switch target activation persistence is unavailable")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return writer.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 
 // MarkTerminated marks a session terminated. Runtime/workspace teardown is the

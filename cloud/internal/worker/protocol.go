@@ -46,9 +46,15 @@ type LaunchContext struct {
 	DeniedCommands  []string                  `json:"deniedCommands"`
 	RepositoryURL   string                    `json:"repositoryUrl"`
 	DefaultBranch   string                    `json:"defaultBranch"`
-	// ExtraRepos are additional repositories the worker clones alongside the
-	// primary repo (multi-repo dev kit). Empty for a single-repo session.
+	// ExtraRepos are the project's additional repositories, which the worker
+	// clones beside the main repository's checkout (domain.RepoDirName) and
+	// checks out on the session branch. Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
+	// AgentStartsIn is where the coding agent starts: "" or
+	// domain.ProjectAgentStartsInRepository for the main repository's
+	// checkout, domain.ProjectAgentStartsInParent for the folder holding every
+	// repository's checkout.
+	AgentStartsIn string `json:"agentStartsIn,omitempty"`
 	// SystemPrompt carries control-plane-authored project context and rules. It
 	// remains separate from Prompt, which is the user's visible task input.
 	SystemPrompt string `json:"systemPrompt"`
@@ -58,6 +64,50 @@ type LaunchContext struct {
 	// Cleanup runs before the workspace is deleted.
 	PostCreate []string `json:"postCreate,omitempty"`
 	PreRemove  []string `json:"preRemove,omitempty"`
+	// PostCreateTimeoutMinutes and PreRemoveTimeoutMinutes are each Setup and
+	// Cleanup command's own time limit in minutes, by index; 0 or a missing
+	// entry is the kind's default (domain.DefaultSetupStepTimeoutMinutes or
+	// domain.DefaultCleanupStepTimeoutMinutes). Absent when no step sets its
+	// own. A worker that predates per-step limits ignores them and gives every
+	// step its own default; a worker given none (an older control plane) gives
+	// every step the kind's default.
+	PostCreateTimeoutMinutes []int `json:"postCreateTimeoutMinutes,omitempty"`
+	PreRemoveTimeoutMinutes  []int `json:"preRemoveTimeoutMinutes,omitempty"`
+}
+
+// ProjectScripts are the launch's Setup and Cleanup commands, each led by its
+// time limit's marker when it sets one (domain.TimedScriptCommand), as
+// SetupRunner.Run and WriteCleanupHook take them.
+func (l LaunchContext) ProjectScripts() (postCreate, preRemove []string) {
+	return domain.JoinTimedScriptCommands(l.PostCreate, l.PostCreateTimeoutMinutes),
+		domain.JoinTimedScriptCommands(l.PreRemove, l.PreRemoveTimeoutMinutes)
+}
+
+// Error codes of the interface notice a session moved off Chat at its start
+// carries (POST /worker/interface/chat-start-fallback and the control plane's
+// own move for a worker without CapabilityChatStart).
+const (
+	// ChatStartUnsupported: the session's worker predates CapabilityChatStart,
+	// so it cannot set up Chat for Claude (the control plane's move, for a
+	// Claude session only).
+	ChatStartUnsupported = "CHAT_START_UNSUPPORTED"
+	// ChatStartAdapterUnavailable: Claude's Chat controller needs the Claude
+	// ACP adapter, which the workspace lacks and the worker could not install
+	// in time (no npm, an install that failed, or one still running).
+	ChatStartAdapterUnavailable = "CHAT_ADAPTER_UNAVAILABLE"
+)
+
+// ChatStartFallbackRequest is a worker reporting it cannot start its
+// session's Chat controller, for the reason Code names.
+type ChatStartFallbackRequest struct {
+	Code string `json:"code"`
+}
+
+// ChatStartFallbackResponse says whether the session moved to the TUI. A
+// session the person switched to Chat does not move, and its worker stays on
+// Chat.
+type ChatStartFallbackResponse struct {
+	MovedToTUI bool `json:"movedToTui"`
 }
 
 // RepoRef is one additional repository the worker clones beside the primary
@@ -127,6 +177,10 @@ type RaisePullRequestRequest struct {
 	Body       string `json:"body"`
 	HeadBranch string `json:"headBranch"`
 	BaseBranch string `json:"baseBranch,omitempty"`
+	// Repository is the owner/name of the project repository the branch was
+	// pushed to; empty means the main repository. Any other value must be one
+	// of the project's additional repositories.
+	Repository string `json:"repository,omitempty"`
 }
 
 // RaisePullRequestResponse describes the pull request the control plane

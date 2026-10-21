@@ -7,17 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
-
-// orgBillingStandingStore reads an organization's plan and grandfathered
-// status for domain.BillingMode. The Postgres store implements it; a store
-// without it reports no plan and no grandfathering.
-type orgBillingStandingStore interface {
-	OrgBillingStanding(ctx context.Context, principal domain.Principal, orgID string) (string, bool, error)
-}
 
 // orgCapabilities returns the effective entitlement flags for one organization.
 // The token's WorkOS organization metadata (principal.OrgCapabilities) describes
@@ -33,31 +29,42 @@ func (s *Server) orgCapabilities(principal domain.Principal, orgID string) []str
 	return s.defaultOrgCapabilities
 }
 
-// orgBillingArrangement returns the organization's billing arrangement
-// (domain.OrgBillingContract or domain.OrgBillingSelfServe), with the same
-// scoping rule as orgCapabilities.
-func (s *Server) orgBillingArrangement(principal domain.Principal, orgID string) string {
-	if orgID != "" && orgID == principal.TeamOrgID && principal.OrgBilling != "" {
-		return principal.OrgBilling
-	}
-	if s.defaultOrgBilling != "" {
-		return s.defaultOrgBilling
-	}
-	return domain.OrgBillingSelfServe
-}
-
 // orgAllowsProvider reports whether an organization may use the given sandbox
-// provider. A provider that is not capability-gated (see
-// AO_CLOUD_CAPABILITY_GATED_PROVIDERS) is always allowed; a gated provider
-// requires the organization to hold a capability of the same name (see
-// orgCapabilities). With no gated providers configured, every provider is
-// allowed and behavior is unchanged. It does not check that the deployment
-// offers the provider; providersForOrg does both.
+// provider. Coder and Freestyle are open to every organization: each picks its
+// default in the desktop's settings (putOrgSandboxProvider), and plans meter
+// both (sandboxBilledTx). An organization with the coder capability starts on
+// Coder and runs it free, and may still buy Freestyle on a plan. Any other
+// provider keeps the capability gate: when it is listed in AO_CLOUD_CAPABILITY_GATED_PROVIDERS, the
+// organization must hold a capability of the same name (see orgCapabilities).
+// It does not check that the deployment offers the provider; providersForOrg
+// does both.
 func (s *Server) orgAllowsProvider(principal domain.Principal, orgID, provider string) bool {
+	if provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
+		return true
+	}
 	if !s.capabilityGatedProviders[provider] {
 		return true
 	}
 	return slices.Contains(s.orgCapabilities(principal, orgID), provider)
+}
+
+// orgHasCoderCapability reports whether an organization holds the coder
+// capability: WorkOS organization metadata capabilities=coder, or the
+// deployment defaults (AO_CLOUD_DEFAULT_ORG_CAPABILITIES). Such an organization
+// starts on Coder and runs it free of any plan. It reads the capability alone,
+// never the capability gate, so emptying AO_CLOUD_CAPABILITY_GATED_PROVIDERS
+// cannot make Coder free for everyone.
+func (s *Server) orgHasCoderCapability(principal domain.Principal, orgID string) bool {
+	return slices.Contains(s.orgCapabilities(principal, orgID), sandbox.ProviderCoder)
+}
+
+// orgHasCustomCoder reports whether the organization may connect its own Coder
+// deployment: this deployment offers Coder, and the organization holds the coder
+// capability or the deployment does not gate coder (a self-hosted control plane
+// without WorkOS capabilities keeps the page, as before).
+func (s *Server) orgHasCustomCoder(principal domain.Principal, orgID string) bool {
+	return slices.Contains(s.availableSandboxProviders, sandbox.ProviderCoder) &&
+		(!s.capabilityGatedProviders[sandbox.ProviderCoder] || s.orgHasCoderCapability(principal, orgID))
 }
 
 // providersForOrg is the organization's effective provider list: what this
@@ -80,11 +87,39 @@ func (s *Server) orgProviderAvailable(principal domain.Principal, orgID, provide
 		s.orgAllowsProvider(principal, orgID, provider)
 }
 
-// defaultProviderForOrg is the provider a session gets when nothing chose one:
-// the deployment default when the organization may use it, otherwise the
-// organization's first allowed provider, otherwise "" (no cloud sessions).
-func (s *Server) defaultProviderForOrg(principal domain.Principal, orgID string) string {
+// orgSandboxPreferenceStore reads and stores the provider an organization chose
+// in settings. The Postgres store implements it; a store without it leaves
+// every organization on its default.
+type orgSandboxPreferenceStore interface {
+	OrgDefaultSandboxProvider(ctx context.Context, orgID string) (string, error)
+	SetOrgDefaultSandboxProvider(ctx context.Context, principal domain.Principal, orgID, provider string) error
+}
+
+// defaultProviderForOrg is the provider a new project, or a session nothing
+// else places, gets. With more than one provider, the organization's choice in
+// settings comes first; otherwise baseProviderForOrg.
+func (s *Server) defaultProviderForOrg(ctx context.Context, principal domain.Principal, orgID string) string {
 	allowed := s.providersForOrg(principal, orgID)
+	if len(allowed) > 1 {
+		if chosen := s.orgChosenProvider(ctx, orgID); chosen != "" && slices.Contains(allowed, chosen) {
+			return chosen
+		}
+	}
+	return s.baseProviderForOrg(principal, orgID)
+}
+
+// baseProviderForOrg is the organization's provider before any choice in
+// settings: Coder for an organization with the coder capability, Freestyle for
+// everyone else (every new organization), then the deployment default when
+// offered, then the first provider, then "" (no cloud sessions).
+func (s *Server) baseProviderForOrg(principal domain.Principal, orgID string) string {
+	allowed := s.providersForOrg(principal, orgID)
+	if s.orgHasCoderCapability(principal, orgID) && slices.Contains(allowed, sandbox.ProviderCoder) {
+		return sandbox.ProviderCoder
+	}
+	if slices.Contains(allowed, sandbox.ProviderFreestyle) {
+		return sandbox.ProviderFreestyle
+	}
 	if slices.Contains(allowed, s.sandboxProvider) {
 		return s.sandboxProvider
 	}
@@ -94,22 +129,80 @@ func (s *Server) defaultProviderForOrg(principal domain.Principal, orgID string)
 	return ""
 }
 
-// billingModeForOrg computes domain.BillingMode for one organization.
-func (s *Server) billingModeForOrg(ctx context.Context, principal domain.Principal, orgID string) (string, error) {
-	if !s.billingReady() || !s.orgOffersBilledProvider(principal, orgID) {
-		// Plans only sell billed (Freestyle) capacity: an organization offered
-		// none has nothing to buy, matching GET /billing.
-		return domain.BillingModeOff, nil
+// projectProvider is the provider a project's sessions run on: the project's
+// sandboxProvider, else Coder for a project carrying Coder dev-kit config (set
+// up on Coder before projects recorded their provider), else "" (the
+// organization's default applies).
+func projectProvider(config json.RawMessage) string {
+	if provider := domain.DecodeProjectSandboxProvider(config); provider != "" {
+		return provider
 	}
-	plan, grandfathered := "", false
-	if store, ok := s.store.(orgBillingStandingStore); ok && orgID != "" {
-		var err error
-		plan, grandfathered, err = store.OrgBillingStanding(ctx, principal, orgID)
-		if err != nil {
-			return "", err
+	if _, ok := domain.DecodeProjectCoderConfig(config); ok {
+		return sandbox.ProviderCoder
+	}
+	return ""
+}
+
+// pinProjectProvider records on a new project's config the provider its
+// sessions will run on, when the organization has more than one: the
+// project's own (projectProvider), else the organization's default. Changing
+// the default in settings later then moves no existing project. With a single
+// provider the config is left as is, so the project follows the deployment.
+func (s *Server) pinProjectProvider(
+	ctx context.Context, principal domain.Principal, orgID string, config json.RawMessage,
+) (json.RawMessage, error) {
+	if domain.DecodeProjectSandboxProvider(config) != "" || len(s.providersForOrg(principal, orgID)) < 2 {
+		return config, nil
+	}
+	provider := projectProvider(config)
+	if provider == "" {
+		provider = s.defaultProviderForOrg(ctx, principal, orgID)
+	}
+	if provider == "" {
+		return config, nil
+	}
+	fields := map[string]json.RawMessage{}
+	if len(config) > 0 {
+		if err := json.Unmarshal(config, &fields); err != nil {
+			return nil, err
 		}
 	}
-	return domain.BillingMode(s.orgBillingArrangement(principal, orgID), plan, grandfathered, true), nil
+	encoded, err := json.Marshal(provider)
+	if err != nil {
+		return nil, err
+	}
+	fields["sandboxProvider"] = encoded
+	return json.Marshal(fields)
+}
+
+// orgChosenProvider is the provider the organization chose in settings, or ""
+// when it has not chosen one or it cannot be read; a read failure falls back to
+// the organization's default rather than failing session creation.
+func (s *Server) orgChosenProvider(ctx context.Context, orgID string) string {
+	store, ok := s.store.(orgSandboxPreferenceStore)
+	if !ok || orgID == "" {
+		return ""
+	}
+	provider, err := store.OrgDefaultSandboxProvider(ctx, orgID)
+	if err != nil {
+		if !errors.Is(err, postgres.ErrNotFound) {
+			s.logger.Warn("read organization default sandbox provider", "org_id", orgID, "error", err)
+		}
+		return ""
+	}
+	return provider
+}
+
+// billingModeForOrg computes domain.BillingMode for one organization: plans
+// apply to every organization offered a billed provider (Freestyle, or Coder
+// without the coder capability), contract and internal ones included.
+func (s *Server) billingModeForOrg(_ context.Context, principal domain.Principal, orgID string) (string, error) {
+	if !s.billingReady() || !s.orgOffersBilledProvider(principal, orgID) {
+		// An organization offered nothing billed has nothing to buy, matching
+		// GET /billing.
+		return domain.BillingModeOff, nil
+	}
+	return domain.BillingMode(true), nil
 }
 
 // offeringResponse is the /me "offering" object: which sandbox providers the
@@ -121,6 +214,16 @@ type offeringResponse struct {
 	BillingMode     string   `json:"billingMode"`
 	Kind            string   `json:"kind"`
 	Features        []string `json:"features"`
+	// CustomCoder: the organization may connect its own Coder deployment (it
+	// holds the coder capability), or still has a connection its sessions run
+	// on; the desktop shows the Coder settings page.
+	CustomCoder bool `json:"customCoder"`
+	// CoderWorkerWorkingFolder: a Coder session whose worker runs as the
+	// dedicated ao-worker user checks out in the project's working folder
+	// (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Off, a working folder applies
+	// only with the workspace user, as before; the desktop's copy follows it.
+	// An older control plane does not send it, which the desktop reads as off.
+	CoderWorkerWorkingFolder bool `json:"coderWorkerWorkingFolder"`
 }
 
 func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal, orgID string) (offeringResponse, error) {
@@ -131,12 +234,36 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 	}
 	return offeringResponse{
 		Providers:       providers,
-		DefaultProvider: s.defaultProviderForOrg(principal, orgID),
+		DefaultProvider: s.defaultProviderForOrg(ctx, principal, orgID),
 		BillingMode:     mode,
 		Kind:            domain.OfferingKind(providers),
 		// Plan feature flags arrive with the paywall; none are gated yet.
 		Features: []string{},
+		CustomCoder: s.orgHasCustomCoder(principal, orgID) ||
+			(slices.Contains(providers, sandbox.ProviderCoder) && s.orgHasCoderConnection(ctx, principal, orgID)),
+		CoderWorkerWorkingFolder: s.provisioning.Coder.WorkerWorkingFolder,
 	}, nil
+}
+
+// orgHasCoderConnection reports whether the organization has a stored
+// bring-your-own Coder connection. Its Coder sessions run there even after it
+// loses the coder capability, so the settings page stays reachable to inspect
+// or clear it. A failed read counts as none.
+func (s *Server) orgHasCoderConnection(ctx context.Context, principal domain.Principal, orgID string) bool {
+	store, ok := s.store.(providerConnectionStore)
+	if !ok || orgID == "" {
+		return false
+	}
+	connections, err := store.ListProviderConnections(ctx, principal, orgID)
+	if err != nil {
+		return false
+	}
+	for _, connection := range connections {
+		if connection.Provider == sandbox.ProviderCoder && connection.Label == defaultAgentConnectionLabel {
+			return true
+		}
+	}
+	return false
 }
 
 // orgMemberStore checks that a principal is an active member of an
@@ -162,6 +289,22 @@ func (s *Server) requireOrgCoder(w http.ResponseWriter, r *http.Request, orgID s
 		return true
 	}
 	writeError(w, r, http.StatusForbidden, "provider_forbidden", "Your organization is not enabled for the Coder sandbox provider.")
+	return false
+}
+
+// requireOrgCustomCoder is requireOrgCoder for the bring-your-own Coder
+// connection endpoints: the organization must also hold the coder capability.
+// The shared deployment's templates stay open to every organization that may
+// run on Coder (requireOrgCoder).
+func (s *Server) requireOrgCustomCoder(w http.ResponseWriter, r *http.Request, orgID string) bool {
+	if !s.requireOrgCoder(w, r, orgID) {
+		return false
+	}
+	if s.orgHasCustomCoder(principalFrom(r), orgID) {
+		return true
+	}
+	writeError(w, r, http.StatusForbidden, "provider_forbidden",
+		"Your organization is not enabled to connect its own Coder deployment.")
 	return false
 }
 
@@ -246,6 +389,7 @@ type coderPlacement struct {
 // untouched.
 func resolveCoderPlacement(
 	projectConfig json.RawMessage,
+	repositoryURL string,
 	connections []domain.ProviderConnection,
 	preferredConnectionID string,
 ) (coderPlacement, error) {
@@ -274,6 +418,8 @@ func resolveCoderPlacement(
 		}
 	}
 	if chosen == nil {
+		// The deployment's Coder runs the worker as the dedicated ao-worker user.
+		placement.addCheckoutDirectory(projectConfig, repositoryURL)
 		return placement, nil
 	}
 	cfg, err := domain.DecodeOrgCoderConfig(chosen.Config)
@@ -297,7 +443,46 @@ func resolveCoderPlacement(
 		WorkingDirectory:          cfg.WorkingDirectory,
 		ProtectSecretFiles:        cfg.ProtectsSecretFiles(),
 	}
+	// A project's own working directory (for example ~/work/{repo}) wins over
+	// the connection's, since where repositories live can differ per project.
+	// Like the connection's, it only applies when AO runs as the workspace user.
+	if directory := domain.ProjectWorkingDirectory(projectConfig); directory != "" &&
+		cfg.WorkerUser == domain.CoderWorkerUserWorkspace {
+		placement.override.WorkingDirectory = directory
+	}
+	// With the dedicated ao-worker user the project's working folder is where
+	// AO checks the main repository out (the connection's working directory
+	// needs the workspace user and never applies here).
+	if cfg.WorkerUser != domain.CoderWorkerUserWorkspace {
+		placement.addCheckoutDirectory(projectConfig, repositoryURL)
+	}
 	return placement, nil
+}
+
+// addCheckoutDirectory stamps the project's working folder, resolved for the
+// project's main repository (domain.CoderCheckoutDirectory), as the session's
+// checkout folder for a worker that runs as the dedicated ao-worker user. A
+// project without a working folder or without a repository (standalone) keeps
+// the default checkout. A folder the checkout refuses (for example one inside
+// a hidden folder, which a project saved before that rule, or saved without an
+// ao-worker connection, may still hold) is recorded as the reason instead, so
+// the session stops with a working_directory_unusable startup error rather
+// than quietly starting in the default checkout.
+func (p *coderPlacement) addCheckoutDirectory(projectConfig json.RawMessage, repositoryURL string) {
+	directory := domain.ProjectWorkingDirectory(projectConfig)
+	if directory == "" || strings.TrimSpace(repositoryURL) == "" || worker.IsScratchRepositoryURL(repositoryURL) {
+		return
+	}
+	if p.options == nil {
+		p.options = &sandbox.CoderSessionOptions{}
+	}
+	checkout, err := domain.CoderCheckoutDirectory(directory, repositoryURL)
+	if err != nil {
+		p.options.CheckoutDirectoryUnusable = domain.CoderCheckoutDirectoryUnusableMessage(directory, err)
+		return
+	}
+	p.options.CheckoutDirectory = checkout
+	p.options.CheckoutSiblings = domain.CoderCheckoutSiblings(projectConfig, checkout)
 }
 
 // orgCoderPlacement resolves the Coder placement for a request-driven session
@@ -308,6 +493,7 @@ func (s *Server) orgCoderPlacement(
 	principal domain.Principal,
 	orgID string,
 	projectConfig json.RawMessage,
+	repositoryURL string,
 ) (coderPlacement, error) {
 	var connections []domain.ProviderConnection
 	if store, ok := s.store.(providerConnectionStore); ok {
@@ -317,7 +503,7 @@ func (s *Server) orgCoderPlacement(
 			return coderPlacement{}, err
 		}
 	}
-	return resolveCoderPlacement(projectConfig, connections, "")
+	return resolveCoderPlacement(projectConfig, repositoryURL, connections, "")
 }
 
 // writeSessionPlanError reports a failure to resolve a session's provisioning
@@ -389,19 +575,23 @@ func (s *Server) scratchSessionPlan(
 	orgID, harness string,
 	projectConfig json.RawMessage,
 ) (sandbox.Plan, string, bool) {
-	provider := domain.DecodeProjectSandboxProvider(projectConfig)
+	provider := projectProvider(projectConfig)
 	if provider != "" {
-		if !s.validateProjectSandboxProvider(w, r, principal, orgID, projectConfig) {
+		if !s.orgProviderAvailable(principal, orgID, provider) {
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "provider_unavailable",
+				"The project's sandbox provider is not available to your organization.",
+			)
 			return sandbox.Plan{}, "", false
 		}
-	} else if provider = s.defaultProviderForOrg(principal, orgID); provider == "" {
+	} else if provider = s.defaultProviderForOrg(r.Context(), principal, orgID); provider == "" {
 		writeProviderForbidden(w, r, "", false)
 		return sandbox.Plan{}, "", false
 	}
 	var placement coderPlacement
 	if provider == sandbox.ProviderCoder {
 		var err error
-		placement, err = s.orgCoderPlacement(r.Context(), principal, orgID, projectConfig)
+		placement, err = s.orgCoderPlacement(r.Context(), principal, orgID, projectConfig, "")
 		if err != nil {
 			s.writeCoderPlacementError(w, r, err)
 			return sandbox.Plan{}, "", false

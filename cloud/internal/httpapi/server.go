@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
@@ -65,7 +66,9 @@ type Store interface {
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
-	ListClientEvents(context.Context, domain.Principal, string, string, int64, int) ([]domain.ClientEvent, bool, error)
+	// ListClientEvents lists the session's client events after a sequence,
+	// only of the given types when any are given.
+	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
 	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	RestoreSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
@@ -123,6 +126,7 @@ type Store interface {
 	GitHubInstallationForRepository(context.Context, string, string) (int64, int64, error)
 	PullRequestForMerge(context.Context, domain.Principal, string, string, int, string) (domain.PullRequest, error)
 	PullRequestSnapshot(context.Context, string, string) (domain.PullRequestSnapshot, error)
+	SessionPullRequestOpener(context.Context, domain.Principal, string, string) (domain.PullRequestOpener, error)
 	ListReviewRunsBySession(context.Context, domain.Principal, string, string) ([]domain.ReviewRunPullRequest, error)
 	PRFactsBySession(ctx context.Context, orgID string, sessionIDs []string) (map[string][]contract.PRFacts, error)
 	PullRequestsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.PullRequest, error)
@@ -182,9 +186,6 @@ type Server struct {
 	// its own (AO_CLOUD_DEFAULT_ORG_CAPABILITIES): personal organizations, and
 	// WorkOS organizations whose metadata has no capabilities key.
 	defaultOrgCapabilities []string
-	// defaultOrgBilling is the billing arrangement of an organization whose
-	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING).
-	defaultOrgBilling string
 	// coderTemplates lists the Coder templates a client may pick from. Nil when
 	// the deployment does not offer the coder provider.
 	coderTemplates   CoderTemplateLister
@@ -215,8 +216,10 @@ type Server struct {
 	terminalStreamEnabled   bool
 	terminalRelayEnabled    bool
 	terminalStreams         *terminalStreams
+	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
 	notificationWake        func()
+	analytics               analytics.Sink
 	sandboxWake             func()
 	projectSnapshots        ProjectSnapshotter
 	billingOptions          *BillingOptions
@@ -244,9 +247,6 @@ type Options struct {
 	// DefaultOrgCapabilities are the capabilities of an organization that has
 	// none of its own; see Server.defaultOrgCapabilities.
 	DefaultOrgCapabilities []string
-	// DefaultOrgBilling is domain.OrgBillingSelfServe (the default when blank)
-	// or domain.OrgBillingContract.
-	DefaultOrgBilling string
 	// CoderTemplates lists templates available from the configured Coder provider.
 	CoderTemplates CoderTemplateLister
 	// CoderTemplateIDs limits the configured Coder's templates the picker
@@ -278,6 +278,8 @@ type Options struct {
 	TerminalStreamEnabled   bool
 	TerminalRelayEnabled    bool
 	NotificationWake        func()
+	// Analytics receives server-side product events. Nil disables them.
+	Analytics analytics.Sink
 	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
 	// this control plane runs no reconciler.
 	SandboxWake func()
@@ -353,10 +355,6 @@ func New(options Options) *Server {
 			defaultOrgCapabilities = append(defaultOrgCapabilities, capability)
 		}
 	}
-	defaultOrgBilling := domain.NormalizeOrgBilling(options.DefaultOrgBilling)
-	if defaultOrgBilling == "" {
-		defaultOrgBilling = domain.OrgBillingSelfServe
-	}
 	server := &Server{
 		store:                     options.Store,
 		transcripts:               options.Transcripts,
@@ -368,7 +366,6 @@ func New(options Options) *Server {
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,
 		defaultOrgCapabilities:    defaultOrgCapabilities,
-		defaultOrgBilling:         defaultOrgBilling,
 		coderTemplates:            options.CoderTemplates,
 		coderTemplateIDs:          options.CoderTemplateIDs,
 		provisioning:              options.Provisioning,
@@ -393,8 +390,10 @@ func New(options Options) *Server {
 		terminalStreamEnabled:     options.TerminalStreamEnabled,
 		terminalRelayEnabled:      options.TerminalRelayEnabled,
 		terminalStreams:           newTerminalStreams(),
+		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
+		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
 		projectSnapshots:          options.ProjectSnapshots,
 		billingOptions:            options.Billing,
@@ -438,6 +437,7 @@ func New(options Options) *Server {
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
+		router.Post("/api/cloud/v1/github/oauth/connect-others", server.githubConnectOthers)
 		router.Get("/api/cloud/v1/github/user/callback", server.githubUserCallback)
 		router.Post("/api/cloud/v1/github/webhooks", server.githubWebhook)
 		if server.brokerAuthToken != "" {
@@ -505,6 +505,7 @@ func New(options Options) *Server {
 			router.Get("/worker/reconnect", server.workerReconnect)
 			router.Post("/worker/events", server.workerEvent)
 			router.Get("/worker/session", server.workerSession)
+			router.Post("/worker/interface/chat-start-fallback", server.workerChatStartFallback)
 			router.Post("/worker/notification-events", server.workerNotificationEvent)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)
@@ -540,6 +541,8 @@ func New(options Options) *Server {
 			router.Get("/worker/terminals/{terminalId}/stream", server.workerTerminalStream)
 			router.Post("/worker/terminals/{terminalId}/exit", server.workerTerminalExit)
 			router.Post("/worker/terminals/agent", server.workerEnsureAgentTerminal)
+			router.Get("/worker/agent-browser", server.workerAgentBrowserControl)
+			router.Get("/worker/agent-browser/streams/{stream}", server.workerAgentBrowserStream)
 		})
 		router.Get("/terminal", server.connectTerminal)
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
@@ -564,6 +567,7 @@ func New(options Options) *Server {
 			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
 			router.Post("/notifications/read-all", server.markAllNotificationsRead)
 			router.Post("/projects", server.createProject)
+			router.Post("/projects/standalone", server.createStandaloneProject)
 			router.Get("/projects/{projectId}", server.getProject)
 			router.Patch("/projects/{projectId}/settings", server.updateProjectSettings)
 			router.Patch("/projects/{projectId}", server.updateProject)
@@ -582,6 +586,7 @@ func New(options Options) *Server {
 			router.Get("/coder-config", server.getOrgCoderConfig)
 			router.Put("/coder-config", server.putOrgCoderConfig)
 			router.Delete("/coder-config", server.deleteOrgCoderConfig)
+			router.Put("/sandbox-provider", server.putOrgSandboxProvider)
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
@@ -611,6 +616,8 @@ func New(options Options) *Server {
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}", server.proxyBrowser)
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}/*", server.proxyBrowser)
 			}
+			router.Get("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
+			router.Post("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
 			router.Get("/sessions/{sessionId}/workspace/files", server.listWorkspaceFiles)
 			router.Post("/sessions/{sessionId}/workspace/checkout", server.requestWorkspaceCheckout)
 			router.Get("/sessions/{sessionId}/workspace/file", server.readWorkspaceFile)
@@ -618,6 +625,7 @@ func New(options Options) *Server {
 			router.Put("/sessions/{sessionId}/workspace/file", server.writeWorkspaceFile)
 			router.Get("/sessions/{sessionId}/workspace/diff", server.getWorkspaceDiff)
 			router.Get("/sessions/{sessionId}/workspace/review", server.getWorkspaceReview)
+			router.Get("/sessions/{sessionId}/workspace/repositories", server.getWorkspaceRepositories)
 			router.Get("/sessions/{sessionId}/workspace/tree", server.getWorkspaceReviewTree)
 			router.Get("/sessions/{sessionId}/workspace/search", server.getWorkspaceReviewSearch)
 			router.Get("/sessions/{sessionId}/workspace/review/file", server.getWorkspaceReviewFile)
@@ -806,6 +814,17 @@ func (s *Server) principalForBearer(
 		return domain.Principal{}, err
 	}
 	return s.store.UpsertWorkOSUser(ctx, principal)
+}
+
+// capture reports a product event for the signed-in WorkOS user. Local-auth
+// (development) principals and anonymous callers are never reported.
+func (s *Server) capture(r *http.Request, event string, props map[string]any) {
+	if s.analytics == nil {
+		return
+	}
+	if p := principalFrom(r); p.Provider == "workos" && p.UserID != "" {
+		s.analytics.Capture(p.UserID, event, props)
+	}
 }
 
 func principalFrom(r *http.Request) domain.Principal {

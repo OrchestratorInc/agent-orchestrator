@@ -68,6 +68,16 @@ describe("OrchestratorChildrenSection", () => {
 		unmount();
 	});
 
+	test("names each PR's repository when a worker has PRs on several", () => {
+		const pr = (url: string, number: number) => ({
+			url, number, state: "open" as const, ci: "unknown", review: "none", mergeability: "unknown", reviewComments: false, updatedAt: "2026-10-16T12:00:00Z",
+		});
+		childrenQuery.data = [childView({ prs: [pr("https://github.com/acme/alice/pull/7", 7), pr("https://github.com/acme/11x/pull/7", 7)] })];
+		render(<OrchestratorChildrenSection session={session} />);
+		expect(screen.getByRole("link", { name: "acme/alice PR #7" })).toHaveAttribute("href", "https://github.com/acme/alice/pull/7");
+		expect(screen.getByRole("link", { name: "acme/11x PR #7" })).toHaveAttribute("href", "https://github.com/acme/11x/pull/7");
+	});
+
 	test("renders worker rows with status, PR chips, and terminated de-emphasis", () => {
 		childrenQuery.data = [
 			childView({

@@ -178,6 +178,9 @@ const (
 	ChatCapabilityUsage     ChatCapability = "usage"
 	ChatCapabilityDiffs     ChatCapability = "diffs"
 	ChatCapabilityPlans     ChatCapability = "plans"
+	// ChatCapabilityPlanMode is a plan mode AO switches per turn, for a
+	// provider that does not offer one as a session setting of its own.
+	ChatCapabilityPlanMode ChatCapability = "plan_mode"
 	// ChatCapabilityModels means the provider can enumerate the models it offers
 	// and accept one per turn.
 	ChatCapabilityModels ChatCapability = "models"
@@ -279,6 +282,12 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 	return out
 }
 
+// PermissionModesStrictestFirst is AO's permission modes from the one that asks
+// before every action to the one that never asks.
+var PermissionModesStrictestFirst = []PermissionMode{
+	PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeAuto, PermissionModeBypassPermissions,
+}
+
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
@@ -362,6 +371,10 @@ type ChatResumeConfig struct {
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string
+	// HasPriorTurns indicates whether the conversation already contains turns
+	// (durable or provider history), so reconnection/restore does not re-send
+	// standing instructions or session preamble intended only for the first turn.
+	HasPriorTurns bool
 	// ProviderScopeID identifies AO's provider ownership boundary. A fresh
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string
@@ -468,6 +481,9 @@ type ChatUserMessage struct {
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+	// Continuation marks the user's one-click "continue" after stopping a turn,
+	// so the timeline can show a marker instead of a message bubble.
+	Continuation bool
 }
 
 // MessageDeliveryOptions describes facts about the message independent of the
@@ -495,6 +511,10 @@ type ChatTurnSettings struct {
 	// Approval is AO's permission mode for this turn. The driver maps it onto
 	// whatever approval policy and sandbox its provider understands.
 	Approval PermissionMode
+	// Fast asks for the provider's faster tier, on models that offer one.
+	Fast bool
+	// Plan asks the provider to plan the work rather than carry it out.
+	Plan bool
 }
 
 // IsZero reports whether nothing was chosen, so a dispatch can omit the fields
@@ -520,6 +540,9 @@ type ChatModel struct {
 	Efforts []string
 	// DefaultEffort is the level the provider uses when none is chosen.
 	DefaultEffort string
+	// FastTier is the provider's id for this model's faster tier. Empty means
+	// the model has none.
+	FastTier string
 }
 
 // ChatModelLister is implemented by drivers whose provider can enumerate models.
@@ -1010,7 +1033,7 @@ type chatProviderFailure struct {
 
 // NewChatProviderFailure preserves provider prose as opaque display text. An
 // adapter may attach an existing sentinel (e.g. ErrChatAuthRequired) when native
-// metadata proves it; callers never infer recovery from the message.
+// metadata proves it; callers never infer authentication recovery from the message.
 func NewChatProviderFailure(title, detail string, cause error) error {
 	title = strings.TrimSpace(title)
 	detail = strings.TrimSpace(detail)
@@ -1126,6 +1149,18 @@ type ChatEvent struct {
 	// Err carries display text and optional typed causes. Its presence does not
 	// imply the conversation is over; check Kind and ControllerState.
 	Err error
+}
+
+// ChatInstallChecker is implemented by chat drivers that can tell, without
+// starting anything, that the adapter they need is missing.
+type ChatInstallChecker interface {
+	CheckChatInstall(ctx context.Context) error
+}
+
+// ChatPermissionModeChecker is implemented by chat drivers whose agent refuses
+// some AO permission modes, so a caller can pick one it accepts before starting.
+type ChatPermissionModeChecker interface {
+	SupportsPermissionMode(mode PermissionMode) bool
 }
 
 // ChatDriver opens conversations for one harness.

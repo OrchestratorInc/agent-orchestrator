@@ -133,12 +133,15 @@ type Session struct {
 }
 
 // CoderWorkspaceRef is the non-secret identity of one session's Coder
-// workspace: the deployment origin, the owning Coder user and the project's
-// workspace name prefix (empty for the default ao-<id> name).
+// workspace: the deployment origin, the owning Coder user, the project's
+// workspace name prefix (empty for the default ao-<id> name) and the
+// workspace name AO stored when it created the session (empty for sessions
+// created before names were stored, whose name is computed from the prefix).
 type CoderWorkspaceRef struct {
 	BaseURL    string
 	Owner      string
 	NamePrefix string
+	Name       string
 }
 
 // Status derives the session's display status from runtime and pull request facts.
@@ -170,8 +173,22 @@ type CreateSession struct {
 	Model           string
 	ReasoningEffort string
 	DeniedCommands  []string
-	Interface       SessionInterface
-	Provider        string
+	// Interface is the interface the caller explicitly requested; empty
+	// resolves through StartInterface at create.
+	Interface SessionInterface
+	// DefaultInterface is the user's default session interface the session was
+	// created with. It resolves this session's interface (StartInterface) and
+	// is stored with the session's agent config (agent_config.defaultInterface)
+	// for the workers an orchestrator spawns, which resolve theirs from it as
+	// local spawns resolve from the daemon's default. Omitted when empty so the
+	// idempotency payload of a create without it is unchanged.
+	DefaultInterface SessionInterface `json:",omitempty"`
+	// Branch is the session's git branch. Empty means a generated
+	// <prefix>/<short id>; a named branch that already exists on the remote is
+	// continued from its commits. Omitted when empty so the idempotency payload
+	// of every other create is unchanged.
+	Branch   string `json:",omitempty"`
+	Provider string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string
@@ -187,6 +204,13 @@ type CreateSession struct {
 	// orchestrator, a standalone worker, or a worker created for a project that
 	// has no active orchestrator.
 	ParentSessionID string
+	// CoderCapability: the caller's organization holds the coder capability
+	// (WorkOS metadata capabilities=coder), so its Coder sessions are not
+	// billed. Set by the HTTP layer, which owns the capability rule; a worker
+	// an orchestrator spawns inherits its parent's billing instead. It is read
+	// from a cache, so it stays out of the create's idempotency payload: a
+	// retry after the cache changed still replays the first create.
+	CoderCapability bool `json:"-"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to
@@ -207,8 +231,9 @@ type ProjectCoderConfig struct {
 	Size          string    `json:"size,omitempty"`
 	StartupScript string    `json:"startupScript,omitempty"`
 	ExtraRepos    []RepoRef `json:"extraRepos,omitempty"`
-	// WorkspaceNamePrefix names new Coder workspaces <prefix>-<short session
-	// id>. Empty keeps the default ao-<id>.
+	// WorkspaceNamePrefix starts new Coder workspace names
+	// (<prefix>-o-<id> or <prefix>-w-<word>-<id>, see CoderWorkspaceName).
+	// Empty uses "ao".
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
 	// Parameters are the project's values for the chosen template's
 	// coder_parameter inputs, keyed by parameter name. Values are strings as

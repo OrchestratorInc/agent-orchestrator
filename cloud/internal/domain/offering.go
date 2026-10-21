@@ -42,16 +42,13 @@ func NormalizeOrgBilling(raw string) string {
 }
 
 // BillingMode is the single rule for whether self-serve billing applies to an
-// organization. It is "off" when the deployment has no Stripe configured,
-// "contract" when the organization is billed under an agreement (metadata
-// billing=contract), runs on the internal plan, or was grandfathered when
-// billing was turned on, and "self_serve" otherwise.
-func BillingMode(orgBilling, plan string, grandfathered, stripeEnabled bool) string {
+// organization offered a billed provider: "off" when the deployment has no
+// Stripe configured, "self_serve" otherwise. Freestyle is paid by every
+// organization, including those under a contract, on the internal plan or
+// grandfathered, so none of those is exempt.
+func BillingMode(stripeEnabled bool) string {
 	if !stripeEnabled {
 		return BillingModeOff
-	}
-	if NormalizeOrgBilling(orgBilling) == OrgBillingContract || plan == PlanInternal || grandfathered {
-		return BillingModeContract
 	}
 	return BillingModeSelfServe
 }
@@ -94,6 +91,9 @@ type OrchestratorPlacement struct {
 	ProjectConfig json.RawMessage
 	// ProjectName is the orchestrator project's display name.
 	ProjectName string
+	// RepositoryURL is the orchestrator project's main repository, which
+	// resolves {repo} in the project's working folder for its children.
+	RepositoryURL string
 	// CoderConnections are the organization's Coder provider connections,
 	// without secrets.
 	CoderConnections []ProviderConnection

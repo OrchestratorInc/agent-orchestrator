@@ -41,7 +41,7 @@ import Markdown, { defaultUrlTransform, type Components, type Options } from "re
 import remarkGfm from "remark-gfm";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { isLoopbackHostname } from "../../lib/loopback";
+import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
@@ -136,18 +136,6 @@ export function ChatLinkProvider({
 		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
 	);
 	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
-}
-
-function isHostLocalWebLink(href: string): boolean {
-	try {
-		// react-markdown percent-encodes IPv6 brackets in href/src attributes.
-		const url = new URL(href.replace(/%5B|%5D/gi, (bracket) => decodeURIComponent(bracket)));
-		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-		const host = url.hostname.replace(/\.$/, "");
-		return isLoopbackHostname(host) || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host) || host === "0.0.0.0" || host === "[::]";
-	} catch {
-		return false;
-	}
 }
 
 function chatUrlTransform(url: string, key: string): string | undefined {

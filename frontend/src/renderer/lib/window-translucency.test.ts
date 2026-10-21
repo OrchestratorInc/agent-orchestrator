@@ -18,13 +18,21 @@ describe("window translucency", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("is on only when Developer Mode and the flag are both saved on macOS", () => {
-		window.localStorage.setItem(windowTranslucencyStorageKey, "true");
+	it("restores the Appearance preference independently of Developer Mode on macOS", () => {
 		expect(readStoredWindowTranslucency()).toBe(false);
+		window.localStorage.setItem(windowTranslucencyStorageKey, "true");
+		expect(readStoredWindowTranslucency()).toBe(true);
 
 		window.localStorage.setItem(developerModeStorageKey, "true");
 		expect(readStoredWindowTranslucency()).toBe(true);
 
+		window.localStorage.setItem(developerModeStorageKey, "false");
+		expect(readStoredWindowTranslucency()).toBe(true);
+
+		window.localStorage.setItem(windowTranslucencyStorageKey, "false");
+		expect(readStoredWindowTranslucency()).toBe(false);
+
+		window.localStorage.setItem(windowTranslucencyStorageKey, "true");
 		vi.mocked(isMacPlatform).mockReturnValue(false);
 		expect(readStoredWindowTranslucency()).toBe(false);
 	});
