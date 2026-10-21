@@ -11,6 +11,7 @@ const projectId = "resume-on-open";
 const untouchedId = "untouched-stopped-chat";
 const now = "2026-10-21T12:00:00Z";
 type ResumeFailure = { status: number; code: string; message: string };
+test.setTimeout(60_000);
 
 function session(id: string, resumed: boolean): components["schemas"]["ControllersSessionView"] {
 	return {
@@ -49,6 +50,12 @@ async function installStoppedChats(page: Page, failures: Record<string, ResumeFa
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v1/settings") return route.fulfill({ json: {
+			defaultSessionMode: "chat", chatHarnesses: ["codex"], localEnabled: true,
+			cloudOffering: false, cloudEnabled: false,
+		} });
+		if (path === "/api/v1/settings/chat-hibernation") return route.fulfill({ json: { enabled: false } });
+		if (path === "/api/v1/notifications") return route.fulfill({ json: { notifications: [] } });
 		if (path === "/api/v1/projects") return route.fulfill({ json: { projects: [{
 			id: projectId, name: projectId, kind: "single_repo", path: `/repos/${projectId}`,
 			sessionPrefix: "resume", folderMissing: false,
@@ -86,7 +93,7 @@ async function installStoppedChats(page: Page, failures: Record<string, ResumeFa
 
 async function openChat(page: Page, id: string) {
 	await page.goto(`/#/projects/${projectId}/sessions/${id}`);
-	await expect(page.getByRole("region", { name: "Chat", exact: true })).toBeVisible();
+	await expect(page.getByRole("region", { name: "Chat", exact: true })).toBeVisible({ timeout: 15000 });
 	await expect(page.getByText("Saved conversation remains available.")).toBeVisible();
 }
 
@@ -128,6 +135,7 @@ test("renderer: automatic recovery stops for permanent errors and after three tr
 	for (const id of ["auth-required", "incompatible-driver"]) {
 		await openChat(page, id);
 		await expect(page.getByRole("button", { name: "Resume agent", exact: true })).toBeVisible();
+		await expect(page.getByText(id === "auth-required" ? auth.message : incompatible.message, { exact: true })).toBeVisible();
 		await page.waitForTimeout(2300); // Beyond the first retry delay: permanent failures stay stopped.
 		expect(attempts[id]).toHaveLength(1);
 	}
@@ -135,6 +143,7 @@ test("renderer: automatic recovery stops for permanent errors and after three tr
 	await expect.poll(() => attempts["persistent-timeout"].length, { timeout: 12000 }).toBe(3);
 	await expect(page.getByText("The agent controller stopped", { exact: true })).toBeVisible();
 	await expect(page.getByRole("button", { name: "Resume agent", exact: true })).toBeEnabled();
+	await expect(page.getByText(timeout.message, { exact: true })).toBeVisible();
 	await page.waitForTimeout(5500); // A fourth attempt must not run after the final backoff.
 	expect(attempts["persistent-timeout"]).toHaveLength(3);
 	await capture(page, "resume-retries-exhausted");
