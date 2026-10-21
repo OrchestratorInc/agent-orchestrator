@@ -672,34 +672,6 @@ describe("SessionsBoard", () => {
 		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
 	});
 
-	it("shows switch progress instead of the exited source on a card", () => {
-		const worker = boardSession({
-			id: "s-switching",
-			title: "switching worker",
-			status: "exited",
-			activity: {
-				state: "exited",
-				lastActivityAt: "2026-01-01T00:00:00Z",
-			},
-		});
-		worker.activeAgentSwitch = activeAgentSwitch(worker.id);
-		workspaceQueryMock.mockReturnValue({
-			data: [workspaceWithSessions([worker])],
-			isError: false,
-			isSuccess: true,
-		});
-
-		renderBoard("p1");
-
-		const card = screen.getByText("switching worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		const status = within(card).getByText("Switching to Codex").parentElement as HTMLElement;
-		expect(status).toHaveClass("text-status-working");
-		expect(status).not.toHaveAttribute("data-kanban-column");
-		expect(status.style.getPropertyValue("--session-status-tone")).toBe("");
-		expect(status.querySelector(".animate-status-pulse")).toBeNull();
-		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
-	});
-
 	it("styles legacy statuses from their status-implied Kanban columns", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
@@ -1850,20 +1822,6 @@ function boardSession(
 		kanbanColumn: toKanbanColumn(undefined, overrides.status),
 		updatedAt: "2026-01-01T00:00:00Z",
 		prs: [],
-		...overrides,
-	};
-}
-
-function activeAgentSwitch(
-	sessionId: string,
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: `switch-${sessionId}`,
-		state: "starting_target",
-		targetHarness: "codex",
 		...overrides,
 	};
 }

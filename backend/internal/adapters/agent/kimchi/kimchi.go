@@ -7,8 +7,9 @@
 // in-command as a trailing positional argument.
 //
 // System prompts are appended to Kimchi's default prompt via
-// `--append-system-prompt <text>`. The flag takes inline text only; a
-// system-prompt file is read from disk and inlined.
+// `--append-system-prompt <text>`. Kimchi also reads a value naming a file
+// that exists (resolvePromptInput); the terminal adapter inlines a
+// system-prompt file, and the chat driver passes its file's path.
 //
 // Permissions: Kimchi accepts `--plan`, `--auto`, and `--yolo` flags for
 // permission modes. AO maps its own modes onto these flags.

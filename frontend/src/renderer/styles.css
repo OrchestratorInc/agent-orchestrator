@@ -113,6 +113,8 @@
 	/* Surfaces */
 	--color-background: var(--color-bg-primary);
 	--color-foreground: var(--color-text-primary);
+	/* Ink on foreground fills must stay opaque when window surfaces become clear. */
+	--color-on-foreground: var(--background);
 	--color-surface: var(--color-bg-secondary);
 	--color-card: var(--color-bg-secondary);
 	--color-card-foreground: var(--color-text-primary);
@@ -350,12 +352,6 @@
 
 @utility toast-exit {
 	animation: toast-exit 180ms ease-in forwards;
-}
-
-@utility agent-switch-terminal-scrim {
-	background-color: color-mix(in srgb, var(--color-terminal) 95%, transparent);
-	-webkit-backdrop-filter: blur(3px);
-	backdrop-filter: blur(3px);
 }
 
 @utility w-daemon-failure-toast {
@@ -2049,90 +2045,6 @@ textarea,
 	.animate-attention-card-pulse::before {
 		animation: none;
 		opacity: 0.5;
-	}
-}
-
-.agent-switch-transfer-pulse {
-	animation: agent-switch-transfer 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
-.agent-switch-progress-step:not(:last-child)::before {
-	position: absolute;
-	top: 0.21875rem;
-	left: calc(50% + 0.25rem);
-	width: calc(100% - 0.5rem);
-	height: 1px;
-	background: var(--color-border-strong);
-	content: "";
-	transition: background-color 320ms var(--ease-out);
-}
-
-.agent-switch-progress-dot {
-	transition:
-		border-color 280ms var(--ease-out),
-		background-color 280ms var(--ease-out),
-		box-shadow 280ms var(--ease-out);
-}
-
-.agent-switch-progress-step.is-complete::before,
-.agent-switch-progress-step.is-complete .agent-switch-progress-dot,
-.agent-switch-progress-step.is-current .agent-switch-progress-dot {
-	border-color: var(--color-accent);
-	background: var(--color-accent);
-}
-
-.agent-switch-progress-step.is-current .agent-switch-progress-dot {
-	animation: agent-switch-step-pulse 1.4s ease-in-out infinite;
-	box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
-}
-
-@keyframes agent-switch-step-pulse {
-	0%,
-	100% {
-		opacity: 1;
-		transform: scale(1);
-	}
-	50% {
-		opacity: 0.55;
-		transform: scale(0.72);
-	}
-}
-
-@keyframes agent-switch-transfer {
-	0% {
-		left: -2.5rem;
-		opacity: 0;
-	}
-	18% {
-		opacity: 1;
-	}
-	82% {
-		opacity: 1;
-	}
-	100% {
-		left: 100%;
-		opacity: 0;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.agent-switch-transfer-pulse {
-		left: calc(50% - 1.25rem);
-		opacity: 0.85;
-		animation: none;
-	}
-
-	.agent-switch-progress-step.is-current .agent-switch-progress-dot {
-		animation: none;
-	}
-
-	.agent-switch-toolbar-spinner {
-		animation: none;
-	}
-
-	.agent-switch-progress-dot,
-	.agent-switch-progress-step::before {
-		transition: none;
 	}
 }
 
@@ -6151,6 +6063,25 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	border-radius: 10px;
 }
 
+/* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on its label. */
+@keyframes ultra-sweep {
+	from { background-position: 0% 50%; }
+	to { background-position: 200% 50%; }
+}
+
+.ultra-text {
+	background-image: linear-gradient(90deg, #5aa2ff, #9b6dff, #ed6ac4, #9b6dff, #5aa2ff);
+	background-size: 200% 100%;
+	animation: ultra-sweep 3.2s linear infinite;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	-webkit-text-fill-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ultra-text { animation: none; }
+}
 
 /* macOS window transparency.
  *

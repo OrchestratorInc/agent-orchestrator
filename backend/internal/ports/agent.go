@@ -362,6 +362,8 @@ type AgentModelInfo struct {
 	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// SupportsFast reports that the model can run on the provider's faster tier.
+	SupportsFast bool `json:"supportsFast,omitempty"`
 	// LastUsedAt is the latest activity of a session in scope whose current model
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.
@@ -375,11 +377,15 @@ type AgentModelCatalog struct {
 	// ConfiguredProviders names providers with credential configuration observed
 	// during discovery. Presence is not proof of authorization; absence is unknown.
 	// Only provider IDs are exposed, never credential values or source paths.
-	ConfiguredProviders []string             `json:"configuredProviders,omitempty"`
-	AgentID             string               `json:"agentId"`
-	SelectionMode       ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models              []AgentModelInfo     `json:"models"`
-	CustomModelEntry    CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	ConfiguredProviders []string `json:"configuredProviders,omitempty"`
+	// RunnableModels names the models the agent itself lists as ones it can run
+	// now, when the rest of Models come from a local catalog of every provider
+	// it knows (OpenCode's), there to browse. Empty means not known.
+	RunnableModels   []string             `json:"runnableModels,omitempty"`
+	AgentID          string               `json:"agentId"`
+	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models           []AgentModelInfo     `json:"models"`
+	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`

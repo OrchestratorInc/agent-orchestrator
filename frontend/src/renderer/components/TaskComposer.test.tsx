@@ -1322,6 +1322,35 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Legacy model"));
 	});
 
+	it("preserves local Cursor effort and thinking variants after the Cloud catalog merge", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: {
+				agentId: "cursor", selectionMode: "catalog", customModelEntry: "none", allowCustom: false,
+				models: [
+					{ id: "claude-opus-4-8-low", label: "Claude Opus 4.8 Low", isDefault: true },
+					{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High" },
+					{ id: "claude-opus-4-8-thinking-low", label: "Claude Opus 4.8 Low Thinking" },
+					{ id: "claude-opus-4-8-thinking-high", label: "Claude Opus 4.8 High Thinking" },
+				],
+			} };
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui" } };
+			return { data: { status: "ok", project: { agent: "cursor", config: {} } } };
+		});
+		h.post.mockResolvedValue({ data: { workerId: "cursor-session" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const effortPicker = await screen.findByRole("button", { name: "Effort" });
+		await userEvent.click(effortPicker);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await userEvent.click(effortPicker);
+		await userEvent.click(screen.getByText("Thinking"));
+		expect(screen.getByRole("switch", { name: "Thinking" })).toBeChecked();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Run Cursor with high thinking" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ model: "claude-opus-4-8-thinking-high" }) })));
+		expect(h.cloudListUserAgentModels).not.toHaveBeenCalled();
+	});
+
 	it("keeps Cursor usable without presenting desktop choices as worker-supported", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "cursor" } } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -229,6 +229,11 @@ func assertActivityRequest(t *testing.T, got, want setActivityAPIRequest) {
 	}
 	// The exact timestamp has a separate deterministic wire-contract test.
 	got.ObservedAt = time.Time{}
+	// Every hook names the agent that sent it; the value has its own test.
+	if got.Harness == "" {
+		t.Fatal("hook omitted the agent that sent it")
+	}
+	got.Harness = ""
 	if got != want {
 		t.Fatalf("body = %+v, want %+v", got, want)
 	}

@@ -614,9 +614,13 @@ func (m *Manager) runInBackground(work func()) {
 // WaitBackgroundWorkers waits for daemon-owned spawn and task-preparation work
 // after the daemon context has been cancelled.
 func (m *Manager) WaitBackgroundWorkers(ctx context.Context) error {
+	return waitForWorkers(ctx, &m.backgroundWorkers)
+}
+
+func waitForWorkers(ctx context.Context, workers *sync.WaitGroup) error {
 	done := make(chan struct{})
 	go func() {
-		m.backgroundWorkers.Wait()
+		workers.Wait()
 		close(done)
 	}()
 	select {
