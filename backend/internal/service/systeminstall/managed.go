@@ -194,9 +194,7 @@ func nextManagedDir(versionsDir string) string {
 	return "v" + strconv.Itoa(highest+1)
 }
 
-// switchFailed is the update notice's message when the new copy installed
-// but AO could not move sessions to it.
-const switchFailed = "AO installed the new copy but could not switch to it."
+const switchFailed = "Installed, but could not switch to it."
 
 // managedInstallError is a failed managed update. The update notice shows
 // summary; err, which names paths and command output, goes to diagnostics.
@@ -235,12 +233,12 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	targetDir := s.managedTargetDir(plan.Target)
 	versionsDir := filepath.Join(targetDir, "versions")
 	if err := os.MkdirAll(versionsDir, 0o750); err != nil {
-		return managedFailure("AO could not make a folder for the new copy.", fmt.Errorf("create managed install directory: %w", err))
+		return managedFailure("Could not create the install folder.", fmt.Errorf("create managed install directory: %w", err))
 	}
 	name := nextManagedDir(versionsDir)
 	dir := filepath.Join(versionsDir, name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return managedFailure("AO could not make a folder for the new copy.", fmt.Errorf("create release directory: %w", err))
+		return managedFailure("Could not create the install folder.", fmt.Errorf("create release directory: %w", err))
 	}
 	keep := false
 	defer func() {
@@ -269,11 +267,11 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	binRel := managedBinRel(s.goos, plan.Method, cli)
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
-		return managedFailure(fmt.Sprintf("The install finished, but AO could not find the new %s executable.", cli), fmt.Errorf("%s is missing", binary))
+		return managedFailure(fmt.Sprintf("Installed, but %s was not found.", cli), fmt.Errorf("%s is missing", binary))
 	}
 	version, err := s.probeManagedVersion(ctx, plan.Target, binary)
 	if err != nil {
-		return managedFailure(fmt.Sprintf("The new %s copy did not start or report its version.", cli), err)
+		return managedFailure(fmt.Sprintf("The new %s did not start.", cli), err)
 	}
 	scheme := versionSchemeFor(plan.Target)
 	if pin != "" {

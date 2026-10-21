@@ -254,7 +254,7 @@ func TestManagedUpdateFailureKeepsPathsOutOfTheNotice(t *testing.T) {
 	// npm exits 0 without writing the executable.
 	f.s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error { return nil })
 	job := f.update(t, "1.1.0")
-	if job.Status != StatusFailed || job.Error != "The install finished, but AO could not find the new codex executable." {
+	if job.Status != StatusFailed || job.Error != "Installed, but codex was not found." {
 		t.Fatalf("job = %+v", job)
 	}
 	if missing := filepath.Join(f.root, "codex", "versions", "v1", "bin", "codex"); !strings.Contains(job.Output, missing+" is missing") {
