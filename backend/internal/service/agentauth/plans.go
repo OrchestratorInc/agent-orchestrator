@@ -46,7 +46,7 @@ var plans = []Plan{
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
 	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
-	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
+	ompLoginPlan(),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
 	documentationPlan("unreal-agent", ActionSetup, "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
@@ -128,6 +128,18 @@ func copilotLoginPlan() Plan {
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "/ commands"}}
 	p.sendInitialInputOnReadyTimeout = true
 	p.prepareWorkspace = copilot.EnsureWorkspaceTrusted
+	return p
+}
+
+// ompLoginPlan opens OMP's TUI and injects /login after startup. OMP does not
+// expose a separate login subcommand; waiting for its banner keeps the command
+// out of the startup buffer, while the timeout fallback handles versions whose
+// banner text has changed.
+func ompLoginPlan() Plan {
+	p := plan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "OMP opens its login picker automatically", "https://github.com/can1357/oh-my-pi")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "oh-my-pi"}}
+	p.sendInitialInputOnReadyTimeout = true
 	return p
 }
 
