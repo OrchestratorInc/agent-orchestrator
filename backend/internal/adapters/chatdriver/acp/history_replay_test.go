@@ -33,6 +33,63 @@ func textBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.ContentBlock{Text: &acpsdk.ContentBlockText{Text: text}}
 }
 
+func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
+	const preamble = "Standing instructions from Agent Orchestrator:\n<ao_standing_instructions>rules</ao_standing_instructions>"
+	conv := replayConversation()
+	conv.historyEvents = []ports.ChatEvent{{Kind: ports.ChatEventUserMessageCompleted, Text: preamble}}
+	conv.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if !conv.preambleSpent || len(conv.preamble) != 0 {
+		t.Fatalf("persisted preamble = (%v, %d blocks), want consumed with no duplicate", conv.preambleSpent, len(conv.preamble))
+	}
+
+	// Preamble concatenated with the user prompt in the same turn (e.g. from Antigravity)
+	convCombined := replayConversation()
+	convCombined.historyEvents = []ports.ChatEvent{{Kind: ports.ChatEventUserMessageCompleted, Text: preamble + "\n\nAdd one line to README.md"}}
+	convCombined.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if !convCombined.preambleSpent || len(convCombined.preamble) != 0 {
+		t.Fatalf("persisted combined preamble = (%v, %d blocks), want consumed with no duplicate", convCombined.preambleSpent, len(convCombined.preamble))
+	}
+
+	// A conversation with prior turns (e.g. started in TUI with "hey") must not
+	// inject standing instructions into subsequent mid-conversation user prompts.
+	convTUI := replayConversation()
+	convTUI.historyEvents = []ports.ChatEvent{
+		{Kind: ports.ChatEventUserMessageCompleted, Text: "hey"},
+		{Kind: ports.ChatEventMessageCompleted, Text: "Hey! How can I help you today?"},
+		{Kind: ports.ChatEventUserMessageCompleted, Text: "add one line to readme"},
+	}
+	convTUI.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if !convTUI.preambleSpent || len(convTUI.preamble) != 0 {
+		t.Fatalf("TUI history preamble = (%v, %d blocks), want disarmed", convTUI.preambleSpent, len(convTUI.preamble))
+	}
+
+	// An empty conversation (no prior user turns) arms the preamble for the first prompt.
+	convFresh := replayConversation()
+	convFresh.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if convFresh.preambleSpent || len(convFresh.preamble) != 1 {
+		t.Fatalf("fresh conversation preamble = (%v, %d blocks), want armed", convFresh.preambleSpent, len(convFresh.preamble))
+	}
+}
+
+// A live reconnect replays no history, so AO's durable turn record decides
+// whether the standing instructions were already delivered.
+func TestSetSessionPreambleDisarmsForDurableTurns(t *testing.T) {
+	const preamble = "Standing instructions from Agent Orchestrator:\n<ao_standing_instructions>rules</ao_standing_instructions>"
+
+	reconnected := replayConversation()
+	reconnected.hasDurableTurns = true
+	reconnected.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if !reconnected.preambleSpent || len(reconnected.preamble) != 0 {
+		t.Fatalf("reconnect with durable turns: preamble = (%v, %d blocks), want disarmed", reconnected.preambleSpent, len(reconnected.preamble))
+	}
+
+	fresh := replayConversation()
+	fresh.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if fresh.preambleSpent || len(fresh.preamble) != 1 {
+		t.Fatalf("fresh session: preamble = (%v, %d blocks), want armed", fresh.preambleSpent, len(fresh.preamble))
+	}
+}
+
 func replayUserChunk(sessionID, messageID, text string) acpsdk.SessionNotification {
 	return acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(sessionID),
@@ -156,6 +213,51 @@ func TestACPReplayDrainReconstructsTurnsInOrder(t *testing.T) {
 	}
 	if len(completed) != 2 || completed[0] != string(domain.TurnStateRecovered) || completed[1] != string(domain.TurnStateRecovered) {
 		t.Fatalf("turn states = %q, want [recovered recovered]", completed)
+	}
+}
+
+func TestACPReplayDrainReconstructsTurnsWithoutMessageIDs(t *testing.T) {
+	conv := replayConversation()
+	conv.beginHistoryReplay("session-1")
+
+	updates := []acpsdk.SessionNotification{
+		replayUserChunk("session-1", "", "first question"),
+		replayAgentChunk("session-1", "", "first answer"),
+		replayUserChunk("session-1", "", "second question"),
+		replayAgentChunk("session-1", "", "second answer"),
+	}
+	for _, update := range updates {
+		if err := conv.SessionUpdate(context.Background(), update); err != nil {
+			t.Fatalf("SessionUpdate: %v", err)
+		}
+	}
+	if err := conv.drainAndFinishReplay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	var userTexts, agentTexts, completed []string
+	for _, event := range history {
+		switch event.Kind {
+		case ports.ChatEventUserMessageCompleted:
+			userTexts = append(userTexts, event.Text)
+		case ports.ChatEventMessageCompleted:
+			agentTexts = append(agentTexts, event.Text)
+		case ports.ChatEventTurnCompleted:
+			completed = append(completed, string(event.TurnState))
+		}
+	}
+	if len(userTexts) != 2 || userTexts[0] != "first question" || userTexts[1] != "second question" {
+		t.Fatalf("user texts = %q, want [first question, second question]", userTexts)
+	}
+	if len(agentTexts) != 2 || agentTexts[0] != "first answer" || agentTexts[1] != "second answer" {
+		t.Fatalf("agent texts = %q, want [first answer, second answer]", agentTexts)
+	}
+	if len(completed) != 2 {
+		t.Fatalf("completed turns = %d, want 2", len(completed))
 	}
 }
 

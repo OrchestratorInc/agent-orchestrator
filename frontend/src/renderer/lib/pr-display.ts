@@ -770,3 +770,27 @@ function overflowLabel(total: number, shown: number, noun: PRNoun): string | und
 function pluralize(noun: PRNoun, count: number): string {
 	return appI18n.t(prNounKeys[noun], { count });
 }
+
+/**
+ * owner/name of the repository a pull request URL points at (GitHub
+ * /owner/name/pull/N or GitLab /owner/name/-/merge_requests/N), or undefined.
+ */
+export function prRepositoryFromUrl(raw: string | undefined): string | undefined {
+	if (!raw) return undefined;
+	try {
+		const match = new URL(raw).pathname.match(/^\/([^/]+\/[^/]+)\/(?:pull|issues|-\/merge_requests)\/\d+/);
+		return match?.[1];
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether a session's pull requests span more than one repository (a
+ * multi-repository cloud session can open one per repository), in which case
+ * each one is labelled with its repository.
+ */
+export function prsSpanRepositories(prs: ReadonlyArray<{ url?: string; htmlUrl?: string; repo?: string }>): boolean {
+	const repositories = new Set(prs.map((pr) => (pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) || "").toLowerCase()).filter(Boolean));
+	return repositories.size > 1;
+}

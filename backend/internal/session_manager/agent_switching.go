@@ -3490,6 +3490,40 @@ func (m *Manager) cleanupRecoveredTargetWorkspace(ctx context.Context, rec domai
 	return nil
 }
 
+// sourceRestoreQuarantined reports a session whose agent switch is parked on an
+// unconfirmed source restore: the source stopped, the target never took
+// ownership, and no controller runs for the switch.
+func (m *Manager) sourceRestoreQuarantined(ctx context.Context, id domain.SessionID) bool {
+	store, ok := m.store.(ports.AgentSwitchStore)
+	if !ok {
+		return false
+	}
+	sw, ok, err := store.GetActiveAgentSwitch(ctx, id)
+	return err == nil && ok && sw.RequiresSourceRestore()
+}
+
+// settleSourceRestoreQuarantineOnKill closes a switch parked on an unconfirmed
+// source restore once Kill has stopped the session's controllers, like a kill
+// that wins the source-stop race. Left active, the switch would quarantine the
+// session again at the next startup.
+func (m *Manager) settleSourceRestoreQuarantineOnKill(ctx context.Context, rec domain.SessionRecord) error {
+	store, ok := m.store.(ports.AgentSwitchStore)
+	if !ok {
+		return nil
+	}
+	sw, ok, err := store.GetActiveAgentSwitch(ctx, rec.ID)
+	if err != nil {
+		return err
+	}
+	if !ok || !sw.RequiresSourceRestore() {
+		return nil
+	}
+	recorder := newAgentSwitchFlightRecorder(sw, domain.NormalizeSessionMode(rec.Mode), domain.AgentSwitchExecutionExplicitRecovery)
+	recorder.boundary(domain.AgentSwitchFailureRecoverySettlement)
+	_, err = m.failAgentSwitchWithRecorder(ctx, store, sw, domain.AgentSwitchErrorSourceSessionTerminated, recorder)
+	return err
+}
+
 func (m *Manager) reconcileStoppingSource(ctx context.Context, store ports.AgentSwitchStore, rec domain.SessionRecord, sw domain.AgentSwitch, execution domain.AgentSwitchExecution) (bool, error) {
 	recorder := newAgentSwitchFlightRecorder(sw, domain.SessionModeTUI, execution)
 	if rec.IsTerminated {

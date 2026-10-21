@@ -59,7 +59,7 @@ export function ArtifactsView() {
 			    each other: half the gap between the toolbar and a control. */}
 			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
 				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <FileText className="size-icon-md" aria-hidden="true" /> : null}
+					{showPageTitle ? <File className="size-icon-md" aria-hidden="true" /> : null}
 					{t("artifacts.title")}
 				</h1>
 				<div className="workspace-topbar-actions flex shrink-0 items-center gap-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
@@ -202,6 +202,8 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[] }) {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// Developer mode moves account management to the Harness page.
+	const agentsSection = useUiStore((state) => state.developerMode) ? "harness" : "agents";
 	const { agentReady, create, pending } = useCreateArtifactSession();
 
 	if (!agentReady) {
@@ -209,7 +211,7 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
 				<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.noAgent.title")}</h2>
 				<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.noAgent.description")}</p>
-				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings("agents")}>
+				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings(agentsSection)}>
 					{t("artifacts.noAgent.action")}
 				</Button>
 			</div>

@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -330,5 +331,70 @@ func TestPollReturnsSessionListFailure(t *testing.T) {
 	observer := New(fakeSessions{err: want}, &fakeSink{}, &fakeRuntime{}, nil, Config{Logger: testLogger()})
 	if err := observer.Poll(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+type renderedMemcodeRuntime struct {
+	*fakeRuntime
+	rendered    string
+	styledCalls int
+}
+
+func (r *renderedMemcodeRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	r.styledCalls++
+	return r.rendered, r.err
+}
+
+func TestMemcodeDecisionObservationBlocksAndResolvesOnlyOnCurrentChrome(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	card := "Do you want to proceed?\n❯ 1. Yes\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"
+	idle := "○ idle\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"
+	for _, tc := range []struct {
+		name    string
+		current domain.ActivityState
+		output  string
+		want    domain.ActivityState
+		event   string
+	}{{"approval", domain.ActivityActive, card, domain.ActivityBlocked, "terminal-blocked"}, {"resolved", domain.ActivityBlocked, idle, domain.ActivityIdle, "permission-resolved"}, {"still blocked", domain.ActivityBlocked, card, "", ""}, {"unknown cannot resolve", domain.ActivityBlocked, "loading", "", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := activeSession(now, domain.HarnessMemcode)
+			session.Activity.State = tc.current
+			sink := &fakeSink{}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{output: "stale raw history"}, rendered: tc.output}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatal(sink.signals)
+				}
+				return
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tc.want || sink.signals[0].Event != tc.event || sink.signals[0].LaunchID != "launch-1" {
+				t.Fatal(sink.signals)
+			}
+		})
+	}
+}
+
+func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMemcode)
+	sink := &fakeSink{}
+	rt := &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{output: "⠋ Thinking… (1s · esc to interrupt)"}, rendered: "○ idle\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, rt, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rt.calls != 0 || rt.styledCalls != 1 || len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle {
+		t.Fatal(rt.calls, rt.styledCalls, sink.signals)
+	}
+	rawSink := &fakeSink{}
+	observer = New(fakeSessions{rows: []domain.SessionRecord{session}}, rawSink, &fakeRuntime{output: rt.rendered}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rawSink.signals) != 1 || rawSink.signals[0].State != domain.ActivityIdle {
+		t.Fatal("raw output fallback did not detect current chrome", rawSink.signals)
 	}
 }

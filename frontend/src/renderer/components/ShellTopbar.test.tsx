@@ -591,6 +591,18 @@ describe("ShellTopbar orchestrator actions", () => {
 		});
 	});
 
+	it("opens the project orchestrator from the open-orchestrator shortcut", () => {
+		renderTopbarSessions([worker, orchestrator], worker.id);
+
+		act(() => appShortcutBus.emit({ id: "open-orchestrator" }));
+
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "orch-1" },
+		});
+	});
+
 	it("opens an exited orchestrator without resuming during an interface transition", async () => {
 		const exitedOrchestrator = {
 			...orchestrator,

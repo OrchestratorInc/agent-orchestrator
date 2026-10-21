@@ -270,7 +270,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				pendingInterfaceTransitionSessions.clear();
 				for (const scope of pendingModelCatalogScopes.values()) {
-					invalidate(["agent-models", scope.agentId, scope.projectId]);
+					// Project pickers can resolve to the global catalog in the daemon.
+					// A global update must refresh those views and Settings together.
+					invalidate(scope.projectId
+						? ["agent-models", scope.agentId, scope.projectId]
+						: ["agent-models", scope.agentId]);
 				}
 				pendingModelCatalogScopes.clear();
 			};

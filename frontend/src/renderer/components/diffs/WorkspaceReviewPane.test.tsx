@@ -1,14 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prefetchDefaultWorkspaceReviewDiffs, type WorkspaceFilesResponse } from "../../hooks/useSessionWorkspaceFiles";
+import {
+	defaultWorkspaceReviewTarget,
+	prefetchDefaultWorkspaceReviewDiffs,
+	type FilesChanges,
+	type ReviewTarget,
+	type WorkspaceFilesResponse,
+	type WorkspaceHistoryResponse,
+} from "../../hooks/useSessionWorkspaceFiles";
+import { CHECKED_OUT_BRANCH, buildReviewTarget, isLegacyManifest } from "../../lib/files-review-selection";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { WorkspaceReviewPane } from "./WorkspaceReviewPane";
 
-const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
+const { getMock, postMock, scrollToMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), scrollToMock: vi.fn() }));
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { POST: postMock, GET: getMock },
@@ -47,14 +55,17 @@ vi.mock("@pierre/diffs", () => ({
 }));
 
 vi.mock("@pierre/diffs/react", () => ({
-	CodeView: ({ className, items, options, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
+	CodeView: ({ className, items, options, ref, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
+		ref?: { current: unknown };
 		className: string;
 		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
 		renderAnnotation?: (annotation: { lineNumber: number; side: string }, item: { id: string }) => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number; side: "additions" }, item: { id: string }) => ReactNode;
-	}) => (
+	}) => {
+		if (ref) ref.current = { scrollTo: scrollToMock };
+		return (
 		<div className={className} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS} data-testid="code-view">
 			{items.map((item) => (
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
@@ -65,7 +76,8 @@ vi.mock("@pierre/diffs/react", () => ({
 			))}
 			{items[0] ? renderGutterUtility?.(() => ({ lineNumber: 7, side: "additions" }), items[0]) : null}
 		</div>
-	),
+		);
+	},
 }));
 
 function annotation(): FileAnnotationModel {
@@ -117,9 +129,19 @@ function renderWithQuery(children: ReactNode) {
 	return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider>{children}</TooltipProvider></QueryClientProvider>);
 }
 
-async function selectFirstCommit(subject = "Test commit") {
-	await userEvent.click(screen.getByRole("button", { name: /Commits/ }));
-	await userEvent.click(screen.getByRole("button", { name: new RegExp(subject) }));
+function history(data: WorkspaceFilesResponse, view?: WorkspaceHistoryResponse["view"]): WorkspaceHistoryResponse {
+	return { sessionId: data.sessionId, commits: data.commits, commitsTruncated: false, view };
+}
+
+// What the Files header hands the pane: the default review, or the picked changes.
+function reviewTarget(data: WorkspaceFilesResponse, changes?: FilesChanges): ReviewTarget {
+	if (!changes) return defaultWorkspaceReviewTarget(data);
+	const legacy = isLegacyManifest(data);
+	return buildReviewTarget({ branch: CHECKED_OUT_BRANCH, changes, manifest: data, legacy, history: history(data) });
+}
+
+function commitTarget(data: WorkspaceFilesResponse, sha = data.commits[0].sha): ReviewTarget {
+	return reviewTarget(data, { kind: "commits", shas: [sha] });
 }
 
 describe("WorkspaceReviewPane", () => {
@@ -135,22 +157,74 @@ describe("WorkspaceReviewPane", () => {
 		});
 	});
 
+	it("scrolls to a file the changed-files rail picks, once its diff is in the list", async () => {
+		scrollToMock.mockReset();
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const target = reviewTarget(data);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (scrollRequest?: { path: string; key: number }) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} scrollRequest={scrollRequest} sessionId="sess-1" split={false} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(pane());
+		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		expect(scrollToMock).not.toHaveBeenCalled();
+
+		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
+		await waitFor(() => expect(scrollToMock).toHaveBeenCalledWith({ type: "item", id: `${target.key}:src/App.tsx`, align: "start" }));
+		// A request is acted on once; a new key asks again.
+		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
+		expect(scrollToMock).toHaveBeenCalledTimes(1);
+		view.rerender(pane({ path: "src/App.tsx", key: 2 }));
+		await waitFor(() => expect(scrollToMock).toHaveBeenCalledTimes(2));
+	});
+
+	it("shows an empty review as an icon, its message and the way to the file tree", async () => {
+		const onBrowseAll = vi.fn();
+		const data = workspace([]);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data, { kind: "unstaged" })} filter="" onBrowseAll={onBrowseAll} sessionId="sess-1" split={false} />);
+		const empty = await screen.findByTestId("empty-message");
+		expect(empty).toHaveClass("flex-1", "justify-center", "items-center");
+		expect(empty.querySelector("svg")).not.toBeNull();
+		expect(empty).toHaveTextContent("No unstaged changes.");
+		const browse = screen.getByRole("button", { name: "Browse all files" });
+		await userEvent.click(browse);
+		expect(onBrowseAll).toHaveBeenCalledOnce();
+	});
+
 	it("reuses the matching prefetch query without another diff request", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		await prefetchDefaultWorkspaceReviewDiffs(queryClient, "sess-1", data);
 
-		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
 
 		expect(screen.getByTestId("code-view")).toBeInTheDocument();
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("reuses the prefetched Uncommitted review the Files header opens on", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const file = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" };
+		const data = workspace([file]);
+		data.sections.uncommitted = [file];
+		await prefetchDefaultWorkspaceReviewDiffs(queryClient, "sess-1", data);
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({ body: expect.objectContaining({ scope: "uncommitted" }) }));
+
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data, { kind: "uncommitted" })} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
+		expect(screen.getByTestId("code-view")).toBeInTheDocument();
+		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("renders an image preview for a binary image in the Changes panel", async () => {
 		const data = workspace([{ path: "sample.png", status: "added", additions: 0, deletions: 0, size: 128, binary: true }]);
 
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByAltText("After version of sample.png")).toHaveAttribute(
 			"src",
@@ -167,12 +241,12 @@ describe("WorkspaceReviewPane", () => {
 			.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: secondPatch, truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		const view = render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		const view = render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
 
 		expect((await screen.findByTestId("review-patch")).textContent).toBe(firstPatch);
 		view.unmount();
 		await queryClient.invalidateQueries({ queryKey: ["session-workspace-diffs", "sess-1"], refetchType: "none" });
-		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
 
 		await waitFor(() => expect(screen.getByTestId("review-patch").textContent).toBe(secondPatch));
 		expect(postMock).toHaveBeenCalledTimes(2);
@@ -184,7 +258,7 @@ describe("WorkspaceReviewPane", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
 		expect(postMock.mock.calls.map((call) => call[1].body.paths.length)).toEqual([24, 24, 9]);
-		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
 		expect(screen.getByTestId("code-view")).toBeInTheDocument();
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
 		await waitFor(() => expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" })).toBeInTheDocument());
@@ -197,7 +271,7 @@ describe("WorkspaceReviewPane", () => {
 		// Both patches have identical lengths and first/last 80 characters.
 		const patch = (change: string) => `diff --git a/src/App.tsx b/src/App.tsx\n${"x".repeat(120)}${change}${"x".repeat(120)}`;
 		const response = (change: string) => ({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: patch(change), truncated: false, includedPaths: ["src/App.tsx"], deferred: [], errors: [] }] } });
-		const mount = () => render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		const mount = () => render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
 		postMock.mockResolvedValue(response("old-content"));
 		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
 		if (alreadyOpen) {
@@ -214,19 +288,16 @@ describe("WorkspaceReviewPane", () => {
 
 	it("requests grouped patches and renders a continuous review for a selected commit", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
-		await selectFirstCommit();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
 			body: expect.objectContaining({ commitSha: "commit-1", paths: ["src/App.tsx"], scope: "committed", workspaceVersion: "workspace-1" }),
 		}));
-		expect(screen.getByText("0 of 1 viewed")).toBeInTheDocument();
 		expect(screen.getByTestId("code-view")).toHaveClass("overflow-y-auto");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-overflow", "wrap");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
-		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
 		// Checked styling comes from theme tokens (foreground box, background
@@ -249,7 +320,7 @@ describe("WorkspaceReviewPane", () => {
 			data: { binary: false, content: init.params.query.side === "before" ? "a\n" : "a\nb\n", revision: `rev-${init.params.query.side}`, truncated: false },
 		}));
 		const data = workspace([{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "false"));
 		for (const side of ["before", "after"]) {
@@ -271,7 +342,7 @@ describe("WorkspaceReviewPane", () => {
 			return { data: { binary: false, content: "contents", revision: `rev-${init.params.query.side}`, truncated: false } };
 		});
 		const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
-		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(getMock.mock.calls.every((call) => call[1].params.query.path === "README.md")).toBe(true);
 		release();
@@ -290,9 +361,9 @@ describe("WorkspaceReviewPane", () => {
 			return new Promise(() => {});
 		});
 		const data = workspace([{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }]);
-		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" hostId="host-a" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" hostId="host-a" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
-		const second = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" hostId="host-b" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const second = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" hostId="host-b" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(4));
 		first.unmount();
 		second.unmount();
@@ -317,7 +388,7 @@ describe("WorkspaceReviewPane", () => {
 				return Promise.resolve({ data: { binary: false, content: "contents", revision: `rev-${init.params.query.side}`, truncated: false } });
 			});
 			const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
-			view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+			view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 			await act(async () => { await vi.waitFor(() => expect(getMock).toHaveBeenCalledTimes(2)); });
 			await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
 			expect(stalledSignals).toHaveLength(2);
@@ -338,7 +409,7 @@ describe("WorkspaceReviewPane", () => {
 		const signals: AbortSignal[] = [];
 		getMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => { signals.push(init.signal); return new Promise(() => {}); });
 		const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
-		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		view.unmount();
 		await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
@@ -362,7 +433,7 @@ describe("WorkspaceReviewPane", () => {
 			return { data: { binary: false, content: init.params.query.side === "before" ? "a\n" : "a\nb\n", revision: `rev-${init.params.query.side}`, truncated: false } };
 		});
 		const data = workspace([{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
@@ -382,7 +453,7 @@ describe("WorkspaceReviewPane", () => {
 		});
 		getMock.mockImplementation(() => new Promise(() => {}));
 		const data = workspace([{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
@@ -391,7 +462,7 @@ describe("WorkspaceReviewPane", () => {
 
 	it("keeps the patch-only diff (and its load-more row) when the file may continue", async () => {
 		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
@@ -400,21 +471,21 @@ describe("WorkspaceReviewPane", () => {
 
 	it("keeps saved viewed files collapsed when the review pane remounts", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		first.unmount();
 
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toBeInTheDocument();
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 	});
 
 	it("collapses and expands file items through controlled CodeView state", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
@@ -423,19 +494,33 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "false");
 	});
 
-	it("uses one toggle for collapsing and expanding all files", async () => {
+	it("collapses and expands every file when the Files menu asks, and reports which it is", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const onAllCollapsedChange = vi.fn();
+		function Harness() {
+			const [request, setRequest] = useState<{ expand: boolean; key: number }>();
+			return (
+				<>
+					<button onClick={() => setRequest((current) => ({ expand: false, key: (current?.key ?? 0) + 1 }))} type="button">collapse</button>
+					<button onClick={() => setRequest((current) => ({ expand: true, key: (current?.key ?? 0) + 1 }))} type="button">expand</button>
+					<WorkspaceReviewPane annotation={annotation()} collapseRequest={request} onAllCollapsedChange={onAllCollapsedChange} target={reviewTarget(data)} filter="" sessionId="sess-1" split={false} />
+				</>
+			);
+		}
+		renderWithQuery(<Harness />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
+		// The pane carries no title row of its own: the Files header names the review.
+		expect(screen.queryByText(/of 1 viewed/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Collapse all files" })).not.toBeInTheDocument();
 
-		const toggle = screen.getByRole("button", { name: "Collapse all files" });
-		await userEvent.click(toggle);
-		expect(screen.getByRole("button", { name: "Expand all files" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "collapse" }));
 		expect(screen.getByTestId("code-view").querySelectorAll('[data-collapsed="true"]')).toHaveLength(1);
+		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(true);
 
-		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
-		expect(screen.getByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "expand" }));
 		expect(screen.getByTestId("code-view").querySelectorAll('[data-collapsed="false"]')).toHaveLength(1);
+		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
 	});
 
 	it("shows a feedback box for every open line comment and drops only the one that closes", async () => {
@@ -445,7 +530,7 @@ describe("WorkspaceReviewPane", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const pane = (targets: FileAnnotationModel["targets"]) => (
 			<QueryClientProvider client={queryClient}><TooltipProvider>
-				<WorkspaceReviewPane annotation={{ ...annotation(), targets }} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />
+				<WorkspaceReviewPane annotation={{ ...annotation(), targets }} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />
 			</TooltipProvider></QueryClientProvider>
 		);
 		const { rerender } = render(pane([first, second]));
@@ -460,15 +545,31 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByRole("textbox", { name: /old line 5/ })).toBeInTheDocument();
 	});
 
-	it("closes a file's feedback composer when that file is collapsed", async () => {
+	it("keeps a file feedback composer mounted when that file is collapsed", async () => {
 		const model = annotation();
 		model.targets = [{ path: "src/App.tsx", side: "file", scope: "committed", surface: "review" }];
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={model} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByRole("textbox", { name: /Feedback for src\/App\.tsx/ })).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
-		expect(model.cancel).toHaveBeenCalledOnce();
+		expect(model.cancel).not.toHaveBeenCalled();
+		expect(screen.getByLabelText(/Feedback for src\/App\.tsx/)).toBeInTheDocument();
+	});
+
+	it("opens file feedback from an already collapsed file header", async () => {
+		const model = annotation();
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const pane = () => <QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { rerender } = render(pane());
+		await userEvent.click(await screen.findByRole("button", { name: "Collapse src/App.tsx" }));
+		await userEvent.click(screen.getAllByRole("button", { name: "Add feedback" })[0]);
+		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({ path: "src/App.tsx", side: "file", surface: "review" }));
+		model.targets = [{ path: "src/App.tsx", side: "file", scope: "committed", surface: "review" }];
+		rerender(pane());
+		expect(screen.getByRole("button", { name: "Expand src/App.tsx" })).toBeInTheDocument();
+		expect(await screen.findByLabelText(/Feedback for src\/App\.tsx/)).toBeInTheDocument();
 	});
 
 	it("routes the gutter plus and file actions without opening an external pane", async () => {
@@ -482,8 +583,7 @@ describe("WorkspaceReviewPane", () => {
 			},
 		});
 		const data = committedWorkspace([{ path: "README.md", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={model} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
-		await selectFirstCommit();
+		renderWithQuery(<WorkspaceReviewPane annotation={model} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		const inlineFeedback = screen.getAllByRole("button", { name: "Add feedback" })[1];
@@ -491,24 +591,23 @@ describe("WorkspaceReviewPane", () => {
 		expect(inlineFeedback).not.toHaveClass("opacity-0");
 		await userEvent.click(inlineFeedback);
 		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({ path: "README.md", side: "new", line: 7 }));
-		await userEvent.click(screen.getByRole("button", { name: "Open rich preview" }));
-		expect(onOpenFile).toHaveBeenCalledWith("README.md", { commitSha: "commit-1", mode: "rendered", scope: "committed" });
+		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
+		expect(onOpenFile).toHaveBeenCalledWith("README.md", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"file",scope:"committed"}));
 	});
 
 	it("opens a file diff in the center pane through the dedicated action", async () => {
 		const onOpenFile = vi.fn();
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
-		await selectFirstCommit();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Open diff in center" }));
-		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { commitSha: "commit-1", mode: "diff", scope: "committed" });
+		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"diff",center:true,scope:"committed"}));
 	});
 
 	it("hides the open-in-center action when no center pane is reachable", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} canOpenInCenter={false} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} canOpenInCenter={false} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
@@ -518,8 +617,7 @@ describe("WorkspaceReviewPane", () => {
 	it("opens a changed diff directly in syntax-aware edit mode", async () => {
 		const onOpenFile = vi.fn();
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
-		await selectFirstCommit();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={{...commitTarget(data),source:undefined}} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
@@ -528,7 +626,7 @@ describe("WorkspaceReviewPane", () => {
 
 	it("does not advertise editing for a file the daemon marks read-only", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
@@ -538,7 +636,7 @@ describe("WorkspaceReviewPane", () => {
 		const model = annotation();
 		model.targets = [{ path: "src/App.tsx", side: "file", scope: "committed" }];
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={model} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		const composer = await screen.findByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		// A popover under the header, portaled above the list (so a later file's
@@ -559,152 +657,16 @@ describe("WorkspaceReviewPane", () => {
 			},
 		});
 		const data = committedWorkspace([{ path: "README.md", status: "deleted", additions: 0, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
-		await selectFirstCommit();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
-		expect(onOpenFile).toHaveBeenCalledWith("README.md", { commitSha: "commit-1", mode: "file", scope: "committed" });
-	});
-
-	it("defaults to the combined review and keeps Git-state source tabs available", async () => {
-		const onOpenFile = vi.fn();
-		const unstaged = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "u-1" };
-		const staged = { path: "README.md", status: "modified" as const, additions: 1, deletions: 0, size: 20, binary: false, fileFingerprint: "s-1" };
-		const untracked = { ...staged, path: "notes.txt", status: "added" as const, fileFingerprint: "n-1" };
-		const committed = { ...staged, path: "src/committed.ts", fileFingerprint: "c-1", editable: false };
-		const data = workspace([committed, unstaged, staged, untracked]);
-		data.sections.staged = [staged];
-		data.sections.untracked = [untracked];
-		data.sections.committed = [committed];
-		data.commits = [{ author: "Ada Lovelace", files: [committed], sha: "commit-1", subject: "Test commit", timestamp: "2026-09-10T10:00:00Z" }];
-		postMock.mockImplementation((_path, init) => Promise.resolve({
-			data: {
-				sessionId: "sess-1",
-				workspaceVersion: "workspace-1",
-				groups: [{
-					repository: "",
-					patch: init?.body?.scope === "staged"
-						? "diff --git a/README.md b/README.md\n"
-						: "diff --git a/src/App.tsx b/src/App.tsx\n",
-					truncated: false,
-					includedPaths: [init?.body?.scope === "staged" ? "README.md" : "src/App.tsx"],
-					deferred: [],
-				}],
-			},
-		}));
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
-		const sourceScope = screen.getByRole("button", { name: /Unstaged/ });
-		const stagedScope = screen.getByRole("button", { name: /Staged/ });
-		const combinedScope = screen.getByRole("button", { name: /Changes/ });
-		const untrackedScope = screen.getByRole("button", { name: /Untracked/ });
-		expect(combinedScope).toHaveAttribute("aria-pressed", "true");
-		expect(untrackedScope).toBeInTheDocument();
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
-			body: expect.objectContaining({ commitSha: undefined, paths: ["src/committed.ts", "src/App.tsx", "README.md", "notes.txt"], scope: "combined", workspaceVersion: "workspace-1" }),
-		})));
-		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
-		expect(sourceScope).toHaveAttribute("aria-pressed", "false");
-		expect(stagedScope).toHaveAttribute("aria-pressed", "false");
-		await userEvent.click(stagedScope);
-		expect(stagedScope).toHaveAttribute("aria-pressed", "true");
-		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
-		expect(onOpenFile).not.toHaveBeenCalled();
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
-			body: expect.objectContaining({ paths: ["README.md"], scope: "staged", workspaceVersion: "workspace-1" }),
-		})));
-		await userEvent.click(untrackedScope);
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
-			body: expect.objectContaining({ paths: ["notes.txt"], scope: "untracked", workspaceVersion: "workspace-1" }),
-		})));
-	});
-
-	it("omits empty working-change sources", () => {
-		const unstaged = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "u-1" };
-		const staged = { ...unstaged, path: "README.md", fileFingerprint: "s-1" };
-		const untracked = { ...unstaged, path: "notes.txt", status: "added" as const, fileFingerprint: "n-1" };
-		const data = workspace([unstaged, untracked]);
-		data.sections.staged = [staged];
-		data.sections.untracked = [untracked];
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
-
-		expect(screen.getByRole("button", { name: /Unstaged/ })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /Staged/ })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /Untracked/ })).toBeInTheDocument();
-	});
-
-	it("defaults to the combined source when only one working source is available", async () => {
-		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "u-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
-
-		const sourceButton = screen.getByRole("button", { name: /Unstaged/ });
-		const combinedButton = screen.getByRole("button", { name: /Changes/ });
-		expect(combinedButton).toHaveAttribute("aria-pressed", "true");
-		expect(sourceButton).toHaveAttribute("aria-pressed", "false");
-		await userEvent.click(sourceButton);
-		expect(screen.getByTestId("code-view")).toBeInTheDocument();
-	});
-
-	it("browses GitHub-style commits and reviews the selected commit only", async () => {
-		const onOpenFile = vi.fn();
-		postMock.mockResolvedValue({
-			data: {
-				sessionId: "sess-1",
-				workspaceVersion: "workspace-1",
-				groups: [{ repository: "", patch: "diff --git a/README.md b/README.md\n", truncated: false, includedPaths: ["README.md"], deferred: [] }],
-			},
-		});
-		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "u-1" }]);
-		data.commits = [{
-			author: "Ada Lovelace",
-			files: [{ path: "README.md", status: "modified", additions: 2, deletions: 1, size: 40, binary: false, editable: false, fileFingerprint: "c-1" }],
-			sha: "abcdef1234567890",
-			subject: "Document the commit browser",
-			timestamp: "2026-09-10T10:00:00Z",
-		}];
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
-
-		await userEvent.click(screen.getByRole("button", { name: /Commits/ }));
-		expect(screen.getByRole("list", { name: "Commit history" })).toBeInTheDocument();
-		expect(screen.getByText("README.md")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: /Document the commit browser/ }));
-		await waitFor(() => expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
-			body: expect.objectContaining({ commitSha: "abcdef1234567890", paths: ["README.md"], scope: "committed" }),
-		})));
-		await userEvent.click(await screen.findByRole("button", { name: "Open diff in center" }));
-		expect(onOpenFile).toHaveBeenCalledWith("README.md", { commitSha: "abcdef1234567890", mode: "diff", scope: "committed" });
-	});
-
-	it("opens the first commit when the combined diff is empty but commits have files", async () => {
-		const data = workspace([]);
-		data.commits = [{
-			author: "Ada Lovelace",
-			files: [{ path: "README.md", status: "modified", additions: 2, deletions: 1, size: 40, binary: false, editable: false, fileFingerprint: "c-1" }],
-			sha: "abcdef1234567890",
-			subject: "Revert back to base",
-			timestamp: "2026-09-10T10:00:00Z",
-		}];
-		postMock.mockResolvedValue({
-			data: {
-				sessionId: "sess-1",
-				workspaceVersion: "workspace-1",
-				groups: [{ repository: "", patch: "diff --git a/README.md b/README.md\n", truncated: false, includedPaths: ["README.md"], deferred: [] }],
-			},
-		});
-
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
-
-		expect(screen.queryByRole("button", { name: /Changes/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /Commits/ })).toHaveAttribute("aria-pressed", "true");
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
-			body: expect.objectContaining({ commitSha: "abcdef1234567890", paths: ["README.md"], scope: "committed" }),
-		})));
-		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		expect(onOpenFile).toHaveBeenCalledWith("README.md", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"file",scope:"committed"}));
 	});
 
 	it("offers the full file browser when there are no changes", async () => {
 		const onBrowseAll = vi.fn();
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={workspace([])} filter="" onBrowseAll={onBrowseAll} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(workspace([]))} filter="" onBrowseAll={onBrowseAll} sessionId="sess-1" split={false} />);
 
 		expect(screen.getByText("No changed files found.")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /Unstaged|Staged|Review changes/ })).not.toBeInTheDocument();
@@ -713,38 +675,12 @@ describe("WorkspaceReviewPane", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
-	it("shows the active commit hash on the commits button even when commit is not the active scope", async () => {
-		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "u-1" }]);
-		data.commits = [{
-			author: "Ada Lovelace",
-			files: [{
-				path: "src/App.tsx",
-				status: "modified",
-				additions: 1,
-				deletions: 1,
-				size: 20,
-				binary: false,
-				fileFingerprint: "file-1",
-				editable: false,
-			}],
-			sha: "abcdef1234567890",
-			subject: "Document the commit browser",
-			timestamp: "2026-09-10T10:00:00Z",
-		}];
-
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
-
-		const commitButton = screen.getByRole("button", { name: /Commits/ });
-		expect(commitButton).toHaveTextContent("Commits");
-		expect(screen.getByText("abcdef1")).toBeInTheDocument();
-	});
-
 	it("filters the review without requesting unrelated files", async () => {
 		const files = [
 			{ path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" },
 			{ path: "docs/guide.md", status: "modified" as const, additions: 1, deletions: 0, size: 20, binary: false, fileFingerprint: "file-2" },
 		];
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={committedWorkspace(files)} filter="app" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(committedWorkspace(files))} filter="app" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		await waitFor(() => expect(postMock).toHaveBeenCalled());
 		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["src/App.tsx"]);
@@ -766,7 +702,7 @@ describe("WorkspaceReviewPane", () => {
 				],
 			},
 		});
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("alpha/README.md")).toBeInTheDocument();
 		expect(await screen.findByText("Unable to load this diff.")).toBeInTheDocument();
@@ -779,12 +715,120 @@ describe("WorkspaceReviewPane", () => {
 
 	it("defers lockfile patches until the user explicitly loads them", async () => {
 		const data = committedWorkspace([{ path: "package-lock.json", status: "modified", additions: 800, deletions: 700, size: 600_000, binary: false, fileFingerprint: "lock-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(screen.getByText(/diff is deferred/i)).toBeInTheDocument();
 		expect(postMock).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "Load diff" }));
 		await waitFor(() => expect(postMock).toHaveBeenCalled());
 		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["package-lock.json"]);
+	});
+
+	it("requests the target scope and view", async () => {
+		const file = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, editable: false, fileFingerprint: "file-1" };
+		const data = committedWorkspace([file]);
+		const shas = ["b".repeat(40), "a".repeat(40)];
+		const view = { kind: "branch" as const, name: "feature/menus", tipSha: "c".repeat(40), baseSha: "d".repeat(40), rangeMode: "since_base" as const };
+		const target = buildReviewTarget({
+			branch: { kind: "branch", name: "feature/menus" },
+			changes: { kind: "commits", shas },
+			manifest: data,
+			legacy: false,
+			history: { ...history(data, view), commits: shas.map((sha) => ({ sha, subject: sha, author: "Ada", timestamp: "2026-09-10T10:00:00Z", files: [file] })) },
+			selection: { pending: false, data: { sessionId: "sess-1", tipSha: view.tipSha, baseSha: view.baseSha, contiguous: true, combinable: true, files: [file], summary: { files: 1, additions: 1, deletions: 1 }, truncated: false } },
+		});
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
+			body: expect.objectContaining({
+				branch: "feature/menus",
+				commitShas: shas,
+				expectedBaseSha: view.baseSha,
+				expectedTipSha: view.tipSha,
+				paths: ["src/App.tsx"],
+				scope: "committed",
+				workspaceVersion: undefined,
+			}),
+		})));
+	});
+
+	it("renders the not-combinable message with Include commits in between", async () => {
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const target: ReviewTarget = {
+			...reviewTarget(data, { kind: "commits", shas: ["b".repeat(40), "a".repeat(40)] }),
+			files: undefined,
+			state: "not_combinable",
+			conflict: { commitSha: "a".repeat(40), paths: ["src/App.tsx"], reason: "conflict", subject: "Rename the app" },
+		};
+		const onIncludeCommitsBetween = vi.fn();
+		const onShowAllCommits = vi.fn();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} onIncludeCommitsBetween={onIncludeCommitsBetween} onShowAllCommits={onShowAllCommits} sessionId="sess-1" split={false} />);
+
+		expect(screen.getByText(/"Rename the app" depends on changes from commits you didn't select/)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Include commits in between" }));
+		expect(onIncludeCommitsBetween).toHaveBeenCalledOnce();
+		await userEvent.click(screen.getByRole("button", { name: "Show all commits" }));
+		expect(onShowAllCommits).toHaveBeenCalledOnce();
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("says it is combining commits while the selection loads", () => {
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const target: ReviewTarget = { ...reviewTarget(data, { kind: "commits", shas: ["b".repeat(40), "a".repeat(40)] }), files: undefined, state: "pending" };
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+
+		expect(screen.getByText("Combining commits…")).toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("offers Retry when the commits it combines fail to load", async () => {
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const target: ReviewTarget = { ...reviewTarget(data, { kind: "commits", shas: ["b".repeat(40), "a".repeat(40)] }), files: undefined, state: "error", error: new Error("Unable to combine commits") };
+		const onRetry = vi.fn();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onRetry={onRetry} sessionId="sess-1" split={false} />);
+
+		expect(screen.getByText("Unable to combine commits")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+	});
+
+	it("keeps open actions available for historical targets", async () => {
+		const image = { path: "logo.png", status: "modified" as const, additions: 0, deletions: 0, size: 128, binary: true };
+		const file = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" };
+		const data = committedWorkspace([file, image]);
+		const target: ReviewTarget = { ...commitTarget(data), view: { branch: "feature/menus" }, source:{kind:"snapshot",view:{branch:"feature/menus"},label:"feature/menus"}, openable: true };
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
+
+		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open diff in center" })).toBeInTheDocument();
+		expect(screen.getAllByRole("button", { name: "Add feedback" }).length).toBeGreaterThan(0);
+		// The image preview reads the worktree, so another branch's image falls back to the placeholder.
+		expect(screen.getByText("Binary file preview is not available.")).toBeInTheDocument();
+		expect(screen.queryByAltText(/version of logo\.png/)).not.toBeInTheDocument();
+	});
+
+	it("keys viewed state by target key", async () => {
+		const file = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" };
+		const data = committedWorkspace([file]);
+		data.commits = [
+			{ ...data.commits[0], sha: "b".repeat(40), subject: "Second" },
+			{ ...data.commits[0], sha: "a".repeat(40), subject: "First" },
+		];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (target: ReviewTarget) => (
+			<QueryClientProvider client={queryClient}><TooltipProvider>
+				<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />
+			</TooltipProvider></QueryClientProvider>
+		);
+		const { rerender } = render(pane(commitTarget(data, "a".repeat(40))));
+		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		expect(JSON.parse(window.localStorage.getItem(`ao.files.viewed.sess-1.commit:${"a".repeat(40)}`) ?? "{}")).toEqual({ "src/App.tsx": "file-1" });
+
+		rerender(pane(commitTarget(data, "b".repeat(40))));
+		expect(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" })).not.toBeChecked();
+		rerender(pane(commitTarget(data, "a".repeat(40))));
+		expect(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toBeChecked();
 	});
 });

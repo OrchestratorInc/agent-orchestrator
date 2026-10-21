@@ -63,7 +63,7 @@ function isViewedRecord(file: CloudCpWorkspaceReviewFileSummary, records: Viewed
 }
 
 export function CloudWorkspaceReviewPane({
-	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, sessionId, split,
+	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, repository, sessionId, split,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
@@ -73,12 +73,14 @@ export function CloudWorkspaceReviewPane({
 	onBrowseAll: () => void;
 	onOpenFile?: (path: string, options?: CloudFileOpenOptions) => void;
 	orgId: string;
+	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
+	repository?: string;
 	sessionId: string;
 	split: boolean;
 }) {
 	const { t } = useTranslation();
 	const first = useMemo(() => initialSelection(data), [data]);
-	const storedSelection = useUiStore((state) => state.inspectorSessions[sessionId]?.cloudReviewSelection);
+	const storedSelection = useUiStore((state) => state.inspectorSessions[sessionId]?.cloudReviewSelection?.[repository ?? ""]);
 	const setStoredSelection = useUiStore((state) => state.setCloudReviewSelection);
 	const scope = storedSelection?.scope ?? first.scope;
 	const commitSha = storedSelection ? storedSelection.commitSha : first.commitSha;
@@ -96,7 +98,7 @@ export function CloudWorkspaceReviewPane({
 		[allFiles, normalizedFilter],
 	);
 	const selectionKey = selectedCommit ? `commit:${selectedCommit.sha}` : scope;
-	const storageKey = `ao.cloud.files.viewed.${sessionId}.${selectionKey}`;
+	const storageKey = `ao.cloud.files.viewed.${sessionId}.${repository ? `${repository}.` : ""}${selectionKey}`;
 	const [viewedRecords, setViewedRecords] = useState<ViewedRecords>(() => readViewedRecords(storageKey));
 	useEffect(() => {
 		setViewedRecords(readViewedRecords(storageKey));
@@ -115,8 +117,8 @@ export function CloudWorkspaceReviewPane({
 		if (scope === "committed" && selectedCommit) return;
 		if (scope === "combined") return;
 		if (scope !== "committed" && data.sections[scope].length > 0) return;
-		setStoredSelection(sessionId, first);
-	}, [data.sections, first, scope, selectedCommit, sessionId, setStoredSelection]);
+		setStoredSelection(sessionId, repository, first);
+	}, [data.sections, first, scope, selectedCommit, sessionId, repository, setStoredSelection]);
 
 	const requested = files.filter((file) => !deferredByDefault(file) || loadedDeferred.has(file.path));
 	const batches = chunk(requested.map((file) => file.path));
@@ -144,8 +146,8 @@ export function CloudWorkspaceReviewPane({
 		window.localStorage.setItem(storageKey, JSON.stringify(next));
 		return next;
 	});
-	const selectScope = (next: CloudCpWorkspaceReviewScope) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, { scope: next }); setCommitBrowserOpen(false); };
-	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, { scope: "committed", commitSha: commit.sha }); setCommitBrowserOpen(false); };
+	const selectScope = (next: CloudCpWorkspaceReviewScope) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, repository, { scope: next }); setCommitBrowserOpen(false); };
+	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, repository, { scope: "committed", commitSha: commit.sha }); setCommitBrowserOpen(false); };
 	const collapseFile = useCallback((path: string) => {
 		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsed((current) => {

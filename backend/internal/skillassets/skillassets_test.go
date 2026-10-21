@@ -129,6 +129,29 @@ func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	}
 }
 
+func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"using-ao/commands/review.md", "normal review-only worker without claiming or attaching the target PR"},
+		{"using-ao/commands/spawn.md", "Spawn a normal worker to review someone else's PR without taking ownership"},
+		{"using-ao/commands/session.md", "Reviewing someone else's PR"},
+	} {
+		body, err := files.ReadFile(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(strings.Fields(string(body)), " "), tc.want) {
+			t.Fatalf("%s missing %q", tc.path, tc.want)
+		}
+	}
+	spawn, _ := files.ReadFile("using-ao/commands/spawn.md")
+	if strings.Contains(string(spawn), `--name "review-pr-88" --claim-pr`) {
+		t.Fatal("spawn guidance still claims the review target")
+	}
+}
+
 // TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
 // skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
 // second run must clobber cleanly, leaving no stale files. This is the whole

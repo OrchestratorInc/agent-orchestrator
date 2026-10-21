@@ -74,6 +74,17 @@ describe("cloud control-plane Coder template parameters", () => {
 			expect.objectContaining({ method: "GET" }),
 		);
 	});
+
+	it("evaluates a template's parameters with draft values", async () => {
+		const parameters = [{ name: "other_github_repo", type: "string", mutable: false, required: false, defaultValue: "" }];
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ parameters }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.evaluateCoderTemplateParameters("org/a", "tpl 1", { github_repos: "[\"Other\"]" })).resolves.toEqual({ parameters });
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/coder-templates/tpl%201/parameters/evaluate");
+		expect(init).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(init.body))).toEqual({ values: { github_repos: "[\"Other\"]" } });
+	});
 });
 
 describe("cloud control-plane session lifecycle", () => {
@@ -159,6 +170,11 @@ describe("cloud control-plane session lifecycle", () => {
 			expect.objectContaining({ method: "GET" }),
 		);
 		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
+		await client.listChatEvents("org/1", "session/1", { after: 0, limit: 500, types: ["workspace.script.step", "agent.ready"] });
+		expect(fetchMock).toHaveBeenLastCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?after=0&limit=500&types=workspace.script.step%2Cagent.ready",
+			expect.objectContaining({ method: "GET" }),
+		);
 	});
 
 	it("reads a Cloud project and patches only supplied settings", async () => {

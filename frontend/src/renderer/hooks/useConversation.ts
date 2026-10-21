@@ -71,6 +71,8 @@ export interface ConversationSendInput {
 	excerpts?: WireExcerptReference[];
 	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
+	/** The user's one-click "continue" after stopping a turn. */
+	continuation?: boolean;
 }
 
 interface ConversationSendMutationInput {
@@ -127,6 +129,8 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A continue after a stop, drawn as a marker while it is sent. */
+	continuation?: boolean;
 	createdAt: string;
 	/** A hibernated send is acknowledged locally while the provider wakes. */
 	backgroundWake?: boolean;
@@ -488,6 +492,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
+				continuation: variables.input.continuation,
 				excerpts: variables.input.excerpts?.map((excerpt) => ({
 					conversationId: excerpt.conversationId,
 					text: excerpt.text,
@@ -897,6 +902,20 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 	});
 
+	const autoResume = useMutation({
+		mutationFn: async ({ targetSessionId, sourceTurnId, enabled }: ConversationSessionMutationInput & { sourceTurnId: string; enabled: boolean }) => {
+			const { error } = await clientForSessionHost(hostId).PATCH(
+				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume",
+				{
+					params: { path: { sessionId: targetSessionId, turnId: sourceTurnId } },
+					body: { enabled },
+				},
+			);
+			if (error) throw error;
+		},
+		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
+	});
+
 	const editMessage = useMutation({
 		mutationFn: async ({
 			targetSessionId,
@@ -975,6 +994,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
+	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
 
 	return {
@@ -1039,6 +1059,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		rollbackPending: rollback.isPending,
 		rollbackError: rollback.error ? apiErrorMessage(rollback.error) : undefined,
 		retryControl: {
+			setAutoResume: (turnId: string, enabled: boolean) => {
+				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+				return autoResume.mutateAsync({ targetSessionId: sessionId, sourceTurnId: turnId, enabled });
+			},
+			autoResumePending: autoResume.isPending && autoResumeTargetsCurrentSession,
+			autoResumeError: autoResumeTargetsCurrentSession && autoResume.error
+				? apiErrorMessage(autoResume.error) : undefined,
+			autoResumeTurnId: autoResumeTargetsCurrentSession ? autoResume.variables?.sourceTurnId : undefined,
 			retry: (turnId: string) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 				const requestId = crypto.randomUUID();
@@ -1480,6 +1508,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	].sort((a, b) => a.sequence - b.sequence);
 
 	return {
+		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		sessionId: wire.sessionId,
 		harness: wire.harness ?? "",
@@ -1567,7 +1596,13 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			providerTurnId: turn.providerTurnId,
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
+			hasHumanPrompt: turn.hasHumanPrompt,
 			errorMessage: turn.errorMessage,
+			usageLimit: turn.usageLimit ? {
+				resetsAt: turn.usageLimit.resetsAt ?? undefined,
+				autoResume: turn.usageLimit.autoResume,
+				resumeError: turn.usageLimit.resumeError,
+			} : undefined,
 			requestedAt: turn.requestedAt,
 			startedAt: turn.startedAt ?? undefined,
 			completedAt: turn.completedAt ?? undefined,
@@ -1693,6 +1728,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			sourceRevision: item.sourceRevision ?? undefined,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
+		continuation: wire.continuation || undefined,
 		streaming: wire.streaming,
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,
@@ -1719,9 +1755,24 @@ function toActivity(wire: WireActivity): ConversationActivity {
 		// Rendering from this is what keeps the card from drawing a button the
 		// provider will reject.
 		decisions: readDecisions(detail),
+		inputResponse: wire.activityKind === "user_input" ? readInputResponse(detail) : undefined,
 		detail: detail as ConversationActivity["detail"],
 		createdAt: wire.createdAt,
 	};
+}
+
+function readInputResponse(detail: Record<string, unknown>): ConversationActivity["inputResponse"] {
+	const action = detail.action;
+	if (action !== "accept" && action !== "decline" && action !== "cancel") return undefined;
+	const content = detail.content;
+	return {
+		action,
+		content: isInputContent(content) ? content : undefined,
+	};
+}
+
+function isInputContent(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readDecisions(detail: Record<string, unknown>): DecisionOption[] | undefined {

@@ -216,7 +216,7 @@ func (s *Supervisor) readTerminalStream(
 				return false
 			}
 			if terminal == s.terminals[s.AgentTerminalID] {
-				s.lastTUIInputAt = time.Now()
+				s.noteAgentTerminalInput(frame.Data)
 			}
 			s.mu.Unlock()
 			if _, err := terminal.pty.Write(frame.Data); err != nil {

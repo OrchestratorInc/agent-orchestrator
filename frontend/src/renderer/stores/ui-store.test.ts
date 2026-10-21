@@ -94,6 +94,38 @@ async function bootStore() {
 	return (await import("./ui-store")).useUiStore;
 }
 
+describe("Cloud review persistence", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("normalizes the main repository and preserves sibling and session selections", () => {
+		const store = useUiStore.getState();
+		store.setCloudReviewSelection("sess-1", undefined, { scope: "staged" });
+		const before = useUiStore.getState();
+		store.setCloudReviewSelection("sess-1", "", { scope: "staged" });
+		expect(useUiStore.getState()).toBe(before);
+		store.setCloudReviewSelection("sess-1", "11x", { scope: "committed", commitSha: "abc123" });
+		store.setCloudReviewSelection("sess-2", undefined, { scope: "combined" });
+		expect(useUiStore.getState().inspectorSessions["sess-1"].cloudReviewSelection).toEqual({
+			"": { scope: "staged" }, "11x": { scope: "committed", commitSha: "abc123" },
+		});
+		expect(useUiStore.getState().inspectorSessions["sess-2"].cloudReviewSelection).toEqual({ "": { scope: "combined" } });
+	});
+
+	it("remembers the active repository per session without redundant writes", () => {
+		const store = useUiStore.getState();
+		store.setCloudReviewRepository("sess-1", "11x");
+		const before = useUiStore.getState();
+		store.setCloudReviewRepository("sess-1", "11x");
+		store.setCloudReviewRepository("sess-2", "");
+		expect(useUiStore.getState()).toBe(before);
+		expect(useUiStore.getState().inspectorSessions["sess-2"]).toBeUndefined();
+		store.setCloudReviewRepository("sess-1", "");
+		expect(useUiStore.getState().inspectorSessions["sess-1"].cloudReviewRepository).toBe("");
+	});
+});
+
 describe("remoteHosts flag", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -202,6 +234,33 @@ describe("file display modes", () => {
 		useUiStore.getState().setFilesChangedOnly("sess-1", false);
 		useUiStore.getState().setFileDisplayMode("sess-1", "README.md", "rendered", 1);
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly).toBe(false);
+	});
+});
+
+describe("files review selection", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("shares one pick per session and resets it to the default", () => {
+		const selection = { branch: { kind: "branch", name: "main" }, changes: { kind: "commits", shas: ["a".repeat(40)] } } as const;
+		useUiStore.getState().setFilesChangedOnly("sess-1", false);
+		useUiStore.getState().setFilesSelection("sess-1", selection);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBe(selection);
+		expect(useUiStore.getState().inspectorSessions["sess-2"]?.filesSelection).toBeUndefined();
+
+		useUiStore.getState().resetFilesSelection("sess-1");
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly).toBe(false);
+	});
+
+	it("leaves the store untouched when nothing changes", () => {
+		const selection = { branch: { kind: "checked_out" }, changes: { kind: "staged" } } as const;
+		useUiStore.getState().setFilesSelection("sess-1", selection);
+		const before = useUiStore.getState().inspectorSessions;
+		useUiStore.getState().setFilesSelection("sess-1", selection);
+		useUiStore.getState().resetFilesSelection("sess-2");
+		expect(useUiStore.getState().inspectorSessions).toBe(before);
 	});
 });
 

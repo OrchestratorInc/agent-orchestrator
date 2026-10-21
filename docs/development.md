@@ -134,6 +134,17 @@ npm run lint
 
 ### Code generation
 
+Create new SQLite migrations from the repository root:
+
+```bash
+npm run migration:create -- add_reports
+```
+
+The command creates a Goose SQL template with a UTC `YYYYMMDDHHMMSSsss` ID.
+Fill in its SQL and append the generated ID and filename to `shippedMigrations`
+in `backend/internal/storage/sqlite/migrate_burned_versions_test.go`.
+Keep existing migration IDs, filenames, and SQL unchanged.
+
 ```bash
 # Regenerate sqlc code after editing queries or schema
 npm run sqlc

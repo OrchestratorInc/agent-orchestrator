@@ -575,6 +575,35 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
+		vi.useFakeTimers();
+		const queryClient = new QueryClient();
+		let disconnect: (() => void) | undefined;
+		try {
+			const keys = [
+				["agent-models", "codex", ""],
+				["agent-models", "codex", "", "catalog"],
+				["agent-models", "codex", "proj-1"],
+				["agent-models", "claude-code", ""],
+				["agent-models", "remote-box", "codex", ""],
+			];
+			for (const key of keys) queryClient.setQueryData(key, { models: [] });
+			disconnect = createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 45, projectId: "", type: "session_updated",
+				payload: { kind: "model_catalog", agentId: "codex", projectId: "" },
+				createdAt: "2026-09-07T08:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			for (const key of keys.slice(0, 3)) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+			for (const key of keys.slice(3)) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+		} finally {
+			disconnect?.();
+			queryClient.clear();
+			vi.useRealTimers();
+		}
+	});
+
 	it("refetches cached unavailable state after the post-spawn session update", async () => {
 		vi.useFakeTimers();
 		let disconnect: (() => void) | undefined;

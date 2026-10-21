@@ -1,10 +1,13 @@
 package pr
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -62,6 +65,20 @@ type fakeActionWriter struct {
 	comments         []domain.PullRequestComment
 	writeErr         error
 	threadWriteErr   error
+	mergedURL        string
+	mergeCommitSHA   string
+	mergedAt         time.Time
+}
+
+func (f *fakeActionWriter) MarkPRMerged(_ context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
+	f.writeCalls++
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	f.mergedURL = prURL
+	f.mergeCommitSHA = mergeCommitSHA
+	f.mergedAt = mergedAt
+	return nil
 }
 
 func (f *fakeActionWriter) WriteSCMObservation(_ context.Context, _ domain.PullRequest, _ []domain.PullRequestCheck, _ []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, _ ports.ReviewWriteMode) error {
@@ -93,6 +110,20 @@ type fakeSCMAction struct {
 	resolveErrs     []error
 	resolveCalls    int
 	resolveRequests []ports.SCMReviewResolveRequest
+}
+
+type fakeActionLifecycle struct {
+	calls     int
+	sessionID domain.SessionID
+	obs       ports.SCMObservation
+	err       error
+}
+
+func (f *fakeActionLifecycle) ApplySCMObservation(_ context.Context, sessionID domain.SessionID, obs ports.SCMObservation) error {
+	f.calls++
+	f.sessionID = sessionID
+	f.obs = obs
+	return f.err
 }
 
 func (f *fakeSCMAction) FetchPullRequests(context.Context, []ports.SCMPRRef) ([]ports.SCMObservation, error) {
@@ -145,11 +176,70 @@ func TestActionServiceMerge_GuardsAndSquashMergesExactHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.PRNumber != 42 || result.Method != "squash" || result.MergeCommitSHA != "merge-sha" {
+	if result.PRNumber != 42 || result.Method != "squash" || result.State != domain.PRStateMerged || result.MergeCommitSHA != "merge-sha" {
 		t.Fatalf("result = %#v", result)
 	}
 	if scm.mergeCalls != 1 || scm.request.ExpectedHeadSHA != pr.HeadSHA || scm.request.Method != ports.SCMMergeSquash {
 		t.Fatalf("request = %#v, calls = %d", scm.request, scm.mergeCalls)
+	}
+}
+
+func TestActionServiceMerge_PersistsMergedStateImmediately(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	pr.SessionID = "session-1"
+	mergedAt := time.Date(2026, 10, 19, 11, 6, 22, 0, time.UTC)
+	writer := &fakeActionWriter{}
+	lifecycle := &fakeActionLifecycle{}
+	svc := NewActionService(ActionDeps{
+		Store:       &fakeActionStore{pr: pr, ok: true},
+		Reader:      scm,
+		Merger:      scm,
+		MergeWriter: writer,
+		Lifecycle:   lifecycle,
+		Clock:       func() time.Time { return mergedAt },
+	})
+
+	result, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writer.writeCalls != 1 {
+		t.Fatalf("writes=%d, want one merged-state write", writer.writeCalls)
+	}
+	if writer.mergedURL != pr.URL || writer.mergeCommitSHA != "merge-sha" || !writer.mergedAt.Equal(mergedAt) {
+		t.Fatalf("persisted merge url=%q sha=%q at=%s", writer.mergedURL, writer.mergeCommitSHA, writer.mergedAt)
+	}
+	if !result.StateChangedAt.Equal(mergedAt) {
+		t.Fatalf("result stateChangedAt = %s, want %s", result.StateChangedAt, mergedAt)
+	}
+	if lifecycle.calls != 1 || lifecycle.sessionID != pr.SessionID || !lifecycle.obs.PR.Merged || lifecycle.obs.PR.State != string(domain.PRStateMerged) || lifecycle.obs.PR.MergeCommitSHA != "merge-sha" || !lifecycle.obs.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("lifecycle calls=%d session=%q observation=%+v", lifecycle.calls, lifecycle.sessionID, lifecycle.obs)
+	}
+}
+
+func TestActionServiceMerge_LocalWriteFailureStillReturnsRemoteSuccess(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	writer := &fakeActionWriter{writeErr: errors.New("database locked")}
+	lifecycle := &fakeActionLifecycle{}
+	var logs bytes.Buffer
+	svc := NewActionService(ActionDeps{
+		Store:       &fakeActionStore{pr: pr, ok: true},
+		Reader:      scm,
+		Merger:      scm,
+		MergeWriter: writer,
+		Lifecycle:   lifecycle,
+		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+
+	result, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
+	if err != nil || result.State != domain.PRStateMerged {
+		t.Fatalf("result=%+v err=%v, want authoritative merge success", result, err)
+	}
+	if !strings.Contains(logs.String(), "local state persistence failed") || !strings.Contains(logs.String(), pr.URL) {
+		t.Fatalf("missing persistence diagnostic: %s", logs.String())
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("lifecycle calls=%d, want 0 without a durable merge state", lifecycle.calls)
 	}
 }
 

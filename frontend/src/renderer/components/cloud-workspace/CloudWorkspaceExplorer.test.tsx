@@ -2,10 +2,11 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cloudWorkspaceReviewQueryKey } from "../../hooks/useCloudWorkspaceReview";
 import type { CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -55,12 +56,26 @@ function RemountingExplorer({ activeSession }: { activeSession: WorkspaceSession
 	</div>;
 }
 
-function renderExplorer(activeSession: WorkspaceSession = session) {
+function renderExplorer(activeSession: WorkspaceSession = session, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	return render(
-		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+		<QueryClientProvider client={queryClient}>
 			<TooltipProvider><RemountingExplorer activeSession={activeSession} /></TooltipProvider>
 		</QueryClientProvider>,
 	);
+}
+
+function mockRepositories() {
+	const main = mixedReview();
+	main.repositories = [
+		{ name: "repository", label: "alice", main: true, present: true },
+		{ name: "11x", present: true },
+	];
+	const sibling = mixedReview();
+	sibling.sections = { unstaged: [], staged: [], untracked: [changed("src/App.tsx", "untracked")], committed: [changed("src/old.ts")] };
+	sibling.commits = [{ ...sibling.commits[0], sha: "987654321", subject: "Sibling work" }];
+	getWorkspaceReview.mockImplementation((_org: string, _session: string, options?: { repository?: string }) =>
+		Promise.resolve(options?.repository === "11x" ? sibling : main));
+	getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
 }
 
 describe("CloudWorkspaceExplorer", () => {
@@ -160,5 +175,163 @@ describe("CloudWorkspaceExplorer", () => {
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("retains each repository's scope and viewed records across switching and maximize/minimize remounts", async () => {
+		mockRepositories();
+		renderExplorer();
+		await userEvent.click(await screen.findByRole("button", { name: /^Staged/ }));
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		expect(screen.getByText("1 of 2 viewed")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
+		expect(await screen.findByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("0 of 1 viewed")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("tab", { name: "alice" }));
+		expect(await screen.findByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("1 of 2 viewed")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("1 of 2 viewed")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
+		await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
+	});
+
+	it("restores separate commit selections for the main and sibling repository after remounts", async () => {
+		mockRepositories();
+		renderExplorer();
+		await userEvent.click(await screen.findByRole("button", { name: /^Commits/ }));
+		await userEvent.click(screen.getByRole("button", { name: /Previous work/ }));
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
+		expect(await screen.findByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(screen.getByRole("button", { name: /^Commits/ }));
+		await userEvent.click(screen.getByRole("button", { name: /Sibling work/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("9876543")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("tab", { name: "alice" }));
+		await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("abcdef1")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByText("9876543")).toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions[session.id].cloudReviewSelection).toEqual({
+			"": { scope: "committed", commitSha: "abcdef123" },
+			"11x": { scope: "committed", commitSha: "987654321" },
+		});
+	});
+
+	it("isolates the active repository and review target between sessions through further remounts", async () => {
+		mockRepositories();
+		const otherSession = { ...session, id: "session-2" };
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = renderExplorer(session, queryClient);
+		await userEvent.click(await screen.findByRole("tab", { name: "11x" }));
+		await userEvent.click(await screen.findByRole("button", { name: /^Commits/ }));
+		await userEvent.click(screen.getByRole("button", { name: /Sibling work/ }));
+		const switchSession = (activeSession: WorkspaceSession) => view.rerender(
+			<QueryClientProvider client={queryClient}><TooltipProvider><RemountingExplorer activeSession={activeSession} /></TooltipProvider></QueryClientProvider>,
+		);
+		switchSession(otherSession);
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Unstaged/ })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(screen.getByRole("button", { name: /^Staged/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
+
+		switchSession(session);
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(await screen.findByText("9876543")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByText("9876543")).toBeInTheDocument();
+
+		switchSession(otherSession);
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it.each(["empty scope", "missing commit"])("persists the fallback for a saved %s through another maximize/minimize remount", async (scenario) => {
+		getWorkspaceReview.mockResolvedValue(mixedReview());
+		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderExplorer(session, queryClient);
+		if (scenario === "empty scope") {
+			await userEvent.click(await screen.findByRole("button", { name: /^Staged/ }));
+		} else {
+			await userEvent.click(await screen.findByRole("button", { name: /^Commits/ }));
+			await userEvent.click(screen.getByRole("button", { name: /Previous work/ }));
+		}
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		const updated = mixedReview();
+		updated.workspaceVersion = "v2";
+		if (scenario === "empty scope") updated.sections.staged = [];
+		else updated.commits = [];
+		getWorkspaceReview.mockResolvedValue(updated);
+		queryClient.setQueryData([...cloudWorkspaceReviewQueryKey("https://cloud.test", "org-1", session.id), "summary"], updated);
+		await waitFor(() => expect(screen.getByRole("button", { name: /^Unstaged/ })).toHaveAttribute("aria-pressed", "true"));
+		expect(useUiStore.getState().inspectorSessions[session.id].cloudReviewSelection?.[""]).toEqual({ scope: "unstaged" });
+		await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+		expect(await screen.findByRole("button", { name: /^Unstaged/ })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		expect(await screen.findByRole("button", { name: /^Unstaged/ })).toHaveAttribute("aria-pressed", "true");
+		expect(useUiStore.getState().inspectorSessions[session.id].cloudReviewSelection?.[""]).toEqual({ scope: "unstaged" });
+	});
+
+	it("reviews one repository at a time in a multi-repository session", async () => {
+		const file = (path: string) => ({ path, status: "modified", additions: 1, deletions: 0, size: 10, binary: false, editable: true, fileFingerprint: path });
+		const summary = (path: string, withRepositories: boolean) => ({
+			workspaceVersion: "v1", files: [], truncated: false, commits: [], summary: { files: 1, additions: 1, deletions: 0 },
+			sections: { staged: [], unstaged: [file(path)], untracked: [], committed: [] },
+			...(withRepositories ? { repositories: [
+				{ name: "11x", repository: "acme/11x", present: true },
+				// Freestyle and Coder check the main repository out into a fixed folder.
+				{ name: "repository", label: "alice", repository: "acme/alice", main: true, present: true },
+				{ name: "voice-calling-ai", present: false },
+			] } : {}),
+		});
+		getWorkspaceReview.mockReset().mockImplementation((_org: string, _session: string, options?: { repository?: string }) =>
+			Promise.resolve(options?.repository === "11x" ? summary("server/main.go", false) : summary("src/App.tsx", true)));
+		getWorkspaceReviewDiffs.mockReset().mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+		const onOpenFile = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TooltipProvider><CloudWorkspaceExplorer onOpenFile={onOpenFile} session={session} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
+		const tabs = screen.getByRole("tablist", { name: "Repositories" });
+		// The main repository comes first; a missing checkout cannot be picked.
+		expect(within(tabs).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["alice", "11x", "voice-calling-ai"]);
+		expect(within(tabs).getByRole("tab", { name: "voice-calling-ai" })).toBeDisabled();
+		await userEvent.click(within(tabs).getByRole("tab", { name: "11x" }));
+		expect(await screen.findByText("server/main.go")).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ repository: "11x" }));
+		expect(getWorkspaceReviewDiffs).toHaveBeenCalledWith("org-1", "session-1", expect.anything(), expect.objectContaining({ repository: "11x" }));
+		// A sibling's file opens as ../<repository>/<path>.
+		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
+		expect(onOpenFile).toHaveBeenCalledWith("../11x/server/main.go", expect.anything());
 	});
 });
