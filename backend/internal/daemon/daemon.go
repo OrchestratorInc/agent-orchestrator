@@ -1335,11 +1335,18 @@ func Run() error {
 	// The tmux server itself needs no signal: it exits once its last session
 	// ends, and a user-opened shell terminal legitimately keeps it alive.
 	if srv.TeardownChildrenRequested() {
-		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-		if err := sessMgr.StopAllSessionProcesses(teardownCtx); err != nil {
-			log.Error("session process teardown on stop", "err", err)
+		// Ships dark for now (owner call on issue #35): without the opt-in env
+		// the marker is acknowledged but ignored, so `ao stop` keeps stopping
+		// only the daemon, as before #112.
+		if stopTeardownEnabled() {
+			teardownCtx, teardownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			if err := sessMgr.StopAllSessionProcesses(teardownCtx); err != nil {
+				log.Error("session process teardown on stop", "err", err)
+			}
+			teardownCancel()
+		} else {
+			log.Info("stop teardown requested but disabled (set AO_STOP_TEARDOWN=1 to enable); leaving session processes running")
 		}
-		teardownCancel()
 	}
 	if usageDone != nil {
 		<-usageDone
