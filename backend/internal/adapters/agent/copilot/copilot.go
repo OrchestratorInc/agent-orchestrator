@@ -290,15 +290,26 @@ func copilotNativeBinaryForLoader(path string) string {
 	if err != nil || filepath.Base(resolved) != "npm-loader.js" {
 		return ""
 	}
-	platform := runtime.GOOS
-	if platform == "darwin" {
-		platform = "darwin"
-	}
-	native := filepath.Join(filepath.Dir(resolved), "node_modules", ".bin", "copilot-"+platform+"-"+runtime.GOARCH)
-	if hookutil.IsExecutableFile(native) {
-		return native
+	for _, name := range copilotNativeNames(runtime.GOOS, runtime.GOARCH) {
+		native := filepath.Join(filepath.Dir(resolved), "node_modules", ".bin", name)
+		if hookutil.IsExecutableFile(native) {
+			return native
+		}
 	}
 	return ""
+}
+
+// copilotNativeNames are the npm platform binaries the loader may run on
+// goos/goarch. npm names amd64 x64, and musl Linux has its own packages.
+func copilotNativeNames(goos, goarch string) []string {
+	if goarch == "amd64" {
+		goarch = "x64"
+	}
+	names := []string{"copilot-" + goos + "-" + goarch}
+	if goos == "linux" {
+		names = append(names, "copilot-linuxmusl-"+goarch)
+	}
+	return names
 }
 
 func (p *Plugin) copilotBinary(ctx context.Context) (string, error) {

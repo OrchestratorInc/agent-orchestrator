@@ -301,7 +301,7 @@ func TestCopilotNativeBinaryForNpmLoader(t *testing.T) {
 	if err := os.WriteFile(loader, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	native := filepath.Join(packageDir, "node_modules", ".bin", "copilot-"+runtime.GOOS+"-"+runtime.GOARCH)
+	native := filepath.Join(packageDir, "node_modules", ".bin", copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0])
 	if err := os.WriteFile(native, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -323,6 +323,22 @@ func TestCopilotNativeBinaryForNpmLoader(t *testing.T) {
 	}
 }
 
+func TestCopilotNativeNamesUseNpmPlatformNames(t *testing.T) {
+	for _, tt := range []struct {
+		goos, goarch string
+		want         []string
+	}{
+		{"darwin", "arm64", []string{"copilot-darwin-arm64"}},
+		{"darwin", "amd64", []string{"copilot-darwin-x64"}},
+		{"linux", "amd64", []string{"copilot-linux-x64", "copilot-linuxmusl-x64"}},
+		{"linux", "arm64", []string{"copilot-linux-arm64", "copilot-linuxmusl-arm64"}},
+	} {
+		if got := copilotNativeNames(tt.goos, tt.goarch); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("copilotNativeNames(%s, %s) = %v, want %v", tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
 func TestResolveCopilotBinaryRunsTheManagedNativeBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("npm loader native binary naming is covered on Unix-like platforms")
@@ -338,7 +354,7 @@ func TestResolveCopilotBinaryRunsTheManagedNativeBinary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(packageDir, "npm-loader.js"), []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	nativeName := "copilot-" + runtime.GOOS + "-" + runtime.GOARCH
+	nativeName := copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0]
 	if err := os.WriteFile(filepath.Join(packageDir, "node_modules", ".bin", nativeName), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +425,7 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 				if err := os.WriteFile(loader, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				native := writeExecutable(t, filepath.Join(packageDir, "node_modules", ".bin", "copilot-"+runtime.GOOS+"-"+runtime.GOARCH))
+				native := writeExecutable(t, filepath.Join(packageDir, "node_modules", ".bin", copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0]))
 				link := filepath.Join(binDir, "copilot")
 				if err := os.Symlink(loader, link); err != nil {
 					t.Fatal(err)
