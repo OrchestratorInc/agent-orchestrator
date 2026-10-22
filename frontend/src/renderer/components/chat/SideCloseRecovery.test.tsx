@@ -36,10 +36,10 @@ async function setup() {
 	return hook;
 }
 
-it.each(["transport", "server"])("retains an uncertain %s close through remount and blocks submission", async (mode) => {
+it.each(["transport", "server", "timeout"])("retains an uncertain %s close through remount and blocks submission", async (mode) => {
 	const hook = await setup();
 	if (mode === "transport") remove.mockRejectedValueOnce(new Error("Lost reply"));
-	else remove.mockResolvedValueOnce({ error: {}, response: { status: 500 } });
+	else remove.mockResolvedValueOnce({ error: {}, response: { status: mode === "timeout" ? 408 : 500 } });
 	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
 	expect(capture).not.toHaveBeenCalledWith("side", true);
 	hook.unmount();
