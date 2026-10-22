@@ -128,6 +128,19 @@ async function checkpoint(context, id, title, run) {
 
 // The search box filters by display name ("Claude Code"), not by harness ID
 // ("claude-code"), so the row is found by its data-agent ID with an empty search.
+// true once the terminal shows `pattern`, false on timeout, null when the
+// terminal text is not in the DOM at all.
+async function waitForTerminalText(page, pattern, timeoutMs) {
+  const rows = page.locator(".xterm-rows");
+  if (!(await visible(rows, 5_000))) return null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pattern.test((await rows.last().innerText().catch(() => "")) ?? "")) return true;
+    await page.waitForTimeout(2_000);
+  }
+  return false;
+}
+
 async function openHarnessSettings(page, harness, label = "") {
   if (!(await visible(page.locator(SELECTORS.settingsDialog), 500))) await locate(page, SELECTORS.settingsButton).first().click();
   await page.locator(SELECTORS.settingsDialog).waitFor({ timeout: 10_000 });
@@ -298,14 +311,19 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
       await locate(dialog, SELECTORS.taskField).first().fill(prompt);
       await dialog.locator(SELECTORS.submit).first().click();
       await page.locator(SELECTORS.sessionDetail).first().waitFor({ timeout: 60_000 });
-      const surface = page.locator(mode === "chat" ? SELECTORS.chat : SELECTORS.terminal);
-      if (!(await visible(surface, 30_000))) return { status: "FAIL", reason: `session opened without a ${mode} surface` };
+      // Some CLIs (Claude Code) take well over 30 s to paint their first frame.
+      const surface = page.locator(mode === "chat" ? SELECTORS.chat : `${SELECTORS.terminal}, .xterm`);
+      if (!(await visible(surface, 90_000))) return { status: "FAIL", reason: `session opened without a ${mode} surface within 90 s` };
       if (mode === "chat") {
         const answered = await visible(page.locator(SELECTORS.chatMessages), 120_000);
         return answered ? { status: "PASS", reason: "Chat session answered" } : { status: "FAIL", reason: "Chat session opened but no assistant reply within 2 minutes" };
       }
-      await page.waitForTimeout(20_000);
-      return { status: "PASS", reason: "terminal session is running (see screenshot for the agent's output)" };
+      // The DOM renderer exposes the screen text; the WebGL renderer does not,
+      // so a missing reply there leaves the screenshot as the evidence.
+      const replied = await waitForTerminalText(page, /\bREADY\b/, 90_000);
+      return replied === true ? { status: "PASS", reason: "terminal session answered READY" }
+        : replied === null ? { status: "PASS", reason: "terminal session is running; its text is not readable from the page (WebGL renderer), see the screenshot" }
+        : { status: "FAIL", reason: "terminal session opened but the agent did not answer within 90 s" };
     });
   }
   return finish(browser, context, { harness, displayName });

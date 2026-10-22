@@ -876,6 +876,9 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
       : "the restored native terminal ready cue was not observed before timeout");
   } catch (error) {
     evidence.error = redactOutput(error.message);
+    // The last screen text (ANSI-stripped, redacted) is what a contract's
+    // ready-cue pattern has to match; keep it so the pattern can be fixed.
+    evidence.screenTail = redactOutput(stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n")).slice(-1500);
     return { passed: false, reason: evidence.error, evidence };
   } finally {
     closing = true;
@@ -1339,6 +1342,10 @@ export async function hostPreflight({ root, repoRoot, aoPath = "", captureComman
   }
   const socketProbe = join(root, "data", "chat-hosts", randomUUID(), "host.sock");
   add("socket_path", socketProbe.length > 100 ? "FAIL" : "PASS", `${socketProbe.length} bytes for a typical AO socket path${socketProbe.length > 100 ? "; set TMPDIR to a short directory such as /tmp" : ""}`);
+  const acpRuntime = process.env.AO_ACP_RUNTIME_DIR || join(resolve(repoRoot), "frontend", "resources", "acp-runtime");
+  if (!(await access(acpRuntime).then(() => true, () => false))) {
+    add("acp_runtime", "ADVISORY", `AO's ACP runtime is not built (${acpRuntime}); Claude Chat will fail with CHAT_DRIVER_UNAVAILABLE. Run \`npm run build:acp-runtime\` in frontend/ (npm ci first), or set AO_ACP_RUNTIME_DIR`);
+  }
   const nodeModules = await access(join(resolve(repoRoot), "frontend", "node_modules")).then(() => true, () => false);
   if (!nodeModules || !captureCommand.length) {
     add("ui_capture", "ADVISORY", [
@@ -1419,6 +1426,12 @@ export async function startManagedDaemon({
   // An inherited CI=1 makes some native TUIs hide their composer, so every
   // launch looks stuck. Sessions must see an interactive environment.
   delete environment.CI;
+  // Claude Chat runs through AO's packaged ACP bridge, which a plain `go build`
+  // does not bundle. Use the checkout's built copy (npm run build:acp-runtime).
+  const acpRuntime = join(resolve(repoRoot), "frontend", "resources", "acp-runtime");
+  if (!environment.AO_ACP_RUNTIME_DIR && await access(acpRuntime).then(() => true, () => false)) {
+    environment.AO_ACP_RUNTIME_DIR = acpRuntime;
+  }
   // Detached on POSIX so a terminal Ctrl-C reaches only the runner; the runner
   // then kills its sessions through this daemon before stopping it.
   const child = spawn(command[0], [...command.slice(1), "daemon"], {
