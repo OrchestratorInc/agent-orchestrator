@@ -416,6 +416,10 @@ export function useIndependentSideChats(
 	const sessionRef = useRef(sessionId);
 	sessionRef.current = enabled ? sessionId : "";
 	useEffect(() => {
+		sessionRef.current = enabled ? sessionId : "";
+		return () => { sessionRef.current = ""; };
+	}, [sessionId, enabled]);
+	useEffect(() => {
 		closedSidesRef.current.clear();
 		closingSidesRef.current.clear();
 		setPendingCloses([]);
@@ -770,7 +774,7 @@ export function useIndependentSideChats(
 				return;
 			}
 			const btw = preparedReceipt ? null : /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
-			if (btw || (!text && draftsRef.current[sideId]?.pendingCommand)) {
+			if (!preparedReceipt && (btw || (!text && draftsRef.current[sideId]?.pendingCommand))) {
 				if (sendingRef.current.has(sideId)) return;
 				sendingRef.current.add(sideId);
 				setSendingRevision((version) => version + 1);
@@ -851,7 +855,10 @@ export function useIndependentSideChats(
 						await persist();
 						throw saved.error;
 					}
-					if (!next.attachments.length) setAttachments((current) => ({ ...current, [sideId]: [] }));
+					setAttachments((current) => ({
+						...current,
+						[sideId]: (current[sideId] ?? []).filter(({ path }) => !original.attachments.some((submitted) => submitted.path === path)),
+					}));
 					await aoBridge.sideChats.capture().catch(() => undefined);
 				} catch (cause) {
 					if (available()) setError(apiErrorMessage(cause));
@@ -863,7 +870,9 @@ export function useIndependentSideChats(
 				return;
 			}
 			if (draftsRef.current[sideId]?.pendingCommand) {
-				setError("Retry the original handoff before sending another question.");
+				const cause = new Error("Retry the original handoff before sending another question.");
+				setError(cause.message);
+				if (propagateError) throw cause;
 				return;
 			}
 
@@ -885,6 +894,7 @@ export function useIndependentSideChats(
 					receipt = current.pendingDelivery ?? preparedReceipt;
 				}
 				const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+				if (draft.pendingCommand) throw new Error("Retry the original handoff before sending another question.");
 				if (!receipt && handoffClientMessageId && draft.lastHandoffDelivery?.clientMessageId === handoffClientMessageId)
 					receipt = draft.lastHandoffDelivery;
 				if (receipt && handoffClientMessageId && receipt.clientMessageId !== handoffClientMessageId)
@@ -1014,7 +1024,8 @@ export function useIndependentSideChats(
 						await refreshList();
 						return;
 					}
-					if (response.status >= 400 && response.status < 500 && response.status !== 404) {
+					// A request timeout is uncertain even when represented as 4xx.
+					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
 						await aoBridge.sideChats.capture(sideId, true);
 					} else await aoBridge.sideChats.capture().catch(() => undefined);
 					throw new Error(apiErrorMessage(requestError));
@@ -1424,6 +1435,7 @@ export function useIndependentSideChats(
 					<div className="p-4" role="status">
 						<p>{t("sideChat.closing")}</p>
 						<button type="button" disabled={closing} onClick={() => {
+							if (!currentActiveId) return;
 							setClosing(true);
 							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
 						}}>{t("sideChat.retryClose")}</button>

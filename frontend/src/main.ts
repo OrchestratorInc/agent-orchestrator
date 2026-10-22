@@ -632,6 +632,7 @@ function focusMainWindow(): void {
 }
 
 let sideClaimedDaemonPID: number | undefined;
+let sideLaunchReady: Promise<void> = Promise.resolve();
 let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> } | undefined;
 const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
@@ -669,8 +670,9 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state === "ready" && nextStatus.port && daemonIdentity && sideClaimedDaemonPID !== daemonIdentity) {
 		sideClaimedDaemonPID = daemonIdentity;
 		const sideBase = `http://127.0.0.1:${nextStatus.port}/api/v1/side-chats/launch`;
-		void fetch(`${sideBase}/claim`, {
+		sideLaunchReady = fetch(`${sideBase}/claim`, {
 			method: "POST",
+			signal: AbortSignal.timeout(5000),
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ appRunId }),
 		}).then(async (response) => {
@@ -678,6 +680,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 			if (sideLaunchState?.appRunId === appRunId && (sideLaunchState.sides.length > 0 || Object.keys(sideLaunchState.numbers ?? {}).length > 0)) {
 				const restored = await fetch(`${sideBase}/state`, {
 					method: "POST", headers: { "content-type": "application/json" },
+					signal: AbortSignal.timeout(15000),
 					body: JSON.stringify(sideLaunchState),
 				});
 				if (!restored.ok) throw new Error(`side chat recovery failed: ${restored.status}`);
@@ -687,7 +690,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 				sideStatePolling = true;
 				const request = ++sideStateRequest;
 				try {
-					const result = await fetch(`${sideBase}/state?appRunId=${encodeURIComponent(appRunId)}`);
+					const result = await fetch(`${sideBase}/state?appRunId=${encodeURIComponent(appRunId)}`, { signal: AbortSignal.timeout(5000) });
 					if (result.ok) {
 						const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
 						if (sideClaimedDaemonPID === daemonIdentity && state.appRunId === appRunId && request > sideStateApplied) { sideStateApplied = request; rememberSideLaunchState(state); }
@@ -2479,6 +2482,14 @@ ipcMain.handle("daemon:restart", async () => {
 	}
 });
 async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
+	// Do not race close/reconciliation against an older launch restore that is
+	// still installing open sides into the replacement daemon.
+	let ready: Promise<void>;
+	do {
+		ready = sideLaunchReady;
+		await ready;
+	} while (ready !== sideLaunchReady);
+	if (daemonStatus.state === "ready" && !sideClaimedDaemonPID) throw new Error("Side chat launch recovery is unavailable. Retry after reconnecting.");
 	if (closedSideId) {
 		if (cancelClose) sideCloseRecovery.cancel(closedSideId);
 		else {

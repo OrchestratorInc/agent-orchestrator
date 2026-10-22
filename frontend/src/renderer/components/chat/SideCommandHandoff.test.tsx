@@ -94,6 +94,19 @@ it("does not create or dispatch after the source session changes during capture"
 	expect(requests).toEqual([]);
 });
 
+it("stops preparation when its source unmounts", async () => {
+	const hook = await setup();
+	let release!: () => void;
+	capture.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+	let sending!: Promise<void>;
+	act(() => { sending = hook.result.current.send("source", "/side question"); });
+	await waitFor(() => expect(release).toBeDefined());
+	hook.unmount();
+	await act(async () => { release(); await sending; });
+	expect(creations.size).toBe(0);
+	expect(requests).toEqual([]);
+});
+
 it.each(["creation", "send"])("reuses a frozen destination and files after a lost %s reply and remount", async (lost) => {
 	const hook = await setup();
 	loseCreation = lost === "creation"; loseSend = lost === "send";
@@ -119,4 +132,22 @@ it("refuses unsupported side references before creating a destination", async ()
 	expect(creations.size).toBe(0);
 	expect(requests).toHaveLength(0);
 	expect(hook.result.current.error).toMatch(/References from another side/);
+});
+
+it.each(["/side explain files", "/side"])("retains %s if its destination has another pending command", async (question) => {
+	const hook = await setup();
+	const implementation = post.getMockImplementation()!;
+	post.mockImplementation(async (path, options) => {
+		const result = await implementation(path, options);
+		if (path.endsWith("/side-chats")) {
+			const source = JSON.parse(drafts.get("source")!);
+			drafts.set(result.data.side.id, JSON.stringify({ ...emptySideChatDraft(), pendingCommand: {
+				creationKey: "other-command", receipt: source.pendingCommand.receipt,
+			} }));
+		}
+		return result;
+	});
+	await act(async () => { await hook.result.current.send("source", question); });
+	expect(requests).toEqual([]);
+	expect(JSON.parse(drafts.get("source")!).pendingCommand.accepted).not.toBe(true);
 });
