@@ -96,6 +96,23 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it("allows only no-Origin GET/HEAD render documents through the control proxy", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "<p>render</p>" }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		for (const method of ["GET", "HEAD"]) {
+			const response = await fetch(`${proxy.base}/api/v1/sessions/s1/renders/r1?source=1`, { method, headers: { "sec-fetch-site": "cross-site" } });
+			expect(response.status).toBe(200);
+		}
+		for (const [method, route, origin] of [
+			["POST", "renders/r1", ""], ["GET", "renders/check", ""], ["GET", "renders/r1/artifact", ""],
+			["GET", "workspace/file/blob", ""], ["GET", "renders/r1", "null"], ["GET", "renders/r1", "http://evil.localhost"],
+		]) {
+			const response = await fetch(`${proxy.base}/api/v1/sessions/s1/${route}`, { method, headers: { "sec-fetch-site": "cross-site", ...(origin ? { Origin: origin } : {}) } });
+			expect(response.status).toBe(403);
+		}
+		expect(seen).toHaveLength(2);
+	});
+
 	it("rejects hostile browser REST and preflights before injecting upstream credentials", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });

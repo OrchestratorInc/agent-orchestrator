@@ -241,9 +241,13 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 
 	// A token authenticates the local native client, not arbitrary pages that
 	// happen to learn its URL. Check before stripping Origin/injecting auth.
-	const validControlOrigin = (req: { headers: IncomingHttpHeaders }): boolean =>
+	// Only sandboxed render-document GET/HEAD navigations may omit Origin.
+	const validControlOrigin = (req: { headers: IncomingHttpHeaders; method?: string; url?: string }): boolean =>
 		req.headers.origin === undefined
-			? req.headers["sec-fetch-site"] === undefined
+			? req.headers["sec-fetch-site"] === undefined || (
+				(req.method === "GET" || req.method === "HEAD") &&
+				/^\/api\/v1\/sessions\/[^/]+\/renders\/(?!check(?:$|[?]))[^/?]+(?:\?.*)?$/.test((stripToken(req.url) ?? "").slice(prefix.length))
+			)
 			: req.headers.origin === rendererOrigin;
 
 	const validPreviewOrigin = (scheme: "http" | "https", host: string | undefined, origin: string | undefined, kind?: PreviewTarget["kind"]): boolean =>

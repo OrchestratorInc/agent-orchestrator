@@ -3,6 +3,7 @@ package httpd
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -287,15 +289,45 @@ func TestBrowserBoundaryPreviewHostsCannotDispatchAPI(t *testing.T) {
 // The separate Electron process uses Chromium's real headers for app://renderer
 // and hostile documents. Optional locally; the frontend workflow enables it.
 func TestBrowserBoundaryElectron(t *testing.T) {
-	binary := os.Getenv("AO_BOUNDARY_ELECTRON")
-	if binary == "" {
+	electronBinary := os.Getenv("AO_BOUNDARY_ELECTRON")
+	if electronBinary == "" {
 		t.Skip("set AO_BOUNDARY_ELECTRON to the installed Electron executable")
 	}
 	shells := &boundaryShells{}
 	source := &boundarySource{}
 	mgr := terminal.NewManager(source, nil, discardLogger())
 	defer mgr.Close()
-	router := NewRouterWithControl(config.Config{AllowedOrigins: []string{"app://renderer"}}, discardLogger(), mgr, APIDeps{ShellTerminals: shells}, ControlDeps{})
+	dataDir := t.TempDir()
+	page := `<script>parent.postMessage("boundary-render-loaded", "*")</script><p id="render-marker">render loaded</p>`
+	if err := attachmentstore.New(dataDir).PutRender(context.Background(), "boundary", "r1", []byte(page)); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouterWithControl(config.Config{DataDir: dataDir, AllowedOrigins: []string{"app://renderer"}}, discardLogger(), mgr, APIDeps{ShellTerminals: shells}, ControlDeps{})
+	// Protected media fixture runs through the router's actual browser guard.
+	// Element transports are the same as workspace blobs and streamed previews.
+	router.Get("/boundary-media/{file}", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".png") {
+			w.Header().Set("Content-Type", "image/png")
+			png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+			_, _ = w.Write(png)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		wav := make([]byte, 44+1600)
+		copy(wav, "RIFF")
+		binary.LittleEndian.PutUint32(wav[4:], uint32(len(wav)-8))
+		copy(wav[8:], "WAVEfmt ")
+		binary.LittleEndian.PutUint32(wav[16:], 16)
+		binary.LittleEndian.PutUint16(wav[20:], 1)
+		binary.LittleEndian.PutUint16(wav[22:], 1)
+		binary.LittleEndian.PutUint32(wav[24:], 8000)
+		binary.LittleEndian.PutUint32(wav[28:], 16000)
+		binary.LittleEndian.PutUint16(wav[32:], 2)
+		binary.LittleEndian.PutUint16(wav[34:], 16)
+		copy(wav[36:], "data")
+		binary.LittleEndian.PutUint32(wav[40:], 1600)
+		_, _ = w.Write(wav)
+	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/boundary-fixture/") {
 			// Header emission on actual preview routes is tested in controllers;
@@ -320,7 +352,7 @@ func TestBrowserBoundaryElectron(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		args = append([]string{"--no-sandbox", "--disable-gpu"}, args...)
 	}
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.CommandContext(ctx, electronBinary, args...)
 	cmd.Env = append(os.Environ(), "AO_BOUNDARY_URL="+srv.URL, "AO_BOUNDARY_DATA="+t.TempDir(), "ELECTRON_RUN_AS_NODE=")
 	output, err := cmd.CombinedOutput()
 	t.Logf("Electron: %s", output)

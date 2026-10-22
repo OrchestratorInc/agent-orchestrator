@@ -249,3 +249,32 @@ func TestCORSPreflightHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderDocumentNavigationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, origin string
+		want                 int
+	}{
+		{"GET", "/api/v1/sessions/s1/renders/r1", "", 204},
+		{"HEAD", "/api/v1/sessions/s1/renders/r1?source=1", "", 204},
+		{"POST", "/api/v1/sessions/s1/renders/r1", "", 403},
+		{"GET", "/api/v1/sessions/s1/renders/check", "", 403},
+		{"GET", "/api/v1/sessions/s1/renders/r1/artifact", "", 403},
+		{"GET", "/api/v1/sessions/s1/workspace/file/blob", "", 403},
+		{"GET", "/api/v1/sessions/s1/renders/r1", "null", 403},
+		{"GET", "/api/v1/sessions/s1/renders/r1", "http://evil.localhost", 403},
+	} {
+		for _, site := range []string{"cross-site", "none"} {
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			r.Header.Set("Sec-Fetch-Site", site)
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			corsMiddleware([]string{"app://renderer"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Errorf("%s %s origin=%q site=%s: got %d want %d", tc.method, tc.path, tc.origin, site, w.Code, tc.want)
+			}
+		}
+	}
+}
