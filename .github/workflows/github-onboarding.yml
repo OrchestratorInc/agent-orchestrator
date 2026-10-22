@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      AO_GITHUB_CLI_FIXTURE_DIR: ${{ runner.temp }}/ao-github-cli
+      AO_GITHUB_CLI_FIXTURE_DIR: ${{ github.workspace }}/../ao-github-cli
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -51,6 +51,6 @@ jobs:
           cd frontend && npx playwright install --with-deps chromium
       - name: Verify connected GitHub onboarding UI
         env:
-          AO_GITHUB_BROWSER_BINARY: ${{ runner.temp }}/ao-github-cli/2.100.0/gh_2.100.0_linux_amd64/bin/gh
+          AO_GITHUB_BROWSER_BINARY: ${{ github.workspace }}/../ao-github-cli/2.100.0/gh_2.100.0_linux_amd64/bin/gh
         run: bash test/onboarding/check-github-browser.sh
 
