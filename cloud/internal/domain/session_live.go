@@ -38,4 +38,7 @@ type ComposerLease struct {
 type SessionLiveState struct {
 	Viewers  []SessionViewer
 	Composer ComposerLease
+	// CanTakeOver reports whether the person reading the state may take the
+	// composer lease from its holder.
+	CanTakeOver bool
 }

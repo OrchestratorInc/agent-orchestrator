@@ -3075,6 +3075,8 @@ export interface components {
         SessionLiveState: {
             /** @constant */
             type: "session.live";
+            /** @description Whether the person reading this stream may take the composer lease from its holder (composerTakeOver). */
+            canTakeOver: boolean;
             /** @description Everyone with the session open right now, once each, in the order they joined. */
             viewers: components["schemas"]["SessionViewer"][];
             composer: components["schemas"]["ComposerLeaseState"];

@@ -305,6 +305,13 @@ func TestComposerTakeOverFencesThePreviousHolder(t *testing.T) {
 	if _, err := c.store.TakeOverComposerLease(ctx, c.bob, c.fixture.orgID, c.fixture.sessionID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("an editor's take-over: %v, want ErrForbidden", err)
 	}
+	// The live state tells each person whether they may take over.
+	for who, want := range map[*domain.Principal]bool{&c.bob: false, &c.owner: true} {
+		state, err := c.store.SessionLiveState(ctx, *who, c.fixture.orgID, c.fixture.sessionID)
+		if err != nil || state.CanTakeOver != want {
+			t.Fatalf("canTakeOver for %s = %v, %v; want %v", who.UserID, state.CanTakeOver, err, want)
+		}
+	}
 	taken, err := c.store.TakeOverComposerLease(ctx, c.owner, c.fixture.orgID, c.fixture.sessionID)
 	if err != nil {
 		t.Fatal(err)

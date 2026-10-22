@@ -80,7 +80,10 @@ func (s *Store) SessionLiveState(
 			return err
 		}
 		state.Viewers = viewers
-		state.Composer, err = composerStateTx(ctx, tx, orgID, sessionID)
+		if state.Composer, err = composerStateTx(ctx, tx, orgID, sessionID); err != nil {
+			return err
+		}
+		state.CanTakeOver, err = mayTakeOverComposerTx(ctx, tx, orgID, sessionID, principal.UserID)
 		return err
 	})
 	return state, err
