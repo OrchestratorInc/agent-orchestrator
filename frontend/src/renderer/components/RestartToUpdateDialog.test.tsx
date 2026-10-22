@@ -291,9 +291,9 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
 	expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
 	expect(screen.queryByRole("progressbar")).toBeNull();
-	// The primary action becomes Retry, and retry restarts AO rather than
+	// The primary action becomes Relaunch AO, and retry restarts AO rather than
 	// re-invoking install() against a Squirrel that cannot be reset in-process.
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+	await userEvent.click(screen.getByRole("button", { name: "Relaunch AO" }));
 	expect(updRelaunch).toHaveBeenCalledTimes(1);
 	expect(updInstall).toHaveBeenCalledTimes(1);
 });
@@ -311,6 +311,28 @@ it("hides the install-on-quit line once preparation fails", async () => {
 	// gone rather than contradicting the error.
 	expect(screen.getByRole("alert")).toBeVisible();
 	expect(screen.queryByText(/installs on its own the next time you quit/)).toBeNull();
+});
+
+it.each(["before", "after"])("restores install confirmation when native readiness arrives %s the failed IPC reply", async (order) => {
+	const install = deferredInstall();
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
+	await screen.findByText("Safer updates");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const ready = () => act(() => updOnStatus.mock.calls[0][0]({ state: "downloaded", version: "1.2.3", staged: { version: "1.2.3", stagedAt: 1, escalated: false } }));
+	if (order === "before") ready();
+	await act(async () => install.reject(new Error("Couldn't finish preparing the update. Relaunch AO to try again.")));
+	if (order === "after") {
+		expect(screen.getByRole("button", { name: "Relaunch AO" })).toBeVisible();
+		ready();
+	}
+	expect(screen.queryByRole("alert")).toBeNull();
+	expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
+	expect(updInstall).toHaveBeenCalledTimes(1);
+	expect(updRelaunch).not.toHaveBeenCalled();
+	updInstall.mockResolvedValue(undefined);
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	expect(updInstall).toHaveBeenCalledTimes(2);
 });
 
 it("allows cancelling after preparation fails", async () => {
