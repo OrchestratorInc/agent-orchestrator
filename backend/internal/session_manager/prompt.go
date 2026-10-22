@@ -337,6 +337,17 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - Saving a local artifact or attaching its reference to an AO report is not external publishing authorization. Publish externally only within the user-authorized scope.
 - Do not file a report for routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session. This limit applies to `+"`ao report`"+` only, not to what you tell the user in the conversation.
 
+## Card Summary
+
+Run `+"`ao summary \"<text>\"`"+` to set the one-line summary on your kanban card. The human reads it on the board to see what you are doing, so keep it specific, under 200 characters, and in plain words.
+
+- Run it as its own command: no `+"`&&`"+`, pipes, or redirects.
+- Set it when you receive the task, then again when your focus shifts: after inspecting the repo, when starting implementation, after a meaningful result. Use present tense while working.
+- Set it once more before you finish, in past tense, so the card shows what you accomplished.
+- It is best-effort. If the command fails, retry at most once and then carry on; never let it hold up your work.
+
+Examples: `+"`ao summary \"Inspecting the site before a redesign\"`"+`, `+"`ao summary \"Found 3 bugs in the frontend app\"`"+`, `+"`ao summary \"Redesigned the homepage and verified the preview\"`"+`.
+
 ## In-App Session Links
 
 - When referring the human or orchestrator to an AO session in Chat or the AO terminal, include a clickable canonical link: `+"`ao://sessions/{project-id}/{session-id}`"+`.

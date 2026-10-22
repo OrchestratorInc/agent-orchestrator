@@ -154,6 +154,11 @@ export type WorkspaceSession = {
 	 * {@link status} already produced.
 	 */
 	displayStatus?: string;
+	/**
+	 * One-line card summary the agent set with `ao summary`, or a line derived
+	 * from lifecycle and PR facts until it has.
+	 */
+	summary?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";
 	/**
 	 * How far this session's start-up got. A Chat spawn answers as soon as the

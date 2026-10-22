@@ -729,6 +729,7 @@ type Session struct {
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
 	LaunchOptions                    string
+	CardSummary                      string
 }
 
 type SessionAgentAccount struct {
