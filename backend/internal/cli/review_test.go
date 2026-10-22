@@ -521,6 +521,38 @@ func TestReviewListGetsReviews(t *testing.T) {
 	}
 }
 
+// A review done message that failed to reach the worker is shown with its
+// last error, so a missed notice can be diagnosed without daemon logs.
+func TestReviewListShowsUndeliveredReviewDoneMessage(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviews":[{
+			"prUrl":"https://github.com/example/repo/pull/42",
+			"prNumber":42,
+			"title":"Fix session resume",
+			"status":"approved",
+			"latestRun":{"id":"run-1","verdict":"approved","workerNotice":"pending","workerNoticeAttempts":3,"workerNoticeError":"guard mer-1: send: no chat controller"}
+		},{
+			"prUrl":"https://github.com/example/repo/pull/43",
+			"prNumber":43,
+			"status":"approved",
+			"latestRun":{"id":"run-2","verdict":"approved","workerNotice":"sent","workerNoticeAttempts":1,"workerNoticeError":"earlier failure"}
+		}]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if want := "#42: review done message for run run-1 not delivered after 3 attempt(s): guard mer-1: send: no chat controller"; !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "earlier failure") {
+		t.Fatalf("a delivered message was reported as undelivered: %q", out)
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{

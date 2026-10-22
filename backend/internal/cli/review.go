@@ -36,6 +36,12 @@ type reviewRun struct {
 	GithubReviewID string     `json:"githubReviewId"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
+	// Worker notice fields mirror domain.ReviewRun: the "review done" message
+	// state and its last failed delivery.
+	WorkerNotice            string     `json:"workerNotice,omitempty"`
+	WorkerNoticeAttempts    int        `json:"workerNoticeAttempts,omitempty"`
+	WorkerNoticeError       string     `json:"workerNoticeError,omitempty"`
+	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
 }
 
 type reviewState struct {
@@ -499,7 +505,21 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 			return err
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	// A "review done" message the worker has not received yet is easy to
+	// miss; name the run and why its last delivery failed.
+	for _, review := range res.Reviews {
+		run := review.LatestRun
+		if run == nil || run.WorkerNotice != "pending" || run.WorkerNoticeError == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(out, "#%d: review done message for run %s not delivered after %d attempt(s): %s\n", review.PRNumber, run.ID, run.WorkerNoticeAttempts, run.WorkerNoticeError); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error) {
