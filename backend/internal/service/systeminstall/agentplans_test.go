@@ -243,7 +243,9 @@ func TestOpenCodeV2HomebrewUnlinksItselfAndRestoresLinkedV1(t *testing.T) {
 			if err := os.MkdirAll(linked, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Symlink(filepath.Join(prefix, "Cellar", "opencode", "1.19.3"), filepath.Join(linked, "opencode")); err != nil {
+			// Homebrew's marker is a symlink; any entry counts, and a plain file
+			// needs no symlink privilege on Windows runners.
+			if err := os.WriteFile(filepath.Join(linked, "opencode"), nil, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			s := newTestService("darwin", "brew")

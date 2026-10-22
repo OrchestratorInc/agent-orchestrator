@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -625,6 +626,9 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 	} {
 		t.Run(tc.id+tc.binaryPath, func(t *testing.T) {
 			t.Parallel()
+			if runtime.GOOS == "windows" && strings.Contains(tc.binaryPath, "/opt/homebrew/opt/") {
+				t.Skip("Homebrew opt links do not exist on Windows")
+			}
 			testAgent := &readinessTestAgent{
 				resolve: func(context.Context) (string, error) {
 					return "", &opencode.IncompatibleVersionError{

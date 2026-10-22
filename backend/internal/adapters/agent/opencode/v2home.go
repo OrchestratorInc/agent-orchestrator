@@ -96,6 +96,9 @@ var homebrewDefaultPrefixes = []string{"/opt/homebrew", "/usr/local", "/home/lin
 // (<prefix>/bin/brew). The opt link exists whether or not the formula is
 // linked into <prefix>/bin.
 func homebrewOptBinaries(formula string) []string {
+	if runtime.GOOS == "windows" {
+		return nil // Homebrew does not run on Windows.
+	}
 	var candidates []string
 	add := func(prefix string) {
 		if prefix == "" || !filepath.IsAbs(prefix) {
