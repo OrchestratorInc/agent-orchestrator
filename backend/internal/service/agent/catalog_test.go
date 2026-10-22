@@ -1611,6 +1611,27 @@ func TestModelUpdateWaitsForStartupReadiness(t *testing.T) {
 	}
 }
 
+// Readiness that lasts through the whole wait limit must not eat into the
+// discovery's own timeout: discovery still gets its full budget afterwards.
+func TestModelUpdateKeepsFullDiscoveryBudgetAfterReadinessWait(t *testing.T) {
+	previousWait, previousTimeout := modelUpdateReadinessWait, modelCatalogLoadTimeout
+	modelUpdateReadinessWait = 60 * time.Millisecond
+	modelCatalogLoadTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { modelUpdateReadinessWait, modelCatalogLoadTimeout = previousWait, previousTimeout })
+	discoverer := successfulModelDiscoverer()
+	discoverer.delay = 80 * time.Millisecond
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, &fakeModelCache{}, discoverer)
+	svc.readinessWarm = make(chan struct{}) // never finishes
+
+	got, err := svc.Models(context.Background(), "codex", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+		t.Fatalf("catalog = %#v, want discovery to finish after the readiness wait", got)
+	}
+}
+
 func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
 	now := time.Now().UTC()
 	record := cachedModelRecord(t, "gemini", "", now, false)
