@@ -374,6 +374,13 @@ type TransportRequest struct {
 	Payload any    `json:"payload"`
 }
 
+// WorkWaitResponse is the answer to a WaitForWork long-poll. ArtifactsChanged
+// is set when the session's committed artifacts changed without the worker,
+// as when a user deleted one, so it checks its files against them.
+type WorkWaitResponse struct {
+	ArtifactsChanged bool `json:"artifactsChanged,omitempty"`
+}
+
 type ClaimTransportResponse struct {
 	Request *TransportRequest `json:"request"`
 }
