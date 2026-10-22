@@ -302,10 +302,10 @@ function chatInitialPrompt(chat) {
     `AO chat audit request token: ${chat.initialToken}`,
     `History-only token (do not write this token to any file yet): ${chat.historyToken}`,
     `Create ${CHAT_PROOF} in your current working directory as raw JSON, without markdown fences.`,
-    "Read the project AGENTS.md and your hidden AO standing instructions.",
+    "It must be in that working directory (run pwd), not in the AO session artifacts folder: this is a harness test file.",
     `If ${CHAT_PROOF} already exists, preserve it and increment initialPromptExecutions; otherwise set initialPromptExecutions to 1.`,
-    "The JSON must contain: cwd (actual current working directory), initialPromptToken, initialPromptExecutions, hiddenInstructionToken, and projectAgentsToken.",
-    "Set those fields from the tokens you actually received. Do not include the history-only token. Then stop.",
+    "Include: cwd (the output of pwd), initialPromptToken (the request token above) and initialPromptExecutions.",
+    "Follow this project's conventions for JSON files. Do not include the history-only token. Then stop.",
   ].join("\n");
 }
 
@@ -391,14 +391,14 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
       : !cwdMatches ? `provider cwd ${first.proof.cwd} is not the AO worktree ${workspacePath}`
       : `initialPromptExecutions is ${first.proof.initialPromptExecutions}, expected 1`,
     { ...first.evidence, workspace: apiEvidence(workspaceResponse), reportedCwd: first.proof?.cwd }));
-  const instructionsOK = first.proof?.hiddenInstructionToken === scenario.hiddenInitialToken && first.proof?.projectAgentsToken === scenario.agentsToken;
+  const instructionsOK = first.proof?.rulesMarker === scenario.hiddenInitialToken && first.proof?.agentsMarker === scenario.agentsToken;
   await record(gate("chat_instructions", instructionsOK ? "PASS" : "FAIL",
     instructionsOK ? "Chat provider consumed AO agentRules and project AGENTS.md"
-      : `instruction tokens mismatched (agentRules: ${first.proof?.hiddenInstructionToken === scenario.hiddenInitialToken ? "ok" : "missing"}, AGENTS.md: ${first.proof?.projectAgentsToken === scenario.agentsToken ? "ok" : "missing"})`,
+      : `instruction tokens mismatched (rulesMarker from agentRules: ${first.proof?.rulesMarker === scenario.hiddenInitialToken ? "ok" : "missing"}, agentsMarker from AGENTS.md: ${first.proof?.agentsMarker === scenario.agentsToken ? "ok" : "missing"})`,
     { hiddenTokenSha256: hash(scenario.hiddenInitialToken), agentsTokenSha256: hash(scenario.agentsToken) }));
   const chatSpec = instructionSpec(agent, contract, "chat");
   const chatDelivery = await checkInstructionDelivery({ spec: chatSpec, token: scenario.hiddenInitialToken, dataDir: resolve(expandHome(dataDir || ".")),
-    workspacePath, sessionId, effectGate: "chat_instructions", effectPassed: first.proof?.hiddenInstructionToken === scenario.hiddenInitialToken });
+    workspacePath, sessionId, effectGate: "chat_instructions", effectPassed: first.proof?.rulesMarker === scenario.hiddenInitialToken });
   await record(gate("chat_instruction_channel", chatDelivery.status, chatDelivery.reason, chatDelivery.evidence));
   if (!first.done) {
     await skipRest("initial Chat turn did not complete");
@@ -701,7 +701,7 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
   // New private instructions after Kill: the restored conversation must use
   // them, not the ones replayed from its native history (Tau, Neovate, Mastra).
   const refresh = projectId
-    ? await refreshRestoreInstructions({ baseURL, projectId, restoreToken: chat.restoreHiddenToken, timeoutMs, label: "chatRestoreHiddenToken" })
+    ? await refreshRestoreInstructions({ baseURL, projectId, restoreToken: chat.restoreHiddenToken, timeoutMs, label: "chatRestoreRulesMarker" })
     : { passed: false, reason: "no project to update", evidence: {} };
 
   const restore = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/restore`, body: {}, timeoutMs });
@@ -724,7 +724,7 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
 
   const recall = await sendChat(baseURL, sessionId, [
     `Update ${CHAT_PROOF}: set chatHistoryRecall to the history-only token from the first message of this conversation,`,
-    "and set chatRestoreInstructionToken to the value your current hidden AO standing instructions give for chatRestoreHiddenToken (null if they give none).",
+    "and follow this project's current conventions for JSON files.",
     "Preserve every existing field, write raw JSON only, then stop.",
   ].join(" "));
   const recalled = recall.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (proof) => proof?.chatHistoryRecall === chat.historyToken }) : { done: false, evidence: {} };
@@ -736,7 +736,7 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
       : "earlier proof fields were lost after restore",
     { send: apiEvidence(recall), historyTokenSha256: hash(chat.historyToken), ...recalled.evidence }));
 
-  const used = recalled.proof?.chatRestoreInstructionToken === chat.restoreHiddenToken;
+  const used = recalled.proof?.chatRestoreRulesMarker === chat.restoreHiddenToken;
   const fresh = refresh.passed
     ? await checkInstructionDelivery({ spec: chatSpec, token: chat.restoreHiddenToken, dataDir: resolve(expandHome(dataDir || ".")), workspacePath, sessionId, effectGate: "chat_system_prompt_restore", effectPassed: used })
     : null;
@@ -744,7 +744,7 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
   await record(gate("chat_system_prompt_restore", restorePassed ? "PASS" : "FAIL",
     !refresh.passed ? `fresh standing instructions could not be stored before restore: ${refresh.reason}`
       : !recalled.done ? "restored Chat did not answer, so fresh instructions could not be checked"
-      : !used ? `restored Chat did not use the fresh standing instructions (reported ${JSON.stringify(recalled.proof?.chatRestoreInstructionToken ?? null)}); it is replaying the old system prompt from history or the driver drops it on session/load`
+      : !used ? `restored Chat did not use the fresh standing instructions (chatRestoreRulesMarker is ${JSON.stringify(recalled.proof?.chatRestoreRulesMarker ?? null)}); it is replaying the old system prompt from history or the driver drops it on session/load`
       : fresh.status !== "PASS" ? fresh.reason
       : "restored Chat used the standing instructions written after Kill",
     { refresh: refresh.evidence, delivery: fresh?.evidence, restoreTokenSha256: hash(chat.restoreHiddenToken) }));

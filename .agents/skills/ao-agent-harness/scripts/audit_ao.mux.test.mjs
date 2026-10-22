@@ -112,8 +112,8 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
       else if (req.url.endsWith("/workspace")) body = { workspacePath: lifecycleHooks.workspacePath || "/tmp/fixture-workspace" };
       else if (req.url.includes("/workspace/file")) body = { content: scenario === "lifecycle-retains-old-instructions" ? JSON.stringify({
         cwd: "/tmp/fixture-workspace", initialPromptToken: "initial", initialPromptExecutions: 1,
-        hiddenInstructionToken: "initial-hidden", projectAgentsToken: "project-agents", secondMessageToken: "second",
-        ...(continued ? { historyToken: "history", restoreHiddenToken: "old-history-instruction" } : {}),
+        rulesMarker: "initial-hidden", agentsMarker: "project-agents", secondMessageToken: "second",
+        ...(continued ? { historyToken: "history", restoreRulesMarker: "old-history-instruction" } : {}),
       }) : "{}" };
       else if (req.url.endsWith("/send")) {
         let raw = "";
@@ -597,7 +597,7 @@ test("restored provider history cannot substitute for newly configured standing 
       localResult: { agent: "fixture", gates: ["local_binary", "local_version", "local_integration", "local_session_spawn"].map(name => ({ name, status: "PASS" })) },
     });
     const gate = name => result.gates.find(item => item.name === name);
-    assert.match(fixture.projectConfig.agentRules, /restoreHiddenToken use exactly: HIDDEN_RESTORE_/);
+    assert.match(fixture.projectConfig.agentRules, /"restoreRulesMarker" with the value "HIDDEN_RESTORE_/);
     assert.equal(gate("post_restore_terminal_ready")?.status, "PASS");
     assert.equal(fixture.messages.some(message => message.startsWith("Update the existing")), true);
     assert.equal(gate("history_file_continuity")?.status, "PASS", JSON.stringify(gate("history_file_continuity")));

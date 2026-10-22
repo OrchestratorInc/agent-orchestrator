@@ -1540,10 +1540,10 @@ function initialPrompt(scenario) {
     `AO audit request token: ${scenario.initialToken}`,
     `History-only token (do not write this token to any file yet): ${scenario.historyToken}`,
     `Create ${scenario.proofFile} in your current working directory as raw JSON, without markdown fences.`,
-    "Read the project AGENTS.md and your hidden AO standing instructions.",
+    "It must be in that working directory (run pwd), not in the AO session artifacts folder: this is a harness test file.",
     `If ${scenario.proofFile} already exists, preserve it and increment initialPromptExecutions; otherwise set initialPromptExecutions to 1.`,
-    "The JSON must contain: cwd (actual current working directory), initialPromptToken, initialPromptExecutions, hiddenInstructionToken, and projectAgentsToken.",
-    "Set those fields from the tokens you actually received. Do not include the history-only token. Then stop and wait.",
+    "Include: cwd (the output of pwd), initialPromptToken (the request token above) and initialPromptExecutions.",
+    "Follow this project's conventions for JSON files. Do not include the history-only token. Then stop and wait.",
   ].join("\n");
 }
 
@@ -1725,11 +1725,17 @@ export async function auditAgent({
   const proof = firstProof.proof;
   const proofEvidence = firstProof.fileResponse ? apiEvidence(firstProof.fileResponse) : undefined;
 
+  // AO's using-ao skill sends deliverables to the session artifacts folder;
+  // a proof found there means the prompt arrived and the agent chose that folder.
+  const misplaced = !proof && dataDir ? join(resolve(expandHome(dataDir)), "artifacts", sessionId, scenario.proofFile) : "";
+  const misplacedFound = misplaced ? await access(misplaced).then(() => true, () => false) : false;
   await record(gate(
     "proof_file_creation",
     proof ? "PASS" : "FAIL",
-    proof ? `${scenario.proofFile} contains valid JSON` : `valid ${scenario.proofFile} was not observed before timeout`,
-    proofEvidence,
+    proof ? `${scenario.proofFile} contains valid JSON`
+      : misplacedFound ? `the agent wrote ${scenario.proofFile} to the AO session artifacts folder instead of the worktree; the prompt arrived, AO's artifact guidance redirected the file`
+      : `valid ${scenario.proofFile} was not observed in the worktree before timeout`,
+    { ...proofEvidence, ...(misplacedFound ? { misplacedProof: misplaced } : {}) },
   ));
 
   let cwdMatches = false;
@@ -1752,17 +1758,19 @@ export async function auditAgent({
   ));
   await record(gate(
     "hidden_ao_instructions",
-    proof?.hiddenInstructionToken === scenario.hiddenInitialToken ? "PASS" : "FAIL",
-    proof?.hiddenInstructionToken === scenario.hiddenInitialToken ? "provider consumed hidden AO standing instructions" : "hidden AO standing-instruction token was not proven",
+    proof?.rulesMarker === scenario.hiddenInitialToken ? "PASS" : "FAIL",
+    proof?.rulesMarker === scenario.hiddenInitialToken ? "the agent applied a project rule it could only get from AO's system prompt" : proof ? "the proof lacks rulesMarker: the project rule from AO's system prompt was not applied" : "no proof file to check the project rule against",
     { expectedTokenSha256: hash(scenario.hiddenInitialToken) },
   ));
   await record(gate(
     "project_agents_md",
-    proof?.projectAgentsToken === scenario.agentsToken ? "PASS" : "FAIL",
-    proof?.projectAgentsToken === scenario.agentsToken ? "provider consumed project AGENTS.md" : "project AGENTS.md token was not proven",
+    proof?.agentsMarker === scenario.agentsToken ? "PASS" : "FAIL",
+    proof?.agentsMarker === scenario.agentsToken ? "the agent applied the convention from project AGENTS.md" : proof ? "the proof lacks agentsMarker: project AGENTS.md was not applied" : "no proof file to check AGENTS.md against",
     { expectedTokenSha256: hash(scenario.agentsToken) },
   ));
-  const activityOK = firstProof.done && firstProof.current?.statusReadiness === "ready"
+  // Activity is judged on its own: a misplaced or missing proof file must not
+  // turn a working active-to-settled turn into an activity failure.
+  const activityOK = firstProof.current?.statusReadiness === "ready"
     && observedActive && SETTLED_STATES.has(firstProof.current?.activity?.state);
   await record(gate(
     "activity_status",
@@ -2016,7 +2024,7 @@ async function completeLifecycle({
       message: [
         `Update the existing ${scenario.proofFile}; do not replace it.`,
         "Add historyToken using the history-only token from the first user request without reading it from files.",
-        "Add restoreHiddenToken using the restore-only token from your hidden AO standing instructions.",
+        "Follow this project's current conventions for JSON files.",
         "Preserve every existing JSON field, then stop and wait.",
       ].join(" "),
     },
@@ -2033,7 +2041,7 @@ async function completeLifecycle({
       done: Boolean(
         proof
         && proof.historyToken === scenario.historyToken
-        && proof.restoreHiddenToken === scenario.hiddenRestoreToken
+        && proof.restoreRulesMarker === scenario.hiddenRestoreToken
         && settled
       ),
       proof,
@@ -2053,8 +2061,8 @@ async function completeLifecycle({
     && firstProof
     && finalProof.initialPromptToken === firstProof.initialPromptToken
     && finalProof.initialPromptExecutions === firstProof.initialPromptExecutions
-    && finalProof.hiddenInstructionToken === firstProof.hiddenInstructionToken
-    && finalProof.projectAgentsToken === firstProof.projectAgentsToken
+    && finalProof.rulesMarker === firstProof.rulesMarker
+    && finalProof.agentsMarker === firstProof.agentsMarker
     && finalProof.secondMessageToken === scenario.secondToken
     && finalProof.historyToken === scenario.historyToken;
   await record(gate(
@@ -2065,8 +2073,8 @@ async function completeLifecycle({
   ));
   await record(gate(
     "system_prompt_restore",
-    finalProof?.restoreHiddenToken === scenario.hiddenRestoreToken ? "PASS" : "FAIL",
-    finalProof?.restoreHiddenToken === scenario.hiddenRestoreToken ? "restore-only hidden standing instruction was observed after restore" : "hidden AO standing instructions were not proven after restore",
+    finalProof?.restoreRulesMarker === scenario.hiddenRestoreToken ? "PASS" : "FAIL",
+    finalProof?.restoreRulesMarker === scenario.hiddenRestoreToken ? "a project rule added after Kill was applied after restore" : "a project rule added after Kill was not applied after restore (the restored session kept its old system prompt)",
     { restoreHiddenTokenSha256: hash(scenario.hiddenRestoreToken), instructionRefresh: instructionRefresh.evidence },
   ));
 
@@ -2173,7 +2181,7 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   return result;
 }
 
-export async function refreshRestoreInstructions({ baseURL, projectId, restoreToken, timeoutMs, label = "restoreHiddenToken" }) {
+export async function refreshRestoreInstructions({ baseURL, projectId, restoreToken, timeoutMs, label = "restoreRulesMarker" }) {
   const path = `projects/${encodeURIComponent(projectId)}`;
   const before = await request({ baseURL, path, timeoutMs });
   const project = before.response?.project;
@@ -2185,7 +2193,7 @@ export async function refreshRestoreInstructions({ baseURL, projectId, restoreTo
   if (typeof config.agentRules !== "string" || config.agentRules.includes(restoreToken)) {
     return { passed: false, reason: "fresh standing-instruction refresh requires existing audit rules and a previously undisclosed token", evidence };
   }
-  const updated = { ...config, agentRules: `${config.agentRules}\nFor ${label} use exactly: ${restoreToken}` };
+  const updated = { ...config, agentRules: `${config.agentRules}\nProject convention update: JSON files you create or update must also include the field "${label}" with the value "${restoreToken}".` };
   const write = await request({ baseURL, method: "PUT", path: `${path}/config`, body: { config: updated }, timeoutMs });
   evidence.write = apiEvidence(write);
   if (!write.ok) return { passed: false, reason: "fresh standing-instruction refresh was rejected by the project config API", evidence };
@@ -2204,7 +2212,7 @@ export async function setupProject({ baseURL, root, agent, scenario, timeoutMs }
   await mkdir(projectPath, { recursive: true });
   await writeFile(
     join(projectPath, "AGENTS.md"),
-    `# AO audit project\n\nWhen asked for the project AGENTS token, use exactly: ${scenario.agentsToken}\n`,
+    `# AO audit project\n\nProject convention: every JSON file you create or update must include the field "agentsMarker" with the value "${scenario.agentsToken}".\n`,
     "utf8",
   );
   await writeFile(join(projectPath, "README.md"), "# Disposable AO harness audit project\n", "utf8");
@@ -2235,8 +2243,7 @@ export async function setupProject({ baseURL, root, agent, scenario, timeoutMs }
       config: {
         defaultBranch: "main",
         agentRules: [
-          "These are private AO standing instructions for the audit.",
-          `For hiddenInstructionToken use exactly: ${scenario.hiddenInitialToken}`,
+          `Project convention: every JSON file you create or update must include the field "rulesMarker" with the value "${scenario.hiddenInitialToken}".`,
         ].join("\n"),
       },
     },
