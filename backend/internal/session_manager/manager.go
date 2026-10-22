@@ -4918,7 +4918,13 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	}
 	wrapped := domain.WrapReportDelivery(clientMessageID, message)
 	if err := m.send(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}); err != nil {
-		return err
+		// A pane write whose activity confirmation could not be observed is not
+		// fatal here: SendSemantic's own durable acceptance loop below is
+		// authoritative and correlates this exact message through its submission
+		// marker. Any other send error is a real failure.
+		if !errors.Is(err, ErrDeliveryUnconfirmed) {
+			return err
+		}
 	}
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
@@ -5067,9 +5073,11 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	// see ports.BlockedActivitySignaler.
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
-		// Confirmation is best-effort and never fails the send (the message
-		// was already delivered above); log so a store error is not swallowed
-		// silently.
+		// This lookup only decides whether the harness is confirm-eligible; a
+		// failure here cannot tell, so confirmation is skipped and the already
+		// delivered message is left as sent. Confirmation itself (below) can
+		// still fail the send with ErrDeliveryUnconfirmed once it runs. Log so a
+		// store error is not swallowed silently.
 		m.logger.Warn("send: confirm skipped, session lookup failed", "sessionID", id, "error", err)
 		return nil
 	}
@@ -5077,7 +5085,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return nil
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
-		if err := m.confirmActive(ctx, m.messenger, id); err != nil {
+		if err := m.confirmActive(ctx, m.messenger, id, rec.Metadata.LatestUserPromptAt); err != nil {
 			return fmt.Errorf("send %s: %w", id, err)
 		}
 	}
@@ -5181,20 +5189,20 @@ const (
 // answer it for the user. Sticky ActivityWaitingInput does NOT stop the loop:
 // an idle-prompt session with an unsubmitted pasted draft is exactly the case
 // the nudge exists for.
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID) error {
-	return m.confirmActiveWithNudge(ctx, id, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
+func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, baselinePromptAt time.Time) error {
+	return m.confirmActiveWithNudge(ctx, id, baselinePromptAt, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
 		return guard.Deliver(nudgeCtx, id, "")
 	})
 }
 
 type confirmationStopCheck func(context.Context) (bool, error)
 
-func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionID, stop confirmationStopCheck, nudge func(context.Context) (sessionguard.Outcome, error)) error {
+func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionID, baselinePromptAt time.Time, stop confirmationStopCheck, nudge func(context.Context) (sessionguard.Outcome, error)) error {
 	for attempt := 1; ; attempt++ {
 		if m.confirmationStopRequested(ctx, id, attempt, stop) {
 			return nil
 		}
-		outcome, err := m.waitForActive(ctx, id)
+		outcome, err := m.waitForActive(ctx, id, baselinePromptAt)
 		if err != nil {
 			return err
 		}
@@ -5206,6 +5214,14 @@ func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionI
 			return nil
 		}
 		if attempt >= m.sendConfirm.maxAttempts {
+			// A submission can land between the final poll and this decision,
+			// returning the session to idle with Active never observed. Honor the
+			// durable LatestUserPromptAt evidence before declaring failure, so an
+			// accepted message is not reported as a false ErrDeliveryUnconfirmed.
+			if rec, ok, readErr := m.store.GetSession(ctx, id); readErr == nil && ok &&
+				rec.Metadata.LatestUserPromptAt.After(baselinePromptAt) {
+				return nil
+			}
 			m.logger.Warn("send: activity confirmation budget exhausted", "sessionID", id, "attempts", attempt)
 			return ErrDeliveryUnconfirmed
 		}
@@ -5251,9 +5267,12 @@ func (m *Manager) confirmationStopRequested(ctx context.Context, id domain.Sessi
 // waitForActive polls Activity.State for up to attemptDeadline and reports
 // whether another nudge could help (see waitOutcome). Blocked is checked every
 // poll so a permission dialog appearing mid-wait aborts immediately instead of
-// burning the deadline. A non-nil error means polling cannot continue (ctx
-// cancelled, store failure, session gone).
-func (m *Manager) waitForActive(ctx context.Context, id domain.SessionID) (waitOutcome, error) {
+// burning the deadline. A prompt accepted and completed between polls returns
+// the session to idle with Active never observed, so an advance of
+// LatestUserPromptAt past baselinePromptAt is honored as acceptance: durable
+// submission evidence that the message landed. A non-nil error means polling
+// cannot continue (ctx cancelled, store failure, session gone).
+func (m *Manager) waitForActive(ctx context.Context, id domain.SessionID, baselinePromptAt time.Time) (waitOutcome, error) {
 	deadlineAt := m.clock().Add(m.sendConfirm.attemptDeadline)
 	ticker := time.NewTicker(m.sendConfirm.pollInterval)
 	defer ticker.Stop()
@@ -5270,6 +5289,9 @@ func (m *Manager) waitForActive(ctx context.Context, id domain.SessionID) (waitO
 			return waitActive, nil
 		case domain.ActivityBlocked:
 			return waitBlocked, nil
+		}
+		if rec.Metadata.LatestUserPromptAt.After(baselinePromptAt) {
+			return waitActive, nil
 		}
 		if !m.clock().Before(deadlineAt) {
 			return waitTimedOut, nil

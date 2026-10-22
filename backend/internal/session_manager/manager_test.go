@@ -11432,6 +11432,28 @@ func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 	}
 }
 
+func TestSend_ConfirmAcceptsRetainedSubmissionEvidence(t *testing.T) {
+	// A prompt accepted (UserPromptSubmit advances LatestUserPromptAt) whose turn
+	// completes between activity polls leaves the session idle, with Active never
+	// observed. Confirmation must treat that durable submission evidence as
+	// success instead of returning a false ErrDeliveryUnconfirmed, which would
+	// prompt a duplicate retry of an already-delivered message.
+	st := newFakeStore()
+	base := time.Now()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{LatestUserPromptAt: base}})
+	msg := &advancePromptOnNudgeMessenger{sessionID: "s1", store: st, at: base.Add(time.Second)}
+	m := newSendTestManager(t, signalingAgent{}, msg, st)
+
+	if err := m.Send(context.Background(), "s1", "do the thing", nil); err != nil {
+		t.Fatalf("Send error = %v, want nil (retained submission evidence recognized)", err)
+	}
+	if got := st.sessions["s1"].Activity.State; got == domain.ActivityActive {
+		t.Fatalf("Activity.State = active, want it to have stayed idle (evidence path, not the active path)")
+	}
+}
+
 func TestSend_BlockedSessionRejectsDelivery(t *testing.T) {
 	// A session paused on a permission decision (blocked) must not receive the
 	// paste at all: the runtime appends Enter, which could answer the dialog.
@@ -11697,6 +11719,29 @@ func (m *flipOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg s
 			m.store.sessions[m.sessionID] = rec
 		}
 		m.flipped = true
+	}
+	return nil
+}
+
+// advancePromptOnNudgeMessenger models an Enter-only nudge whose prompt is
+// accepted (UserPromptSubmit advances LatestUserPromptAt) while the turn
+// completes within the poll gap, so Activity never settles on Active.
+type advancePromptOnNudgeMessenger struct {
+	msgs      []string
+	sessionID domain.SessionID
+	store     *fakeStore
+	at        time.Time
+	advanced  bool
+}
+
+func (m *advancePromptOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg string) error {
+	m.msgs = append(m.msgs, msg)
+	if msg == "" && !m.advanced {
+		if rec, ok := m.store.sessions[m.sessionID]; ok {
+			rec.Metadata.LatestUserPromptAt = m.at
+			m.store.sessions[m.sessionID] = rec
+		}
+		m.advanced = true
 	}
 	return nil
 }
