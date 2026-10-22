@@ -115,6 +115,7 @@ type liveFeed struct {
 	unsubscribe  func()
 	refresher    *time.Ticker
 	last         []byte
+	lastRead     time.Time
 }
 
 // openLiveFeed starts the feed when the request asked for one (live=1) and
@@ -168,12 +169,34 @@ func (f *liveFeed) touch() {
 	}
 }
 
+// throttle waits out sessionEventMinInterval since the last read, so a
+// holder typing quickly costs each stream at most one read per interval; the
+// wake channel folds the keystrokes in between. It returns false once the
+// stream should end.
+func (f *liveFeed) throttle() bool {
+	wait := sessionEventMinInterval - time.Since(f.lastRead)
+	if wait <= 0 {
+		return true
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-f.request.Context().Done():
+		return false
+	case <-f.server.drain:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 // write sends the current live state when it differs from the last frame
 // sent. It returns false only when the client connection failed.
 func (f *liveFeed) write(w http.ResponseWriter) bool {
 	if f == nil {
 		return true
 	}
+	f.lastRead = time.Now()
 	state, err := f.store.SessionLiveState(f.request.Context(), principalFrom(f.request), f.orgID, f.sessionID)
 	if err != nil {
 		f.server.logger.Warn("read session live state", "error", err, "request_id", requestID(f.request))

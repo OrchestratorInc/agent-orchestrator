@@ -1187,6 +1187,29 @@ paths:
                 $ref: "#/components/schemas/ComposerLeaseAnswer"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/draft:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerPublishDraft
+      tags: [Sessions]
+      description: Share what the holder is typing, so everyone else in the session sees it live, read-only. Counts as a keystroke, renewing the grant. Anyone not holding the grant they present is refused with granted false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposerGrantInput"
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -6412,6 +6435,23 @@ components:
           description: Everyone waiting for the lease, first in line first.
           items:
             $ref: "#/components/schemas/ComposerParticipant"
+        draft:
+          description: What the holder is typing, shown live and read-only to everyone else; null while they have typed nothing. It clears when their turn ends.
+          oneOf:
+            - $ref: "#/components/schemas/ComposerDraft"
+            - type: "null"
+    ComposerDraft:
+      type: object
+      additionalProperties: false
+      required: [text, cursor]
+      properties:
+        text:
+          type: string
+          maxLength: 65536
+        cursor:
+          type: integer
+          minimum: 0
+          description: The caret's offset into text, in UTF-16 code units as the writing client counts them.
     ComposerLeaseAnswer:
       type: object
       additionalProperties: false
@@ -6442,6 +6482,14 @@ components:
         typing:
           type: boolean
           description: renew only. True when the holder typed since the last renewal.
+        text:
+          type: string
+          maxLength: 65536
+          description: draft only. The holder's draft.
+        cursor:
+          type: integer
+          minimum: 0
+          description: draft only. The caret's offset into text.
     UserMessageEvent:
       type: object
       additionalProperties: false
