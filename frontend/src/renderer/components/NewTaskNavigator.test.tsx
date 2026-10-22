@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readChatSessionDraft } from "../lib/chat-drafts";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { NewTaskNavigator } from "./NewTaskNavigator";
@@ -65,14 +64,6 @@ describe("NewTaskNavigator", () => {
 		renderNavigator();
 		act(() => useUiStore.getState().requestNewTask("proj-1"));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined }, replace: true });
-	});
-
-	it("puts a prefilled prompt in the new chat page's draft", () => {
-		renderNavigator();
-		const scope = { sessionId: "new-chat:local", incarnation: "new-chat:local" };
-		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID, undefined, { initialPrompt: "Read the triage prompt", displayName: "Report a problem" }));
-		expect(readChatSessionDraft(scope).composer.text).toBe("Read the triage prompt");
-		expect(navigateMock).toHaveBeenCalledWith({ to: "/new", search: { project: undefined, host: undefined }, replace: false });
 	});
 
 	it("keeps the New Task dialog for cloud projects", () => {

@@ -961,10 +961,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
 	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
-	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
+	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[], displayName?: string) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
-			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
+			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files, displayName })
+			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files, displayName });
 
 	const changeAgent = (value: string) => {
 		if (selectedAgent) {

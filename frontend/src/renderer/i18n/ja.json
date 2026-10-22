@@ -3,6 +3,7 @@
 	"sideChat.closing": "サイドチャットを閉じています。終了が確認されると消えます。",
 	"sideChat.retryClose": "閉じる操作を再試行",
 	"report.action": "問題を報告",
+	"report.promptPlaceholder": "何がうまくいきませんでしたか？（任意）",
 	"report.description": "ログを収集し、問題の内容を聞き取り、報告を送信できるエージェントを起動します。",
 	"report.opening": "開いています...",
 	"report.failed": "報告を開始できませんでした。もう一度お試しください。",

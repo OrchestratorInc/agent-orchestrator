@@ -264,10 +264,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			// A report's prompt keeps its name only while it is sent unchanged.
-			const request = useUiStore.getState().newTaskRequest;
-			const displayName = request?.initialPrompt && request.displayName && text.trim() === request.initialPrompt.trim() ? request.displayName : undefined;
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments, displayName });
+			const report = reportRequest();
+			const sessionId = await launch.launch(withReportPrompt(report, text), { clientRequestId: clientMessageId, replay, attachments, displayName: report?.displayName });
+			consumeReportRequest(report);
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -282,6 +281,19 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			resolveLaunch(clientMessageId);
 			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
 		}
+	};
+
+	// Report a problem hands this page instructions for the agent. They go ahead of
+	// what the user typed and stay out of the composer; only the page they were
+	// raised for uses them.
+	const reportRequest = () => {
+		const request = useUiStore.getState().newTaskRequest;
+		const here = targetRef.current;
+		return request?.hiddenPrompt && request.projectId === here.projectId && request.hostId === here.hostId ? request : undefined;
+	};
+	const consumeReportRequest = (report: ReturnType<typeof reportRequest>) => {
+		const current = useUiStore.getState().newTaskRequest;
+		if (report && current?.nonce === report.nonce) useUiStore.setState({ newTaskRequest: { ...current, hiddenPrompt: undefined, displayName: undefined } });
 	};
 
 	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
@@ -303,7 +315,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, clientMessageId, heldAttachments);
+			const report = reportRequest();
+			const sessionId = await task.launchFallback(withReportPrompt(report, brief.text), clientMessageId, heldAttachments, report?.displayName);
+			consumeReportRequest(report);
 			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
 			writeChatAttachments(draftScope, []);
@@ -412,6 +426,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
  * Undefined when they cannot show exactly what the task will start with; the page
  * then draws AO's own controls instead.
  */
+/** The report's agent instructions ahead of what the user typed, if any. */
+function withReportPrompt(report: { hiddenPrompt?: string } | undefined, text: string): string {
+	return report?.hiddenPrompt ? report.hiddenPrompt + (text.trim() ? `\n\n${text}` : "") : text;
+}
+
 function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, cloud: boolean): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
