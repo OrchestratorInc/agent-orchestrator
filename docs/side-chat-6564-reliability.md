@@ -8,7 +8,7 @@ effort. Both use a scale of 1–10. No P0 is established.
 
 | ID | Issue | Priority | Severity | Complexity | Status |
 | --- | --- | --- | --- | --- | --- |
-| SIDE-01 | Stale running-turn recovery blocks its queue | Reported P1 | 8 if reproduced | 4 | Existing fix verified through public recovery API |
+| SIDE-01 | Stale running-turn recovery blocks its queue | Historical P1 | 8 historically | 4 | Existing fix verified through public recovery API; not reproduced on this base |
 | SIDE-02 | Side-local commands duplicate delivery | P2 | 6 | 7 | Frozen source-owned handoff implemented; regression tests pass |
 | SIDE-03 | Side-local commands omit staged files | P2 | 5 | 5 | Files/images included in frozen receipt; regression tests pass |
 | SIDE-04 | Close loses cleanup ownership during a crash | P2 | 6 | 7 | Electron cleanup ledger and closing-tab retry implemented; focused regressions pass |
@@ -38,8 +38,51 @@ tab and retry the same side. Definitive rejection restores the saved open record
 confirmed host shutdown hides the tab while native-fork cleanup remains owned.
 Renderer IPC summaries contain only the side ID, session ID, and label.
 
-## Validation limits
+## Phase 4 validation
 
-Full-suite, race, and isolated desktop results will be recorded as phases finish.
+Passed on Windows with Node 24.15.0 and Go 1.27.1:
+
+- Backend build and vet; daemon development build.
+- All side/boundary Chat tests, including stale-running launch recovery.
+- 58 focused frontend tests across seven files: handoff ownership, files/images,
+  lost replies, remounts, session changes/unmount, ordered drafts, closing state,
+  already-closed reconciliation, and translation coverage.
+- Renderer production build, main/preload bundle compilation, and E2E TypeScript
+  check. Bundle compilation does not establish native Electron startup.
+- SQL and API regeneration with no content drift; changed Go formatting.
+- Pinned golangci-lint restricted to new issues reports zero issues. This is not
+  a pass for the complete lint gate.
+
+The complete backend and Chat suites fail on this Windows environment. The Chat
+suite's four failures are unchanged tests involving invalid Windows fixture paths,
+symlink privileges, and a POSIX `0600` assertion. Broader backend failures also
+include missing POSIX shell commands and platform-specific fixtures. The complete
+lint run reports 2,036 issues (mostly CRLF-sensitive goimports plus unchanged
+Windows code findings) and times out. These gates have not passed.
+
+Race checks cannot run with CGO disabled and no C compiler. Local workflow
+validation fails because native Windows tar cannot open `/dev/null`; Docker's
+Linux engine is also unavailable. Native macOS checks require a macOS runner.
+
+The isolated Electron lab uses `~/.ao/dev/fix-6564/{data,electron}` and its own
+run file. Launch is blocked by rebuilding `better-sqlite3`: Electron 44.7.0 has
+no matching prebuilt binary and Visual Studio C++ build tools are absent. No
+native-window or real-provider crash-window verification is claimed. No lab
+Electron process remains running.
+
+A broad frontend run before final handoff hardening finished with 8,738 passing
+tests, 215 failures across
+26 failing files, 10 skipped tests, and one worker error. Failures include native
+macOS fixtures, POSIX permissions/sockets and Windows path differences, plus the
+unchanged ContextMeter/ChatWorkspace assertions expecting US grouping while this
+machine uses `en-IN` (`258,400` versus `2,58,400`). The complete ChatWorkspace
+suite separately passes 211 of 212 tests, with only that locale assertion failing.
+These are reported failures, not a green frontend gate.
+The affected suites were rerun after hardening and all 58 tests pass.
+
+The first main frontend typecheck found an optional tab-ID error, corrected by
+checking the active ID in the retry handler. The subsequent full typecheck passes;
+an incremental recheck covers the final hardening changes.
+
 Developer Mode gating and launch-scoped recovery remain unchanged. Performance,
 visual redesign, and long-history reconstruction are outside this branch.

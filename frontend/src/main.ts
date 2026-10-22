@@ -721,6 +721,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		}).then(async (response) => {
 			if (!response.ok) throw new Error(`side launch claim failed: ${response.status}`);
 			if (sideLaunchState?.appRunId === appRunId && (sideLaunchState.sides.length > 0 || Object.keys(sideLaunchState.numbers ?? {}).length > 0)) {
+				sideCloseRecovery.markRestoreAttempt();
 				const restored = await fetch(`${sideBase}/state`, {
 					method: "POST", headers: { "content-type": "application/json" },
 					signal: AbortSignal.timeout(15000),
@@ -2603,6 +2604,13 @@ ipcMain.handle("daemon:restart", async () => {
 	}
 });
 async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
+	// Pin known ownership immediately, even while an older restore is in flight.
+	// A second daemon crash must not lose this close intent while capture waits.
+	if (closedSideId && !cancelClose && sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) {
+		sideCloseRecovery.begin(closedSideId);
+		sideLaunchState = sideCloseRecovery.state;
+		publishPendingSideCloses();
+	}
 	// Do not race close/reconciliation against an older launch restore that is
 	// still installing open sides into the replacement daemon.
 	let ready: Promise<void>;
