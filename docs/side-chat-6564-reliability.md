@@ -9,8 +9,8 @@ effort. Both use a scale of 1–10. No P0 is established.
 | ID | Issue | Priority | Severity | Complexity | Status |
 | --- | --- | --- | --- | --- | --- |
 | SIDE-01 | Stale running-turn recovery blocks its queue | Reported P1 | 8 if reproduced | 4 | Existing fix verified through public recovery API |
-| SIDE-02 | Side-local commands duplicate delivery | P2 | 6 | 7 | Pending phase 2 |
-| SIDE-03 | Side-local commands omit staged files | P2 | 5 | 5 | Pending phase 2 |
+| SIDE-02 | Side-local commands duplicate delivery | P2 | 6 | 7 | Frozen source-owned handoff implemented; regression tests pass |
+| SIDE-03 | Side-local commands omit staged files | P2 | 5 | 5 | Files/images included in frozen receipt; regression tests pass |
 | SIDE-04 | Close loses cleanup ownership during a crash | P2 | 6 | 7 | Pending phase 3 |
 
 ## Phase 1
