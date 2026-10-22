@@ -3563,5 +3563,8 @@
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
 	"chat.fileAnnotationInvalid": "La sélection n’a pas pu être validée. Supprimez-la et ajoutez-la à nouveau.",
-	"chat.fileAnnotationCheckFailed": "La vérification de la source a échoué. Réessayez plus tard."
+	"chat.fileAnnotationCheckFailed": "La vérification de la source a échoué. Réessayez plus tard.",
+	"chat.fileAnnotationOpen": "Open selected lines",
+	"chat.fileAnnotationOpenFile": "Open file",
+	"chat.fileAnnotationChangedDuringOpen": "Source changed while opening. Reopen the annotation to view the captured selection."
 }

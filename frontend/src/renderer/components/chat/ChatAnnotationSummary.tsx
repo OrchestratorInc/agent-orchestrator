@@ -102,7 +102,7 @@ export function ChatAnnotationSummary({
 					{annotations.map((annotation, index) => (
 						<div key={annotation.id ?? `${annotation.messageId ?? "annotation"}-${index}`} className="relative min-w-0 rounded bg-interactive-hover">
        {annotation.fileReference ? <div className={cn("px-2.5 py-1.5 text-xs", onRemove && "pr-7")}>
-<FileAnnotationPreview reference={annotation.fileReference} />
+<FileAnnotationPreview reference={annotation.fileReference} onNavigate={() => setOpen(false)} />
        </div> : <button
 								type="button"
 								disabled={disabled}

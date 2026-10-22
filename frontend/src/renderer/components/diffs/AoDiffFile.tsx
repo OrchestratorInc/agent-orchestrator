@@ -1,3 +1,5 @@
+import type { FileAnnotationRange } from "../../../shared/chat-file-reference";
+import { useFileAnnotationReveal } from "./useFileAnnotationReveal";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
@@ -48,6 +50,8 @@ function rowForLine(rows: DiffRow[], side: "deletions" | "additions", lineNumber
 
 export function AoDiffFile({
 	annotation,
+	annotationRange,
+ annotationReady = true,
 	detail,
 	fallback,
 	onActiveSelectionChange,
@@ -61,6 +65,8 @@ export function AoDiffFile({
 	extraCSS = "",
 }: {
 	annotation: FileAnnotationModel;
+	annotationRange?: FileAnnotationRange;
+ annotationReady?: boolean;
 	detail: WorkspaceFileDetail;
 	fallback: ReactNode;
 	onActiveSelectionChange: (active: boolean) => void;
@@ -105,7 +111,10 @@ export function AoDiffFile({
     return fetchWorkspaceFileRevision({
      commitSha,sessionId,path:detail.path,side,hostId,
      scope:source.kind === "snapshot" ? "committed" : scope,
-     workspaceVersion:source.kind === "snapshot" ? undefined : detail.workspaceVersion,
+     // Detail fingerprints and manifest versions are different fences. For
+     // annotation navigation verify fresh rendered rows instead of sending a
+     // detail hint to the manifest-fenced revision endpoint.
+     workspaceVersion:source.kind === "snapshot" || annotationRange ? undefined : detail.workspaceVersion,
      view:source.kind === "snapshot" ? source.view : undefined,
      commitShas:source.kind === "snapshot" ? source.commitShas : undefined,
     });
@@ -121,24 +130,25 @@ export function AoDiffFile({
 				newFile,
 			};
 		},
-		[commitSha, detail.path, detail.previousPath, detail.workspaceVersion, scope, sessionId, hostId, source, t],
+		[commitSha, detail.path, detail.previousPath, detail.workspaceVersion, scope, sessionId, hostId, source, t, annotationRange],
 	);
 	// The detail patch is git's --unified=3, which endsAtLastHunk assumes. When it
 	// proves the file ends at the last hunk, load the full contents up front so
 	// Pierre has no dead "More unchanged context may be available" row to draw.
 	const endsAtEndOfFile = metadata != null && detail.size <= END_OF_FILE_PREFETCH_MAX_BYTES && endsAtLastHunk(metadata);
 	const endOfFileContents = useQuery({
-		queryKey: hostId ? ["files-preview-end-of-file", hostId, sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, endsAtEndOfFile && metadata ? patchIdentity(metadata) : ""] as const
-			: ["files-preview-end-of-file", sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, endsAtEndOfFile && metadata ? patchIdentity(metadata) : ""] as const,
+		queryKey: hostId ? ["files-preview-end-of-file", hostId, sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, detail.fileFingerprint ?? "", detail.workspaceVersion ?? "", source.kind === "pull_request" ? `${source.number}:${source.snapshot ?? ""}` : "", metadata && (endsAtEndOfFile || annotationRange) ? patchIdentity(metadata) : "", annotationRange?.requestKey ?? ""] as const
+			: ["files-preview-end-of-file", sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, detail.fileFingerprint ?? "", detail.workspaceVersion ?? "", source.kind === "pull_request" ? `${source.number}:${source.snapshot ?? ""}` : "", metadata && (endsAtEndOfFile || annotationRange) ? patchIdentity(metadata) : "", annotationRange?.requestKey ?? ""] as const,
 		queryFn: () => loadDiffFiles(metadata as FileDiffMetadata),
-		enabled: endsAtEndOfFile,
+		enabled: Boolean(metadata) && (endsAtEndOfFile || Boolean(annotationRange)),
 		retry: false,
 		staleTime: Infinity,
 	});
 	const fileDiff = useMemo(
-		() => (endsAtEndOfFile && metadata && endOfFileContents.data ? hydratedCopy(metadata, endOfFileContents.data) : null) ?? metadata,
-		[endOfFileContents.data, endsAtEndOfFile, metadata],
+		() => ((endsAtEndOfFile || annotationRange) && metadata && endOfFileContents.data ? hydratedCopy(metadata, endOfFileContents.data) : null) ?? metadata,
+		[endOfFileContents.data, endsAtEndOfFile, annotationRange, metadata],
 	);
+ const annotationReveal=useFileAnnotationReveal(containerRef,annotationRange,{ready:annotationReady && (!annotationRange || !metadata || (endOfFileContents.isSuccess && !endOfFileContents.isFetching)),contentKey:fileDiff});
 	const beginLineAnnotation = useCallback((side: "deletions" | "additions", lineNumber: number) => {
 		const { row, rowIndex } = rowForLine(rows, side, lineNumber);
 		if (!row || row.kind === "hunk") return;
@@ -177,9 +187,10 @@ export function AoDiffFile({
 			<FileDiff
 				disableWorkerPool={typeof Worker === "undefined"}
 				fileDiff={fileDiff ?? metadata}
+				selectedLines={annotationReveal.selectedLines}
 				lineAnnotations={lineAnnotations}
 				options={{
-					collapsedContextThreshold: 8,
+					collapsedContextThreshold: annotationRange ? Number.MAX_SAFE_INTEGER : 8,
 					diffIndicators: "classic",
 					diffStyle: split ? "split" : "unified",
 					disableFileHeader: hideFileHeader,
@@ -190,7 +201,7 @@ export function AoDiffFile({
 					loadDiffFiles,
 					maxLineDiffLength: 400,
 					lineHoverHighlight: "line",
-					onPostRender: gutterHover.restoreAfterRender,
+					onPostRender: () => { gutterHover.restoreAfterRender(); annotationReveal.reveal(); },
 					overflow: "wrap",
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,
@@ -213,6 +224,7 @@ export function AoDiffFile({
 					/>
 				)}
 			/>
+			{annotationReveal.changed ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
 			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 			{detail.diffTruncated ? (
 				<div className="border-t border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">

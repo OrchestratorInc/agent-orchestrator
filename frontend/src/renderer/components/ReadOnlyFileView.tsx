@@ -1,6 +1,8 @@
 import { mediaCrossOrigin } from "../lib/file-media";
 import { fileReferenceSource } from "../lib/file-reference-source";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { FileAnnotationRange } from "../../shared/chat-file-reference";
+import { useFileAnnotationReveal } from "./diffs/useFileAnnotationReveal";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
@@ -37,6 +39,8 @@ function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | 
 // oversized files short-circuit before any tokenization is attempted.
 export function ReadOnlyFileView({
 	annotation,
+	annotationRange,
+ annotationReady = true,
 	detail,
 	editing = false,
 	onContentReady,
@@ -52,6 +56,8 @@ export function ReadOnlyFileView({
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
+	annotationRange?: FileAnnotationRange;
+ annotationReady?: boolean;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
 	onContentReady?: () => void;
@@ -71,6 +77,7 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());
 	// The line a reveal brought into view, marked briefly so the eye lands on it.
@@ -173,7 +180,7 @@ export function ReadOnlyFileView({
 				}}
 				file={file}
 				lineAnnotations={lineAnnotations}
-				selectedLines={highlightedLine === null ? null : { start: highlightedLine, end: highlightedLine }}
+				selectedLines={annotationRange ? annotationReveal.selectedLines : highlightedLine === null ? null : { start: highlightedLine, end: highlightedLine }}
 				options={{
 					disableFileHeader: true,
 					enableGutterUtility: true,
@@ -182,6 +189,7 @@ export function ReadOnlyFileView({
 						gutterHover.restoreAfterRender();
 						onContentReady?.();
 						revealRequestedLine();
+						annotationReveal.reveal();
 					},
 					overflow: "wrap",
 					theme: { dark: "github-dark", light: "github-light" },
@@ -203,6 +211,7 @@ export function ReadOnlyFileView({
 					}} />
 				)}
 			/>
+			{annotationReveal.changed ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
 			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 		</div>
 	);

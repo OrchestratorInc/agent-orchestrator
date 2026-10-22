@@ -1,5 +1,5 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
-import type { ChatFileReference } from "../../../shared/chat-file-reference";
+import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -523,6 +523,7 @@ export interface ChatWorkspaceProps {
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -770,6 +771,7 @@ function ChatWorkspaceContent({
 	rollbackError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	retryControl,
 	onEditMessage,
 	editMessagePending,
@@ -813,6 +815,8 @@ function ChatWorkspaceContent({
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+ const fileNavigationGeneration=useRef(0);
+ useEffect(()=>{fileNavigationGeneration.current++;return ()=>{fileNavigationGeneration.current++}},[snapshot.sessionId,activeRemoteHostId,workspaceActiveTabKey]);
 	const remoteCreateMux = useMemo(
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
@@ -1716,7 +1720,7 @@ function ChatWorkspaceContent({
 	}, [conversationEmpty]);
 
 	return (
- <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId }}>
+ <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
 			ref={surfaceRef}
 			onKeyDown={handleChatKeyDown}

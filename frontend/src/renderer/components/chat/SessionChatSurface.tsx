@@ -1,3 +1,4 @@
+import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
@@ -120,6 +121,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	shellError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
@@ -171,6 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
@@ -820,6 +823,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}
 				onOpenFile={onOpenFile}
+				onOpenFileAnnotation={onOpenFileAnnotation}
 				retryControl={commands.retryControl}
 				onEditMessage={commands.editMessage}
 				editMessagePending={commands.editMessagePending}

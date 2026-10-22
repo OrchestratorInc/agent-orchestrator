@@ -3498,5 +3498,8 @@
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
 	"chat.fileAnnotationInvalid": "選択内容を検証できませんでした。削除して、もう一度追加してください。",
-	"chat.fileAnnotationCheckFailed": "ソースの確認に失敗しました。後でもう一度お試しください。"
+	"chat.fileAnnotationCheckFailed": "ソースの確認に失敗しました。後でもう一度お試しください。",
+	"chat.fileAnnotationOpen": "Open selected lines",
+	"chat.fileAnnotationOpenFile": "Open file",
+	"chat.fileAnnotationChangedDuringOpen": "Source changed while opening. Reopen the annotation to view the captured selection."
 }

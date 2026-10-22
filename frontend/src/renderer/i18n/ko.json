@@ -3498,5 +3498,8 @@
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
 	"chat.fileAnnotationInvalid": "선택 내용을 확인할 수 없습니다. 삭제한 후 다시 추가하세요.",
-	"chat.fileAnnotationCheckFailed": "원본 확인에 실패했습니다. 나중에 다시 시도하세요."
+	"chat.fileAnnotationCheckFailed": "원본 확인에 실패했습니다. 나중에 다시 시도하세요.",
+	"chat.fileAnnotationOpen": "Open selected lines",
+	"chat.fileAnnotationOpenFile": "Open file",
+	"chat.fileAnnotationChangedDuringOpen": "Source changed while opening. Reopen the annotation to view the captured selection."
 }
