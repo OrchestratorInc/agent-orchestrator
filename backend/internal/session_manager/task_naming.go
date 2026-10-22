@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -34,11 +33,15 @@ func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecor
 	if fallback.Slug == "" {
 		fallback.Slug = taskSlug(string(rec.ID))
 	}
+	// Clients keep the temporary branch private until the rename settles.
+	m.setBranchNaming(rec.ID, true)
+	settled := func() { m.setBranchNaming(rec.ID, false) }
 	runner, ok := m.chat.(chatBackgroundTaskRunner)
 	if !ok {
-		return func() generatedTaskName { return fallback }, func() {}
+		return func() generatedTaskName { return fallback }, settled
 	}
-	namingCtx, cancel := context.WithTimeout(m.backgroundContext, taskNamingTimeout)
+	namingCtx, cancelNaming := context.WithTimeout(m.backgroundContext, taskNamingTimeout)
+	cancel := func() { cancelNaming(); settled() }
 	done := make(chan generatedTaskName, 1)
 	slots := m.taskNamingSlots
 	select {
@@ -133,9 +136,7 @@ func taskSlug(value string) string {
 // nameTaskBranchLater renames a launched task's temporary branch once its
 // generated name arrives. The checkout never moves, so neither setup nor the
 // agent waits for naming. A skipped or failed rename keeps the temporary branch.
-// The launched spawn hands back its project gate, which the rename takes. A
-// running branch step tells clients a name is on the way, and finishing it
-// tells them to read the branch again.
+// The launched spawn hands back its project gate, which the rename takes.
 func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, taskName func() generatedTaskName, cancel context.CancelFunc) {
 	if release, ok := ctx.Value(spawnWorkspaceGateKey{}).(func()); ok {
 		release()
@@ -144,7 +145,6 @@ func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRec
 		cancel()
 		return
 	}
-	m.setTaskBranchStep(rec.ID, domain.SessionProvisionStepRunning)
 	m.runInBackground(func() {
 		defer cancel()
 		started := time.Now()
@@ -161,11 +161,10 @@ func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRec
 		if namer, ok := m.workspace.(ports.WorkspaceTaskNamer); ok && name.Slug != "" && ws.Branch != "" {
 			renamed, err := m.renameTaskBranch(namer, rec, ws, project, name.Slug)
 			if err != nil {
-				m.logger.Warn("task naming: keep temporary branch", "sessionID", rec.ID, "branch", ws.Branch, "error", err)
+				m.logger.Warn("task naming: rename branch", "sessionID", rec.ID, "branch", renamed, "error", err)
 			}
 			branch = renamed
 		}
-		m.setTaskBranchStep(rec.ID, domain.SessionProvisionStepDone)
 		m.logger.Info("task branch naming", "sessionID", rec.ID, "branch", branch, "durationMs", time.Since(started).Milliseconds())
 	})
 }
@@ -177,15 +176,17 @@ var (
 	taskNamingWriteTimeout  = 10 * time.Second
 )
 
-// taskBranchRecorder serializes the branch write with lifecycle row rewrites.
-type taskBranchRecorder interface {
-	SetTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string) (bool, error)
-}
-
+// renameTaskBranch returns the branch Git holds afterwards, and records it.
 func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, slug string) (string, error) {
 	// Serialize with cleanup and restore so a removed checkout is never renamed.
-	release := m.acquireWorkspaceGate(rec.ProjectID)
-	defer release()
+	gate := m.workspaceGate(rec.ProjectID)
+	if !gate.TryLock() {
+		// Another start or cleanup holds the project, maybe for minutes: show the
+		// temporary branch meanwhile. The rename still lands after.
+		m.setBranchNaming(rec.ID, false)
+		gate.Lock()
+	}
+	defer gate.Unlock()
 	if err := m.backgroundContext.Err(); err != nil {
 		return ws.Branch, err
 	}
@@ -204,57 +205,41 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 		info = *project
 	}
 	renamed, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug, "root"))
-	if err != nil || renamed.Root.Branch == ws.Branch {
-		return renamed.Root.Branch, err
+	if renamed.Root.Branch == ws.Branch {
+		return ws.Branch, err
 	}
-	var updated bool
-	if lcm, ok := m.lcm.(taskBranchRecorder); ok {
-		updated, err = lcm.SetTaskBranch(ctx, rec.ID, ws.Branch, renamed.Root.Branch)
-	} else {
-		updated, err = m.store.SetSessionTaskBranch(ctx, rec.ID, ws.Branch, renamed.Root.Branch, m.clock())
+	// Git moved the root: every repository, or some after a failed undo.
+	recordErr := m.recordTaskBranch(ctx, rec.ID, ws.Branch, renamed.Root.Branch)
+	if recordErr != nil && err == nil {
+		// Keep Git and the row agreeing: put the temporary names back exactly.
+		undoErr := namer.RevertTaskBranch(ctx, renamed, info)
+		if undoErr == nil {
+			return ws.Branch, recordErr
+		}
+		// Git kept the new name, so the row must name it: try once more.
+		retryCtx, done := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
+		defer done()
+		if m.recordTaskBranch(retryCtx, rec.ID, ws.Branch, renamed.Root.Branch) == nil {
+			return renamed.Root.Branch, undoErr
+		}
+		return renamed.Root.Branch, errors.Join(recordErr, undoErr)
 	}
+	return renamed.Root.Branch, errors.Join(err, recordErr)
+}
+
+func (m *Manager) recordTaskBranch(ctx context.Context, id domain.SessionID, temporary, branch string) error {
+	updated, err := m.store.SetSessionTaskBranch(ctx, id, temporary, branch, m.clock())
 	if err == nil && !updated {
 		err = errors.New("session branch changed during naming")
 	}
-	if err != nil {
-		// Keep Git and the row agreeing: put the temporary names back exactly.
-		if undoErr := namer.RevertTaskBranch(ctx, renamed, info); undoErr != nil {
-			return renamed.Root.Branch, errors.Join(err, undoErr)
-		}
-		return ws.Branch, err
-	}
-	return renamed.Root.Branch, nil
+	return err
 }
 
-// setTaskBranchStep marks the post-launch branch step. Its write is what
-// tells clients to read the session again, including when the rename was
-// skipped and nothing else changed.
-func (m *Manager) setTaskBranchStep(id domain.SessionID, status domain.SessionProvisionStepStatus) {
+// setBranchNaming publishes whether a task's generated branch name is on the way.
+func (m *Manager) setBranchNaming(id domain.SessionID, naming bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
 	defer cancel()
-	rec, found, err := m.store.GetSession(ctx, id)
-	if err != nil || !found {
-		m.logger.Warn("task naming: read branch step", "sessionID", id, "error", err)
-		return
+	if err := m.store.SetSessionBranchNaming(ctx, id, naming); err != nil {
+		m.logger.Warn("task naming: record branch naming", "sessionID", id, "error", err)
 	}
-	if err := m.store.SetSessionProvisionSteps(ctx, id, withTaskBranchStep(rec.ProvisionSteps, status, m.clock()), m.clock()); err != nil {
-		m.logger.Warn("task naming: record branch step", "sessionID", id, "error", err)
-	}
-}
-
-func withTaskBranchStep(steps []domain.SessionProvisionStep, status domain.SessionProvisionStepStatus, now time.Time) []domain.SessionProvisionStep {
-	steps = slices.Clone(steps)
-	i := slices.IndexFunc(steps, func(step domain.SessionProvisionStep) bool { return step.ID == domain.SessionProvisionStepBranch })
-	if i < 0 {
-		return append(steps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepBranch, Status: status, StartedAt: &now})
-	}
-	steps[i].Status = status
-	if status == domain.SessionProvisionStepDone {
-		steps[i].EndedAt = &now
-	}
-	return steps
-}
-
-func runningTaskBranchStep(step domain.SessionProvisionStep) bool {
-	return step.ID == domain.SessionProvisionStepBranch && step.Status == domain.SessionProvisionStepRunning
 }

@@ -12,6 +12,7 @@ import (
 
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	chatregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -23,6 +24,14 @@ type taskNamingLauncher struct {
 	wait     bool
 	gate     chan struct{} // holds the naming answer until a test releases it
 	onNaming func()
+	onDrain  func()
+}
+
+func (l *taskNamingLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) error {
+	if l.onDrain != nil {
+		l.onDrain()
+	}
+	return l.recordingLauncher.DrainChatQueue(ctx, id)
 }
 
 func TestTaskNamingAllShippedAgents(t *testing.T) {
@@ -303,46 +312,89 @@ func TestTaskNamingRenamesBesideAgentBranches(t *testing.T) {
 	}
 }
 
+type namingWritesStore struct {
+	*fakeStore
+	writes chan bool
+}
+
+func (s *namingWritesStore) SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error {
+	s.writes <- naming
+	return s.fakeStore.SetSessionBranchNaming(ctx, id, naming)
+}
+
 // A project gate held past the rename deadline by another start's setup must
-// not drop the rename or the generated title.
+// not drop the rename or the generated title, nor hide the branch meanwhile.
 func TestTaskNamingWaitsForGateBeforeDeadline(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
 	defer func(d time.Duration) { taskBranchRenameTimeout = d }(taskBranchRenameTimeout)
 	taskBranchRenameTimeout = time.Second
+	store := &namingWritesStore{fakeStore: st, writes: make(chan bool, 1)}
+	m.store = store
 	release := m.acquireWorkspaceGate(rec.ProjectID)
-	go func() { time.Sleep(2 * taskBranchRenameTimeout); release() }()
-	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Title: "Fix login", Slug: "fix-login"}), func() {})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Title: "Fix login", Slug: "fix-login"}), func() {})
+	}()
+	if naming := <-store.writes; naming {
+		t.Fatal("waiting on the gate kept the branch hidden")
+	}
+	time.Sleep(2 * taskBranchRenameTimeout)
+	release()
+	<-done
 	if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/fix-login/root" || actual.DisplayName != "Fix login" {
 		t.Fatalf("after a long gate wait = %+v", actual)
 	}
 }
 
-// The post-launch branch step runs until the rename settles; a restart that
-// interrupts it finishes the step so clients never wait on it forever.
-func TestTaskNamingBranchStep(t *testing.T) {
+// Clients keep the temporary branch private from the start of naming until
+// the rename lands, and a start that fails shows it again.
+func TestTaskNamingBranchNamingFlag(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
+	m.chat = &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
 	rec, root := launchedTaskSession(t, m, st, ws)
-	held := make(chan struct{})
-	m.nameTaskBranchLater(context.Background(), rec, root, nil, func() generatedTaskName {
-		if got := st.sessions[rec.ID].ProvisionSteps; len(got) != 1 || !runningTaskBranchStep(got[0]) {
-			t.Errorf("steps while naming = %+v", got)
-		}
-		close(held)
-		return generatedTaskName{Slug: "fix-login"}
-	}, func() {})
-	<-held
-	if got := st.sessions[rec.ID].ProvisionSteps; len(got) != 1 || got[0].Status != domain.SessionProvisionStepDone {
-		t.Fatalf("steps after naming = %+v", got)
+	cfg := asyncChatSpawnConfig("Fix login")
+	cfg.NameFromPrompt = true
+	taskName, cancel := m.startTaskNaming(cfg, rec, st.projects["mer"].Config)
+	if !st.sessions[rec.ID].BranchNaming {
+		t.Fatal("naming did not hide the temporary branch")
 	}
-	stale := st.sessions[rec.ID]
-	stale.ProvisionSteps = withTaskBranchStep(stale.ProvisionSteps, domain.SessionProvisionStepRunning, time.Now())
-	st.sessions[rec.ID] = stale
-	if _, err := m.failInterruptedProvisioningRecords(context.Background(), []domain.SessionRecord{stale}); err != nil {
+	m.nameTaskBranchLater(context.Background(), rec, root, nil, taskName, cancel)
+	if actual := st.sessions[rec.ID]; actual.BranchNaming || actual.Metadata.Branch != "ao/fix-login/root" {
+		t.Fatalf("after the rename = %+v", actual)
+	}
+	_, cancel = m.startTaskNaming(cfg, rec, st.projects["mer"].Config)
+	cancel()
+	if st.sessions[rec.ID].BranchNaming {
+		t.Fatal("a failed start left the branch hidden")
+	}
+}
+
+// A start that fails after launch keeps its temporary branch, and the project
+// gate is free once the agent is launched.
+func TestAsyncStartNamesOnlyAfterSuccess(t *testing.T) {
+	m, st, _, _ := newGitTaskPreparationManager(t)
+	m.dataDir = t.TempDir()
+	launcher := &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
+	launcher.drainErr = errors.New("controller stopped before dispatch")
+	gateFree := false
+	launcher.onDrain = func() {
+		if gate := m.workspaceGate("mer"); gate.TryLock() {
+			gateFree = true
+			gate.Unlock()
+		}
+	}
+	m.chat = launcher
+	cfg := asyncChatSpawnConfig("Fix login")
+	cfg.NameFromPrompt = true
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[rec.ID].ProvisionSteps; slices.ContainsFunc(got, runningTaskBranchStep) {
-		t.Fatalf("restart left the branch step running: %+v", got)
+	actual := st.sessions[rec.ID]
+	if !gateFree || actual.ProvisionState != domain.SessionProvisionFailed || actual.Metadata.Branch != "ao/"+string(rec.ID)+"/root" || actual.BranchNaming {
+		t.Fatalf("gate free = %v, session = %+v", gateFree, actual)
 	}
 }
 
@@ -371,6 +423,37 @@ func TestTaskNamingUndoesRenameTheRowRejects(t *testing.T) {
 	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
 	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != root.Branch || st.sessions[rec.ID].Metadata.Branch != root.Branch {
 		t.Fatalf("git branch = %q, row = %+v", got, st.sessions[rec.ID].Metadata)
+	}
+}
+
+type revertFailsWorkspace struct{ *gitworktree.Workspace }
+
+func (revertFailsWorkspace) RevertTaskBranch(context.Context, ports.WorkspaceProjectInfo, ports.WorkspaceProjectInfo) error {
+	return errors.New("ref locked")
+}
+
+type flakyTaskBranchStore struct {
+	*fakeStore
+	failures int
+}
+
+func (s *flakyTaskBranchStore) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expected, branch string, now time.Time) (bool, error) {
+	if s.failures > 0 {
+		s.failures--
+		return false, errors.New("database is locked")
+	}
+	return s.fakeStore.SetSessionTaskBranch(ctx, id, expected, branch, now)
+}
+
+// When neither the row write nor the undo lands, the row is written again so it
+// names the branch Git holds.
+func TestTaskNamingRecordsRenameItCannotUndo(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	m.workspace, m.store = revertFailsWorkspace{ws}, &flakyTaskBranchStore{fakeStore: st, failures: 1}
+	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
+	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != "ao/fix-login/root" || st.sessions[rec.ID].Metadata.Branch != got {
+		t.Fatalf("git branch = %q, row = %q", got, st.sessions[rec.ID].Metadata.Branch)
 	}
 }
 
@@ -476,5 +559,11 @@ func TestRetryRecreatesMissingWorktree(t *testing.T) {
 	actual := st.sessions[rec.ID]
 	if _, err := os.Stat(actual.Metadata.WorkspacePath); actual.ProvisionState != domain.SessionProvisionReady || err != nil {
 		t.Fatalf("retry = state %s error %q path %s, worktree: %v", actual.ProvisionState, actual.ProvisionError, actual.Metadata.WorkspacePath, err)
+	}
+	// The checklist shows the worktree it created again.
+	if !slices.ContainsFunc(actual.ProvisionSteps, func(step domain.SessionProvisionStep) bool {
+		return step.ID == domain.SessionProvisionStepWorktree && step.Status == domain.SessionProvisionStepDone
+	}) {
+		t.Fatalf("retry checklist = %+v", actual.ProvisionSteps)
 	}
 }

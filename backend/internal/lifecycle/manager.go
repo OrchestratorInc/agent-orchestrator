@@ -106,11 +106,6 @@ type preparedChatSpawnStore interface {
 	) error
 }
 
-// taskBranchStore records a task's background branch rename.
-type taskBranchStore interface {
-	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error)
-}
-
 // notificationSink is the optional lifecycle-to-notification-producer boundary.
 type notificationSink interface {
 	Notify(ctx context.Context, intent ports.NotificationIntent) error
@@ -1686,19 +1681,6 @@ func (m *Manager) changeControllerEpoch(
 	}
 	m.resolveNotifications(ctx, resolutions...)
 	return true, nil
-}
-
-// SetTaskBranch records a background task branch rename under the lifecycle
-// lock. Lifecycle writes read and rewrite the whole row under that lock, so
-// one of them can no longer put the temporary branch back.
-func (m *Manager) SetTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string) (bool, error) {
-	store, ok := m.store.(taskBranchStore)
-	if !ok {
-		return false, errors.New("lifecycle: store cannot record task branches")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return store.SetSessionTaskBranch(ctx, id, expectedBranch, branch, m.clock())
 }
 
 // MarkTerminated marks a session terminated. Runtime/workspace teardown is the

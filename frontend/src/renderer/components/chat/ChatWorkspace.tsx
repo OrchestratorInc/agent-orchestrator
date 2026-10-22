@@ -794,8 +794,7 @@ function ChatWorkspaceContent({
 			: undefined;
 	// While a session starts, its opening brief reads as sent: the setup checklist
 	// under it explains why nothing has answered yet. Later messages still queue.
-	// The daemon's post-launch branch step only drives the naming shimmer.
-	const provisionSteps = (session?.provisionSteps ?? startingSteps)?.filter((step) => step.id !== "branch");
+	const provisionSteps = session?.provisionSteps ?? startingSteps;
 	// Ready can arrive before the first turn does. Keep its setup slot through
 	// that gap; selecting the first turn also never promotes a queued follow-up.
 	const hasStartup = Boolean(

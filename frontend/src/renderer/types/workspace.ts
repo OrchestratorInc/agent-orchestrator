@@ -89,7 +89,7 @@ export type SessionMode = "chat" | "tui";
 
 /** One stage of an asynchronous Chat start. */
 export type SessionProvisionStep = {
-	id: "fetch" | "worktree" | "setup" | "agent" | "branch";
+	id: "fetch" | "worktree" | "setup" | "agent";
 	status: "pending" | "running" | "done";
 	startedAt?: string;
 	endedAt?: string;
@@ -173,6 +173,8 @@ export type WorkspaceSession = {
 	provisionSteps?: SessionProvisionStep[];
 	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
+	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
+	branchNaming?: boolean;
 	/** Set while this launch runs a harness release an update replaced; it moves to `version` when idle. */
 	staleBinary?: SessionStaleBinary;
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */

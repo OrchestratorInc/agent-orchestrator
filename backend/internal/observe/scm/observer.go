@@ -1266,49 +1266,30 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 		if sr.branch == "" {
 			continue
 		}
-		for _, owned := range []string{sr.branch, temporaryTaskBranch(sr)} {
+		// A renamed task keeps owning its temporary branch, which the agent may
+		// have built on. It ranks below any session's current branch, so a later
+		// task given that name still wins its own PRs.
+		for temporary, owned := range []string{sr.branch, sr.session.TemporaryBranch} {
 			if owned == "" {
 				continue
 			}
+			rank := func(length int) int { return 2*length + 1 - temporary }
 			alias := sr
 			alias.branch = owned
 			if owned == sourceBranch {
-				consider(sr, len(sourceBranch)+1)
+				consider(sr, rank(len(sourceBranch)+1))
 			}
 			for _, prefix := range sessionBranchPrefixes(owned) {
 				if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
-					consider(sr, len(prefix))
+					consider(sr, rank(len(prefix)))
 				}
 			}
 			if workspaceHyphenBranch(alias) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
-				consider(sr, len(owned))
+				consider(sr, rank(len(owned)))
 			}
 		}
 	}
 	return best, bestLen >= 0 && !ambiguous
-}
-
-// temporaryTaskBranch is the branch a worker started on before its generated
-// name was applied after launch. The agent may have made or remembered branches
-// under it, so the session keeps owning that namespace after the rename.
-func temporaryTaskBranch(sr sessionRepo) string {
-	// Only a generated task branch (ao/<slug>/root) was renamed from one.
-	if sr.session.ID == "" || sr.session.Kind == domain.KindOrchestrator ||
-		!strings.HasPrefix(sr.branch, "ao/") || !strings.HasSuffix(sr.branch, "/root") {
-		return ""
-	}
-	namespace := "ao/"
-	if strings.HasPrefix(sr.branch, "ao/dev/") {
-		namespace = "ao/dev/"
-	}
-	branch := namespace + string(sr.session.ID)
-	if !sr.workspace {
-		branch += "/root"
-	}
-	if branch == sr.branch {
-		return ""
-	}
-	return branch
 }
 
 func workspaceHyphenBranch(sr sessionRepo) bool {

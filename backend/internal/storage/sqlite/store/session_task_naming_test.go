@@ -8,6 +8,7 @@ import (
 
 // A launched task's background rename applies only while the row still
 // carries the temporary branch it renamed, so it never overwrites another move.
+// A session stopped meanwhile still records the branch Git holds.
 func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "mer")
@@ -26,7 +27,7 @@ func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 			case "changed_branch":
 				rec.Metadata.Branch = "ao/mer-1/feature"
 			case "terminated":
-				rec.IsTerminated = true
+				rec.IsTerminated, want = true, true
 			}
 			created, err := s.CreateSession(t.Context(), rec)
 			if err != nil {
@@ -84,5 +85,60 @@ func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 		if row.Branch != "ao/login/root" {
 			t.Fatalf("row left on the old branch: %+v", row)
 		}
+	}
+}
+
+// A full-row write from a read taken before the rename puts back neither the
+// temporary branch nor the old title, and the rename alone publishes a change.
+func TestTaskRenameSurvivesStaleRowWrites(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Metadata.Branch, rec.DisplayName = "ao/mer-1/root", "Provisional"
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionBranchNaming(ctx, created.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	stale, _, err := s.GetSession(ctx, created.ID)
+	if err != nil || !stale.BranchNaming {
+		t.Fatalf("naming flag = %v, %v", stale.BranchNaming, err)
+	}
+	seq, _ := s.LatestSeq(ctx)
+	if ok, err := s.SetSessionTaskBranch(ctx, created.ID, "ao/mer-1/root", "ao/login/root", created.UpdatedAt); err != nil || !ok {
+		t.Fatalf("rename = %v, %v", ok, err)
+	}
+	if events, err := s.EventsAfter(ctx, seq, 10); err != nil || len(events) != 1 {
+		t.Fatalf("rename events = %+v, %v", events, err)
+	}
+	if ok, err := s.RenameSessionIfDisplayName(ctx, created.ID, "Provisional", "Fix login", created.UpdatedAt); err != nil || !ok {
+		t.Fatalf("title = %v, %v", ok, err)
+	}
+	stale.Metadata.Model = "lifecycle write"
+	if err := s.UpdateSession(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.GetSession(ctx, created.ID)
+	if got.Metadata.Branch != "ao/login/root" || got.DisplayName != "Fix login" || got.BranchNaming || got.Metadata.Model != "lifecycle write" {
+		t.Fatalf("after a stale write = %+v", got)
+	}
+	got.Metadata.Branch = ""
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if cleared, _, _ := s.GetSession(ctx, created.ID); cleared.Metadata.Branch != "" {
+		t.Fatalf("a deliberate branch change was dropped: %q", cleared.Metadata.Branch)
+	}
+	if err := s.SetSessionBranchNaming(ctx, created.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearSessionBranchNaming(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if restarted, _, _ := s.GetSession(ctx, created.ID); restarted.BranchNaming {
+		t.Fatal("a restart left branch naming on")
 	}
 }

@@ -736,11 +736,11 @@ describe("pending branch presentation", () => {
 	it.each<Partial<WorkspaceSession>>([{ activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }, { statusReadiness: "unavailable" }, { isTerminated: true }, { provisionState: "failed" }])("does not shimmer forever on a stopped or failed worker: %j", (stopped) => {
 		expect(sessionBranchPresentation({ ...pending, ...stopped })).toEqual({ branch: undefined, naming: false });
 	});
-	it("hides a launched task's branch while the daemon's branch step runs", () => {
-		const launched = session({ id: "mer-7", branch: "ao/mer-7/root", chatProviderPreserved: true, provisionSteps: [{ id: "branch", status: "running" }] });
+	it("hides a task's branch while its generated name is on the way", () => {
+		const launched = session({ id: "mer-7", branch: "ao/mer-7/root", chatProviderPreserved: true, branchNaming: true });
 		expect(sessionBranchPresentation(launched)).toEqual({ branch: undefined, naming: true });
-		expect(sessionBranchPresentation({ ...launched, branch: "ao/login-redirect/root", provisionSteps: [{ id: "branch", status: "done" }] })).toEqual({ branch: "ao/login-redirect/root", naming: false });
-		expect(sessionBranchPresentation({ ...launched, provisionSteps: [] })).toEqual({ branch: "ao/mer-7/root", naming: false });
+		expect(sessionBranchPresentation({ ...launched, branch: "ao/login-redirect/root", branchNaming: false })).toEqual({ branch: "ao/login-redirect/root", naming: false });
 		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
+		expect(sessionBranchPresentation({ ...launched, provisionState: "failed" })).toEqual({ branch: "ao/mer-7/root", naming: false });
 	});
 });

@@ -192,13 +192,17 @@ func TestRenameTaskBranchToItsOwnName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "proj-1", Branch: "ao/proj-1/root"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := ws.RenameTaskBranch(context.Background(), ports.WorkspaceProjectInfo{Root: root}, "ao/proj-1/root")
-	if err != nil || info.Root.Branch != "ao/proj-1/root" {
-		t.Fatalf("rename to own name = %+v, %v", info, err)
+	// A workspace project's temporary branch is the bare namespace.
+	for i, temporary := range []string{"ao/proj-1/root", "ao/proj-2"} {
+		id := fmt.Sprintf("proj-%d", i+1)
+		root, err := ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: domain.SessionID(id), Branch: temporary})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := ws.RenameTaskBranch(context.Background(), ports.WorkspaceProjectInfo{Root: root}, "ao/"+id+"/root")
+		if err != nil || info.Root.Branch != temporary {
+			t.Fatalf("rename %s to own name = %+v, %v", temporary, info, err)
+		}
 	}
 }
 

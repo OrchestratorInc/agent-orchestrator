@@ -356,6 +356,14 @@ type SessionRecord struct {
 	// branch-state reconcile writes it only when a fact changes; nil until the first
 	// observation, and a failed git read keeps the last known value.
 	BranchState *SessionBranchState `json:"branchState,omitempty"`
+	// BranchNaming is set while a task's generated branch name is on the way:
+	// from the start of naming until the background rename settles. Clients keep
+	// the temporary branch private meanwhile. Written only by its narrow setter.
+	BranchNaming bool `json:"branchNaming,omitempty"`
+	// TemporaryBranch is the branch a task started on before its generated name
+	// replaced it. The session keeps owning refs under it, and full-row writes
+	// never put it back. Written only by the rename.
+	TemporaryBranch string `json:"-"`
 }
 
 // SessionStaleBinary describes a launch left on a replaced harness release.
@@ -412,15 +420,12 @@ type SessionProvisionStepID string
 
 // Start-up stages, in the order a start runs them. A start includes only the
 // stages it will actually run: a prepared worktree skips the fetch, and setup
-// appears only when the project has post-create commands. Branch runs after
-// launch while a task's generated branch name is applied; it is not a
-// checklist row.
+// appears only when the project has post-create commands.
 const (
 	SessionProvisionStepFetch    SessionProvisionStepID = "fetch"
 	SessionProvisionStepWorktree SessionProvisionStepID = "worktree"
 	SessionProvisionStepSetup    SessionProvisionStepID = "setup"
 	SessionProvisionStepAgent    SessionProvisionStepID = "agent"
-	SessionProvisionStepBranch   SessionProvisionStepID = "branch"
 )
 
 // SessionProvisionStepStatus is how far one start-up stage has got.
@@ -435,7 +440,7 @@ const (
 
 // SessionProvisionStep is one row of a start's checklist.
 type SessionProvisionStep struct {
-	ID        SessionProvisionStepID     `json:"id" enum:"fetch,worktree,setup,agent,branch"`
+	ID        SessionProvisionStepID     `json:"id" enum:"fetch,worktree,setup,agent"`
 	Status    SessionProvisionStepStatus `json:"status" enum:"pending,running,done"`
 	StartedAt *time.Time                 `json:"startedAt,omitempty"`
 	EndedAt   *time.Time                 `json:"endedAt,omitempty"`

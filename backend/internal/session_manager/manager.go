@@ -344,6 +344,8 @@ type Store interface {
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error)
+	SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error
+	ClearSessionBranchNaming(ctx context.Context) error
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -510,7 +512,14 @@ type Manager struct {
 // acquireWorkspaceGate acquires the per-project workspace gate, returning a
 // release function that must be deferred or called when the operation finishes.
 func (m *Manager) acquireWorkspaceGate(projectID domain.ProjectID) func() {
+	mu := m.workspaceGate(projectID)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (m *Manager) workspaceGate(projectID domain.ProjectID) *sync.Mutex {
 	m.workspaceGateMu.Lock()
+	defer m.workspaceGateMu.Unlock()
 	if m.workspaceGates == nil {
 		m.workspaceGates = make(map[domain.ProjectID]*sync.Mutex)
 	}
@@ -519,10 +528,7 @@ func (m *Manager) acquireWorkspaceGate(projectID domain.ProjectID) func() {
 		mu = &sync.Mutex{}
 		m.workspaceGates[projectID] = mu
 	}
-	m.workspaceGateMu.Unlock()
-
-	mu.Lock()
-	return mu.Unlock
+	return mu
 }
 
 // Spawn rollback must release its project's gate before untimed cleanup.
@@ -4084,6 +4090,10 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	// background, where a slow or unavailable repository cannot delay boot.
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
+	// No branch naming survives a restart; clients show the branch it left.
+	if err := m.store.ClearSessionBranchNaming(ctx); err != nil {
+		m.logger.Warn("reconcile: interrupted branch naming could not be cleared", "error", err)
+	}
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		m.logger.Warn("reconcile: interrupted startup work could not be listed", "error", err)

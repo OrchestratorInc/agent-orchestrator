@@ -5160,6 +5160,7 @@ export interface components {
             autoInjectReview: boolean;
             autoReviewEnabled: boolean;
             branch?: string;
+            branchNaming?: boolean;
             branchState?: components["schemas"]["SessionBranchState"];
             chatProviderPreserved: boolean;
             /** Format: date-time */
@@ -6760,7 +6761,7 @@ export interface components {
             /** Format: date-time */
             endedAt?: null | string;
             /** @enum {string} */
-            id: "fetch" | "worktree" | "setup" | "agent" | "branch";
+            id: "fetch" | "worktree" | "setup" | "agent";
             /** Format: date-time */
             startedAt?: null | string;
             /** @enum {string} */

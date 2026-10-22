@@ -42,15 +42,17 @@ func (w *Workspace) RenameTaskBranch(ctx context.Context, info ports.WorkspacePr
 		}
 	}
 	namespace := strings.TrimSuffix(branch, "/root")
-	root := branch[len(namespace):] // keep a bare workspace-project branch bare
+	root := branch[len(namespace):]
 candidates:
 	for suffix := 1; suffix <= 100; suffix++ {
 		candidate := namespace
 		if suffix > 1 {
 			candidate = fmt.Sprintf("%s-%d", namespace, suffix)
 		}
-		if candidate+root == info.Root.Branch {
-			return info, nil // the generated name is the temporary one
+		// The generated name is the temporary one; a workspace project's
+		// temporary branch is the bare namespace.
+		if candidate == strings.TrimSuffix(info.Root.Branch, "/root") {
+			return info, nil
 		}
 		for _, refs := range refsByRepo {
 			for _, ref := range refs {
@@ -79,14 +81,12 @@ func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original port
 	if err != nil || len(to) != len(from) {
 		return errors.Join(err, errors.New("gitworktree: task repositories changed during naming"))
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
+	moves := make([]branchMove, len(from))
 	for i, repo := range from {
-		if _, err := w.run(ctx, w.binary, "-C", repo.Path, "branch", "-m", "--", repo.Branch, to[i].Branch); err != nil {
-			return err
-		}
+		moves[i] = branchMove{repo.Path, repo.Branch, to[i].Branch}
 	}
-	return nil
+	_, err = w.moveBranches(ctx, moves)
+	return err
 }
 
 func (w *Workspace) taskRepos(info ports.WorkspaceProjectInfo) ([]ports.WorkspaceRepoInfo, error) {
@@ -104,24 +104,30 @@ func (w *Workspace) taskRepos(info ports.WorkspaceProjectInfo) ([]ports.Workspac
 }
 
 func (w *Workspace) renameTaskCandidate(ctx context.Context, info ports.WorkspaceProjectInfo, repos []ports.WorkspaceRepoInfo, branch string) (ports.WorkspaceProjectInfo, bool, error) {
+	moves := make([]branchMove, len(repos))
 	for i, repo := range repos {
-		_, err := w.run(ctx, w.binary, "-C", repo.Path, "branch", "-m", "--", repo.Branch, branch)
-		if err == nil {
-			continue
-		}
-		// All repositories share one task name, so undo the ones already renamed.
-		if left, rollbackErr := w.undoTaskRenames(ctx, repos[:i], branch); rollbackErr != nil {
-			// Report what Git now holds: the first left repositories kept the new name.
-			info = renamedTaskInfo(info, branch, left)
-			return info, false, errors.Join(err, rollbackErr)
-		}
-		// Another project sharing this repository may have claimed the name.
-		if _, probeErr := w.run(ctx, w.binary, "-C", repo.RepoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); probeErr == nil {
-			return info, true, nil
-		}
-		return info, false, err
+		moves[i] = branchMove{repo.Path, repo.Branch, branch}
 	}
-	return renamedTaskInfo(info, branch, len(repos)), false, nil
+	n, err := w.moveBranches(ctx, moves)
+	if err == nil {
+		return renamedTaskInfo(info, branch, n), false, nil
+	}
+	// All repositories share one task name, so undo the ones already renamed,
+	// last first.
+	undo := make([]branchMove, n)
+	for i := range undo {
+		mv := moves[n-1-i]
+		undo[i] = branchMove{mv.path, mv.to, mv.from}
+	}
+	if undone, undoErr := w.moveBranches(ctx, undo); undoErr != nil {
+		// Report what Git now holds: the first repositories kept the new name.
+		return renamedTaskInfo(info, branch, n-undone), false, errors.Join(err, undoErr)
+	}
+	// Another project sharing this repository may have claimed the name.
+	if _, probeErr := w.run(ctx, w.binary, "-C", repos[n].RepoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); probeErr == nil {
+		return info, true, nil
+	}
+	return info, false, err
 }
 
 // renamedTaskInfo marks the first n repositories (and the root with the first)
@@ -137,15 +143,18 @@ func renamedTaskInfo(info ports.WorkspaceProjectInfo, branch string, n int) port
 	return info
 }
 
-// undoTaskRenames renames branch back in reverse order and reports how many
-// leading repositories still carry branch when it stops.
-func (w *Workspace) undoTaskRenames(ctx context.Context, renamed []ports.WorkspaceRepoInfo, branch string) (int, error) {
+type branchMove struct{ path, from, to string }
+
+// moveBranches renames branches in order and reports how many landed. Shutdown
+// cannot cancel it, so Git never stops halfway through renaming the branch a
+// live agent has checked out.
+func (w *Workspace) moveBranches(ctx context.Context, moves []branchMove) (int, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	for j := len(renamed) - 1; j >= 0; j-- {
-		if _, err := w.run(ctx, w.binary, "-C", renamed[j].Path, "branch", "-m", "--", branch, renamed[j].Branch); err != nil {
-			return j + 1, err
+	for i, mv := range moves {
+		if _, err := w.run(ctx, w.binary, "-C", mv.path, "branch", "-m", "--", mv.from, mv.to); err != nil {
+			return i, err
 		}
 	}
-	return 0, nil
+	return len(moves), nil
 }

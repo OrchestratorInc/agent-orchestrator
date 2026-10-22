@@ -32,11 +32,11 @@ describe("sessionStartupView", () => {
 		expect(view).toMatchObject({ branch: "ao/x/root", namingBranch: false });
 	});
 
-	it("hides the branch step and its temporary branch until the generated name lands", () => {
-		const naming = [...finished, step("branch", "running")];
-		const view = sessionStartupView({ provisionState: "ready", provisionSteps: naming, branch: "ao/x/root" }, snapshot([turn("t1", "running")]));
+	it("hides the temporary branch until the generated name lands", () => {
+		const view = sessionStartupView({ provisionState: "ready", provisionSteps: finished, branch: "ao/x/root", branchNaming: true }, snapshot([turn("t1", "running")]));
 		expect(view).toMatchObject({ steps: finished, branch: undefined, namingBranch: true });
 		expect(startupVisible(view, snapshot([turn("t1", "running")]))).toBe(false);
+		expect(sessionStartupView({ provisionState: "failed", provisionSteps: finished, branch: "ao/x/root", branchNaming: true }, snapshot([turn("t1", "failed")]))).toMatchObject({ branch: "ao/x/root", namingBranch: false });
 	});
 
 	it("keeps a ready session's checklist while the opening turn is still live", () => {

@@ -15028,6 +15028,8 @@ components:
           type: boolean
         branch:
           type: string
+        branchNaming:
+          type: boolean
         branchState:
           $ref: '#/components/schemas/SessionBranchState'
         chatProviderPreserved:
@@ -19275,7 +19277,6 @@ components:
           - worktree
           - setup
           - agent
-          - branch
           type: string
         startedAt:
           format: date-time

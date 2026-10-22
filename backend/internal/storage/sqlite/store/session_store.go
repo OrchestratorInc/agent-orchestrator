@@ -192,6 +192,27 @@ func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, e
 	return rows > 0, nil
 }
 
+// SetSessionBranchNaming marks whether a task's generated branch name is still
+// on the way.
+func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetSessionBranchNaming(ctx, gen.SetSessionBranchNamingParams{ID: id, BranchNaming: naming}); err != nil {
+		return fmt.Errorf("record branch naming for %s: %w", id, err)
+	}
+	return nil
+}
+
+// ClearSessionBranchNaming ends every branch naming a restart interrupted.
+func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.ClearSessionBranchNaming(ctx); err != nil {
+		return fmt.Errorf("clear interrupted branch naming: %w", err)
+	}
+	return nil
+}
+
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
 func (s *Store) SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
 	s.writeMu.Lock()
@@ -1012,6 +1033,8 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ProvisionError:    row.ProvisionError,
 		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
 		BranchState:       decodeBranchState(row.BranchState),
+		BranchNaming:      row.BranchNaming,
+		TemporaryBranch:   row.TemporaryBranch,
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
 }
@@ -1156,13 +1179,13 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		ReviewerHarness:                  rec.ReviewerHarness,
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),
 		AutoReviewEnabled:                rec.AutoReviewEnabled,
-		DisplayName:                      rec.DisplayName,
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
 		IsTerminated:                     rec.IsTerminated,
 		IsPinned:                         rec.IsPinned,
 		PinnedAt:                         timePtrToNullTime(rec.PinnedAt),
+		TemporaryBranch:                  rec.Metadata.Branch,
 		Branch:                           rec.Metadata.Branch,
 		WorkspacePath:                    rec.Metadata.WorkspacePath,
 		WorkspaceRepoPath:                rec.Metadata.WorkspaceRepoPath,

@@ -23,14 +23,13 @@ export type SessionStartupView = {
 	openingTurnId?: string;
 };
 
-type StartupSession = Partial<Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch" | "isTerminated">>;
+type StartupSession = Partial<Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch" | "branchNaming" | "isTerminated">>;
 
 export const STEP_LABELS: Record<SessionProvisionStep["id"], string> = {
 	fetch: "Fetch base branch",
 	worktree: "Create worktree",
 	setup: "Run setup script",
 	agent: "Start the agent",
-	branch: "Name branch",
 };
 
 export const BRANCH_NAMING_LABELS = [
@@ -59,11 +58,9 @@ export function startupAgentName(harness: string | undefined | null): string {
  */
 export function sessionStartupView(session: StartupSession, snapshot: Pick<ConversationSnapshot, "harness" | "turns" | "hasMoreBefore" | "controller"> | undefined): SessionStartupView | undefined {
 	const state = session.provisionState === "provisioning" || session.provisionState === "failed" ? session.provisionState : undefined;
-	// The daemon's post-launch branch step is not a checklist row: while it
-	// runs, the task's generated branch name is on the way.
-	const steps = (session.provisionSteps ?? []).filter((step) => step.id !== "branch");
-	const namingAfterLaunch = !session.isTerminated
-		&& Boolean(session.provisionSteps?.some((step) => step.id === "branch" && step.status === "running"));
+	const steps = session.provisionSteps ?? [];
+	// The task's generated branch name is on the way.
+	const namingAfterLaunch = Boolean(session.branchNaming) && !session.isTerminated && state !== "failed";
 	// Mobile pages history in, so the first loaded turn is only the opening one
 	// when nothing older exists.
 	const opening = snapshot && !snapshot.hasMoreBefore ? snapshot.turns[0] : undefined;
