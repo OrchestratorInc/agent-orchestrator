@@ -742,6 +742,11 @@ export async function clearNotification(cfg: ServerConfig, id: string): Promise<
 	}
 }
 
+// Clears the machine's whole history, not just the rows the screen has loaded.
+export async function clearAllNotifications(cfg: ServerConfig): Promise<void> {
+	await req(cfg, `${API}/notifications`, { method: "DELETE" });
+}
+
 // ---- Notification history ---------------------------------------------------
 
 export type NotificationType =
@@ -792,8 +797,13 @@ export async function getNotifications(
 	};
 }
 
-export async function markAllNotificationsRead(cfg: ServerConfig): Promise<void> {
-	await req(cfg, `${API}/notifications/read-all`, { method: "POST" });
+// With ids, only those rows are marked, so unread rows on pages the screen has
+// not loaded yet stay unread. Without ids, every unread row on the machine is.
+export async function markAllNotificationsRead(cfg: ServerConfig, ids?: string[]): Promise<void> {
+	await req(cfg, `${API}/notifications/read-all`, {
+		method: "POST",
+		...(ids && ids.length > 0 ? { body: JSON.stringify({ ids }) } : {}),
+	});
 }
 
 // ---- Pull request detail ----------------------------------------------------

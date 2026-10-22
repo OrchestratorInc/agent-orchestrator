@@ -1,5 +1,5 @@
 import { Feather } from "../lib/icons";
-import { useRouter, type Href } from "expo-router";
+import { useFocusEffect, useRouter, type Href } from "expo-router";
 import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+	clearAllNotifications,
 	clearNotification,
 	getNotifications,
 	markAllNotificationsRead,
@@ -71,7 +72,7 @@ function NotificationsContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
-	const { hostStates, configForHost, restore } = useApp();
+	const { hostStates, configForHost, refreshHost, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
@@ -88,6 +89,15 @@ function NotificationsContent() {
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
+	// Opening the screen marks what it loaded as read, as the desktop panel does.
+	// Those rows keep their unread look for this visit so the user can still see
+	// what was new.
+	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
+	const acknowledgedRef = useRef(new Set<string>());
+	// A visit ends when the screen loses focus, not when it unmounts: tapping into
+	// a session leaves this screen mounted underneath, and coming back should
+	// show those rows as read, like reopening the desktop panel.
+	useFocusEffect(useCallback(() => () => setHighlightedIds(new Set()), []));
 	const items = useMemo(() => notificationsAcrossHosts(Object.values(feeds).map((feed) => {
 		const host = hostStates.find((candidate) => candidate.hostId === feed.hostId);
 		return {
@@ -98,7 +108,6 @@ function NotificationsContent() {
 		};
 	})), [feeds, hostStates]);
 	const sections = useMemo(() => notificationSections(items), [items]);
-	const unreadCount = useMemo(() => Object.values(feeds).reduce((count, feed) => count + feed.unreadCount, 0), [feeds]);
 	const unavailableFeeds = useMemo(() => Object.values(feeds).filter((feed) => feed.error), [feeds]);
 	const hasMore = useMemo(() => Object.values(feeds).some((feed) => Boolean(feed.nextCursor)), [feeds]);
 	const knownHostIds = useMemo(() => new Set(hostStates.map((host) => host.hostId)), [hostStates]);
@@ -121,6 +130,8 @@ function NotificationsContent() {
 			const hosts = hostsRef.current;
 			const currentFeeds = feedsRef.current;
 			const generation = mode === "more" ? loadGeneration.current : ++loadGeneration.current;
+			// A reload may bring back rows whose ack failed; let them be retried.
+			if (mode !== "more") acknowledgedRef.current = new Set();
 			const targets = hosts.flatMap((host) => {
 				const source = configForHost(host.hostId);
 				const cursor = currentFeeds[host.hostId]?.nextCursor;
@@ -196,6 +207,52 @@ function NotificationsContent() {
 		void load("initial");
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [hostSignature]);
+
+	// Concrete loaded ids only, never "everything": unread rows on pages not
+	// loaded yet stay unread until the user scrolls to them.
+	useEffect(() => {
+		for (const feed of Object.values(feeds)) {
+			const source = feed.error ? null : configForHost(feed.hostId);
+			if (!source) continue;
+			const ids = feed.items
+				.filter((item) => item.status === "unread" && !acknowledgedRef.current.has(notificationIdentity(feed.hostId, item.id)))
+				.map((item) => item.id);
+			if (ids.length === 0) continue;
+			const keys = ids.map((id) => notificationIdentity(feed.hostId, id));
+			for (const key of keys) acknowledgedRef.current.add(key);
+			setHighlightedIds((current) => new Set([...current, ...keys]));
+			const acked = new Set(ids);
+			updateFeeds((previous) => {
+				const current = previous[feed.hostId];
+				if (!current) return previous;
+				const marked = current.items.filter((item) => acked.has(item.id) && item.status === "unread").length;
+				return { ...previous, [feed.hostId]: {
+					...current,
+					items: current.items.map((item) => acked.has(item.id) ? { ...item, status: "read" } : item),
+					unreadCount: Math.max(0, current.unreadCount - marked),
+				} };
+			});
+			markAllNotificationsRead(source, ids)
+				// Refresh that machine so the bell badge is already clear on the way back.
+				.then(() => refreshHost(feed.hostId))
+				.catch(() => {
+					// Put the rows back to unread without forgetting the ack, so a
+					// machine that keeps refusing is not retried in a loop.
+					// Pull-to-refresh retries.
+					setNotice(`Couldn't mark notifications read on ${feed.hostName}.`);
+					updateFeeds((previous) => {
+						const current = previous[feed.hostId];
+						if (!current) return previous;
+						const restored = current.items.filter((item) => acked.has(item.id) && item.status === "read").length;
+						return { ...previous, [feed.hostId]: {
+							...current,
+							items: current.items.map((item) => acked.has(item.id) ? { ...item, status: "unread" } : item),
+							unreadCount: current.unreadCount + restored,
+						} };
+					});
+				});
+		}
+	}, [configForHost, feeds, refreshHost, updateFeeds]);
 
 	function open(notification: FeedItem) {
 		const source = configForHost(notification.hostId);
@@ -289,25 +346,54 @@ function NotificationsContent() {
 			.finally(() => setRestoringId(undefined));
 	}
 
-	async function markAll() {
-		const targets = Object.values(feedsRef.current).flatMap((feed) => {
-			const source = feed.unreadCount > 0 ? configForHost(feed.hostId) : null;
+	function confirmClearAll() {
+		Alert.alert("Clear all notifications?", "This removes the notification history on every connected machine.", [
+			{ text: "Cancel", style: "cancel" },
+			{ text: "Clear all", style: "destructive", onPress: () => void clearAll() },
+		]);
+	}
+
+	// Mirrors the desktop panel's Clear all: each machine's whole history goes,
+	// including pages this screen never loaded.
+	async function clearAll() {
+		const feedList = Object.values(feedsRef.current);
+		const targets = feedList.flatMap((feed) => {
+			const source = configForHost(feed.hostId);
 			return source ? [{ feed, source }] : [];
 		});
+		const offline = feedList.filter((feed) => !configForHost(feed.hostId) && feed.items.length > 0);
 		if (targets.length === 0) {
 			haptics.warning();
-			setNotice("Unread notifications are on machines that are currently offline.");
+			setNotice("Notifications are on machines that are currently offline.");
 			return;
 		}
-		haptics.success();
+		haptics.warning();
+		// Drop anything in flight so a page that lands now cannot bring rows back.
+		loadGeneration.current += 1;
 		const targetHostIds = new Set(targets.map(({ feed }) => feed.hostId));
 		updateFeeds((previous) => Object.fromEntries(Object.entries(previous).map(([hostId, feed]) => [hostId, targetHostIds.has(hostId) ? {
 			...feed,
-			items: feed.items.map((item) => ({ ...item, status: "read" })),
+			items: [],
+			nextCursor: undefined,
 			unreadCount: 0,
 		} : feed])));
-		const results = await Promise.allSettled(targets.map(({ source }) => markAllNotificationsRead(source)));
-		if (results.some((result) => result.status === "rejected")) void load("refresh");
+		const results = await Promise.allSettled(targets.map(async ({ feed, source }) => {
+			try {
+				await clearAllNotifications(source);
+			} catch (cause) {
+				throw new Error(userFacingError(cause, `Couldn't clear notifications on ${feed.hostName}.`));
+			}
+			void refreshHost(feed.hostId);
+		}));
+		const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+		if (failure) {
+			haptics.error();
+			setNotice(failure.reason instanceof Error ? failure.reason.message : "Couldn't clear notifications.");
+		} else if (offline.length > 0) {
+			setNotice(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`);
+		}
+		// Also releases pagination that the generation bump cut off.
+		void load("refresh");
 	}
 
 	useEffect(() => {
@@ -323,8 +409,8 @@ function NotificationsContent() {
 				title="Notifications"
 				left={<HeaderIconButton icon="back" label="Back" onPress={() => backOr(router)} />}
 				right={
-					unreadCount > 0 ? (
-						<HeaderIconButton icon="check" label="Mark all read" onPress={() => void markAll()} />
+					items.length > 0 ? (
+						<HeaderIconButton icon="trash" label="Clear all" onPress={confirmClearAll} />
 					) : undefined
 				}
 			/>
@@ -376,6 +462,7 @@ function NotificationsContent() {
 					renderItem={({ item }) => (
 						<NotificationRow
 							item={item}
+							highlighted={highlightedIds.has(notificationIdentity(item.hostId, item.id))}
 							now={now}
 							action={notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
 							restoring={restoringId === notificationIdentity(item.hostId, item.sessionId)}
@@ -437,8 +524,9 @@ function NotificationSectionHeader({ title, count }: { title: string; count: num
 	);
 }
 
-function NotificationRow({ item, now, action, restoring, onPress, onRestore, onClear }: {
+function NotificationRow({ item, highlighted, now, action, restoring, onPress, onRestore, onClear }: {
 	item: FeedItem;
+	highlighted: boolean;
 	now: number;
 	action: "open" | "review" | "restore" | "prs" | "none";
 	restoring: boolean;
@@ -449,7 +537,7 @@ function NotificationRow({ item, now, action, restoring, onPress, onRestore, onC
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const visual = notificationVisual(t, item.type);
-	const unread = item.status === "unread";
+	const unread = item.status === "unread" || highlighted;
 
 	return (
 		<NotificationSwipeRow onClear={onClear}>

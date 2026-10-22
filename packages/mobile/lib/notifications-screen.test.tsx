@@ -10,6 +10,11 @@ const fixtures = vi.hoisted(() => {
 		configs,
 		offline: new Set<string>(),
 		clearNotification: vi.fn(async () => {}),
+		clearAllNotifications: vi.fn(async (_config: unknown) => {}),
+		alert: vi.fn(),
+		blur: undefined as (() => void) | undefined,
+		markAllNotificationsRead: vi.fn(async (_config: unknown, _ids?: string[]) => {}),
+		refreshHost: vi.fn(async (_hostId: string) => {}),
 		getNotifications: vi.fn(async (config: { hostId: "dev" | "mac" }) => ({
 			notifications: config.hostId === "dev"
 				? [
@@ -28,7 +33,7 @@ vi.mock("react-native", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		ActivityIndicator: host("ActivityIndicator"),
-		Alert: { alert: vi.fn() },
+		Alert: { alert: fixtures.alert },
 		Pressable: host("Pressable"),
 		RefreshControl: host("RefreshControl"),
 		SectionList: ({ sections, renderItem, renderSectionHeader, ListHeaderComponent, ListFooterComponent, ListEmptyComponent, ...props }: {
@@ -54,13 +59,27 @@ vi.mock("react-native", async () => {
 		View: host("View"),
 	};
 });
-vi.mock("expo-router", () => ({ useRouter: () => ({ navigate: vi.fn(), push: vi.fn(), back: vi.fn(), canGoBack: () => false }) }));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	return {
+		useRouter: () => ({ navigate: vi.fn(), push: vi.fn(), back: vi.fn(), canGoBack: () => false }),
+		// Focus runs the effect on mount; blur() runs its cleanup like losing focus.
+		useFocusEffect: (effect: () => (() => void) | void) => {
+			React.useEffect(() => {
+				const cleanup = effect();
+				fixtures.blur = () => cleanup?.();
+				return cleanup ?? undefined;
+			}, [effect]);
+		},
+	};
+});
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock("./api", () => ({
 	getNotifications: fixtures.getNotifications,
-	markAllNotificationsRead: vi.fn(async () => {}),
+	markAllNotificationsRead: fixtures.markAllNotificationsRead,
 	markNotificationRead: vi.fn(async () => {}),
 	clearNotification: fixtures.clearNotification,
+	clearAllNotifications: fixtures.clearAllNotifications,
 }));
 vi.mock("./store", () => ({ useApp: () => ({
 	hostStates: [
@@ -70,6 +89,7 @@ vi.mock("./store", () => ({ useApp: () => ({
 	allSessions: [],
 	allProjects: [],
 	configForHost: (hostId: "dev" | "mac") => fixtures.offline.has(hostId) ? null : fixtures.configs[hostId],
+	refreshHost: fixtures.refreshHost,
 	restore: vi.fn(async () => {}),
 }) }));
 vi.mock("./ThemeProvider", () => {
@@ -89,7 +109,7 @@ vi.mock("./notification-type-icon", async () => {
 	const React = await import("react");
 	return { NotificationTypeIcon: (props: object) => React.createElement("NotificationTypeIcon", props) };
 });
-vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./useNow", () => ({ MINUTE_MS: 60_000, useNow: () => Date.parse("2026-10-08T11:00:00Z") }));
 vi.mock("./ui", async () => {
@@ -117,6 +137,12 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.getNotifications.mockClear();
 	fixtures.clearNotification.mockClear();
+	fixtures.markAllNotificationsRead.mockReset();
+	fixtures.markAllNotificationsRead.mockImplementation(async () => {});
+	fixtures.refreshHost.mockClear();
+	fixtures.clearAllNotifications.mockReset();
+	fixtures.clearAllNotifications.mockImplementation(async () => {});
+	fixtures.alert.mockClear();
 	fixtures.offline.clear();
 });
 
@@ -127,6 +153,69 @@ afterEach(async () => {
 });
 
 describe("NotificationsScreen", () => {
+	it("clears every connected machine's history from the header after confirming", async () => {
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		const header = () => renderer!.root.findByType("ScreenHeader" as never);
+		expect(header().props.right.props).toEqual(expect.objectContaining({ icon: "trash", label: "Clear all" }));
+
+		act(() => { header().props.right.props.onPress(); });
+		expect(fixtures.clearAllNotifications).not.toHaveBeenCalled();
+		const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
+		fixtures.refreshHost.mockClear();
+		await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
+
+		expect(fixtures.clearAllNotifications).toHaveBeenCalledTimes(2);
+		expect(fixtures.clearAllNotifications).toHaveBeenCalledWith(fixtures.configs.dev);
+		expect(fixtures.clearAllNotifications).toHaveBeenCalledWith(fixtures.configs.mac);
+		expect(fixtures.refreshHost).toHaveBeenCalledWith("dev");
+		expect(fixtures.refreshHost).toHaveBeenCalledWith("mac");
+	});
+
+	it("leaves an offline machine's rows alone and says so", async () => {
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		fixtures.offline.add("mac");
+		const header = renderer!.root.findByType("ScreenHeader" as never);
+		act(() => { header.props.right.props.onPress(); });
+		const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
+		await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
+
+		expect(fixtures.clearAllNotifications).toHaveBeenCalledTimes(1);
+		expect(fixtures.clearAllNotifications).toHaveBeenCalledWith(fixtures.configs.dev);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && String(node.props.children).includes("Mac is offline"))).toHaveLength(1);
+	});
+
+	it("marks the loaded unread rows read on open and keeps them highlighted for the visit", async () => {
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(1);
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledWith(fixtures.configs.dev, ["dev-1", "dev-2"]);
+		expect(fixtures.refreshHost).toHaveBeenCalledWith("dev");
+		// Both acknowledged rows still carry the unread dot.
+		expect(renderer!.root.findAllByType("Dot" as never)).toHaveLength(2);
+
+		// Leaving for a session keeps the screen mounted; coming back shows them read.
+		act(() => { fixtures.blur?.(); });
+		expect(renderer!.root.findAllByType("Dot" as never)).toHaveLength(0);
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(1);
+	});
+
+	it("restores unread rows when the ack fails without retrying in a loop", async () => {
+		fixtures.markAllNotificationsRead.mockRejectedValue(new Error("offline"));
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		await act(async () => {});
+
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(1);
+		expect(fixtures.refreshHost).not.toHaveBeenCalled();
+		const dots = renderer!.root.findAllByType("Dot" as never);
+		expect(dots).toHaveLength(2);
+
+		fixtures.markAllNotificationsRead.mockImplementation(async () => {});
+		const list = renderer!.root.findByType("SectionList" as never);
+		await act(async () => { await list.props.refreshControl.props.onRefresh(); });
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(2);
+		expect(fixtures.markAllNotificationsRead).toHaveBeenLastCalledWith(fixtures.configs.dev, ["dev-1", "dev-2"]);
+	});
+
 	it("refuses to clear a retained offline notification and accepts it after reconnecting", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		fixtures.offline.add("dev");
@@ -186,5 +275,11 @@ describe("NotificationsScreen", () => {
 		fixtures.getNotifications.mockClear();
 		await act(async () => { list().props.onEndReached(); });
 		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
+	});
+
+	it("hides Clear all when there is nothing to clear", async () => {
+		fixtures.getNotifications.mockImplementation(async () => ({ notifications: [], nextCursor: undefined, unreadCount: 0 }));
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		expect(renderer!.root.findByType("ScreenHeader" as never).props.right).toBeUndefined();
 	});
 });
