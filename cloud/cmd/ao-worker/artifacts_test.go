@@ -823,3 +823,75 @@ func TestArtifactRestoreCountsFilesStillOnDiskAsSynced(t *testing.T) {
 		t.Fatalf("committed = %v", got)
 	}
 }
+
+func TestArtifactScanKeepsCommittedBytesAtTheSessionLimit(t *testing.T) {
+	_, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	s := testSyncer(c, dir)
+	const mib = int64(1 << 20)
+	sparse := func(path string, size int64) {
+		t.Helper()
+		file, err := os.OpenFile(filepath.Join(dir, path), os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Truncate(size); err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+	}
+	// Twenty 24 MiB files and one of 20 MiB are committed: 500 MiB, the limit.
+	for index := range 20 {
+		path := fmt.Sprintf("f%02d.bin", index)
+		sparse(path, 24*mib)
+		s.synced[path] = artifactState{size: 24 * mib, sha: "committed"}
+	}
+	sparse("last.bin", 20*mib)
+	s.synced["last.bin"] = artifactState{size: 20 * mib, sha: "committed"}
+	// The first file grows by 1 MiB, and a new file appears.
+	sparse("f00.bin", 25*mib)
+	writeArtifact(t, dir, "new.md", "# new")
+
+	scan, err := s.scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, refused := range []string{"f00.bin", "new.md"} {
+		if _, ok := scan.current[refused]; ok {
+			t.Errorf("%s was admitted over the 500 MiB limit", refused)
+		}
+	}
+	// Every other committed file stays in the scan, so no commit leaves one out.
+	for index := 1; index < 20; index++ {
+		if _, ok := scan.current[fmt.Sprintf("f%02d.bin", index)]; !ok {
+			t.Errorf("f%02d.bin was left out", index)
+		}
+	}
+	if _, ok := scan.current["last.bin"]; !ok {
+		t.Error("last.bin was left out")
+	}
+}
+
+func TestArtifactSyncSeesARewriteThatKeepsSizeAndModTime(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "note.md", "AAAA")
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	info, err := os.Stat(filepath.Join(dir, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeArtifact(t, dir, "note.md", "BBBB")
+	if err := os.Chtimes(filepath.Join(dir, "note.md"), info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	syncSettled(s)
+	plane.mu.Lock()
+	committed := plane.rows["note.md"].sha
+	plane.mu.Unlock()
+	if want := sha256.Sum256([]byte("BBBB")); committed != hex.EncodeToString(want[:]) {
+		t.Fatal("a rewrite that kept the size and modification time was not synced")
+	}
+}
