@@ -7,9 +7,11 @@ No upstream PR is opened by this work. Several days of ordinary coding are the n
 
 ### Persistent-host slow-consumer recovery
 
-Every controller-facing host write has a 30-second per-write deadline. A controller that stops reading cannot indefinitely hold the host mutex and exclusive attachment. Failure follows the existing detach/journal path; the provider process is not killed. Idle time and total replay duration do not consume the next frame's budget.
+Controller-facing host writes have a 30-second no-reader-progress deadline. A slow but progressing reader renews a blocked write's deadline; a controller that stops reading cannot indefinitely hold the host mutex and exclusive attachment. Failure follows the existing detach/journal path; the provider process is not killed. Idle time and total replay duration do not consume the next frame's budget.
 
-`TestStalledControllerReleasesOwnershipAndPreservesACPReplay` stalls a real local socket with a large synthetic ACP update burst. The replacement receives all 12,001 updates in exact content/order and a terminal result, with the same provider PID. The fixture is synthetic; this proves the failure class, not the precise trigger of a historical production incident.
+Read receipts use a second connection to the existing authenticated loopback control listener, scoped by a fresh attachment capability. They are sent only after output is read (not by a heartbeat), coalesced to at most ten receipts per second, and processed independently of the host mutex so replay cannot block them. Closing or replacing the attachment retires its receipt channel. These receipts prove consumption only: the existing durable prompt-completion ACK remains the only authority for discarding the journal. The optional capability preserves attachment to older hosts that do not advertise it.
+
+`TestControllerWritePreservesSlowReaderAndReleasesStoppedReader` exercises a write lasting longer than its initial budget, exact output, idle deadline clearing, and ownership release when reads stop. Retired/unknown progress capabilities are rejected. `TestStalledControllerReleasesOwnershipAndPreservesACPReplay` stalls a real local socket with a large synthetic ACP update burst. Its journal wait reads only appended bytes and has a separate one-minute completion budget for race-instrumented CI. The replacement receives all 12,001 updates in exact content/order and a terminal result, with the same provider PID. The fixture is synthetic; this proves the failure class, not the precise trigger of a historical production incident.
 
 ### Rebound-orchestrator identity recovery
 

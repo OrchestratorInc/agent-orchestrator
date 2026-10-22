@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -72,15 +73,36 @@ func TestStalledControllerReleasesOwnershipAndPreservesACPReplay(t *testing.T) {
 	// this wait.
 	const burst = 12000
 	journalPath := filepath.Join(dataDir, "chat-hosts", cfg.SessionID, "acp-prompt.journal")
-	journalDeadline := time.Now().Add(10 * time.Second)
-	for {
-		content, err := os.ReadFile(journalPath) //nolint:gosec // path is AO-owned and test-local.
-		if err == nil && bytes.Count(content, []byte(`"agent_message_chunk"`)) == burst+1 {
-			break
+	// Race-instrumented JSON relay and journal I/O can be slow on shared CI.
+	// Read only appended bytes, rather than rescanning the growing ~25 MiB file
+	// every 20 ms. This is a journal-completion budget, not a detach deadline;
+	// the smaller writer regressions test ownership release independently.
+	journalDeadline := time.Now().Add(time.Minute)
+	var journal *os.File
+	chunks := 0
+	buffer := make([]byte, 64<<10)
+	for chunks < burst+1 {
+		if journal == nil {
+			var err error
+			journal, err = os.Open(journalPath) //nolint:gosec // AO-owned test-local path.
+			if err == nil {
+				t.Cleanup(func() { _ = journal.Close() })
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		}
+		if journal != nil {
+			n, err := journal.Read(buffer)
+			chunks += bytes.Count(buffer[:n], []byte{'\n'})
+			if err != nil && err != io.EOF {
+				t.Fatal(err)
+			}
+			if n > 0 {
+				continue
+			}
 		}
 		if time.Now().After(journalDeadline) {
-			t.Fatalf("host never journaled the full prompt; controller transport wedged (journal has %d chunks)",
-				bytes.Count(content, []byte(`"agent_message_chunk"`)))
+			t.Fatalf("journal completion timed out: got %d chunks, want %d (not proof of a wedged controller)", chunks, burst+1)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -89,9 +111,9 @@ func TestStalledControllerReleasesOwnershipAndPreservesACPReplay(t *testing.T) {
 	// unbounded write under the host-wide mutex, so every attach either reports
 	// ErrAttached or times out its handshake.
 	replacement := awaitAttach(t, d)
-	conn, ok := replacement.Stdin.(*net.TCPConn)
+	conn, ok := replacement.Stdin.(net.Conn)
 	if !ok {
-		t.Fatal("persistent transport stdin is not a TCP connection")
+		t.Fatal("persistent transport stdin is not a network connection")
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		t.Fatal(err)

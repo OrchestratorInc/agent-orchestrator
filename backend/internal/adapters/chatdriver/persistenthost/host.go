@@ -42,15 +42,11 @@ const (
 	providerStopDeadline = 3 * time.Second
 )
 
-// clientWriteTimeout bounds each write to the attached controller. A controller
-// that stops reading while keeping its socket open (a wedged projector, a
-// half-dead daemon) must not hold host ownership forever: an unbounded write
-// blocks the provider pump inside the host-wide mutex, so every later attach
-// reports ErrAttached until the host process is killed. Expiry takes the
-// existing write-failure path — detach, buffer or journal the frame, keep the
-// provider alive — which is the designed resumable detached state. One deadline
-// per write, not per connection: idle time and the total replay duration do not
-// consume the next frame's write budget.
+// clientWriteTimeout bounds controller writes without observed reader progress.
+// Socket backpressure alone is not evidence of a stalled controller: a slow
+// projector can keep consuming while a TCP write blocks. Attachment-scoped read
+// receipts renew an active write's deadline; idle time has no deadline. Expiry
+// still takes the existing detach/journal path without killing the provider.
 var clientWriteTimeout = 30 * time.Second
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -153,9 +149,10 @@ type Transport struct {
 }
 
 type hello struct {
-	Version int    `json:"version"`
-	Token   string `json:"token"`
-	Action  string `json:"action"`
+	Version       int    `json:"version"`
+	Token         string `json:"token"`
+	Action        string `json:"action"`
+	ProgressToken string `json:"progressToken,omitempty"`
 	// QuickStop on a shutdown: see ShutdownQuick.
 	QuickStop bool `json:"quickStop,omitempty"`
 }
@@ -165,6 +162,7 @@ type helloResponse struct {
 	Error         string    `json:"error,omitempty"`
 	NextRequestID int64     `json:"nextRequestId,omitempty"`
 	ACPState      *ACPState `json:"acpState,omitempty"`
+	ProgressToken string    `json:"progressToken,omitempty"`
 }
 
 func hostDir(dataDir, sessionID string) (string, error) {
@@ -492,8 +490,20 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 			return nil, errors.New(response.Error)
 		}
 	}
+	var stdin io.WriteCloser = conn
+	var stdout io.Reader = reader
+	if response.ProgressToken != "" {
+		progress, progressErr := connectReadProgress(handshakeCtx, d, response.ProgressToken)
+		if progressErr != nil {
+			_ = conn.Close()
+			return nil, progressErr
+		}
+		signal := &readProgress{conn: progress}
+		stdin = &progressTransport{Conn: conn, signal: signal}
+		stdout = &progressReader{reader: reader, signal: signal}
+	}
 	return &Transport{
-		Stdin: conn, Stdout: reader, Reconnected: reconnected,
+		Stdin: stdin, Stdout: stdout, Reconnected: reconnected,
 		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
 	}, nil
 }
@@ -755,6 +765,7 @@ type host struct {
 	stdin    io.WriteCloser
 	token    string
 	acp      *acpRelay
+	progress sync.Map // attachment capability -> *controllerConn; independent of mu during replay
 
 	mu               sync.Mutex
 	cond             *sync.Cond
@@ -785,26 +796,11 @@ func (h *host) accept() error {
 	}
 }
 
-// clientWriteDeadline bounds one controller-facing write. The deadline is
-// cleared after success so an idle attached host does not inherit a stale one
-// on a much later frame; a failed write keeps it, but its only reader takes
-// the detach path and closes the connection.
-type clientWriteDeadline struct{ conn net.Conn }
-
-func (w clientWriteDeadline) Write(p []byte) (int, error) {
-	if err := w.conn.SetWriteDeadline(time.Now().Add(clientWriteTimeout)); err != nil {
-		return 0, err
-	}
-	n, err := w.conn.Write(p)
-	if err != nil {
-		return n, err
-	}
-	_ = w.conn.SetWriteDeadline(time.Time{})
-	return n, nil
-}
-
 func writeClientFrame(conn net.Conn, frame []byte) error {
-	_, err := clientWriteDeadline{conn: conn}.Write(frame)
+	n, err := conn.Write(frame)
+	if err == nil && n != len(frame) {
+		return io.ErrShortWrite
+	}
 	return err
 }
 
@@ -823,6 +819,16 @@ func (h *host) handle(conn net.Conn) {
 	if subtle.ConstantTimeCompare([]byte(request.Token), []byte(h.token)) != 1 {
 		_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrUnauthorized.Error()})
 		_ = conn.Close()
+		return
+	}
+	if request.Action == "progress" {
+		value, _ := h.progress.Load(request.ProgressToken)
+		if output, ok := value.(*controllerConn); ok {
+			output.serveProgress(conn, reader)
+		} else {
+			_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrUnauthorized.Error()})
+			_ = conn.Close()
+		}
 		return
 	}
 	if request.Action == "shutdown" {
@@ -847,10 +853,21 @@ func (h *host) handle(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+	progressToken, err := randomToken()
+	if err != nil {
+		h.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
+	output := &controllerConn{Conn: conn}
+	conn = output
+	h.progress.Store(progressToken, output)
+	defer h.progress.Delete(progressToken)
+	defer func() { _ = output.Close() }()
 	h.client = conn
 	h.clientGeneration++
 	generation := h.clientGeneration
-	response := helloResponse{OK: true, NextRequestID: h.maxRequestID}
+	response := helloResponse{OK: true, NextRequestID: h.maxRequestID, ProgressToken: progressToken}
 	if h.acp != nil {
 		response.ACPState = h.acp.snapshot()
 	}
@@ -862,7 +879,7 @@ func (h *host) handle(conn net.Conn) {
 		writeErr = writeClientFrame(conn, append(encoded, '\n'))
 	}
 	if writeErr == nil && h.acp != nil {
-		writeErr = h.acp.replayTo(h.ctx, clientWriteDeadline{conn: conn})
+		writeErr = h.acp.replayTo(h.ctx, conn)
 	}
 	if writeErr == nil {
 		for _, frame := range h.detached {
