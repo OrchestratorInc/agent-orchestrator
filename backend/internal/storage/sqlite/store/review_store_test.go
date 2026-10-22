@@ -981,6 +981,26 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 		t.Fatalf("failure on a sent notice: ok=%v err=%v, want no-op", ok, err)
 	}
 
+	// After ReviewWorkerNoticeMaxAttempts failures the notice reads as failed
+	// and is no longer queued for delivery.
+	for i := 2; i < domain.ReviewWorkerNoticeMaxAttempts; i++ {
+		if ok, err := s.RecordReviewRunNoticeFailure(ctx, "rerun", "still no controller", failedAt); err != nil || !ok {
+			t.Fatalf("record failure %d: ok=%v err=%v", i+1, ok, err)
+		}
+	}
+	if got := notice("rerun"); got.WorkerNotice != domain.ReviewWorkerNoticeFailed || got.WorkerNoticeAttempts != domain.ReviewWorkerNoticeMaxAttempts || got.WorkerNoticeError != "still no controller" {
+		t.Fatalf("after the last attempt: %+v", got)
+	}
+	queued, err := s.ListPendingReviewRunNotices(ctx, on.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range queued {
+		if run.ID == "rerun" {
+			t.Fatal("a notice that gave up is still queued")
+		}
+	}
+
 	// A terminated worker cannot take a message; the sweep skips it.
 	term := notice("rerun")
 	rec, _, err := s.GetSession(ctx, term.SessionID)

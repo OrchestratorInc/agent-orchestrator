@@ -103,7 +103,7 @@ type ReviewRun struct {
 	// WorkerNotice tracks the one "review done" message owed to the worker
 	// once this pass is final. The store marks it pending on the final status
 	// write when the session receives review feedback.
-	WorkerNotice ReviewWorkerNotice `json:"workerNotice,omitempty" enum:",pending,sent"`
+	WorkerNotice ReviewWorkerNotice `json:"workerNotice,omitempty" enum:",pending,sent,failed"`
 	// WorkerNoticeAttempts counts failed attempts to deliver the notice;
 	// WorkerNoticeError and WorkerNoticeAttemptedAt describe the latest one.
 	// A failed send keeps the notice pending and is retried with backoff.
@@ -124,7 +124,17 @@ const (
 	ReviewWorkerNoticePending ReviewWorkerNotice = "pending"
 	// ReviewWorkerNoticeSent marks a pass whose notice reached the worker.
 	ReviewWorkerNoticeSent ReviewWorkerNotice = "sent"
+	// ReviewWorkerNoticeFailed marks a notice that gave up after
+	// ReviewWorkerNoticeMaxAttempts failed sends. It is derived on read from a
+	// pending notice and its attempt count; WorkerNoticeError keeps the last
+	// failure.
+	ReviewWorkerNoticeFailed ReviewWorkerNotice = "failed"
 )
+
+// ReviewWorkerNoticeMaxAttempts bounds failed sends of one notice. A failed
+// send can still have reached the worker (a partly written paste), so retries
+// are capped rather than repeated forever.
+const ReviewWorkerNoticeMaxAttempts = 5
 
 // Recorded reasons for review passes that end without a result. The "review
 // done" notice reads them to tell the worker whether another review is worth

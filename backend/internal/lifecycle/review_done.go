@@ -48,7 +48,8 @@ type reviewNoticeStore interface {
 // feedback; a notice is marked sent only after it reached the worker, so a
 // suppressed or failed send is retried and a sent one is never repeated,
 // across restarts too. A failed send records its error on the run and is
-// retried with backoff.
+// retried with backoff, at most domain.ReviewWorkerNoticeMaxAttempts times;
+// later passes wait behind a notice still retrying, not one that gave up.
 func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.SessionID) error {
 	store, ok := m.store.(reviewNoticeStore)
 	if !ok || m.guard == nil {
@@ -95,7 +96,16 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 			// as Sent: the worker did not get the message. Keep it pending and
 			// record why; the sweep retries it after a backoff. A partly
 			// written terminal paste may then repeat, which beats losing it.
-			slog.Default().WarnContext(ctx, "lifecycle: review done notice send failed", "session", id, "run", run.ID, "outcome", outcome.String(), "err", err)
+			// Retries are capped at ReviewWorkerNoticeMaxAttempts: a send
+			// reported as failed may still have landed, so a persistent
+			// failure must not re-paste forever. After the last attempt the
+			// notice reads as failed and keeps the error.
+			attempt := run.WorkerNoticeAttempts + 1
+			if attempt >= domain.ReviewWorkerNoticeMaxAttempts {
+				slog.Default().ErrorContext(ctx, "lifecycle: review done notice gave up", "session", id, "run", run.ID, "attempts", attempt, "outcome", outcome.String(), "err", err)
+			} else {
+				slog.Default().WarnContext(ctx, "lifecycle: review done notice send failed", "session", id, "run", run.ID, "attempt", attempt, "outcome", outcome.String(), "err", err)
+			}
 			if _, recErr := store.RecordReviewRunNoticeFailure(ctx, run.ID, err.Error(), m.clock()); recErr != nil {
 				return recErr
 			}
@@ -289,6 +299,12 @@ func (l reviewNoticeLater) laterNote(run domain.ReviewRun) string {
 			state = "is running"
 		case domain.ReviewRunComplete:
 			state = "finished: " + reviewDoneVerdict(*n)
+		case domain.ReviewRunCancelled:
+			if n.Body == domain.ReviewRunCancelledByUserReason {
+				state = "was cancelled by the user"
+			} else {
+				state = "was cancelled"
+			}
 		default:
 			state = "ended: " + reviewDoneVerdict(*n)
 		}

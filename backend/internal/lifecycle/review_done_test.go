@@ -20,7 +20,7 @@ type noticeStore struct {
 func (s *noticeStore) ListPendingReviewRunNotices(_ context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
 	var out []domain.ReviewRun
 	for _, run := range s.runs {
-		if run.SessionID == id && run.WorkerNotice == domain.ReviewWorkerNoticePending {
+		if run.SessionID == id && run.WorkerNotice == domain.ReviewWorkerNoticePending && run.WorkerNoticeAttempts < domain.ReviewWorkerNoticeMaxAttempts {
 			out = append(out, run)
 		}
 	}
@@ -31,7 +31,7 @@ func (s *noticeStore) ListSessionsWithPendingReviewRunNotices(context.Context) (
 	seen := map[domain.SessionID]bool{}
 	var out []domain.SessionID
 	for _, run := range s.runs {
-		if run.WorkerNotice == domain.ReviewWorkerNoticePending && !seen[run.SessionID] {
+		if run.WorkerNotice == domain.ReviewWorkerNoticePending && run.WorkerNoticeAttempts < domain.ReviewWorkerNoticeMaxAttempts && !seen[run.SessionID] {
 			seen[run.SessionID] = true
 			out = append(out, run.SessionID)
 		}
@@ -496,4 +496,70 @@ func TestReviewDoneNotice_NamesANewerPass(t *testing.T) {
 		t.Fatalf("want one notice, got %v", msg.msgs)
 	}
 	assertContains(t, msg.msgs[0], "AO review done: approved", "A newer review of this PR (run run-2, head def4567) is running.", "covers the reviewed commit only", "LGTM")
+}
+
+// sendCountingMessenger fails every send and counts the attempts that reached it.
+type sendCountingMessenger struct{ sends int }
+
+func (f *sendCountingMessenger) Send(context.Context, domain.SessionID, string) error {
+	f.sends++
+	return errors.New("no chat controller")
+}
+
+// A send that keeps failing is retried at most ReviewWorkerNoticeMaxAttempts
+// times: a failed send may still have landed, so it must not re-paste
+// forever. After the cap the notice keeps its last error, stops retrying, and
+// no longer holds back the worker's later notices.
+func TestReviewDoneNotice_GivesUpAfterMaxAttempts(t *testing.T) {
+	st := &noticeStore{fakeStore: newFakeStore()}
+	st.sessions["w-1"] = working("w-1")
+	counting := &sendCountingMessenger{}
+	m := New(st, counting)
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	first := doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")
+	first.CreatedAt = now.Add(-time.Hour)
+	st.runs = []domain.ReviewRun{first}
+
+	for i := 0; i < 2*domain.ReviewWorkerNoticeMaxAttempts; i++ {
+		m.SweepReviewDoneNotices(ctx)
+		now = now.Add(reviewNoticeRetryMax)
+	}
+	got := st.run("run-1")
+	if counting.sends != domain.ReviewWorkerNoticeMaxAttempts || got.WorkerNoticeAttempts != domain.ReviewWorkerNoticeMaxAttempts {
+		t.Fatalf("sends=%d attempts=%d, want both capped at %d", counting.sends, got.WorkerNoticeAttempts, domain.ReviewWorkerNoticeMaxAttempts)
+	}
+	if !strings.Contains(got.WorkerNoticeError, "no chat controller") {
+		t.Fatalf("last error not kept: %+v", got)
+	}
+
+	// A later pass is not blocked by the notice that gave up.
+	msg := &fakeMessenger{}
+	m2 := New(st, msg)
+	m2.clock = m.clock
+	st.runs = append(st.runs, doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user"))
+	m2.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "Run: run-2") {
+		t.Fatalf("later notice blocked by a notice that gave up: %v", msg.msgs)
+	}
+}
+
+// A newer pass that the user cancelled is named as such, not as "ended".
+func TestReviewDoneNotice_NamesAUserCancelledNewerPass(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	newer := doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", domain.ReviewRunCancelledByUserReason)
+	newer.CreatedAt = time.Date(2026, 10, 22, 12, 5, 0, 0, time.UTC)
+	newer.WorkerNotice = domain.ReviewWorkerNoticeSent
+	old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	st.runs = []domain.ReviewRun{old, newer}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one notice, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "A newer review of this PR (run run-2, head abc123) was cancelled by the user.")
 }
