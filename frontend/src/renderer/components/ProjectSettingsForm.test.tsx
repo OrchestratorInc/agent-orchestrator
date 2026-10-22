@@ -1237,7 +1237,7 @@ describe("ProjectSettingsForm", () => {
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", {
 			params: {
 				path: { agent: "codex" },
-				query: { projectId: "proj-1", revalidate: true },
+				query: { projectId: undefined, revalidate: true },
 			},
 		});
 	});

@@ -1850,7 +1850,37 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent(expected);
 	});
 
-	it("clears a stale model while the newly selected agent catalog resolves", async () => {
+	it("shows the saved frontend models immediately and updates the picker from the DB without a loader", async () => {
+		const cached = {
+			agentId: "codex", selectionMode: "catalog" as const, customModelEntry: "none" as const,
+			models: [{ id: "cached-model", label: "GPT Cached", isDefault: true }],
+			allowCustom: false, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z",
+		};
+		cacheAgentModels(cached, "codex", "");
+		const updated = { ...cached, models: [{ id: "fresh-model", label: "GPT Fresh", isDefault: true }] };
+		let finishDB!: (value: { data: typeof cached }) => void;
+		const dbResponse = new Promise<{ data: typeof cached }>((resolve) => { finishDB = resolve; });
+		h.get.mockImplementation(async (path: string, options?: { params?: { query?: { catalogOnly?: boolean } } }) => {
+			if (path.includes("/models")) return options?.params?.query?.catalogOnly ? dbResponse : { data: updated };
+			return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(["project", "proj-1"], { agent: "codex", config: {} });
+		const view = render(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		try {
+			expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT Cached");
+			expect(screen.queryByRole("status", { name: "Loading models…" })).not.toBeInTheDocument();
+			await act(async () => finishDB({ data: updated }));
+			await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT Fresh"));
+			expect(screen.queryByRole("status", { name: "Loading models…" })).not.toBeInTheDocument();
+		} finally {
+			finishDB({ data: updated });
+			view.unmount();
+			queryClient.clear();
+		}
+	});
+
+	it("keeps the picker visible without a loader while a new agent's DB catalog resolves", async () => {
 		let resolveClaudeCatalog!: (value: {
 			data: {
 				agent: string;

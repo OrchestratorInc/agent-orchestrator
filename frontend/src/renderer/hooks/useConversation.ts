@@ -1259,6 +1259,12 @@ export function useConversationModels(sessionId: string | undefined, enabled: bo
 		// hides itself rather than showing an error the user cannot act on.
 		models: query.data ?? [],
 		isLoading: query.isLoading,
+		/**
+		 * The provider has answered, with models or an error. Until then a chat can
+		 * show the saved catalog; afterwards the live answer decides, so an agent
+		 * that cannot list or switch models never offers saved choices.
+		 */
+		loaded: query.isFetched,
 	};
 }
 

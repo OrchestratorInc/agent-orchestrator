@@ -117,7 +117,7 @@ vi.mock("../../hooks/useConversation", () => ({
 		catalogObserverState.enabled.push(enabled);
 		return configState;
 	}),
-	useConversationModels: vi.fn(() => ({ models: [] })),
+	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
 	useStageAttachments: () => undefined,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),

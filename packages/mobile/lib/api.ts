@@ -609,6 +609,7 @@ export type AgentModelCatalog = {
 	fetchedAt: string;
 	validatedAt?: string;
 	refreshRecommended?: boolean;
+	refreshState?: "idle" | "queued" | "refreshing" | "error";
 	warning?: string;
 };
 
@@ -646,10 +647,41 @@ export async function refreshAgents(cfg: ServerConfig): Promise<AgentCatalog> {
 	};
 }
 
-export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
+// The daemon answers an agent it has never discovered with an empty catalog
+// marked refreshing while discovery runs in the background, rather than making
+// the picker wait. Re-read until the discovered list arrives.
+const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
+
+function pollDelay(signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, MODEL_CATALOG_REFRESH_POLL_MS);
+		signal?.addEventListener("abort", finish, { once: true });
+		if (signal?.aborted) finish();
+	});
+}
+
+/**
+ * Loads an agent's model catalog, re-reading while the daemon is still
+ * discovering it. There is no attempt cap: the daemon bounds discovery (a
+ * readiness wait, then discovery's own timeout) and then saves a result, so a
+ * cold load ends with models or an error. `signal` stops polling when the view
+ * that asked closes.
+ */
+export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string, signal?: AbortSignal): Promise<AgentModelCatalog> {
 	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-	const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
-	return await res.json() as AgentModelCatalog;
+	for (;;) {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
+		const catalog = await res.json() as AgentModelCatalog;
+		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
+		if (!discovering || signal?.aborted) return catalog;
+		await pollDelay(signal);
+		if (signal?.aborted) return catalog;
+	}
 }
 
 export async function refreshAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
