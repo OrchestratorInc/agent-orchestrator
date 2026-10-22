@@ -213,7 +213,7 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 		if endpoint == "" {
 			return probeInconclusive
 		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", nil)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", http.NoBody)
 		if err == nil && p.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+p.APIKey)
 		}
@@ -235,7 +235,7 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 		if p.APIKey == "" {
 			return probeRejected
 		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models", nil)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models", http.NoBody)
 		if err == nil {
 			req.Header.Set("x-goog-api-key", p.APIKey)
 		}
@@ -251,10 +251,10 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	switch {
-	case resp.StatusCode == accept:
+	switch resp.StatusCode {
+	case accept:
 		return probeAccepted
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden:
 		return probeRejected
 	}
 	return probeInconclusive

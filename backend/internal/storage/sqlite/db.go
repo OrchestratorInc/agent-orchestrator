@@ -2139,6 +2139,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		}
 		needsNativeAssistant = true
 	}
+	if !needsStakpak {
+		// Stakpak's migration also inserts it before 'fake', so remove it the
+		// same way before the exact repairs and append it again below.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''stakpak'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Stakpak constraint: %w", err)
+		}
+		needsStakpak = true
+	}
 	type replacement struct {
 		old string
 		new string
