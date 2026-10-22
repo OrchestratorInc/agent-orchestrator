@@ -1100,10 +1100,16 @@ func (s *Service) installStartedBranchController(
 		s.controllers[id] = replacement
 	}
 	if cfg, ok := s.startConfigs[owner]; ok {
+		// Mirror the owner ActivateConversationBranchSession just made durable,
+		// agent-session identity included. A stale field here fails the next
+		// credential rotation's ownership fence, so a second edit or activation
+		// would report an uncertain delivery and stop the session.
 		cfg.ExpectedControllerOwner.Harness = cfg.Harness
 		cfg.ExpectedControllerOwner.Mode = domain.SessionModeChat
 		cfg.ExpectedControllerOwner.IsTerminated = false
 		cfg.ExpectedControllerOwner.RuntimeLaunchID = ""
+		cfg.ExpectedControllerOwner.AgentSessionID = replacement.ProviderConversationID()
+		cfg.ExpectedControllerOwner.AgentSessionIDLaunchID = ""
 		cfg.ExpectedControllerOwner.ProviderConversationID = replacement.ProviderConversationID()
 		cfg.ExpectedControllerOwner.ControllerGeneration = replacement.Generation()
 		s.startConfigs[owner] = cfg
