@@ -672,6 +672,107 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/acquire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease when it is free and nobody is ahead in line, or renew it when already held. Viewers are refused with 403. */
+        post: operations["composerAcquire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Extend a held grant. typing reports a keystroke since the last renewal; a holder who has not typed for 45 seconds loses the lease. */
+        post: operations["composerRenew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Give up a held grant; the next person in line gets the lease. Releasing a grant no longer held does nothing. */
+        post: operations["composerRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Get in line for the composer lease. A free lease passes at once to the first person in line who has the session open. */
+        post: operations["composerRequestTurn"];
+        /** @description Leave the line for the composer lease. */
+        delete: operations["composerLeaveQueue"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease from whoever holds it. Only the session's creator and the organization's owners and admins may; others get 403. */
+        post: operations["composerTakeOver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
         parameters: {
             query?: never;
@@ -2412,6 +2513,11 @@ export interface components {
             mode?: components["schemas"]["SessionMode"];
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -2429,6 +2535,11 @@ export interface components {
         };
         SendMessageInput: {
             text: string;
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
         };
         WorkerWorkspaceListPayload: {
             path: string;
@@ -2955,6 +3066,42 @@ export interface components {
             type: "session.live";
             /** @description Everyone with the session open right now, once each, in the order they joined. */
             viewers: components["schemas"]["SessionViewer"][];
+            composer: components["schemas"]["ComposerLeaseState"];
+        };
+        ComposerParticipant: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+        };
+        /** @description The session's composer lease, its hard lock on talking to the agent. Only the holder may send or steer. */
+        ComposerLeaseState: {
+            /** @description Who holds the lease, or null while it is free. */
+            holder: components["schemas"]["ComposerParticipant"] | null;
+            /**
+             * Format: int64
+             * @description Increases with every grant. A holder presents it to send, steer, renew, or release.
+             */
+            epoch: number;
+            /** @description Everyone waiting for the lease, first in line first. */
+            waitlist: components["schemas"]["ComposerParticipant"][];
+        };
+        ComposerLeaseAnswer: {
+            composer: components["schemas"]["ComposerLeaseState"] & {
+                /**
+                 * Format: int64
+                 * @description How long the caller's grant has left; 0 unless granted.
+                 */
+                expiresInMs: number;
+            };
+            /** @description Whether the caller holds the lease after the request. */
+            granted: boolean;
+        };
+        ComposerGrantInput: {
+            /** Format: int64 */
+            epoch: number;
+            /** @description renew only. True when the holder typed since the last renewal. */
+            typing?: boolean;
         };
         UserMessageEvent: {
             sessionId: string;
@@ -4510,6 +4657,158 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerAcquire: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRenew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRequestTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerLeaveQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerTakeOver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
                 };
             };
             default: components["responses"]["Error"];

@@ -26,6 +26,8 @@ type sendMessageRequest struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	Mode            string `json:"mode,omitempty"`
 	ApprovalMode    string `json:"approvalMode,omitempty"`
+	// ComposerEpoch is the composer lease grant the sender holds, 0 for none.
+	ComposerEpoch int64 `json:"composerEpoch,omitempty"`
 }
 
 var chatModelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
@@ -88,7 +90,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	event, err := s.store.SendMessage(
+	event, err := s.store.SendMessageWithLease(
 		r.Context(),
 		principalFrom(r),
 		orgID,
@@ -96,6 +98,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		key,
 		request.Text,
 		domain.ChatTurnSettings{Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode},
+		request.ComposerEpoch,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -149,7 +152,7 @@ func (s *Server) steerTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
 		return
 	}
-	event, err := s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text)
+	event, err := s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text, request.ComposerEpoch)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
