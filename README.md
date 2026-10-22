@@ -1,0 +1,1 @@
+Screenshots from native Electron manual testing of PR #6940 at 2c6cfbf08ba105c164905161a34a2b78335024b2. Isolated checkout, real daemon, throwaway session. 01 shows the saved-annotation test message; 02 shows the relocated function highlighted at lines 5-7. This branch contains review evidence only.
