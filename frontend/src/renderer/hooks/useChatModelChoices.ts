@@ -30,9 +30,12 @@ export function useChatModelChoices(
 	const showSavedCatalog = isClaude || (!liveModelsLoaded && !providerModelOption);
 	const savedCatalog = useQuery({ ...agentModelsQueryOptions(harness ?? "", "", hostId), enabled: Boolean(harness) && showSavedCatalog }).data;
 	const catalogModels = useMemo(() => {
-		if (!showSavedCatalog || !savedCatalog?.models.length) return controllerModels;
-		return savedCatalog.models
-			.filter((model) => model.id.toLowerCase() !== "default")
+		// A catalog response may omit models (an older daemon or a mock); treat that
+		// like an empty catalog rather than reading through it.
+		const savedModels = savedCatalog?.models ?? [];
+		if (!showSavedCatalog || savedModels.length === 0) return controllerModels;
+		return savedModels
+			.filter((model) => typeof model?.id === "string" && model.id.toLowerCase() !== "default")
 			.map((model) => ({
 				id: model.id,
 				displayName: model.label || model.id,
@@ -46,7 +49,7 @@ export function useChatModelChoices(
 	// Resolve current Claude aliases before filtering so their labels cannot move
 	// to an older enabled model when the current concrete entry is switched off.
 	const resolveClaudeChoice = useMemo(
-		() => isClaude && savedCatalog ? claudeChoiceModel(savedCatalog.models) : undefined,
+		() => isClaude && savedCatalog?.models ? claudeChoiceModel(savedCatalog.models) : undefined,
 		[isClaude, savedCatalog],
 	);
 	const currentModels = [currentModel, providerModelOption?.currentValue];
