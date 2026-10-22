@@ -743,6 +743,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. */
         post: operations["cancelTurn"];
         delete?: never;
         options?: never;
@@ -884,6 +885,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Answer an approval prompt. Allowed for the same people who may stop its turn (see cancelTurn); anyone else gets 403. */
         post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
@@ -955,7 +957,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Upgrade to a terminal WebSocket using a short-lived ticket. */
+        /**
+         * Upgrade to a terminal WebSocket using a short-lived ticket.
+         * @description On the agent terminal, keystrokes are talking to the agent, so they need
+         *     the session's composer lease: typing takes it when it is free and nobody
+         *     is waiting, and renews it while the typist keeps typing. While someone
+         *     else holds it or is waiting for it, input is dropped and the server
+         *     sends `{"type":"input_refused","inputId":...,"message":...}` instead of
+         *     `input_ack`; the connection stays open.
+         *
+         */
         get: operations["connectTerminal"];
         put?: never;
         post?: never;

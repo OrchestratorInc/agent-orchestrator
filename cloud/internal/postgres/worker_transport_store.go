@@ -698,9 +698,9 @@ func (s *Store) IssueTerminalTicket(
 		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO ao_access_tickets (
-				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at
-			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)`,
-			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl),
+				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at, user_id
+			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, NULLIF($8, '')::uuid)`,
+			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl), principal.UserID,
 		)
 		return err
 	})
@@ -906,11 +906,11 @@ func (s *Store) OpenTerminal(
 			WHERE token_hash = $1 AND purpose = $2
 			  AND consumed_at IS NULL AND expires_at > now()
 			RETURNING id, org_id, session_id, purpose, scopes,
-				COALESCE(worker_epoch, 0), expires_at`,
+				COALESCE(worker_epoch, 0), expires_at, COALESCE(user_id::text, '')`,
 			hash[:], terminalTicketPurpose(kind, terminalID),
 		).Scan(
 			&ticket.ID, &ticket.OrgID, &ticket.SessionID, &ticket.Purpose,
-			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt,
+			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt, &ticket.UserID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return classifyInvalidTerminalTicket(ctx, tx, hash[:], terminalTicketPurpose(kind, terminalID))
@@ -924,6 +924,7 @@ func (s *Store) OpenTerminal(
 	terminal := domain.TerminalSession{
 		OrgID: ticket.OrgID, SessionID: ticket.SessionID,
 		WorkerEpoch: ticket.WorkerEpoch, Kind: kind, Scopes: ticket.Scopes,
+		UserID: ticket.UserID,
 	}
 	err = s.withOrg(ctx, ticket.OrgID, func(tx pgx.Tx) error {
 		current, err := workerEpochCurrent(
