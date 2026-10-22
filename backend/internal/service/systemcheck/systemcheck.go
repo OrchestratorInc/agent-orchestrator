@@ -59,8 +59,11 @@ type Service struct {
 	commands    ports.CommandRunner
 	terminals   GitHubAuthTerminalOpener
 
-	deviceMu sync.Mutex
-	device   *githubDeviceLogin
+	deviceMu       sync.Mutex
+	device         *githubDeviceLogin
+	deviceCodeWait time.Duration
+	deviceClosed   bool
+	deviceRuns     sync.WaitGroup
 }
 
 // SetGitHubAuthTerminalOpener late-binds the shell terminal service, which is
@@ -271,6 +274,7 @@ func (s *Service) checkGitHubAuth(ctx context.Context) Requirement {
 		Hosts map[string][]struct {
 			Active bool   `json:"active"`
 			State  string `json:"state"`
+			Error  string `json:"error"`
 		} `json:"hosts"`
 	}
 	if err == nil && json.Unmarshal(stdout.Bytes(), &status) == nil {
@@ -278,12 +282,19 @@ func (s *Service) checkGitHubAuth(ctx context.Context) Requirement {
 		if len(status.Hosts) == 0 {
 			return Requirement{ID: "github-auth", Label: "GitHub access", Detail: detail}
 		}
+		rejected := false
 		for _, accounts := range status.Hosts {
 			for _, account := range accounts {
 				if account.Active && account.State == "success" {
 					return Requirement{ID: "github-auth", Label: "GitHub access", Satisfied: true, Detail: "GitHub CLI is signed in."}
 				}
+				if account.Active && account.State == "error" && strings.Contains(account.Error, "HTTP 401") {
+					rejected = true
+				}
 			}
+		}
+		if rejected {
+			return Requirement{ID: "github-auth", Label: "GitHub access", Detail: detail}
 		}
 	}
 	// Unsupported/malformed JSON or failed validation falls back to the local
@@ -295,8 +306,38 @@ func (s *Service) checkGitHubAuth(ctx context.Context) Requirement {
 }
 
 func (s *Service) hasGitHubAuth(ctx context.Context, path string) bool {
+	// Legacy status has no structured result. An authenticated API response can
+	// distinguish a rejected token from an unavailable network without reading it.
+	apiCtx, apiCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer apiCancel()
+	var headers bytes.Buffer
+	_ = s.commands.Run(apiCtx, []string{path, "api", "user", "--include", "--silent"}, &headers, io.Discard)
+	firstLine, _, _ := strings.Cut(headers.String(), "\n")
+	fields := strings.Fields(firstLine)
+	if len(fields) >= 2 && strings.HasPrefix(fields[0], "HTTP/") {
+		switch fields[1] {
+		case "200":
+			return true
+		case "401":
+			return false
+		}
+	}
 	// Give the local credential probe its own budget, even when status timed out.
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	return s.commands.Run(probeCtx, []string{path, "auth", "token"}, io.Discard, io.Discard) == nil
+	var token credentialPresenceWriter
+	if err := s.commands.Run(probeCtx, []string{path, "auth", "token"}, &token, io.Discard); err == nil {
+		return token.present
+	}
+	return false
+}
+
+// credentialPresenceWriter records presence without retaining token bytes.
+type credentialPresenceWriter struct{ present bool }
+
+func (w *credentialPresenceWriter) Write(p []byte) (int, error) {
+	if len(bytes.TrimSpace(p)) > 0 {
+		w.present = true
+	}
+	return len(p), nil
 }

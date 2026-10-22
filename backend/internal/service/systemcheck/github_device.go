@@ -2,14 +2,17 @@ package systemcheck
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // GitHubDeviceLoginState is where a GitHub CLI device sign-in stands.
@@ -41,8 +44,6 @@ var (
 	// clipboard"), so the code is found by its shape alone.
 	githubDeviceCodePattern = regexp.MustCompile(`\b([A-Z0-9]{4}-[A-Z0-9]{4})\b`)
 	githubDeviceURLPattern  = regexp.MustCompile(`https://\S+`)
-	// gh colors its output when the environment forces it (CLICOLOR_FORCE).
-	ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 )
 
 // GitHubDeviceLogin is a snapshot of the device sign-in. The code is the
@@ -64,7 +65,6 @@ type githubDeviceLogin struct {
 	readyOnce sync.Once
 	lastLine  string
 	partial   string
-	urlSeen   bool
 }
 
 func (l *githubDeviceLogin) markReady() { l.readyOnce.Do(func() { close(l.ready) }) }
@@ -82,14 +82,21 @@ func (l *githubDeviceLogin) Write(p []byte) (int, error) {
 	defer l.mu.Unlock()
 	l.partial += string(p)
 	for {
-		idx := strings.IndexByte(l.partial, '\n')
+		idx := strings.IndexAny(l.partial, "\r\n")
 		if idx < 0 {
 			break
 		}
-		line := strings.TrimSpace(ansiEscapePattern.ReplaceAllString(l.partial[:idx], ""))
+		line := strings.TrimSpace(ansi.Strip(l.partial[:idx]))
 		l.partial = l.partial[idx+1:]
 		l.consumeLine(line)
 	}
+	// Some releases/wrappers write prompts without a trailing newline.
+	// Keep incomplete escape sequences and code fragments for the next write.
+	const maxPartialBytes = 16 * 1024
+	if len(l.partial) > maxPartialBytes {
+		l.partial = l.partial[len(l.partial)-maxPartialBytes:]
+	}
+	l.consumeLine(strings.TrimSpace(ansi.Strip(l.partial)))
 	return len(p), nil
 }
 
@@ -98,18 +105,14 @@ func (l *githubDeviceLogin) consumeLine(line string) {
 		return
 	}
 	l.lastLine = line
-	// The first link gh prints is the verification page; later lines are not.
-	url := githubDeviceURLPattern.FindString(line)
-	if url != "" && !l.urlSeen {
-		l.urlSeen = true
-		l.snap.VerificationURL = url
-	}
+	// Login is pinned to github.com. Debug output can include OAuth API URLs
+	// before the actual verification link, so retain the known browser URL.
 	// The first code-shaped token outside a link is the code; once it is known,
 	// nothing later replaces it.
 	if l.snap.UserCode != "" {
 		return
 	}
-	if m := githubDeviceCodePattern.FindStringSubmatch(strings.Replace(line, url, "", 1)); m != nil {
+	if m := githubDeviceCodePattern.FindStringSubmatch(githubDeviceURLPattern.ReplaceAllString(line, "")); m != nil {
 		l.snap.UserCode = m[1]
 		if l.snap.State == GitHubDeviceLoginStarting {
 			l.snap.State = GitHubDeviceLoginAwaitingApproval
@@ -122,7 +125,7 @@ func (l *githubDeviceLogin) finish(err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	defer l.markReady()
-	if l.snap.State == GitHubDeviceLoginCancelled {
+	if l.snap.State == GitHubDeviceLoginCancelled || l.snap.State == GitHubDeviceLoginFailed {
 		return
 	}
 	if err == nil {
@@ -130,7 +133,11 @@ func (l *githubDeviceLogin) finish(err error) {
 		return
 	}
 	l.snap.State = GitHubDeviceLoginFailed
-	l.snap.Error = deviceFailureMessage(l.lastLine)
+	if errors.Is(err, context.DeadlineExceeded) {
+		l.snap.Error = "GitHub sign-in timed out. Try again."
+	} else {
+		l.snap.Error = deviceFailureMessage(l.lastLine)
+	}
 }
 
 func deviceFailureMessage(last string) string {
@@ -148,7 +155,7 @@ func deviceFailureMessage(last string) string {
 // StartGitHubDeviceLogin begins (or returns the in-flight) GitHub CLI device
 // sign-in. It runs gh without a terminal, so gh skips every prompt, prints the
 // one-time code and starts waiting for approval at once. The caller shows the
-// code and decides when to open GitHub; nothing here opens a browser.
+// code and opens GitHub in the browser.
 func (s *Service) StartGitHubDeviceLogin(ctx context.Context) (GitHubDeviceLogin, error) {
 	if err := ctx.Err(); err != nil {
 		return GitHubDeviceLogin{}, err
@@ -157,11 +164,19 @@ func (s *Service) StartGitHubDeviceLogin(ctx context.Context) (GitHubDeviceLogin
 	if err != nil || path == "" {
 		return GitHubDeviceLogin{}, apierr.Invalid("GITHUB_CLI_UNAVAILABLE", "GitHub CLI was not found on PATH.", nil)
 	}
-	if s.commands == nil {
+	runner, ok := s.commands.(ports.GitHubDeviceLoginRunner)
+	if !ok {
 		return GitHubDeviceLogin{}, apierr.Internal("GITHUB_AUTH_UNAVAILABLE", "GitHub authentication is unavailable.")
 	}
 
+	if err := ctx.Err(); err != nil {
+		return GitHubDeviceLogin{}, err
+	}
 	s.deviceMu.Lock()
+	if s.deviceClosed {
+		s.deviceMu.Unlock()
+		return GitHubDeviceLogin{}, apierr.Internal("GITHUB_AUTH_UNAVAILABLE", "GitHub authentication is shutting down.")
+	}
 	if cur := s.device; cur != nil {
 		if state := cur.snapshot().State; state == GitHubDeviceLoginStarting || state == GitHubDeviceLoginAwaitingApproval {
 			s.deviceMu.Unlock()
@@ -176,22 +191,43 @@ func (s *Service) StartGitHubDeviceLogin(ctx context.Context) (GitHubDeviceLogin
 	runCtx, cancel := context.WithTimeout(context.Background(), githubDeviceLoginTimeout)
 	login.cancel = cancel
 	s.device = login
+	s.deviceRuns.Add(1)
 	s.deviceMu.Unlock()
 
-	argv := []string{path, "auth", "login", "--web", "--hostname", "github.com", "--git-protocol", "https", "--skip-ssh-key"}
+	codeWait := s.deviceCodeWait
+	if codeWait <= 0 {
+		codeWait = githubDeviceCodeWait
+	}
 	go func() {
+		timer := time.NewTimer(codeWait)
+		defer timer.Stop()
+		select {
+		case <-login.ready:
+			return
+		case <-timer.C:
+			login.mu.Lock()
+			if login.snap.State != GitHubDeviceLoginStarting {
+				login.mu.Unlock()
+				return
+			}
+			login.snap.State = GitHubDeviceLoginFailed
+			login.snap.Error = "GitHub CLI did not provide a sign-in code. Update GitHub CLI and try again."
+			login.mu.Unlock()
+			cancel()
+			login.markReady()
+		}
+	}()
+	go func() {
+		defer s.deviceRuns.Done()
 		defer cancel()
-		login.finish(s.commands.Run(runCtx, argv, login, login))
+		login.finish(runner.RunGitHubDeviceLogin(runCtx, path, login, login))
 	}()
 	return s.awaitDeviceCode(ctx, login)
 }
 
 func (s *Service) awaitDeviceCode(ctx context.Context, login *githubDeviceLogin) (GitHubDeviceLogin, error) {
-	timer := time.NewTimer(githubDeviceCodeWait)
-	defer timer.Stop()
 	select {
 	case <-login.ready:
-	case <-timer.C:
 	case <-ctx.Done():
 		return GitHubDeviceLogin{}, ctx.Err()
 	}
@@ -234,4 +270,18 @@ func (s *Service) CancelGitHubDeviceLogin(ctx context.Context) (GitHubDeviceLogi
 		cur.markReady()
 	}
 	return cur.snapshot(), nil
+}
+
+// Close stops authentication work when the owning daemon shuts down.
+func (s *Service) Close() {
+	s.deviceMu.Lock()
+	s.deviceClosed = true
+	s.deviceMu.Unlock()
+	_, _ = s.CancelGitHubDeviceLogin(context.Background())
+	drained := make(chan struct{})
+	go func() { s.deviceRuns.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+	}
 }

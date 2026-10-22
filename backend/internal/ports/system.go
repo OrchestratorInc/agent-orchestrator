@@ -19,6 +19,12 @@ type CommandRunner interface {
 	Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error
 }
 
+// GitHubDeviceLoginRunner runs the daemon-owned login without launching a browser.
+// Legacy GitHub CLIs otherwise open one even when stdin is not a terminal.
+type GitHubDeviceLoginRunner interface {
+	RunGitHubDeviceLogin(ctx context.Context, path string, stdout, stderr io.Writer) error
+}
+
 // InstallCommand carries the extra execution policy required for unattended
 // installers. Argv remains server-owned; Env contains only explicit overrides.
 type InstallCommand struct {

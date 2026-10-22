@@ -11,7 +11,7 @@ import {
 	ensureAgentReadiness,
 } from "./useAgentReadinessQuery";
 import { codexAccountsQueryKey } from "./codex-accounts-state";
-import { systemRequirementsQueryKey } from "./useSystemRequirementsGate";
+import { githubAuthRequirementQueryOptions, githubDeviceLoginQueryKey, systemRequirementsQueryKey } from "./useSystemRequirementsGate";
 
 const STATUS_REFRESH_MS = 2_000;
 const READY_STATUS_REFRESH_MS = 10_000;
@@ -81,6 +81,8 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 				queryClient.removeQueries({ queryKey: agentReadinessQueryKey, exact: true });
 				queryClient.removeQueries({ queryKey: codexAccountsQueryKey, exact: true });
 				queryClient.removeQueries({ queryKey: systemRequirementsQueryKey });
+				queryClient.removeQueries({ queryKey: githubAuthRequirementQueryOptions.queryKey });
+				queryClient.removeQueries({ queryKey: githubDeviceLoginQueryKey });
 			}
 			if (nextStatus.state === "ready" && nextStatus.port) {
 				applyDaemonStatus(nextStatus);

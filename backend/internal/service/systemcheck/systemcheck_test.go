@@ -26,6 +26,7 @@ type fakeCommandRunner struct {
 	err     error
 	errors  []error
 	stdout  string
+	outputs []string
 	argv    []string
 	argvLog [][]string
 	run     func(context.Context) error
@@ -42,11 +43,16 @@ func (f *fakeGitHubAuthTerminalOpener) OpenCommandTerminal(_ context.Context, in
 
 func (f *fakeCommandRunner) Run(ctx context.Context, argv []string, stdout, _ io.Writer) error {
 	if f.run != nil {
+		_, _ = io.WriteString(stdout, f.stdout)
 		return f.run(ctx)
 	}
 	f.argv = append([]string(nil), argv...)
 	f.argvLog = append(f.argvLog, append([]string(nil), argv...))
-	_, _ = io.WriteString(stdout, f.stdout)
+	output := f.stdout
+	if index := len(f.argvLog) - 1; index < len(f.outputs) {
+		output = f.outputs[index]
+	}
+	_, _ = io.WriteString(stdout, output)
 	if index := len(f.argvLog) - 1; index < len(f.errors) {
 		return f.errors[index]
 	}
@@ -371,6 +377,7 @@ func TestCheckGitHubAuth_IsAdvisory(t *testing.T) {
 	}
 	wantCalls := [][]string{
 		{"/usr/bin/gh", "auth", "status", "--active", "--json", "hosts"},
+		{"/usr/bin/gh", "api", "user", "--include", "--silent"},
 		{"/usr/bin/gh", "auth", "token"},
 	}
 	if len(runner.argvLog) != len(wantCalls) {
@@ -384,7 +391,7 @@ func TestCheckGitHubAuth_IsAdvisory(t *testing.T) {
 }
 
 func TestCheckGitHubAuth_FallsBackForOlderGitHubCLI(t *testing.T) {
-	runner := &fakeCommandRunner{errors: []error{errors.New("unknown flag: --json"), nil}}
+	runner := &fakeCommandRunner{stdout: "test-local-token", errors: []error{errors.New("unknown flag: --json"), errors.New("offline"), nil}}
 	svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(map[string]string{
 		"gh": "/usr/bin/gh",
 	})), runner)
@@ -398,6 +405,7 @@ func TestCheckGitHubAuth_FallsBackForOlderGitHubCLI(t *testing.T) {
 	}
 	wantCalls := [][]string{
 		{"/usr/bin/gh", "auth", "status", "--active", "--json", "hosts"},
+		{"/usr/bin/gh", "api", "user", "--include", "--silent"},
 		{"/usr/bin/gh", "auth", "token"},
 	}
 	if len(runner.argvLog) != len(wantCalls) {
@@ -407,6 +415,35 @@ func TestCheckGitHubAuth_FallsBackForOlderGitHubCLI(t *testing.T) {
 		if !slices.Equal(runner.argvLog[i], wantCalls[i]) {
 			t.Fatalf("auth probe argv = %#v, want %#v", runner.argvLog, wantCalls)
 		}
+	}
+}
+
+func TestCheckGitHubAuthDoesNotAcceptRejectedOrEmptyCredentials(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		outputs []string
+		errors  []error
+	}{
+		{"revoked_token", []string{`{"hosts":{"github.com":[{"active":true,"state":"error","error":"HTTP 401: Bad credentials"}]}}`, "test-local-token"}, nil},
+		{"empty_token", []string{"", "", " \n"}, []error{errors.New("unknown flag: --json"), errors.New("offline"), nil}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{outputs: test.outputs, errors: test.errors}
+			svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(map[string]string{"gh": "/usr/bin/gh"})), runner)
+			auth, err := svc.CheckGitHubAuth(context.Background())
+			if err != nil || auth.Satisfied {
+				t.Fatalf("auth = %+v, err = %v", auth, err)
+			}
+		})
+	}
+}
+
+func TestCheckGitHubAuthSupportsCLIsWithoutTokenSubcommand(t *testing.T) {
+	runner := &fakeCommandRunner{outputs: []string{"", "HTTP/2.0 200 OK\n"}, errors: []error{errors.New("unknown flag: --json"), nil}}
+	svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(map[string]string{"gh": "/usr/bin/gh"})), runner)
+	auth, err := svc.CheckGitHubAuth(context.Background())
+	if err != nil || !auth.Satisfied {
+		t.Fatalf("auth = %+v, err = %v", auth, err)
 	}
 }
 
@@ -422,13 +459,14 @@ func TestCheckGitHubAuth_LocalTokenIsFloor(t *testing.T) {
 				if !hasToken {
 					tokenErr = errors.New("no local token")
 				}
-				runner := &fakeCommandRunner{stdout: output, errors: []error{nil, tokenErr}}
+				runner := &fakeCommandRunner{stdout: output, errors: []error{nil, errors.New("offline"), tokenErr}, err: tokenErr}
 				svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(map[string]string{"gh": "/usr/bin/gh"})), runner)
 				auth, err := svc.CheckGitHubAuth(context.Background())
 				if err != nil || auth.Satisfied != hasToken {
 					t.Fatalf("auth = %+v, err = %v, want satisfied=%v", auth, err, hasToken)
 				}
-				if len(runner.argvLog) != 2 || !slices.Equal(runner.argvLog[1], []string{"/usr/bin/gh", "auth", "token"}) {
+				wantCalls := 3
+				if len(runner.argvLog) != wantCalls || !slices.Equal(runner.argvLog[2], []string{"/usr/bin/gh", "auth", "token"}) {
 					t.Fatalf("calls = %v", runner.argvLog)
 				}
 			})
@@ -510,7 +548,7 @@ func requirementByID(t *testing.T, report Report, id string) Requirement {
 // to read credentials, without extending a caller's own cancellation deadline.
 func TestCheckGitHubAuth_FallbackHasFreshDeadline(t *testing.T) {
 	calls := 0
-	runner := &fakeCommandRunner{run: func(ctx context.Context) error {
+	runner := &fakeCommandRunner{stdout: "test-local-token", run: func(ctx context.Context) error {
 		calls++
 		if calls == 1 {
 			<-ctx.Done()
@@ -526,7 +564,7 @@ func TestCheckGitHubAuth_FallbackHasFreshDeadline(t *testing.T) {
 	}}
 	svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(map[string]string{"gh": "/usr/bin/gh"})), runner)
 	auth, err := svc.CheckGitHubAuth(context.Background())
-	if err != nil || !auth.Satisfied || calls != 2 {
+	if err != nil || !auth.Satisfied || calls != 3 {
 		t.Fatalf("auth = %+v, err = %v, calls = %d", auth, err, calls)
 	}
 }
@@ -540,5 +578,14 @@ func TestCheckGitHubAuth_EmptyHostsIsSignedOut(t *testing.T) {
 	}
 	if len(runner.argvLog) != 1 {
 		t.Fatalf("unexpected token fallback: %v", runner.argvLog)
+	}
+}
+
+func TestCheckGitHubAuthMissingTokenDoesNotTrustLegacyStatusExitCode(t *testing.T) {
+	runner := &fakeCommandRunner{errors: []error{errors.New("unknown flag"), errors.New("offline"), errors.New("no oauth token found"), nil}}
+	svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(map[string]string{"gh": "/usr/bin/gh"})), runner)
+	auth, err := svc.CheckGitHubAuth(context.Background())
+	if err != nil || auth.Satisfied || len(runner.argvLog) != 3 {
+		t.Fatalf("auth=%+v err=%v calls=%v", auth, err, runner.argvLog)
 	}
 }

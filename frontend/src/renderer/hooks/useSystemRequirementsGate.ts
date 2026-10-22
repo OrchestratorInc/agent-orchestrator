@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
@@ -48,8 +48,11 @@ export const githubAuthRequirementQueryOptions = {
 /** Advisory authentication probe. Kept separate from the startup gate because
  * credential-store access can be slow or interactive on some machines. */
 export function useGitHubAuthRequirement(loginActive = false) {
+	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	return useQuery({
 		...githubAuthRequirementQueryOptions,
+		queryKey: [...githubAuthRequirementQueryOptions.queryKey, baseUrl],
+		enabled: !usesPreviewWorkspaceData && Boolean(baseUrl),
 		// The browser/device flow can finish before its PTY exit reaches the
 		// renderer. Probe only while AO owns an active login terminal so the card
 		// closes promptly after authorization without permanent background polling.
@@ -156,36 +159,54 @@ export function useSystemRequirementsGate() {
  * flight. */
 export function useGitHubDeviceLogin() {
 	const queryClient = useQueryClient();
+	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const queryKey = [...githubDeviceLoginQueryKey, baseUrl];
+	const operation = useRef(0);
+	const startRequest = useRef<AbortController | null>(null);
 	const query = useQuery<GitHubDeviceLogin>({
-		queryKey: githubDeviceLoginQueryKey,
-		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/system/github-auth/device");
+		queryKey,
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/system/github-auth/device", { signal });
 			if (error || !data) throw new Error(apiErrorMessage(error, "Could not check GitHub sign-in."));
 			return data;
 		},
-		initialData: { state: "idle" },
+		enabled: !usesPreviewWorkspaceData && Boolean(baseUrl),
 		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnMount: "always",
 		refetchOnWindowFocus: false,
+		retry: 1,
 		refetchInterval: (q) => {
 			const state = q.state.data?.state;
 			return state === "starting" || state === "awaiting_approval" ? GITHUB_DEVICE_POLL_INTERVAL_MS : false;
 		},
 	});
+	const applyResult = (result: { login: GitHubDeviceLogin; generation: number; baseUrl: string }) => {
+		if (result.generation === operation.current && result.baseUrl === getApiBaseUrl()) {
+			queryClient.setQueryData([...githubDeviceLoginQueryKey, result.baseUrl], result.login);
+		}
+	};
 	const start = useMutation({
-		mutationFn: async (): Promise<GitHubDeviceLogin> => {
-			const { data, error } = await apiClient.POST("/api/v1/system/github-auth/device");
+		mutationFn: async () => {
+			const generation = ++operation.current;
+			const controller = new AbortController();
+			startRequest.current = controller;
+			await queryClient.cancelQueries({ queryKey });
+			const { data, error } = await apiClient.POST("/api/v1/system/github-auth/device", { signal: controller.signal });
 			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start GitHub sign-in."));
-			return data;
+			return { login: data, generation, baseUrl };
 		},
-		onSuccess: (login) => queryClient.setQueryData(githubDeviceLoginQueryKey, login),
+		onSuccess: applyResult,
 	});
 	const cancel = useMutation({
-		mutationFn: async (): Promise<GitHubDeviceLogin> => {
+		mutationFn: async () => {
+			const generation = ++operation.current;
+			startRequest.current?.abort();
+			await queryClient.cancelQueries({ queryKey });
 			const { data, error } = await apiClient.DELETE("/api/v1/system/github-auth/device");
 			if (error || !data) throw new Error(apiErrorMessage(error, "Could not cancel GitHub sign-in."));
-			return data;
+			return { login: data, generation, baseUrl };
 		},
-		onSuccess: (login) => queryClient.setQueryData(githubDeviceLoginQueryKey, login),
+		onSuccess: applyResult,
 	});
-	return { login: query.data, start, cancel };
+	return { login: query.data ?? { state: "idle" as const }, start, cancel };
 }
