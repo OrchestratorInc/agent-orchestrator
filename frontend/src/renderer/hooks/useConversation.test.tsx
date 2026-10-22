@@ -23,9 +23,11 @@ import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
 	useConversation,
+	ProviderSwitchFailed,
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
@@ -51,6 +53,42 @@ it("preserves queued-edit API error codes for delivery recovery", async () => {
 	postMock.mockResolvedValue({ data: undefined, error: refusal });
 	const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
 	await expect(result.current.editQueuedTurn("queued-1", "edited")).rejects.toBe(refusal);
+});
+
+it("persists and cancels auto-resume for the selected failed turn", async () => {
+	patchMock.mockResolvedValue({ error: undefined });
+	const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+	await act(async () => { await result.current.retryControl.setAutoResume("limited-1", true); });
+	expect(patchMock).toHaveBeenLastCalledWith(
+		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume",
+		{ params: { path: { sessionId: "ao-1", turnId: "limited-1" } }, body: { enabled: true } },
+	);
+	await act(async () => { await result.current.retryControl.setAutoResume("limited-1", false); });
+	expect(patchMock).toHaveBeenLastCalledWith(
+		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume",
+		{ params: { path: { sessionId: "ao-1", turnId: "limited-1" } }, body: { enabled: false } },
+	);
+	expect(postMock).not.toHaveBeenCalled();
+});
+
+it("shows scheduling errors only for the session that requested auto-resume", async () => {
+	const refusal = { message: "Reset time is unavailable" };
+	patchMock.mockResolvedValue({ error: refusal });
+	apiErrorMessageMock.mockReturnValue("Reset time is unavailable");
+	const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+	const stableWrapper = ({ children }: { children: ReactNode }) =>
+		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const { result, rerender } = renderHook(({ sessionId }) => useConversationCommands(sessionId), {
+		wrapper: stableWrapper, initialProps: { sessionId: "ao-1" },
+	});
+	await act(async () => {
+		await expect(result.current.retryControl.setAutoResume("limited-1", true)).rejects.toBe(refusal);
+	});
+	await waitFor(() => expect(result.current.retryControl.autoResumeError).toBe("Reset time is unavailable"));
+	expect(result.current.retryControl.autoResumeTurnId).toBe("limited-1");
+	rerender({ sessionId: "ao-2" });
+	expect(result.current.retryControl.autoResumeError).toBeUndefined();
+	expect(result.current.retryControl.autoResumeTurnId).toBeUndefined();
 });
 
 /** The provider state the daemon now serves, in wire shape. */
@@ -86,6 +124,9 @@ const WIRE = {
 		at: "2026-08-03T00:00:01Z",
 	},
 	account: {
+		authenticationState: "required",
+		authFailureId: "auth-failure-1",
+		lastAuthFailureReason: "expired",
 		authMode: "chatgpt",
 		planLabel: "Pro",
 		reauthRequiredAt: "2026-08-03T00:00:02Z",
@@ -204,7 +245,7 @@ describe("accepted conversation sends", () => {
 			await firstSend;
 		});
 
-		expect(result.current.pendingAcceptedTurnId).toBe("turn-2");
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-2"));
 		rerender({ sessionId: "ao-1" });
 		expect(result.current.pendingAcceptedTurnId).toBe("turn-1");
 	});
@@ -764,6 +805,9 @@ describe("useConversation snapshot mapping", () => {
 			at: "2026-08-03T00:00:01Z",
 		});
 		expect(snapshot.account?.reauthRequiredAt).toBe("2026-08-03T00:00:02Z");
+		expect(snapshot.account?.authenticationState).toBe("required");
+		expect(snapshot.account?.authFailureId).toBe("auth-failure-1");
+		expect(snapshot.account?.lastAuthFailureReason).toBe("expired");
 		expect(snapshot.threadState).toEqual({
 			status: "system_error",
 			waitingOn: ["user_input"],
@@ -777,7 +821,7 @@ describe("useConversation snapshot mapping", () => {
 		]);
 	});
 
-	it("maps retry lineage and consumed-source facts from the daemon", async () => {
+	it("maps retry lineage and durable prompt facts from the daemon", async () => {
 		getMock.mockResolvedValue({
 			data: {
 				...WIRE,
@@ -786,6 +830,7 @@ describe("useConversation snapshot mapping", () => {
 						...WIRE.turns[0],
 						retryOfTurnId: "turn-source",
 						hasRetryAttempt: true,
+						hasHumanPrompt: true,
 					},
 				],
 			},
@@ -798,7 +843,20 @@ describe("useConversation snapshot mapping", () => {
 		expect(result.current.snapshot!.turns[0]).toMatchObject({
 			retryOfTurnId: "turn-source",
 			hasRetryAttempt: true,
+			hasHumanPrompt: true,
 		});
+	});
+
+	it("maps absolute reset and durable auto-resume state from the daemon", () => {
+		const usageLimit = { resetsAt: "2026-10-14T16:50:00Z", autoResume: true, resumeError: "Could not wake the agent" };
+		const snapshot = toSnapshot({
+			conversationId: "conv-1", sessionId: "ao-1", mode: "chat", controller: "ready", latestSequence: 1,
+			continueTurnId: "",
+			branchedFromEarlierMessage: false, hasMoreBefore: false, nativeForkAvailableAfterSequence: 0,
+			settings: {}, messages: [], activities: [],
+			turns: [{ id: "limited", requestedAt: "2026-10-14T16:00:00Z", state: "failed", usageLimit }],
+		});
+		expect(snapshot.turns[0]?.usageLimit).toEqual(usageLimit);
 	});
 
 	// Absent must stay absent: a client has to tell "the provider said nothing" from
@@ -836,6 +894,56 @@ describe("conversation branching commands", () => {
 		for (const [, options] of postMock.mock.calls.slice(1)) {
 			expect(options.headers).toEqual({ "X-AO-Attachment-Upload": "1" });
 		}
+	});
+
+	it("sends a message with its agent switch in one request", async () => {
+		const switched = new Headers({ "X-AO-Provider-Switched": "1" });
+		postMock
+			.mockResolvedValueOnce({ data: { status: "ok", message: { turnId: "turn-9", state: "running", duplicate: false } }, error: undefined, response: new Response() })
+			.mockResolvedValueOnce({ data: undefined, error: { code: "PROVIDER_SWITCH_busy" }, response: new Response(null, { status: 409 }) })
+			.mockResolvedValueOnce({ data: undefined, error: { code: "SESSION_NOT_FOUND" }, response: new Response(null, { status: 404, headers: switched }) });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex", model: "gpt-6" };
+
+		await act(async () => {
+			await expect(result.current.send({ text: "first turn", clientMessageId: "m1", providerSwitch })).resolves
+				.toMatchObject({ turnId: "turn-9" });
+		});
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/provider-switch", expect.objectContaining({
+			body: expect.objectContaining({ ...providerSwitch, message: { text: "first turn", clientMessageId: "m1" } }),
+		}));
+
+		// Refused: the message never left.
+		await act(async () => {
+			await expect(result.current.send({ text: "again", clientMessageId: "m2", providerSwitch })).rejects
+				.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The switch notice reports it; the composer does not show it twice.
+		expect(result.current.error).toBeUndefined();
+		// Switched, then the send failed: an ordinary send failure.
+		await act(async () => {
+			const failure = await result.current.send({ text: "later", clientMessageId: "m3", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+			expect(failure).toMatchObject({ code: "SESSION_NOT_FOUND" });
+		});
+	});
+
+	it("does not call a switch refused when no clear answer came back", async () => {
+		postMock
+			.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE" }, response: new Response(null, { status: 502 }) })
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex" };
+		// A remote daemon's gateway gave up, but the daemon may still switch and send.
+		await act(async () => {
+			const failure = await result.current.send({ text: "a", clientMessageId: "m1", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The request never got an answer.
+		await act(async () => {
+			const failure = await result.current.send({ text: "b", clientMessageId: "m2", providerSwitch }).catch((error) => error);
+			expect(failure).toBeInstanceOf(TypeError);
+		});
 	});
 
 	it("threads caller-owned idempotency ids through send, steer, and inline edit", async () => {
@@ -1094,41 +1202,28 @@ describe("steering refusals", () => {
 	});
 });
 
-describe("tool server reload refusals", () => {
-	it("withdraws the control when the harness cannot reload", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_MCP_RELOAD_UNSUPPORTED");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_MCP_RELOAD_UNSUPPORTED" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(true);
-			// Not also an error message: the control disappearing is the whole answer.
-			expect(result.current.mcpReloadError).toBeUndefined();
-		});
-	});
-
-	it("surfaces a refusal the user can act on", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_TURN_RUNNING");
-		apiErrorMessageMock.mockReturnValue("a turn is running");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_RUNNING" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(false);
-			expect(result.current.mcpReloadError).toBe("a turn is running");
-		});
-	});
-});
-
 describe("controller recovery", () => {
+	it("shares an automatic resume's pending state only with the same session", async () => {
+		const queryClient = new QueryClient();
+		const completion = deferred<void>();
+		const mutation = queryClient.getMutationCache().build(queryClient, {
+			mutationKey: ["resume-agent", "local", "ao-1"],
+			mutationFn: () => completion.promise,
+		});
+		const pending = mutation.execute(undefined);
+		const { result } = renderHook(() => ({
+			opened: useConversationCommands("ao-1"),
+			other: useConversationCommands("ao-2"),
+		}), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+		await waitFor(() => expect(result.current.opened.resumingAgent).toBe(true));
+		expect(result.current.other.resumingAgent).toBe(false);
+		await act(async () => {
+			completion.resolve();
+			await pending;
+		});
+		await waitFor(() => expect(result.current.opened.resumingAgent).toBe(false));
+	});
+
 	it("refreshes the conversation after Stop reports stale turn state", async () => {
 		postMock.mockResolvedValue({
 			data: undefined,
@@ -1235,5 +1330,62 @@ describe("useConversationSkills polling", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+
+describe("toSnapshot", () => {
+	it.each([
+		{ action: "accept", content: { question_0: "keep", question_0_custom: "Tell me the names first" }, expectedAction: "accept" },
+		{ action: "decline", content: undefined, expectedAction: "decline" },
+		{ action: "cancel", content: undefined, expectedAction: "cancel" },
+		{ action: "unknown", content: {}, expectedAction: undefined },
+	])("decodes structured input resolution $action from persisted activity details", ({ action, content, expectedAction }) => {
+		const snapshot = toSnapshot({
+			conversationId: "c1", sessionId: "s1", harness: "claude-code", mode: "chat", controller: "ready",
+			latestSequence: 1, oldestSequence: 1, hasMoreBefore: false, turns: [], messages: [], settings: {},
+			branchedFromEarlierMessage: false, continueTurnId: "", nativeForkAvailableAfterSequence: 0,
+			activities: [{
+				kind: "activity", id: "input-1", sequence: 1, revision: 1, activityKind: "user_input",
+				status: "resolved", summary: "Choose worktrees", createdAt: "2026-10-19T00:00:00Z",
+				detail: { action, content },
+			}],
+		});
+		const item = snapshot.items[0];
+		if (item?.kind !== "activity") throw new Error("missing input activity");
+		expect(item.inputResponse?.action).toBe(expectedAction);
+		if (expectedAction) expect(item.inputResponse?.content).toEqual(content);
+	});
+
+	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
+		const snapshot = toSnapshot({
+			conversationId: "c1",
+			sessionId: "s1",
+			harness: "claude-code",
+			mode: "chat",
+			controller: "ready",
+			latestSequence: 1,
+			turns: [],
+			messages: [
+				{
+					kind: "message",
+					id: "m1",
+					turnId: "t1",
+					sequence: 1,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: "hi",
+					clientMessageId: "client-1",
+					editAvailable: true,
+					streaming: false,
+					createdAt: "2026-10-08T00:00:00Z",
+				},
+			],
+			activities: [],
+		} as unknown as Parameters<typeof toSnapshot>[0]);
+
+		const message = snapshot.items.find((item) => item.kind === "message");
+		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
 import type { AoBridge } from "./preload";
 
@@ -95,15 +95,6 @@ describe("preload telemetry generation bridge", () => {
 		await exposedBridge().telemetry.capture({ kind: "message", message: "second" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(1, "telemetry:capture", { kind: "message", message: "first", consentGeneration: "generation-off" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "telemetry:capture", { kind: "message", message: "second", consentGeneration: "generation-on" });
-	});
-
-	it("attaches the latest policy generation to visibility signals without accepting renderer generation", () => {
-		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-a", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
-		expect(exposedBridge().telemetry.signalAgentSwitchVisibility({ kind: "focus", value: true })).toBe(true);
-		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-b", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
-		expect(exposedBridge().telemetry.signalAgentSwitchVisibility({ kind: "online", value: false })).toBe(true);
-		expect(electronMocks.send).toHaveBeenNthCalledWith(1, "agent-switch:visibility", { consentGeneration: "generation-a", signal: { kind: "focus", value: true } });
-		expect(electronMocks.send).toHaveBeenNthCalledWith(2, "agent-switch:visibility", { consentGeneration: "generation-b", signal: { kind: "online", value: false } });
 	});
 
 	it("acknowledges renderer queue purge only after every registered cleanup succeeds", async () => {
@@ -256,7 +247,7 @@ describe("preload application shortcut bridges", () => {
 		[NEXT_SESSION_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextSessionShortcut(listener)],
 		[PREVIOUS_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onPreviousTabShortcut(listener)],
 		[NEXT_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextTabShortcut(listener)],
-		[FOCUS_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onFocusTerminalShortcut(listener)],
+		[APP_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onShortcut(listener)],
 	] as const)("delivers and disposes %s", (channel, subscribe) => {
 		const listener = vi.fn();
 		const dispose = subscribe(listener);

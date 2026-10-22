@@ -21,6 +21,9 @@ type SpawnConfig struct {
 	// AutomationRunID makes one scheduled occurrence idempotent across daemon
 	// restarts. Ordinary interactive spawns leave this unset.
 	AutomationRunID *domain.AutomationRunID
+	// ClientRequestID and hash identify one optional interactive create request.
+	ClientRequestID   string
+	ClientRequestHash string
 	// ParentSessionID identifies the AO orchestrator that requested this worker
 	// through `ao spawn`. The daemon validates this reference and derives any
 	// inherited settings itself; callers never supply an inherited policy.
@@ -47,6 +50,9 @@ type SpawnConfig struct {
 	// AgentConfigResolved means AgentConfig already contains the fully merged
 	// project/role/task settings and may intentionally clear inherited values.
 	AgentConfigResolved bool
+	// AgentAccountID is the provider account the agent runs under. Empty uses
+	// the provider's default account.
+	AgentAccountID string
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any
@@ -55,9 +61,17 @@ type SpawnConfig struct {
 	// fails the spawn rather than falling back to the other mode.
 	RequestedMode domain.SessionMode
 
+	// RequestedOutput is the deliverable the caller asks for. Empty is the ordinary
+	// task flow; artifact adds an artifact-delivery section to the worker prompt.
+	RequestedOutput domain.RequestedOutput
+
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).
 	DisplayName string
+	// NameFromPrompt generates task and workspace names before launch.
+	NameFromPrompt bool
+	// KeepDisplayName preserves an explicit CLI/API title while naming its workspace.
+	KeepDisplayName bool
 	// Attachments are files pasted or dropped into the task brief. They are
 	// written into the session worktree and referenced by path in the prompt so
 	// the agent can read them (CLI agents receive the prompt as text and cannot
@@ -69,8 +83,8 @@ type SpawnConfig struct {
 	// its conversation exist, leaving the worktree and the agent controller to
 	// finish in the background. Only a caller with a UI to return to should set
 	// it: `ao spawn` and the tests rely on a returned session being fully live.
-	// Ignored for TUI mode and for orchestrators, which own a project-scoped
-	// narrative that must not be rebound before its controller exists.
+	// Ignored for TUI mode. Orchestrator callers serialize project-scoped
+	// starts and reuse the published session while its controller is starting.
 	Async bool
 	// TaskPreparation is the opaque speculative-worktree token returned while
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired

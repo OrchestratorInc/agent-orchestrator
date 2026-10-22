@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,42 @@ const (
 )
 
 type sendMessageRequest struct {
-	Text string `json:"text"`
+	Text            string `json:"text"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	ApprovalMode    string `json:"approvalMode,omitempty"`
+}
+
+var chatModelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+func validateSendMessageRequest(request sendMessageRequest) error {
+	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
+		return errors.New("Message text must be between 1 and 65536 bytes.")
+	}
+	return validateChatTurnSettings(request.Model, request.ReasoningEffort, request.Mode, request.ApprovalMode)
+}
+
+func validateChatTurnSettings(model, effort, mode, approvalMode string) error {
+	if model != "" && !chatModelIDPattern.MatchString(model) {
+		return errors.New("The model selection is invalid.")
+	}
+	switch effort {
+	case "", "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	default:
+		return errors.New("The reasoning effort selection is invalid.")
+	}
+	switch mode {
+	case "", "read-only", "standard", "trusted":
+	default:
+		return errors.New("The mode selection is invalid.")
+	}
+	switch approvalMode {
+	case "", "default", "accept-edits", "auto", "bypass-permissions":
+	default:
+		return errors.New("The approval mode selection is invalid.")
+	}
+	return nil
 }
 
 type clientEventResponse struct {
@@ -48,8 +84,8 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
-	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
+	if err := validateSendMessageRequest(request); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	event, err := s.store.SendMessage(
@@ -59,6 +95,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		key,
 		request.Text,
+		domain.ChatTurnSettings{Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode},
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -92,6 +129,34 @@ func (s *Server) cancelTurn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 }
 
+func (s *Server) steerTurn(w http.ResponseWriter, r *http.Request) {
+	orgID, sessionID, turnID := chi.URLParam(r, "orgId"), chi.URLParam(r, "sessionId"), chi.URLParam(r, "turnId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil || requireUUID(turnID, "turnId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId, sessionId, and turnId must be UUIDs.")
+		return
+	}
+	key, err := idempotencyKey(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	var request sendMessageRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
+		return
+	}
+	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
+		return
+	}
+	event, err := s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"event": toClientEventResponse(event)})
+}
+
 func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -109,6 +174,11 @@ func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	types, err := parseEventTypes(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -116,6 +186,7 @@ func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		after,
 		limit,
+		types,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -150,6 +221,11 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	types, err := parseEventTypes(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -157,6 +233,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		after,
 		eventPageLimit,
+		types,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -197,6 +274,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				sessionID,
 				after,
 				eventPageLimit,
+				types,
 			)
 			if err != nil {
 				s.logger.Warn("replay event stream", "error", err, "request_id", requestID(r))
@@ -218,6 +296,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				sessionID,
 				after,
 				eventPageLimit,
+				types,
 			)
 			if err != nil {
 				s.logger.Warn("poll event stream", "error", err, "request_id", requestID(r))
@@ -246,6 +325,33 @@ func parseEventSequence(value string) (int64, error) {
 		return 0, errors.New("after must be between 0 and 9007199254740991")
 	}
 	return sequence, nil
+}
+
+// maxEventTypes bounds the types filter.
+const maxEventTypes = 32
+
+// parseEventTypes reads the optional types filter: client event types,
+// comma separated (types=workspace.setup,workspace.script.step) or repeated.
+// nil means every client event type. A type the control plane does not serve
+// matches nothing, so a client may ask for one a newer control plane serves.
+func parseEventTypes(r *http.Request) ([]string, error) {
+	var types []string
+	for _, value := range r.URL.Query()["types"] {
+		for _, eventType := range strings.Split(value, ",") {
+			if eventType = strings.TrimSpace(eventType); eventType != "" {
+				types = append(types, eventType)
+			}
+		}
+	}
+	if len(types) > maxEventTypes {
+		return nil, fmt.Errorf("types may name at most %d event types", maxEventTypes)
+	}
+	for _, eventType := range types {
+		if len(eventType) > 64 {
+			return nil, errors.New("types must name event types")
+		}
+	}
+	return types, nil
 }
 
 func parseEventLimit(r *http.Request) (int, error) {

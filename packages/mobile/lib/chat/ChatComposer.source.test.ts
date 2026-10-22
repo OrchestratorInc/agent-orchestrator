@@ -7,10 +7,13 @@ function source(relativePath: string): string {
 }
 
 const composer = source("./ChatComposer.tsx");
+// The dock and pill rules ChatComposer shares with ReviewerComposer.
+const composerStyles = source("./composerStyles.ts");
 
-/** The body of one entry in the composer's stylesheet. */
+/** The body of one entry in the composer's stylesheet, shared or its own. */
 function styleRule(name: string): string {
-	const match = composer.match(new RegExp(`\\n\\t${name}: \\{([^}]*)\\}`));
+	const rule = new RegExp(`\\n\\t${name}: \\{([^}]*)\\}`);
+	const match = composerStyles.match(rule) ?? composer.match(rule);
 	expect(match, `${name} rule`).not.toBeNull();
 	return match?.[1] ?? "";
 }
@@ -21,7 +24,8 @@ describe("chat composer pill", () => {
 	it("draws a single borderless capsule", () => {
 		const pill = styleRule("composer");
 		expect(pill).toContain("borderRadius: COMPOSER_RADIUS");
-		expect(composer).toContain("const COMPOSER_RADIUS = 28");
+		expect(composerStyles).toContain("const COMPOSER_RADIUS = 28");
+		expect(composer).toContain("...composerStyleRules(t),");
 		expect(pill).not.toContain("borderWidth");
 		expect(pill).not.toContain("borderColor");
 		// No fill under the glass: an opaque pill under a material is the one
@@ -39,14 +43,15 @@ describe("chat composer pill", () => {
 		// while the keyboard is still moving. Filling reads nothing.
 		expect(composer).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(composer).not.toContain("<ComposerGlass height=");
-		expect(composer).not.toContain("onLayout");
+		// The PR card measures its own header for the drag-to-collapse animation;
+		// that measurement does not size the glass behind the composer row.
 		// The field grows from the native content size while glass fills the pill,
 		// avoiding a separately measured glass height that could lag behind it.
 		expect(composer).toContain("onContentSizeChange={(event) => {");
 		expect(composer).toContain("style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}");
 		expect(styleRule("composer")).toContain("minHeight: COMPOSER_HEIGHT");
-		expect(styleRule("composer")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
-		expect(styleRule("composer")).toContain('alignItems: "flex-end"');
+		expect(styleRule("composerRow")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
+		expect(styleRule("composerRow")).toContain('alignItems: "flex-end"');
 		expect(styleRule("input")).toContain("minHeight: COMPOSER_FIELD_HEIGHT");
 		expect(styleRule("input")).toContain("maxHeight: COMPOSER_FIELD_MAX_HEIGHT");
 		expect(composer).toContain("const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT)");
@@ -62,9 +67,15 @@ describe("chat composer pill", () => {
 	it("returns an emptied multiline draft to the one-line height", () => {
 		// A controlled TextInput can retain its last native content size after its
 		// value is cleared; the empty placeholder must not inherit that height.
-		expect(composer).toContain('setText("");\n\t\t\tsetFieldHeight(COMPOSER_FIELD_HEIGHT);');
-		expect(composer).toContain('if (!latestText.current) {\n\t\t\t\t\t\t\tsetFieldHeight(COMPOSER_FIELD_HEIGHT);');
+		expect(composer).toMatch(/setText\(""\);\s*setFieldHeight\(COMPOSER_FIELD_HEIGHT\);/);
+		expect(composer).toMatch(/if \(!latestText.current\) \{\s*setFieldHeight\(COMPOSER_FIELD_HEIGHT\);/);
 		expect(composer).toContain("height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT");
+	});
+
+	it("does not clear a newer draft when an earlier send completes", () => {
+		expect(composer).toContain('const unchanged = current === text && currentQuotes === quotes;');
+		expect(composer).toContain('unchanged ? AsyncStorage.removeItem(draftKey)');
+		expect(composer).toContain('if (latestText.current === text && latestQuotes.current === quotes) {');
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
@@ -91,7 +102,7 @@ describe("chat composer pill", () => {
 	// inset too low and then jumped into place at the end.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
 		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value");
+		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});
@@ -113,5 +124,37 @@ describe("composer meta row", () => {
 		expect(styleRule("deliveryNote")).toContain("flexShrink: 0");
 		expect(control).toContain('alignSelf: "stretch"');
 		expect(control).toContain('overflow: "hidden"');
+	});
+});
+
+describe("PR review composer", () => {
+	it("groups the PR prompt, settings selector, and message input inside one review surface", () => {
+		expect(composer).toContain("const reviewPromptAvailable = Boolean(reviewPR && onOpenReview)");
+		expect(composer).toContain("{showReviewPrompt ? <Animated.View style={[styles.reviewArea, styles.reviewAreaWithPrompt]}>");
+		expect(composer).toContain("<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]}");
+		expect(composer).toContain("<PRReviewPrompt pr={activeReviewPR}");
+		expect(composer).toContain("<TextInput");
+		expect(composer).toContain("{activeReviewPR ? <Animated.View pointerEvents=\"none\" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}>");
+	});
+
+	it("uses supported PR and navigation symbols instead of a blank icon tile", () => {
+		const prompt = source("./PRReviewPrompt.tsx");
+		expect(prompt).toContain('name="git-pull-request"');
+		expect(prompt).toContain('name="chevron-right"');
+		expect(prompt).not.toContain('name="arrow-up-right"');
+	});
+});
+
+describe("session changes pill", () => {
+	// Codex-style: once the session has changed files, the meta row offers them
+	// where the "Sent after this" note sat. The placeholder still says a message
+	// waits for the turn, so nothing is lost, and steering stays reachable.
+	it("replaces the queue note and keeps the steer action", () => {
+		const start = composer.indexOf("{changes && !(deliveryPresentation.showQueueNote && attachments.length)");
+		expect(start).toBeGreaterThan(-1);
+		const pill = composer.slice(start, composer.indexOf(': deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>', start));
+		expect(pill).toContain("changes.onOpen()");
+		expect(pill).toContain('accessibilityLabel="Steer this turn now"');
+		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
 	});
 });

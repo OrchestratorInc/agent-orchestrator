@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,7 +16,10 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -53,6 +57,13 @@ type coderConfigInput struct {
 	// ExtraRepos are additional repositories every session of the project clones
 	// alongside the primary repo.
 	ExtraRepos []createSessionRepo `json:"extraRepos,omitempty"`
+	// WorkspaceNamePrefix names the project's Coder workspaces
+	// <prefix>-<short session id>; empty keeps ao-<id>.
+	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// Parameters are values for the chosen template's coder_parameter inputs
+	// (name -> string value); only values changed from the template default
+	// need to be sent. Requires a chosen template.
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 type updateProjectRequest struct {
@@ -61,30 +72,50 @@ type updateProjectRequest struct {
 }
 
 type projectResponse struct {
-	ID                 string         `json:"id"`
-	OrgID              string         `json:"orgId"`
-	DisplayName        string         `json:"displayName"`
-	RepositoryURL      string         `json:"repositoryUrl"`
-	DefaultBranch      string         `json:"defaultBranch"`
-	GitHubRepositoryID string         `json:"githubRepositoryId,omitempty"`
-	Config             map[string]any `json:"config"`
-	CreatedAt          time.Time      `json:"createdAt"`
-	UpdatedAt          time.Time      `json:"updatedAt"`
+	ID                 string `json:"id"`
+	OrgID              string `json:"orgId"`
+	DisplayName        string `json:"displayName"`
+	RepositoryURL      string `json:"repositoryUrl"`
+	DefaultBranch      string `json:"defaultBranch"`
+	GitHubRepositoryID string `json:"githubRepositoryId,omitempty"`
+	// Standalone marks a project with no repository; its repositoryUrl is a
+	// placeholder (https://scratch.ao.local/<id>) that is never cloned.
+	Standalone bool           `json:"standalone,omitempty"`
+	Config     map[string]any `json:"config"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	UpdatedAt  time.Time      `json:"updatedAt"`
 }
 
 type createSessionRequest struct {
-	ProjectID                   string   `json:"projectId"`
-	Kind                        string   `json:"kind"`
-	Harness                     string   `json:"harness"`
-	DisplayName                 string   `json:"displayName"`
-	Prompt                      string   `json:"prompt"`
-	Mode                        string   `json:"mode,omitempty"`
+	ProjectID   string `json:"projectId"`
+	Kind        string `json:"kind"`
+	Harness     string `json:"harness"`
+	DisplayName string `json:"displayName"`
+	Prompt      string `json:"prompt"`
+	Mode        string `json:"mode,omitempty"`
+	// Model is the coding-agent model the session launches with (harness-native
+	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
+	// the harness default.
+	Model                       string   `json:"model,omitempty"`
+	ReasoningEffort             string   `json:"reasoningEffort,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// InterfaceMode is the interface the session starts in: "chat" or "tui".
+	// Omitted resolves it from DefaultInterfaceMode, else the terminal; Chat
+	// needs a harness with a Chat controller (domain.ChatHarnesses).
+	InterfaceMode string `json:"interfaceMode,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface ("tui" or
+	// "chat"), the desktop's setting. A create without interfaceMode resolves
+	// the session's interface from it as the local daemon does
+	// (domain.StartInterface): an orchestrator starts in Chat where its
+	// harness can. An orchestrator keeps it for the workers it spawns. A
+	// create with neither (an older desktop) starts in the TUI, an
+	// orchestrator too.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
 type createSessionRepo struct {
@@ -92,25 +123,50 @@ type createSessionRepo struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+type sessionStartupError struct {
+	Code    string    `json:"code"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+	// Detail is the redacted operator detail, present only for an
+	// organization's own (BYO Coder) compute.
+	Detail string `json:"detail,omitempty"`
+}
+
 type sessionResponse struct {
-	ID               string   `json:"id"`
-	OrgID            string   `json:"orgId"`
-	ProjectID        string   `json:"projectId"`
-	Kind             string   `json:"kind"`
-	Harness          string   `json:"harness"`
-	DisplayName      string   `json:"displayName"`
-	Branch           string   `json:"branch"`
-	Mode             string   `json:"mode"`
-	DeniedCommands   []string `json:"deniedCommands"`
-	ActivityState    string   `json:"activityState"`
-	Status           string   `json:"status"`
-	RuntimeConnected bool     `json:"runtimeConnected"`
-	SandboxProvider  string   `json:"sandboxProvider,omitempty"`
-	DesiredState     string   `json:"desiredState,omitempty"`
-	ObservedState    string   `json:"observedState,omitempty"`
-	RuntimeState     string   `json:"runtimeState,omitempty"`
-	RuntimeError     string   `json:"runtimeError,omitempty"`
-	IsTerminated     bool     `json:"isTerminated"`
+	ID                string   `json:"id"`
+	OrgID             string   `json:"orgId"`
+	ProjectID         string   `json:"projectId"`
+	Kind              string   `json:"kind"`
+	Harness           string   `json:"harness"`
+	ReviewerHarness   string   `json:"reviewerHarness,omitempty"`
+	AutoReviewEnabled bool     `json:"autoReviewEnabled"`
+	DisplayName       string   `json:"displayName"`
+	Branch            string   `json:"branch"`
+	Mode              string   `json:"mode"`
+	Model             string   `json:"model,omitempty"`
+	DeniedCommands    []string `json:"deniedCommands"`
+	InterfaceMode     string   `json:"interfaceMode"`
+	ActivityState     string   `json:"activityState"`
+	Status            string   `json:"status"`
+	RuntimeConnected  bool     `json:"runtimeConnected"`
+	SandboxProvider   string   `json:"sandboxProvider,omitempty"`
+	DesiredState      string   `json:"desiredState,omitempty"`
+	ObservedState     string   `json:"observedState,omitempty"`
+	RuntimeState      string   `json:"runtimeState,omitempty"`
+	RuntimeError      string   `json:"runtimeError,omitempty"`
+	// StartupError is the latest user-facing reason the session's sandbox has
+	// not started; absent once the worker checks in.
+	StartupError *sessionStartupError `json:"startupError,omitempty"`
+	// CoderWorkspaceURL is the session's workspace page on the organization's
+	// own (bring-your-own) Coder deployment, from the session's creation (the
+	// workspace may not exist yet). Never set for AO's managed Coder, which
+	// customers cannot sign in to, or for other providers.
+	CoderWorkspaceURL  string                   `json:"coderWorkspaceUrl,omitempty"`
+	IsTerminated       bool                     `json:"isTerminated"`
+	AutoInjectCI       bool                     `json:"autoInjectCI"`
+	AutoInjectReview   bool                     `json:"autoInjectReview"`
+	TerminateOnPRMerge bool                     `json:"terminateOnPrMerge"`
+	PRs                []sessionPRFactsResponse `json:"prs"`
 	// WorkerEpoch advances on every fresh worker connection (resume, restore,
 	// re-provision). Clients key their terminal on it so a resumed session
 	// re-attaches to the live agent instead of the dead epoch's terminal.
@@ -128,12 +184,13 @@ type pageInfo struct {
 // children listing: enough for a human row (number, url, lifecycle) and for an
 // orchestrator to route CI/review feedback without a second lookup.
 type sessionPRFactsResponse struct {
-	URL          string `json:"url"`
-	Number       int    `json:"number"`
-	State        string `json:"state"`
-	CI           string `json:"ci"`
-	Review       string `json:"review"`
-	Mergeability string `json:"mergeability"`
+	URL           string                            `json:"url"`
+	Number        int                               `json:"number"`
+	State         string                            `json:"state"`
+	CI            string                            `json:"ci"`
+	Review        string                            `json:"review"`
+	Mergeability  string                            `json:"mergeability"`
+	FailingChecks []pullRequestFailingCheckResponse `json:"failingChecks,omitempty"`
 	// The control plane does not track unresolved review comments yet; the
 	// field exists so the renderer's shared PullRequestFacts shape maps 1:1.
 	ReviewComments bool      `json:"reviewComments"`
@@ -156,28 +213,39 @@ func toSessionChildResponse(
 	facts []contract.PRFacts,
 	prs []domain.PullRequest,
 ) sessionChildResponse {
-	rendered := make([]sessionPRFactsResponse, 0, len(prs))
-	for _, pr := range prs {
-		state := string(pr.State)
-		if pr.Draft && pr.State == contract.PRStateOpen {
-			state = "draft"
-		}
-		rendered = append(rendered, sessionPRFactsResponse{
-			URL:          pr.URL,
-			Number:       pr.Number,
-			State:        state,
-			CI:           string(pr.CIState),
-			Review:       string(pr.ReviewState),
-			Mergeability: string(pr.Mergeability),
-			SourceBranch: pr.SourceBranch,
-			TargetBranch: pr.TargetBranch,
-			UpdatedAt:    pr.UpdatedAt,
-		})
-	}
 	return sessionChildResponse{
 		sessionResponse: toSessionResponse(session, facts),
-		PRs:             rendered,
+		PRs:             toSessionPRFactsResponses(prs, facts),
 	}
+}
+
+// writeProjectStoreError renders a project-creation store error, turning the
+// active-repository uniqueness conflict into a clear, specific message that
+// names the repository instead of the generic "resource conflicts" 409. Every
+// other error class is delegated to the shared store-error mapper unchanged.
+func (s *Server) writeProjectStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var repoConflict *postgres.ProjectRepositoryConflictError
+	if errors.As(err, &repoConflict) {
+		writeError(
+			w, r, http.StatusConflict, "project_repository_exists",
+			projectRepositoryConflictMessage(repoConflict.RepositoryURL),
+		)
+		return
+	}
+	s.writeStoreError(w, r, err)
+}
+
+// projectRepositoryConflictMessage explains that the workspace already has a
+// project for this repository, naming the repository (owner/name) when the URL
+// is known so the user can find and reuse or delete the existing project.
+func projectRepositoryConflictMessage(repositoryURL string) string {
+	if owner, repo, ok := parseGitHubRepo(repositoryURL); ok {
+		return fmt.Sprintf(
+			"You already have a project for %s/%s in this workspace. Open that project, or delete it before creating another for the same repository.",
+			owner, repo,
+		)
+	}
+	return "You already have a project for this repository in this workspace. Open that project, or delete it before creating another for the same repository."
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +279,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
 		return
 	}
+	if err := validateProjectCoderConfig(config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
+	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
+		return
+	}
+	if request.Coder == nil && !s.validateProjectCoderParameters(w, r, orgID, config) {
+		return
+	}
 	// Store the coder dev-kit config (template + size/startup + extra repos)
 	// under the project's config, so every coder session of the project inherits
 	// it. Absent = default template, single repo (unchanged behavior).
@@ -225,11 +303,28 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		// every session build for the project. Best-effort — if the template's
 		// parameters cannot be read, store the config as-is rather than block.
 		coderConfig = s.sanitizeCoderConfig(r.Context(), coderConfig, requestID(r))
+		// Template parameters must be ones the chosen template declares (best
+		// effort: only a readable parameter list can reject a name).
+		if problem := s.coderTemplateParameterProblem(
+			r.Context(), orgID, coderConfig.TemplateID, coderConfig.Parameters, requestID(r),
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
+			return
+		}
 		config, err = domain.MergeProjectCoderConfig(config, coderConfig)
 		if err != nil {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project coder configuration is invalid.")
 			return
 		}
+	}
+	// Checked on the merged config, so the coder dev kit's extra repositories
+	// sent as the separate coder input are admin-gated like "repos".
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
+	}
+	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
 	}
 	principal := principalFrom(r)
 	userStore, ok := s.store.(userProviderConnectionStore)
@@ -268,6 +363,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	owner, repo, _ := parseGitHubRepo(request.RepositoryURL)
 	canonicalURL := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	config, problem := normalizeNewProjectRepoConfig(canonicalURL, config)
+	if problem != nil {
+		problem.write(w, r)
+		return
+	}
+	// This project reaches GitHub through the creator's personal access token,
+	// so every additional repository must be reachable with it too.
+	for _, extra := range domain.ProjectAdditionalRepos(config) {
+		reachable, _, err := s.probeRepositoryAccess(r.Context(), extra.URL, string(secret))
+		if err != nil {
+			s.logger.Error("probe additional repository access", "error", err, "request_id", requestID(r))
+			writeError(w, r, http.StatusBadGateway, "provider_unavailable", "GitHub is temporarily unavailable. Please try again later.")
+			return
+		}
+		if !reachable {
+			writeError(w, r, http.StatusUnprocessableEntity, "repository_unreachable",
+				fmt.Sprintf("Can't reach %s with your GitHub token. It may be private, or the URL may be wrong.", extra.URL))
+			return
+		}
+	}
 
 	project, err := s.store.CreateProject(
 		r.Context(),
@@ -282,9 +397,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"project created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", project.ID,
+	)
+	s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivityProjectCreated,
+		Attrs: map[string]any{"project_id": project.ID}})
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 
@@ -410,11 +533,23 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
+	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
 	if !validSessionInput(request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
+		return
+	}
+	if request.DefaultInterfaceMode != "" && !domain.SessionInterface(request.DefaultInterfaceMode).Valid() {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "defaultInterfaceMode must be tui or chat.")
+		return
+	}
+	// As the local daemon does, Chat for a harness without a Chat controller is
+	// refused with the code the desktop offers to retry in the terminal.
+	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !chatControllerSupported(request.Harness) {
+		writeError(w, r, http.StatusConflict, "SESSION_MODE_UNSUPPORTED", request.Harness+" can't run in Chat in AO Cloud. Start it in the terminal.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -424,34 +559,38 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	if store, ok := s.store.(providerConnectionStore); ok {
-		connections, err := store.ListProviderConnections(
-			r.Context(), principalFrom(r), orgID,
+	userStore, ok := s.store.(userProviderCredentialStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Personal coding-agent credentials are unavailable.")
+		return
+	}
+	available, err := userStore.UserAgentCredentialAvailable(
+		r.Context(), principalFrom(r).UserID, request.Harness,
+	)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !available {
+		writeError(
+			w, r, http.StatusUnprocessableEntity,
+			"agent_provider_required",
+			"Connect and validate your personal coding-agent credential before creating a session.",
 		)
-		if err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-		available := agentConnectionAvailable(connections, request.Harness)
-		if !available {
-			if userStore, ok := s.store.(userProviderCredentialStore); ok {
-				available, err = userStore.UserAgentCredentialAvailable(
-					r.Context(), principalFrom(r).UserID, request.Harness,
-				)
-				if err != nil {
-					s.writeStoreError(w, r, err)
-					return
-				}
-			}
-		}
-		if !available {
-			writeError(
-				w, r, http.StatusUnprocessableEntity,
-				"agent_provider_required",
-				"Connect and validate the selected coding-agent provider before creating a session.",
-			)
-			return
-		}
+		return
+	}
+	// A project set up for a specific sandbox provider runs every session there,
+	// whatever the client's saved preference. The availability and entitlement
+	// checks below still apply to it.
+	project, err := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	providerFromProject := false
+	if provider := projectProvider(project.Config); provider != "" {
+		request.Provider = provider
+		providerFromProject = true
 	}
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
@@ -474,7 +613,20 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			if found {
 				parentSessionID = orchestratorID
 				request.Provider = orchestratorProvider
+				providerFromProject = false
 			}
+		}
+	}
+	// With nothing choosing a provider, the session gets the organization's
+	// default: the deployment default when the organization may use it,
+	// otherwise its first allowed provider. An organization with no allowed
+	// provider cannot run cloud sessions at all.
+	principal := principalFrom(r)
+	if request.Provider == "" {
+		request.Provider = s.defaultProviderForOrg(r.Context(), principal, orgID)
+		if request.Provider == "" {
+			writeProviderForbidden(w, r, "", false)
+			return
 		}
 	}
 	// Validate the sandbox provider AFTER the auto-link override above: an
@@ -482,59 +634,74 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// availability check must run on the final value, not the client-sent one.
 	// Otherwise a UI-created worker whose stale client selection differs from the
 	// orchestrator's provider is rejected before the override can take effect.
-	if request.Provider != "" && !slices.Contains(s.availableSandboxProviders, request.Provider) {
+	if !slices.Contains(s.availableSandboxProviders, request.Provider) {
 		writeError(
 			w, r, http.StatusUnprocessableEntity, "provider_unavailable",
 			"The selected sandbox provider is not available on this control plane.",
 		)
 		return
 	}
-	// The active organization must be entitled to the (final, post-override)
-	// provider: coder is gated on a WorkOS org capability. Enforced here so the
-	// gate holds even when a client bypasses the org-filtered list returned by
-	// /me and posts a gated provider directly.
-	if request.Provider != "" && !s.orgAllowsProvider(principalFrom(r), request.Provider) {
-		writeError(
-			w, r, http.StatusForbidden, "provider_forbidden",
-			"Your organization is not enabled for the selected sandbox provider.",
-		)
+	// The organization must be entitled to the (final, post-override) provider,
+	// whether the client sent it, the project saved it, or it is the default.
+	// Enforced here so the gate holds even when a client bypasses the
+	// org-filtered list returned by /me and posts a gated provider directly.
+	if !s.orgAllowsProvider(principal, orgID, request.Provider) {
+		writeProviderForbidden(w, r, request.Provider, providerFromProject)
 		return
 	}
 	// Coder sessions inherit the project's dev-kit config (template + size +
-	// startup), chosen once at project setup and stored on the project. Non-coder
-	// providers, and projects without a coder config, keep the default-template
-	// behavior. (Extra repos also live on the project config; the worker reads
-	// them from the project at launch — see launchContextFrom.)
-	effectiveProvider := request.Provider
-	if effectiveProvider == "" {
-		effectiveProvider = s.sandboxProvider
-	}
+	// startup), chosen once at project setup and stored on the project, and run
+	// on the organization's bring-your-own Coder deployment when it has one: the
+	// session binds to that connection (so the row carries
+	// provider_connection_id and the resolver decrypts the org's token). (Extra
+	// repos also live on the project config; the worker reads them from the
+	// project at launch, see launchContextFrom.)
 	var coderOpts *sandbox.CoderSessionOptions
-	if effectiveProvider == sandbox.ProviderCoder {
-		project, projectErr := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
-		if projectErr != nil {
-			s.writeStoreError(w, r, projectErr)
+	var coderOverride *sandbox.CoderDeploymentOverride
+	if request.Provider == sandbox.ProviderCoder {
+		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config, project.RepositoryURL)
+		if placementErr != nil {
+			s.writeCoderPlacementError(w, r, placementErr)
 			return
 		}
-		if cfg, ok := domain.DecodeProjectCoderConfig(project.Config); ok {
-			coderOpts = &sandbox.CoderSessionOptions{
-				TemplateID:    cfg.TemplateID,
-				Size:          cfg.Size,
-				StartupScript: cfg.StartupScript,
-			}
+		coderOpts, coderOverride = placement.options, placement.override
+		if coderOverride != nil {
+			coderOverride.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(project.DisplayName)
+		}
+		if placement.connectionID != "" {
+			request.SandboxProviderConnectionID = placement.connectionID
 		}
 	}
 	// The plan is resolved once, here, and stamped onto the sandbox row. The
 	// reconciler reads it back from the row rather than from configuration, so
 	// a later config change cannot disturb a session already in flight.
-	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts)
+	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
+	if errors.Is(err, sandbox.ErrCoderTemplateRequired) && coderOverride != nil && isScratchProject(project.Config) {
+		// A scratch project cannot pick a template; as for its first
+		// orchestrator (scratchSessionPlan), it runs on the deployment's Coder.
+		coderOverride, request.SandboxProviderConnectionID = nil, ""
+		plan, err = s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
+	}
 	if err != nil {
-		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
-		writeError(
-			w, r, http.StatusInternalServerError, "internal_error",
-			"Sandbox provisioning is misconfigured on this deployment.",
-		)
+		s.writeSessionPlanError(w, r, orgID, request.ProjectID, err)
 		return
+	}
+	// A Freestyle session boots from its project's prepared snapshot (the
+	// repository already cloned) when one exists for the current harness
+	// build; otherwise from the harness snapshot, and a build starts below.
+	var projectSnapshot *projectsnapshot.Request
+	if s.projectSnapshots != nil {
+		base := sandbox.FreestyleSnapshot(plan)
+		if snapshotRequest, ok := projectsnapshot.NewRequest(orgID, project, request.Harness, base); ok && base != "" {
+			if snapshotID, ok := s.projectSnapshots.Lookup(r.Context(), snapshotRequest); ok {
+				if prepared, rewriteErr := sandbox.WithFreestyleSnapshot(plan, snapshotID); rewriteErr == nil {
+					plan = prepared
+				} else {
+					s.logger.Warn("use project snapshot", "error", rewriteErr, "request_id", requestID(r))
+				}
+			}
+			projectSnapshot = &snapshotRequest
+		}
 	}
 	session, err := s.store.CreateSession(
 		r.Context(),
@@ -549,18 +716,44 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			DisplayName:         request.DisplayName,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
+			Interface:           domain.SessionInterface(request.InterfaceMode),
+			Model:               request.Model,
+			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
+			DefaultInterface:    domain.SessionInterface(request.DefaultInterfaceMode),
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile:     plan.ResourceProfile,
 			BootstrapContext:    plan.BootstrapContext,
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
+			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
 		},
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
+	}
+	s.logger.Info(
+		"session created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", request.ProjectID,
+		"session_id", session.ID,
+		"provider", plan.Provider,
+		"harness", request.Harness,
+		"interface", session.Interface,
+	)
+	s.recordSessionCreateRequested(r, orgID, session.ID, plan.Provider, request.SandboxProviderConnectionID,
+		request.ProjectID, request.Kind, request.Harness, projectSnapshot != nil)
+	// The sandbox row is committed, so the reconciler can start provisioning
+	// now rather than at its next tick.
+	if s.sandboxWake != nil {
+		s.sandboxWake()
+	}
+	if projectSnapshot != nil {
+		projectSnapshot.SessionID = session.ID
+		s.projectSnapshots.Ensure(*projectSnapshot)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(session, nil)})
 }
@@ -607,9 +800,16 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, sessionIDs)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	items := make([]sessionResponse, 0, len(sessions))
 	for _, session := range sessions {
-		items = append(items, toSessionResponse(session, prFacts[session.ID]))
+		response := toSessionResponse(session, prFacts[session.ID])
+		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
+		items = append(items, response)
 	}
 	page := pageInfo{HasMore: hasMore}
 	if hasMore && len(sessions) > 0 {
@@ -622,6 +822,50 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 // resumeSession records one explicit user intent and lets the reconciler own
 // every slow provider/worker transition. The response is the accepted intent,
 // not a claim that the workspace is connected yet.
+// sessionStartupRetryStore re-arms startup for a session whose worker never
+// started. Optional so test stores need not implement it.
+type sessionStartupRetryStore interface {
+	RetrySessionStartup(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
+}
+
+// retrySessionStartup lets a user retry a session whose sandbox never started
+// (the startup ceiling parked it, a bootstrap failed, or its workspace build
+// failed) without deleting it: the reconciler re-runs the worker bootstrap
+// against the existing compute, starts a new build of a failed workspace, or
+// creates the compute that could not be created.
+func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	store, ok := s.store.(sessionStartupRetryStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Retrying session startup is unavailable.")
+		return
+	}
+	if err := store.RetrySessionStartup(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
+		if errors.Is(err, postgres.ErrConflict) {
+			writeError(w, r, http.StatusConflict, "startup_retry_unavailable",
+				"This session is not waiting on a failed startup, so there is nothing to retry.")
+			return
+		}
+		s.writeStoreError(w, r, err)
+		return
+	}
+	// The sandbox is re-armed; act on it now rather than at the next tick.
+	if s.sandboxWake != nil {
+		s.sandboxWake()
+	}
+	session, err := s.store.GetSession(r.Context(), principalFrom(r), orgID, sessionID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"session": toSessionResponse(session, nil)})
+}
+
 func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -629,6 +873,7 @@ func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
 		return
 	}
+	// ResumeSession checks the plan in the transaction that wakes the session.
 	lifecycle, err := s.store.ResumeSession(
 		r.Context(), principalFrom(r), orgID, sessionID,
 	)
@@ -636,6 +881,9 @@ func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, SessionID: sessionID,
+		Kind: domain.ActivitySessionResumeRequested, Provider: lifecycle.Provider,
+		Attrs: map[string]any{"observed_state": lifecycle.ObservedState}})
 	writeJSON(w, http.StatusAccepted, map[string]any{"session": map[string]any{
 		"id": lifecycle.SessionID, "sandboxProvider": lifecycle.Provider,
 		"desiredState": lifecycle.DesiredState, "observedState": lifecycle.ObservedState,
@@ -721,7 +969,97 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": toSessionResponse(session, prFacts[sessionID])})
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	response := toSessionResponse(session, prFacts[sessionID])
+	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	writeJSON(w, http.StatusOK, map[string]any{"session": response})
+}
+
+func (s *Server) setCloudSessionAutoInjectCI(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	var input struct {
+		AutoInjectCI *bool `json:"autoInjectCI"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil || input.AutoInjectCI == nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "autoInjectCI must be a boolean.")
+		return
+	}
+	session, err := s.store.SetCloudSessionAutoInjectCI(r.Context(), principalFrom(r), orgID, sessionID, *input.AutoInjectCI)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	prFacts, err := s.store.PRFactsBySession(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	response := toSessionResponse(session, prFacts[sessionID])
+	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	writeJSON(w, http.StatusOK, map[string]any{"session": response})
+}
+
+func (s *Server) setCloudSessionAutoInjectReview(w http.ResponseWriter, r *http.Request) {
+	s.setCloudSessionBooleanPolicy(w, r, "autoInjectReview", func(ctx context.Context, principal domain.Principal, orgID, sessionID string, enabled bool) (domain.Session, error) {
+		return s.store.SetCloudSessionAutoInjectReview(ctx, principal, orgID, sessionID, enabled)
+	})
+}
+
+func (s *Server) setCloudSessionMergePolicy(w http.ResponseWriter, r *http.Request) {
+	s.setCloudSessionBooleanPolicy(w, r, "terminateOnPrMerge", func(ctx context.Context, principal domain.Principal, orgID, sessionID string, enabled bool) (domain.Session, error) {
+		return s.store.SetCloudSessionTerminateOnPRMerge(ctx, principal, orgID, sessionID, enabled)
+	})
+}
+
+func (s *Server) setCloudSessionBooleanPolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	field string,
+	update func(context.Context, domain.Principal, string, string, bool) (domain.Session, error),
+) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	input := map[string]*bool{}
+	if err := decodeJSON(w, r, &input); err != nil || input[field] == nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", field+" must be a boolean.")
+		return
+	}
+	session, err := update(r.Context(), principalFrom(r), orgID, sessionID, *input[field])
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	prFacts, err := s.store.PRFactsBySession(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	response := toSessionResponse(session, prFacts[sessionID])
+	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }
 
 // deleteSession records the intent to tear a session's sandbox down. It does
@@ -807,6 +1145,24 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 	return cfg
 }
 
+// validateProjectCoderConfig rejects a free-form project config whose coder
+// settings carry a workspace name prefix Coder would refuse: every session of
+// the project would otherwise fail to provision.
+func validateProjectCoderConfig(config json.RawMessage) error {
+	// The project's Setup and Cleanup commands are checked here too, so both
+	// project create paths reject them in the wrong shape.
+	if err := domain.ValidateProjectScriptsConfig(config); err != nil {
+		return err
+	}
+	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
+		if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
+			return err
+		}
+		return domain.ValidateCoderTemplateParameterValues(cfg.Parameters)
+	}
+	return nil
+}
+
 func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, error) {
 	cfg := domain.ProjectCoderConfig{}
 	if id := strings.TrimSpace(in.TemplateID); id != "" {
@@ -848,6 +1204,22 @@ func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, err
 	}
 	if len(repos) > 0 {
 		cfg.ExtraRepos = repos
+	}
+	cfg.WorkspaceNamePrefix = strings.TrimSpace(in.WorkspaceNamePrefix)
+	if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
+		return domain.ProjectCoderConfig{}, err
+	}
+	if len(in.Parameters) > 0 {
+		if cfg.TemplateID == "" {
+			return domain.ProjectCoderConfig{}, fmt.Errorf("coder template parameters require choosing a template")
+		}
+		if err := domain.ValidateCoderTemplateParameterValues(in.Parameters); err != nil {
+			return domain.ProjectCoderConfig{}, err
+		}
+		cfg.Parameters = make(map[string]string, len(in.Parameters))
+		for name, value := range in.Parameters {
+			cfg.Parameters[name] = value
+		}
 	}
 	return cfg, nil
 }
@@ -937,6 +1309,9 @@ func validProjectUpdate(request updateProjectRequest) bool {
 }
 
 func validSessionInput(request createSessionRequest) bool {
+	if validateChatTurnSettings("", request.ReasoningEffort, "", "") != nil {
+		return false
+	}
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||
@@ -948,7 +1323,8 @@ func validSessionInput(request createSessionRequest) bool {
 		// with "Session ... is invalid" for any brief over 80 chars).
 		len(request.DisplayName) < 1 || utf8.RuneCountInString(request.DisplayName) > 100 ||
 		len(request.Prompt) > 65536 ||
-		len(request.DeniedCommands) > 128 {
+		len(request.DeniedCommands) > 128 ||
+		(request.InterfaceMode != "" && !domain.SessionInterface(request.InterfaceMode).Valid()) {
 		return false
 	}
 	for _, command := range request.DeniedCommands {
@@ -974,6 +1350,7 @@ func toProjectResponse(project domain.Project) projectResponse {
 		RepositoryURL:      project.RepositoryURL,
 		DefaultBranch:      project.DefaultBranch,
 		GitHubRepositoryID: decimalID(project.GitHubRepositoryID),
+		Standalone:         domain.IsStandaloneRepositoryURL(project.RepositoryURL),
 		Config:             config,
 		CreatedAt:          project.CreatedAt,
 		UpdatedAt:          project.UpdatedAt,
@@ -984,29 +1361,76 @@ func toProjectResponse(project domain.Project) projectResponse {
 // facts, used to derive PR-lifecycle status (pr_open, ci_failed, ...) —
 // pass nil only for a session that provably has none yet (just created).
 func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionResponse {
-	return sessionResponse{
-		ID:               session.ID,
-		OrgID:            session.OrgID,
-		ProjectID:        session.ProjectID,
-		Kind:             session.Kind,
-		Harness:          session.Harness,
-		DisplayName:      session.DisplayName,
-		Branch:           session.Branch,
-		Mode:             session.Mode,
-		DeniedCommands:   nonNilStrings(session.DeniedCommands),
-		ActivityState:    string(session.ActivityState),
-		Status:           string(session.Status(time.Now().UTC(), prs)),
-		RuntimeConnected: session.RuntimeConnected,
-		SandboxProvider:  session.SandboxProvider,
-		DesiredState:     session.DesiredState,
-		ObservedState:    session.ObservedState,
-		RuntimeState:     session.RuntimeState,
-		RuntimeError:     session.RuntimeError,
-		IsTerminated:     session.IsTerminated,
-		WorkerEpoch:      session.WorkerEpoch,
-		CreatedAt:        session.CreatedAt,
-		UpdatedAt:        session.UpdatedAt,
+	var startupError *sessionStartupError
+	if session.StartupErrorCode != "" && session.StartupErrorAt != nil {
+		startupError = &sessionStartupError{
+			Code:    session.StartupErrorCode,
+			Message: session.StartupErrorMessage,
+			At:      session.StartupErrorAt.UTC(),
+			Detail:  session.StartupErrorDetail,
+		}
 	}
+	coderWorkspaceURL := ""
+	if ref := session.BYOCoderWorkspace; ref != nil {
+		if strings.TrimSpace(session.ID) != "" {
+			coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, coder.SessionWorkspaceName(ref.Name, ref.NamePrefix, session.ID))
+		}
+	}
+	return sessionResponse{
+		ID:                 session.ID,
+		OrgID:              session.OrgID,
+		ProjectID:          session.ProjectID,
+		Kind:               session.Kind,
+		Harness:            session.Harness,
+		ReviewerHarness:    session.ReviewerHarness,
+		AutoReviewEnabled:  session.AutoReviewEnabled,
+		DisplayName:        session.DisplayName,
+		Branch:             session.Branch,
+		Mode:               session.Mode,
+		Model:              session.Model,
+		DeniedCommands:     nonNilStrings(session.DeniedCommands),
+		InterfaceMode:      string(session.Interface.Normalized()),
+		ActivityState:      string(session.ActivityState),
+		Status:             string(session.Status(time.Now().UTC(), prs)),
+		RuntimeConnected:   session.RuntimeConnected,
+		SandboxProvider:    session.SandboxProvider,
+		DesiredState:       session.DesiredState,
+		ObservedState:      session.ObservedState,
+		RuntimeState:       session.RuntimeState,
+		RuntimeError:       session.RuntimeError,
+		StartupError:       startupError,
+		CoderWorkspaceURL:  coderWorkspaceURL,
+		IsTerminated:       session.IsTerminated,
+		AutoInjectCI:       session.AutoInjectCI,
+		AutoInjectReview:   session.AutoInjectReview,
+		TerminateOnPRMerge: session.TerminateOnPRMerge,
+		WorkerEpoch:        session.WorkerEpoch,
+		CreatedAt:          session.CreatedAt,
+		UpdatedAt:          session.UpdatedAt,
+		PRs:                []sessionPRFactsResponse{},
+	}
+}
+
+func toSessionPRFactsResponses(prs []domain.PullRequest, facts []contract.PRFacts) []sessionPRFactsResponse {
+	reviewCommentsByURL := make(map[string]bool, len(facts))
+	for _, fact := range facts {
+		reviewCommentsByURL[fact.URL] = fact.ReviewComments
+	}
+	items := make([]sessionPRFactsResponse, 0, len(prs))
+	for _, pr := range prs {
+		state := string(pr.State)
+		if pr.Draft && state == "open" {
+			state = "draft"
+		}
+		items = append(items, sessionPRFactsResponse{
+			URL: pr.URL, Number: pr.Number, State: state, CI: string(pr.CIState),
+			Review: string(pr.ReviewState), Mergeability: string(pr.Mergeability),
+			FailingChecks:  pullRequestFailingChecks(pr.Checks),
+			ReviewComments: reviewCommentsByURL[pr.URL],
+			SourceBranch:   pr.SourceBranch, TargetBranch: pr.TargetBranch, UpdatedAt: pr.UpdatedAt,
+		})
+	}
+	return items
 }
 
 func decimalID(id *int64) string {

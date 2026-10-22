@@ -2,13 +2,15 @@
 
 Operational guidance for coding agents working in this repository. Keep changes small, match the current rewrite architecture, and prefer the documented daemon/API boundaries over behavior from the old TypeScript implementation.
 
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting work.
+
 ## Repo layout
 
-- `backend/` — Go rewrite of Agent Orchestrator: Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.
-- `frontend/` — Electron + React supervisor wired to the daemon via the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
-- `docs/` — current architecture/status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
-- `test/` — external smoke/e2e assets, including the CLI fresh-install container check.
-- `.github/workflows/` — CI definitions. Mirror these commands locally when possible.
+- `backend/`: Go rewrite of Agent Orchestrator with the Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.
+- `frontend/`: Electron + React supervisor wired to the daemon through the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
+- `docs/`: Current architecture and status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
+- `test/`: External smoke/e2e assets, including the CLI fresh-install container check.
+- `.github/workflows/`: CI definitions. Mirror these commands locally when possible.
 
 ## Commands
 
@@ -63,13 +65,13 @@ AO_DATA_DIR=/tmp/ao-lab-data ./node_modules/.bin/electron-forge start
 
 ## Where to look first
 
-- `README.md` — current run/config/test quickstart.
-- `docs/README.md` — docs index.
-- `docs/documentation-map.md` — which artifacts are the machine-readable contract layer (`openapi.yaml`, `AGENTS.md`, `skills/`, sqlc `gen/`), what each is source of truth for, and how CI keeps them from drifting.
-- `docs/architecture.md` — backend mental model, package layout, lifecycle/session/service boundaries, and load-bearing rules.
-- `docs/STATUS.md` — what is shipped on `main` today and what is still in flight.
-- `docs/cli/README.md` — intended CLI shape: thin Cobra client over daemon HTTP, never direct storage/runtime access.
-- `CLAUDE.md` — compatibility pointer for Claude Code; it directs agents back to `AGENTS.md`.
+- `README.md`: Current run/config/test quickstart.
+- `docs/README.md`: Docs index.
+- `docs/documentation-map.md`: Which artifacts are the machine-readable contract layer (`openapi.yaml`, `AGENTS.md`, `skills/`, sqlc `gen/`), what each is source of truth for, and how CI keeps them from drifting.
+- `docs/architecture.md`: Backend mental model, package layout, lifecycle/session/service boundaries, and load-bearing rules.
+- `docs/STATUS.md`: What is shipped on `main` today and what is still in flight.
+- `docs/cli/README.md`: Intended CLI shape, a thin Cobra client over daemon HTTP with no direct storage/runtime access.
+- `CLAUDE.md`: Compatibility pointer for Claude Code. It directs agents back to `AGENTS.md`.
 
 For code entry points:
 
@@ -104,12 +106,13 @@ For code entry points:
 ## Hard rules and boundaries
 
 - The daemon's **primary (loopback) listener** stays bound to `127.0.0.1` and unauthenticated. Do not change its bind host or add auth to it.
-- The daemon MAY run a **second, opt-in LAN listener** (the "Connect Mobile" feature) that binds `0.0.0.0` **only while explicitly enabled**, **only** behind the bearer-password `authMiddleware`, serving the app API but never the loopback-gated control routes (`/shutdown`, telemetry, mobile control). **Exactly one route is exempt from `authMiddleware`: `GET /api/v1/identity`**, which returns an opaque host id and the mobile contract version so a phone can confirm which machine answered before presenting a credential — see `docs/adr/0003-unauthenticated-identity-probe.md`. The exemption is an exact path, `GET` only, and checked ahead of the lockout; any further unauthenticated route needs its own ADR. It is plaintext and home-network-only by deliberate decision — see `docs/adr/0001-lan-listener-for-mobile.md` and `CONTEXT.md`. Do not add any other network-facing bind.
+- The daemon MAY run a **second, opt-in LAN listener** (the "Connect Mobile" feature) that binds `0.0.0.0` **only while explicitly enabled**, **only** behind the bearer-password `authMiddleware`, serving the app API but never the loopback-gated control routes (`/shutdown`, internal telemetry control, mobile control). Authenticated `GET /api/v1/telemetry/identity` is an app API route available to a paired phone; it returns the Cloud user ID and GitHub login when present, but no email. **Exactly one route is exempt from `authMiddleware`: `GET /api/v1/identity`**, which returns an opaque host id and the mobile contract version so a phone can confirm which machine answered before presenting a credential. See `docs/adr/0003-unauthenticated-identity-probe.md`. The exemption is an exact path, `GET` only, and checked ahead of the lockout; any further unauthenticated route needs its own ADR. The direct LAN listener is plaintext for trusted home networks. See `docs/adr/0001-lan-listener-for-mobile.md` and `CONTEXT.md` for the original decision. Current managed cloudflared and Tailscale TLS endpoints wrap this authenticated mobile path; they do not authorize exposing the primary listener or adding an unauthenticated route. See `frontend/src/docs/content/configuration/remote-access.mdx` for current pairing behavior. Do not add any other network-facing bind.
 - The CLI is a thin client. Do not port old in-process TypeScript CLI behavior that bypasses daemon HTTP routes.
 - Do not store derived/display session status. Status is derived from durable facts (`activity_state`, `is_terminated`, PR/check/comment facts) at service read time.
 - Do not treat failed/unknown runtime probes as proof a session is dead.
 - Do not force-delete dirty registered worktrees.
 - Do not modify already-merged SQLite migrations. Add a new migration instead.
+- Create new SQLite migrations with `npm run migration:create -- <snake_case_name>` (UTC `YYYYMMDDHHMMSSsss` IDs); append the generated ID and filename to `shippedMigrations` in `migrate_burned_versions_test.go`.
 - Do not hand-edit `backend/internal/storage/sqlite/gen/*`; change `backend/internal/storage/sqlite/queries/*` or migrations and run `npm run sqlc`.
 - SQLite change events come from DB triggers into `change_log`; do not add parallel manual CDC emission from store methods unless the architecture changes explicitly.
 - Keep generated OpenAPI/API DTO drift in mind: controller response shapes live in `backend/internal/httpd/controllers/dto.go` and tests may assert CLI/HTTP wire compatibility.
@@ -119,12 +122,12 @@ For code entry points:
 
 ## API contract changes
 
-The daemon API is code-first. The OpenAPI spec and frontend TypeScript types are generated artifacts — edit the source, then regenerate.
+The daemon API is code-first. The OpenAPI spec and frontend TypeScript types are generated artifacts. Edit the source, then regenerate.
 
 **Source files to edit:**
 
-- `backend/internal/httpd/controllers/dto.go` — request/response shapes.
-- `backend/internal/httpd/apispec/specgen/build.go` — operation registry; add a `schemaNames` entry for any new named type.
+- `backend/internal/httpd/controllers/dto.go`: request/response shapes.
+- `backend/internal/httpd/apispec/specgen/build.go`: operation registry. Add a `schemaNames` entry for any new named type.
 
 **Regenerate after editing:**
 
@@ -142,7 +145,7 @@ npm run api:ts       # npx openapi-typescript@7.4.4 backend/internal/httpd/apisp
 **Verify:**
 
 ```bash
-cd backend && go test ./internal/httpd/...    # spec drift + route/spec parity tests (does not cover schema.ts — that is checked by the api-drift CI job)
+cd backend && go test ./internal/httpd/...    # spec drift + route/spec parity tests (does not cover schema.ts; the api-drift CI job checks it)
 ```
 
 Commit `openapi.yaml` and `frontend/src/api/schema.ts` together with the Go changes. CI will regenerate both files and fail if the committed versions are out of date. The CLI hand-mirrored DTOs remain a deliberate manual boundary and are not generated.

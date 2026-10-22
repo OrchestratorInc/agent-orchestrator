@@ -2,8 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
+import { TooltipProvider } from "../ui/tooltip";
 import { MarkdownFileView } from "./MarkdownFileView";
 
+const { baseUrlForHostMock } = vi.hoisted(() => ({ baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined) }));
+vi.mock("../../lib/host-clients", () => ({ baseUrlForHost: baseUrlForHostMock }));
 vi.mock("../../lib/api-client", () => ({
 	getApiBaseUrl: () => "http://127.0.0.1:4567",
 }));
@@ -25,13 +28,15 @@ afterEach(() => {
 
 function view(content: string, filePath = "docs/README.md", truncated = false) {
 	return (
-		<MarkdownFileView
-			content={content}
-			filePath={filePath}
-			sessionId="sess-1"
-			truncated={truncated}
-			version={7}
-		/>
+		<TooltipProvider>
+			<MarkdownFileView
+				content={content}
+				filePath={filePath}
+				sessionId="sess-1"
+				truncated={truncated}
+				version={7}
+			/>
+		</TooltipProvider>
 	);
 }
 
@@ -51,6 +56,19 @@ describe("MarkdownFileView", () => {
 		);
 	});
 
+	it("copies each fenced code block's source from its copy button", async () => {
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		render(view("```ts\nconst ready = true;\n```\n\n```\nplain text\n```"));
+
+		const buttons = screen.getAllByRole("button", { name: "Copy code" });
+		expect(buttons).toHaveLength(2);
+		expect(buttons[0]).toHaveTextContent("");
+		fireEvent.click(buttons[1]!);
+
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith("plain text"));
+		expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+	});
+
 	it("resolves relative images through the workspace blob route without double encoding", () => {
 		render(view("![Flow diagram](./assets/flow%20chart.png)", "docs/README.md"));
 
@@ -58,6 +76,15 @@ describe("MarkdownFileView", () => {
 		const url = new URL(src!);
 		expect(url.searchParams.get("path")).toBe("docs/assets/flow chart.png");
 		expect(url.searchParams.get("side")).toBe("after");
+	});
+
+	it("uses the selected host for relative images and does not fall back when offline", () => {
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/token-a");
+		const { rerender } = render(<MarkdownFileView content="![Flow](./flow.png)" filePath="docs/README.md" hostId="host-a" sessionId="same-id" truncated={false} version={7} />);
+		expect(screen.getByRole("img", { name: "Flow" })).toHaveAttribute("src", expect.stringContaining("http://127.0.0.1:4000/token-a/api/v1/sessions/same-id/"));
+		baseUrlForHostMock.mockReturnValue(undefined);
+		rerender(<MarkdownFileView content="![Flow](./flow.png)" filePath="docs/README.md" hostId="offline" sessionId="same-id" truncated={false} version={7} />);
+		expect(screen.queryByRole("img", { name: "Flow" })).not.toBeInTheDocument();
 	});
 
 	it("keeps relative file links inert and escapes raw HTML", () => {

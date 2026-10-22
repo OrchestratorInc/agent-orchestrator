@@ -10,6 +10,8 @@
  * lifecycle decisions all belong to the daemon. Nothing here recomputes them.
  */
 
+import type { ScriptRun } from "../lib/cloud-script-runs";
+
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
 
@@ -99,6 +101,13 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 }
 
+export interface ConversationUsageLimit {
+	/** Absolute provider reset time, when it can be determined safely. */
+	resetsAt?: string;
+	autoResume: boolean;
+	resumeError?: string;
+}
+
 export interface ConversationTurn {
 	id: string;
 	state: TurnState;
@@ -114,7 +123,10 @@ export interface ConversationTurn {
 	retryOfTurnId?: string;
 	/** A retry attempt exists, even if that child is outside the active branch. */
 	hasRetryAttempt?: boolean;
+	/** Durable human-prompt fact, independent of the loaded history page. */
+	hasHumanPrompt?: boolean;
 	errorMessage?: string;
+	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
 	completedAt?: string;
@@ -152,6 +164,10 @@ export interface ConversationContentSummary {
 	mimeType?: string;
 	uri?: string;
 	name?: string;
+	text?: string;
+	sourceConversationId?: string;
+ sourceMessageId?: string;
+	sourceRevision?: number;
 }
 
 export interface QueuedMessageEditOptions {
@@ -176,11 +192,18 @@ export interface ConversationMessage {
 	content?: ConversationContentSummary[];
 	/** False when the original prompt content cannot be reproduced safely. */
 	editAvailable?: boolean;
+	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
+	continuation?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
+	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
+	clientMessageId?: string;
 	createdAt: string;
 }
 
@@ -387,6 +410,26 @@ export interface AutoReviewDetail {
 	commandSource?: string;
 }
 
+/** An agent HTML page published with `ao render`, shown inline in its turn. */
+export interface RenderRef {
+	id: string;
+	title: string;
+	height: number;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/renders/{renderId}`. */
+	path: string;
+	/** `[width, height]` pairs measured when the page was published, sorted by width. */
+	heights?: Array<[number, number]>;
+}
+
+/** An HTML session artifact the agent reported with `ao report --artifact`, shown inline in its turn. */
+export interface ArtifactRef {
+	/** Relative to the session's artifact directory, slash-separated. */
+	path: string;
+	name: string;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/artifact-files/{path}`. */
+	url: string;
+}
+
 /**
  * A `system` activity's discriminator and the fields that belong to it.
  *
@@ -403,7 +446,43 @@ export interface SystemEventDetail {
 		| "steer"
 		| "plan"
 		| "context.reset"
-		| "context.boundary";
+		| "context.boundary"
+		| "provider_switch"
+		| "render"
+		| "artifact"
+		| "workspace.setup"
+		| "workspace.script.run"
+		| "account.switched";
+	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
+	scriptRun?: ScriptRun;
+	/** account.switched: the account a stopped turn's conversation continues on. */
+	accountId?: string;
+	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
+	setupStatus?: "succeeded" | "failed" | "timed_out";
+	/** workspace.setup: the 1-based Setup step that failed or timed out. */
+	setupStep?: number;
+	/** provider_switch */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
+	/** The Claude Code compaction window the target started with, such as "200k". */
+	targetAutoCompactWindow?: string;
+	/** The permission mode the target started in. */
+	permissionMode?: ApprovalMode;
+	/** The chat's own mode, when the target could not run in it; a switch away goes back to it. */
+	chatPermissionMode?: ApprovalMode;
+	/** provider_switch: drawn before the daemon has switched, so the line shows it is still in progress. Never stored. */
+	switching?: boolean;
+	/** workspace.setup: a failed step's command, the user and groups it ran as, where, and its full log. */
+	setupFailure?: { command?: string; user?: string; groups?: string[]; dir?: string; logPath?: string };
+	/** workspace.setup: why a failed step likely failed (no Docker, no sudo, a refused path). */
+	setupHint?: string;
+	/** render */
+	render?: RenderRef;
+	/** artifact */
+	artifact?: ArtifactRef;
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
@@ -413,6 +492,10 @@ export interface SystemEventDetail {
 	revision?: number;
 	/** steer: the user's own words, delivered into a turn already running. */
 	origin?: string;
+	/** steer: source session metadata for an AO automation steer. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	clientMessageId?: string;
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
@@ -539,6 +622,11 @@ export interface ConversationActivity {
 	 * card left on screen cannot answer a request that replaced it.
 	 */
 	requestId?: string;
+	/** Structured-input resolution decoded from the daemon's detail payload. */
+	inputResponse?: {
+		action: "accept" | "decline" | "cancel";
+		content?: Record<string, unknown>;
+	};
 	/** Provider correlation key used to attach nested agent activity to its parent. */
 	providerItemId?: string;
 	/**
@@ -566,6 +654,12 @@ export interface TurnSettings {
 	model?: string;
 	reasoningEffort?: string;
 	approvalMode?: ApprovalMode;
+	/** Ask for the provider's faster tier, on models that offer one. */
+	fastMode?: boolean;
+	/** Ask the provider to plan rather than act, where AO sets that per turn. */
+	planMode?: boolean;
+	/** Where Claude Code compacts on its own. Unset leaves it to Claude Code. */
+	autoCompactWindow?: "200k" | "1m";
 }
 
 /** One model the provider offers for this session. */
@@ -578,6 +672,8 @@ export interface ChatModel {
 	/** Reasoning levels this model supports, in the provider's order. */
 	efforts?: string[];
 	defaultEffort?: string;
+	/** The model can run on the provider's faster tier. */
+	supportsFast?: boolean;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -624,8 +720,8 @@ export interface ChatSkill {
 	source?: string;
 }
 
-/** Health of the daemon's connection to the provider. */
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+/** State of the daemon's connection to the provider. */
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated";
 
 /**
  * How full this conversation is.
@@ -684,11 +780,16 @@ export interface ModelReroute {
 
 /** The provider account this conversation runs under. */
 export interface ConversationAccount {
+	authenticationState?: "unknown" | "required" | "authenticated";
+	authVerifiedAt?: string;
+	lastAuthFailureAt?: string;
+	lastAuthFailureReason?: string;
+	authFailureId?: string;
 	authMode?: string;
 	planLabel?: string;
 	/**
 	 * When the provider last demanded credentials AO does not hold. Present means the
-	 * session has stopped working for a reason no retry will fix.
+	 * daemon has not yet verified recovery.
 	 */
 	reauthRequiredAt?: string;
 	reauthReason?: string;
@@ -724,6 +825,8 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
+	continueTurnId?: string;
 	conversationId: string;
 	sessionId: string;
 	harness: string;
@@ -824,7 +927,8 @@ export function brokenMcpServers(snapshot: ConversationSnapshot): McpServer[] {
 
 /** Whether the provider is demanding credentials the daemon does not hold. */
 export function needsReauth(snapshot: ConversationSnapshot): boolean {
-	return Boolean(snapshot.account?.reauthRequiredAt);
+	return snapshot.account?.authenticationState === "required" ||
+		(snapshot.account?.authenticationState === undefined && Boolean(snapshot.account?.reauthRequiredAt));
 }
 
 /**
@@ -841,15 +945,31 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 /**
- * Turn ids whose human prompt must not appear in the timeline.
+ * Turn ids whose human prompt is represented in the queue dock instead.
  *
- * Queued turns live in the dock until dispatch. Turns cancelled from the dock
- * before dispatch must not reappear in the timeline after the snapshot refreshes.
+ * Human prompts for queued turns live in the dock until dispatch. Automation
+ * messages have no dock row, so their queued feedback stays visible in the
+ * timeline. Human turns cancelled from the dock must not reappear after refresh.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
+	const humanPromptTurnIds = new Set<string>();
+	for (const item of snapshot.items) {
+		if (
+			item.kind === "message" &&
+			item.role === "user" &&
+			item.origin === "human" &&
+			item.turnId
+		) {
+			humanPromptTurnIds.add(item.turnId);
+		}
+	}
 	return new Set(
 		snapshot.turns
-			.filter((turn) => turn.state === "queued" || turn.state === "cancelled")
+			.filter(
+				(turn) =>
+					(turn.state === "queued" || turn.state === "cancelled") &&
+					humanPromptTurnIds.has(turn.id),
+			)
 			.map((turn) => turn.id),
 	);
 }

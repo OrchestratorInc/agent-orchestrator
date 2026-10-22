@@ -1,5 +1,6 @@
+import { memo } from "react";
 import { Feather } from "./icons";
-import { useRouter } from "expo-router";
+import { useOpenPage } from "./pageNavigation";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { haptics } from "./haptics";
@@ -19,21 +20,26 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, space, type } from "./tokens";
 
 /** A pull-request row with the same hierarchy and density as WorkerListRow. */
-export function PRCard({
+export const PRCard = memo(function PRCard({
 	pr,
 	session,
 	summary,
+	hostId,
+	hostName,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
 	summary?: SessionPRSummary;
+	hostId: string;
+	hostName?: string;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
+	const openPage = useOpenPage();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
+	const projectLabel = hostName ? `${hostName} · ${project}` : project;
 	const branches = summary
 		? [summary.sourceBranch, summary.targetBranch].filter(Boolean).join(" → ")
 		: session.branch || "";
@@ -48,19 +54,19 @@ export function PRCard({
 	return (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`${title}. Pull request ${pr.number}. ${status.text}.`}
+			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
 			onPress={() => {
 				haptics.tap();
-				router.push({
-					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId },
+				openPage({
+					pathname: "/review/[sessionId]",
+					params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId },
 				});
 			}}
 			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
 		>
 			<View style={styles.eyebrow}>
 				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
-				<Text style={styles.project} numberOfLines={1}>{project}</Text>
+				<Text style={styles.project} numberOfLines={1}>{projectLabel}</Text>
 				<Text style={[styles.status, { color: toneColor(t, status.tone) }]} numberOfLines={1}>{status.text}</Text>
 			</View>
 
@@ -87,7 +93,7 @@ export function PRCard({
 			{blockers ? <Text style={styles.blockers} numberOfLines={1}>{blockers}</Text> : null}
 		</Pressable>
 	);
-}
+});
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({

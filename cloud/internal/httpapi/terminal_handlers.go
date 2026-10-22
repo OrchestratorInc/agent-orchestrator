@@ -38,6 +38,10 @@ const (
 	// few misses prevents a reconnect storm during heavy replays while still
 	// closing a genuinely unresponsive socket within a bounded window.
 	terminalPingMaxFailures = 3
+	// An agent ticket request waits up to agentTicketWait for the agent
+	// terminal to open, checking every agentTicketPoll.
+	agentTicketWait = 8 * time.Second
+	agentTicketPoll = 250 * time.Millisecond
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -50,7 +54,8 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Kind string `json:"kind"`
+		Kind       string `json:"kind"`
+		TerminalID string `json:"terminalId,omitempty"`
 	}
 	if err := decodeJSONLimit(w, r, &input, maxWorkerControlBody); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
@@ -60,9 +65,26 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "TERMINAL_KIND_UNSUPPORTED", "Terminal kind must be agent or workspace.")
 		return
 	}
+	if input.TerminalID != "" && requireUUID(input.TerminalID, "terminalId") != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The terminal ID must be a UUID.")
+		return
+	}
+	// A ticket wakes a paused sandbox, so it is subject to the plan's usage
+	// limits like resume is. This early answer takes no lock and returns at
+	// once for unbilled (Coder, Docker) and running sessions; the transaction
+	// that wakes the sandbox checks again.
+	if s.billingStore != nil {
+		if err := s.billingStore.WakeAllowed(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+	}
 	token, scopes, err := s.store.IssueTerminalTicket(
-		r.Context(), principalFrom(r), orgID, sessionID, input.Kind, terminalTicketTTL,
+		r.Context(), principalFrom(r), orgID, sessionID, input.Kind, input.TerminalID, terminalTicketTTL,
 	)
+	if errors.Is(err, postgres.ErrWorkerUnavailable) && input.Kind == "agent" && input.TerminalID == "" {
+		token, scopes, err = s.awaitAgentTicket(r, orgID, sessionID, err)
+	}
 	if errors.Is(err, postgres.ErrTerminalSessionExited) {
 		writeError(w, r, http.StatusGone, "TERMINAL_SESSION_EXITED", "The coding-agent terminal has exited. Start a new session to continue.")
 		return
@@ -82,14 +104,59 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// agentTerminalProbe is the read-only readiness check awaitAgentTicket polls.
+type agentTerminalProbe interface {
+	AgentTerminalLive(ctx context.Context, principal domain.Principal, orgID, sessionID string) (bool, error)
+}
+
+// awaitAgentTicket holds an agent ticket request that found the agent not yet
+// started, instead of answering 409 straight away. Each browser retry costs a
+// full round trip on top of its poll interval, so on a distant client the
+// ticket arrived up to ~0.5s after the terminal opened. Here the wait is a
+// cheap read-only poll beside the database, and the ticket is minted as soon
+// as the terminal is live. IssueTerminalTicket already ran once, so a paused
+// sandbox is waking and the interaction lease is held. When the wait expires
+// it answers the original 409 and the browser retries as before.
+func (s *Server) awaitAgentTicket(r *http.Request, orgID, sessionID string, unavailable error) (string, []string, error) {
+	probe, ok := s.store.(agentTerminalProbe)
+	if !ok {
+		return "", nil, unavailable
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), agentTicketWait)
+	defer cancel()
+	ticker := time.NewTicker(agentTicketPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return "", nil, unavailable
+		case <-ticker.C:
+		}
+		live, err := probe.AgentTerminalLive(ctx, principalFrom(r), orgID, sessionID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", nil, unavailable
+			}
+			return "", nil, err
+		}
+		if live {
+			return s.store.IssueTerminalTicket(
+				r.Context(), principalFrom(r), orgID, sessionID, "agent", "", terminalTicketTTL,
+			)
+		}
+	}
+}
+
 func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("ticket"))
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	terminalID := strings.TrimSpace(r.URL.Query().Get("terminalId"))
 	if kind == "" {
 		kind = "workspace"
 	}
 	after, err := strconv.ParseInt(defaultString(r.URL.Query().Get("after"), "0"), 10, 64)
-	if token == "" || (kind != "workspace" && kind != "agent") || err != nil || after < 0 {
+	if token == "" || (kind != "workspace" && kind != "agent") ||
+		(terminalID != "" && requireUUID(terminalID, "terminalId") != nil) || err != nil || after < 0 {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "A valid ticket, kind, and after cursor are required.")
 		return
 	}
@@ -97,7 +164,7 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	if kind == "agent" {
 		ttl = agentTerminalTTL
 	}
-	terminal, err := s.store.OpenTerminal(r.Context(), token, kind, ttl)
+	terminal, err := s.store.OpenTerminal(r.Context(), token, kind, terminalID, ttl)
 	if errors.Is(err, postgres.ErrInvalidTicket) {
 		if s.logger != nil {
 			s.logger.Warn(
@@ -153,10 +220,9 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	if structured {
 		// Replay this attachment from sequence zero and tell the client to discard
 		// whatever it was showing. A workspace reconnect gets a fresh shell; an
-		// agent terminal's output sequence space is per worker epoch (an idle
-		// resume or worker restart bumps the epoch and restarts sequences at 1), so
-		// a resume cursor carried across a bump would point past the new epoch's
-		// output and strand the pane. A from-0 replay is always correct, and the
+		// agent terminal can be reopened across worker epochs, so a client cursor
+		// from an earlier attachment cannot safely describe its current replay
+		// window. A from-0 replay is always correct, and the
 		// reset makes the client wipe stale content so the replay does not stack.
 		// (A future epoch-aware CP can compare the client's `after` against this
 		// epoch's output floor and resume within an epoch instead — see the cursor
@@ -436,6 +502,12 @@ func (s *Server) writeTerminalOutput(
 		live, cancelLive = s.terminalStreams.subscribeRelayOutput(terminal.ID)
 		defer cancelLive()
 	}
+	var notificationHints chan terminalRelayNotification
+	if structured && s.terminalRelayEnabled && s.terminalStreams != nil {
+		var cancelNotifications func()
+		notificationHints, cancelNotifications = s.terminalStreams.subscribeRelayNotifications(terminal.ID)
+		defer cancelNotifications()
+	}
 	replayComplete := false
 	startingSent := false
 	ready := false
@@ -554,6 +626,16 @@ func (s *Server) writeTerminalOutput(
 					"terminal_id", terminal.ID, "sequence", frame.sequence,
 					"bytes", len(frame.data))
 			}
+		case hint := <-notificationHints:
+			writeMu.Lock()
+			writeErr := writeTerminalMessage(ctx, connection, terminalServerMessage{
+				Type: "notification_hint", EventID: hint.eventID, EventType: hint.typeName,
+				OccurredAt: hint.occurredAt, Payload: hint.payload,
+			})
+			writeMu.Unlock()
+			if writeErr != nil {
+				return writeErr
+			}
 		case <-wake:
 			pollDurable = true
 		case <-ticker.C:
@@ -563,11 +645,15 @@ func (s *Server) writeTerminalOutput(
 }
 
 type terminalServerMessage struct {
-	Type     string `json:"type"`
-	Data     string `json:"data,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Sequence int64  `json:"sequence,omitempty"`
-	InputID  string `json:"inputId,omitempty"`
+	Type       string          `json:"type"`
+	Data       string          `json:"data,omitempty"`
+	Message    string          `json:"message,omitempty"`
+	Sequence   int64           `json:"sequence,omitempty"`
+	InputID    string          `json:"inputId,omitempty"`
+	EventID    string          `json:"eventId,omitempty"`
+	EventType  string          `json:"eventType,omitempty"`
+	OccurredAt time.Time       `json:"occurredAt,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 }
 
 func writeTerminalMessage(

@@ -8,6 +8,7 @@ import type { ServerConfig } from "../config";
 import { lookUpSession } from "./sessionLookup";
 import {
 	currentSessionLookup,
+	isRuntimeGone,
 	sessionLookupDue,
 	sessionLookupKey,
 	sessionLookupSettled,
@@ -32,15 +33,24 @@ const pending: SessionLookup = { state: "pending" };
 
 type ViewArgs = Parameters<typeof sessionRouteView>[0];
 const view = (over: Partial<ViewArgs> = {}) =>
-	sessionRouteView({ listed: undefined, configured: true, connection: "open", loading: false, lookup: pending, ...over });
+	sessionRouteView({ listed: undefined, configured: true, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
 
 type DueArgs = Parameters<typeof sessionLookupDue>[0];
 const due = (over: Partial<DueArgs> = {}) =>
 	sessionLookupDue({ listed: false, configured: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
 
 describe("sessionRouteView", () => {
+	it("never opens another machine's same-ID session from a stale route", () => {
+		const listed = worker({ id: "same-id" });
+		expect(view({ listed, routeHostId: "host-a", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
+		expect(view({ listed, routeHostId: undefined })).toEqual({ kind: "wrongHost" });
+	});
 	it("waits for the saved config before judging anything", () => {
-		expect(view({ configured: null, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+		expect(view({ configured: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+	});
+	it("shows an offline paired host instead of another-machine or a permanent loader", () => {
+		expect(view({ configured: null, connection: "closed" })).toEqual({ kind: "offline" });
+		expect(view({ configured: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
 	});
 
 	// The store keeps the last machine's lists after Settings → forget, so a
@@ -65,6 +75,12 @@ describe("sessionRouteView", () => {
 	it("opens an unlisted session that is still live", () => {
 		const live = worker({ id: "proj-9" });
 		expect(view({ lookup: found(live) })).toEqual({ kind: "screen", session: live });
+	});
+
+	it("opens a standalone worker without a project id", () => {
+		const standalone = worker({ id: "standalone-1", projectId: "" });
+		expect(view({ listed: standalone })).toEqual({ kind: "screen", session: standalone });
+		expect(view({ lookup: found(standalone) })).toEqual({ kind: "screen", session: standalone });
 	});
 
 	it.each([404, 410])("reports not found only on a %s", (status) => {
@@ -253,5 +269,24 @@ describe("lookUpSession, the request the route sends", () => {
 		const lookup = await lookUpSession(cfg, "scratch-1");
 		expect(lookup).toEqual(failed(undefined));
 		expect(view({ lookup })).toEqual({ kind: "failed" });
+	});
+});
+
+describe("isRuntimeGone", () => {
+	it("keeps the terminal for a merged or errored worker whose runtime is still live", () => {
+		expect(isRuntimeGone(worker({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "errored" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "working" }))).toBe(false);
+	});
+
+	it("treats a terminated worker as gone", () => {
+		expect(isRuntimeGone(worker({ isTerminated: true, status: "merged" }))).toBe(true);
+		expect(isRuntimeGone(worker({ status: "terminated" }))).toBe(true);
+	});
+
+	it("reads an orchestrator's runtime flags, never a missing field", () => {
+		expect(isRuntimeGone(orchestrator({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(orchestrator({ isTerminal: true }))).toBe(true);
+		expect(isRuntimeGone(orchestrator({ hasRuntime: false }))).toBe(true);
 	});
 });

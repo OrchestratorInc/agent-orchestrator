@@ -94,12 +94,16 @@ for (const platform of PLATFORMS) {
 		await fakePlatform(page, platform);
 		await installFakeAgent(page, { projectId: "fake-proj", projectName: "fake-proj" });
 		await page.goto("/#/projects/fake-proj");
+		// The sidebar mounts under the startup screen, so the trigger can be attached
+		// while the startup screen still covers it. A forced click then lands on the
+		// startup screen and the menu never opens.
+		await expect(page.getByTestId("daemon-startup-loader")).toHaveCount(0);
 		await page
 			.getByRole("button", { name: /Project actions for fake-proj/ })
 			.first()
 			.click({ force: true });
 		await page.getByRole("menuitem", { name: /New task/ }).click();
-		const prompt = page.getByRole("dialog").getByLabel("Task", { exact: true });
+		const prompt = page.getByRole("dialog").getByLabel("Task");
 		await expect(prompt).toBeVisible();
 		await page.keyboard.type("caret is here");
 		await expect(prompt).toHaveValue("caret is here");

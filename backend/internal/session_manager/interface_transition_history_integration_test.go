@@ -124,7 +124,7 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 					})
 					useFastInterfaceTransitionTimings(m)
 					if _, err := m.resumeChatController(ctx, "initial Chat", sess, project,
-						ports.WorkspaceInfo{Path: workspace, Branch: "main"}, false, "", domain.SessionInterfaceTransitionHistoryStrict); err != nil {
+						ports.WorkspaceInfo{Path: workspace, Branch: "main"}, false, false, "", domain.SessionInterfaceTransitionHistoryStrict); err != nil {
 						t.Fatal(err)
 					}
 					getSession := func() domain.SessionRecord {
@@ -277,7 +277,7 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 						t.Fatal(err)
 					}
 					if _, err := m.resumeChatController(ctx, "retry", getSession(), project,
-						ports.WorkspaceInfo{Path: workspace, Branch: "main"}, false, "", domain.SessionInterfaceTransitionHistoryStrict); err != nil {
+						ports.WorkspaceInfo{Path: workspace, Branch: "main"}, false, false, "", domain.SessionInterfaceTransitionHistoryStrict); err != nil {
 						t.Fatal(err)
 					}
 					assertHistory()

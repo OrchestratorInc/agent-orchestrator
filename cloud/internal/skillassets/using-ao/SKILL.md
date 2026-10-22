@@ -1,14 +1,14 @@
 ---
 name: using-ao
-description: "Catalog of the AO Cloud `ao` CLI available inside a cloud sandbox: spawning worker sessions, listing them, messaging them, reporting to the orchestrator, killing them, and claiming pull requests. Use when orchestrating or coordinating AO cloud sessions with the ao CLI."
-trigger: "Using the ao CLI inside an AO Cloud sandbox: spawning, listing, messaging, reporting to, or killing sessions, or claiming a PR."
+description: "Catalog of the AO Cloud `ao` CLI available inside a cloud sandbox: spawning worker sessions, listing them, messaging them, reporting to the orchestrator, killing them, claiming pull requests, and starting AO reviews. Use when orchestrating or coordinating AO cloud sessions with the ao CLI."
+trigger: "Using the ao CLI inside an AO Cloud sandbox: spawning, listing, messaging, reporting to, or killing sessions, claiming a PR, or starting an AO review."
 ---
 
 # AO Cloud CLI Catalog
 
 `ao` inside a cloud sandbox is a thin client over the AO control plane. It is a
 different, smaller CLI than the desktop `ao`: there is no `ao session`,
-`ao project`, `ao status`, `ao preview`, or `ao browser` here. Every command is
+`ao project`, `ao status`, or `ao preview` here. Every command is
 `ao help` for the authoritative list.
 
 | Command | What it does | Who can run it | Details |
@@ -19,6 +19,8 @@ different, smaller CLI than the desktop `ao`: there is no `ao session`,
 | `kill` (`delete`, `rm`) | Terminate a worker session and its sandbox | Orchestrators only | [commands/orchestration.md](commands/orchestration.md) |
 | `report` | Send a message to the orchestrator that spawned this session | Workers with an orchestrator parent | [commands/orchestration.md](commands/orchestration.md) |
 | `claim-pr` | Attach an existing pull request to this session | Any session | [commands/pull-requests.md](commands/pull-requests.md) |
+| `review trigger` | Start AO's reviewer on this session's open pull requests | Any session | [commands/pull-requests.md](commands/pull-requests.md) |
+| `browser` | Run agent-browser commands (open, snapshot, click, fill, screenshot, ...) in a browser the person sees and can use in AO's Browser panel | Sandboxes with a browser | `ao help` |
 
 ## Conventions
 
@@ -34,5 +36,6 @@ different, smaller CLI than the desktop `ao`: there is no `ao session`,
   `runtimeConnected` in `ao list --json` to see whether a worker is live.
 - Spawning and messaging are idempotent server-side; a command that prints a
   success line has been durably accepted even if the effect is not visible yet.
-- Pull requests and reviews are handled through socket helpers described in
-  [commands/pull-requests.md](commands/pull-requests.md), not through `ao`.
+- Opening pull requests and submitting review verdicts use socket helpers
+  described in [commands/pull-requests.md](commands/pull-requests.md);
+  claiming a PR and starting an AO review use `ao`.

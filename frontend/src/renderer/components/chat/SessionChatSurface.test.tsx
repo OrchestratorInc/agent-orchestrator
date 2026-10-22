@@ -3,11 +3,11 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentSwitchesQueryKey } from "../../hooks/useAgentSwitches";
-import type { ChatConfigOption, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
-import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
+import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
 const LINK = "http://localhost:5173";
@@ -39,23 +39,26 @@ const {
 	getMock,
 	invalidateCatalogsMock,
 	postMock,
+	providerSwitchMock,
 	workspacePathsState,
 	conversationState,
 	conversationCommandState,
-	agentSwitchState,
 } = vi.hoisted(() => ({
 	catalogObserverState: { enabled: [] as boolean[] },
 	clearCatalogsMock: vi.fn(),
 	getMock: vi.fn(),
 	invalidateCatalogsMock: vi.fn(),
 	postMock: vi.fn(),
+	providerSwitchMock: vi.fn(),
 	workspacePathsState: { paths: [] as string[] },
-	agentSwitchState: { data: [] as AgentSwitchSummary[] },
 	conversationCommandState: {
 		busy: false,
+		send: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
+		echoBeforeSend: vi.fn(),
+		dropEcho: vi.fn(),
 	},
 	conversationState: {
 		snapshot: { capabilities: [] } as
@@ -70,22 +73,50 @@ const {
 	},
 }));
 
+const switchFailure = vi.hoisted(() => ({
+	ProviderSwitchFailed: class ProviderSwitchFailed extends Error {
+		constructor(readonly reason: unknown) {
+			super("switch failed");
+		}
+	},
+}));
+
 const configState = vi.hoisted(() => ({
 	options: [] as ChatConfigOption[], loaded: false, error: undefined as string | undefined,
 }));
 
-const visibilityMocks = vi.hoisted(() => ({
-	presentation: vi.fn(),
-	route: vi.fn(),
+const sideMocks = vi.hoisted(() => ({
+	create: vi.fn(),
+	send: vi.fn(),
+	show: vi.fn(),
+	addReference: vi.fn(),
+	sides: [] as { hasWork: boolean }[],
+	agentSwitch: undefined as AgentSwitchProps | undefined,
+	workspaceSend: undefined as
+		| undefined
+		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
+}));
+vi.mock("./IndependentSideChats", () => ({
+	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
 }));
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	getApiBaseUrl: () => "",
+	hasTrustedApiBaseUrl: () => true,
+	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
+// Every agent's permission modes are known, as once the daemon has answered, unless a test says not.
+const permissionModesState = vi.hoisted(() => ({ known: true }));
+vi.mock("../../hooks/useChatPermissionModes", () => ({
+	useChatPermissionModes: (_hostId: string | undefined, harness: string | undefined) =>
+		harness && permissionModesState.known ? new Map([[harness, ["default", "accept-edits", "bypass-permissions"]]]) : undefined,
+}));
+
 vi.mock("../../hooks/useConversation", () => ({
+	ProviderSwitchFailed: switchFailure.ProviderSwitchFailed,
 	clearConversationProviderCatalogs: clearCatalogsMock,
 	conversationQueryKey: (sessionId: string) => ["conversation", sessionId],
 	invalidateConversationProviderCatalogs: invalidateCatalogsMock,
@@ -96,6 +127,12 @@ vi.mock("../../hooks/useConversation", () => ({
 			: undefined,
 	}),
 	useConversationCommands: () => conversationCommandState,
+	useProviderSwitchCommand: () => ({
+		mutateAsync: providerSwitchMock,
+		isPending: false,
+		error: null,
+		reset: vi.fn(),
+	}),
 	useConversationConfigOptions: vi.fn((_sessionId: string, enabled: boolean) => {
 		catalogObserverState.enabled.push(enabled);
 		return configState;
@@ -106,15 +143,14 @@ vi.mock("../../hooks/useConversation", () => ({
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
-vi.mock("../../hooks/useAgentSwitchVisibility", () => ({
-	useAgentSwitchPresentationVisibility: visibilityMocks.presentation,
-	useAgentSwitchRouteVisibility: visibilityMocks.route,
-}));
-
 vi.mock("./ChatWorkspace", async () => {
 	const { useState } = await vi.importActual<typeof import("react")>("react");
+	const { TurnSettingsBar } = await vi.importActual<typeof import("./TurnSettingsBar")>("./TurnSettingsBar");
 	return {
+		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
+		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
+			agentSwitch,
 			agentInputDisabled,
 			headerActions,
 			sessionTabAction,
@@ -122,9 +158,19 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen,
 			onRememberPermissions,
 			onChooseSettings,
+			onContinueTurn,
+			configOptionError,
+			configOptions,
+			models,
+			promptSuggestion,
 			snapshot,
 			shellTarget,
+			onSend,
+			composerNotice,
 		}: {
+			onSend: typeof sideMocks.workspaceSend;
+			composerNotice?: ReactNode;
+			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -132,9 +178,16 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
-			snapshot: { sessionId?: string };
+			onContinueTurn?: () => Promise<unknown> | void;
+			configOptionError?: string;
+			configOptions?: ChatConfigOption[];
+			models: ChatModel[];
+			promptSuggestion?: { id: string; text: string };
+			snapshot: Pick<ConversationSnapshot, "sessionId" | "harness" | "settings">;
 			shellTarget?: { handleId: string };
 		}) => {
+			sideMocks.workspaceSend = onSend;
+			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -148,8 +201,18 @@ vi.mock("./ChatWorkspace", async () => {
 					/>
 					{snapshot.sessionId ? <div>Mounted {mountedSessionId}</div> : null}
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
+					{composerNotice}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
+					<div data-testid="config-option-error">{configOptionError}</div>
+					{configOptions?.map((option) => (
+						<div key={option.id} data-testid={`config-option-${option.id}`}>
+							{option.choices.map((choice) => choice.value).join(",")}
+						</div>
+					))}
+					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
+					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<button type="button" onClick={() => { void Promise.resolve(onContinueTurn?.()).catch(() => {}); }}>Continue test turn</button>
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
@@ -189,12 +252,15 @@ beforeEach(() => {
 	configState.options = [];
 	configState.loaded = false;
 	configState.error = undefined;
+	permissionModesState.known = true;
 	getMock.mockReset().mockImplementation(async () => ({
-		data: { switches: agentSwitchState.data },
+		data: {},
 		error: undefined,
 		response: { status: 200 },
 	}));
 	postMock.mockReset().mockResolvedValue({ data: {}, error: undefined });
+	providerSwitchMock.mockReset().mockResolvedValue({});
+	sideMocks.agentSwitch = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -204,21 +270,251 @@ beforeEach(() => {
 	conversationState.hasOlder = false;
 	conversationState.isLoadingOlder = false;
 	conversationState.loadOlder = vi.fn();
+	conversationCommandState.send = vi.fn().mockResolvedValue({});
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
-	agentSwitchState.data = [];
+	conversationCommandState.echoBeforeSend.mockReset();
+	conversationCommandState.dropEcho.mockReset();
 	catalogObserverState.enabled = [];
-	visibilityMocks.presentation.mockReset();
-	visibilityMocks.route.mockReset();
-	useUiStore.setState({ inspectorSessions: {} });
+	useUiStore.setState({ inspectorSessions: {}, developerMode: true });
 });
 
 afterEach(() => {
 	vi.useRealTimers();
 });
 
+describe("SessionChatSurface pending switch effort", () => {
+	it.each([
+		{ harness: "codex", effort: undefined, shownEffort: "low", expected: "low" },
+		{ harness: "codex", effort: "high", shownEffort: "low", expected: "high" },
+		{ harness: "cursor", effort: undefined, shownEffort: "high", expected: undefined },
+	])("sends $harness effort $expected from the pending picker", async ({ harness, effort, shownEffort, expected }) => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness, model: "chosen-model", effort, shownEffort });
+		});
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
+		});
+		// The switch and the message go out in one request.
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({
+			text: "Recall the code word.",
+			clientMessageId: "switch-message",
+			providerSwitch: expect.objectContaining({ targetHarness: harness, effort: expected }),
+		}));
+		expect(providerSwitchMock).not.toHaveBeenCalled();
+	});
+
+	it("drops a picked agent when another tab of the session comes to the front", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex" });
+		});
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} shellTarget={{ kind: "shell", handleId: "shell-1", generation: "generation-1", title: "Shell" }} /></Wrapper>);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
+	it("lets a pick lapse when Developer Mode is turned off", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex" });
+		});
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
+		await act(async () => {
+			useUiStore.setState({ developerMode: false });
+		});
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
+	it("sends nothing with a switch until the agent's permission modes are known", async () => {
+		permissionModesState.known = false;
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
+		conversationCommandState.send = vi.fn().mockResolvedValue({});
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "pi" });
+		});
+		let failure: unknown;
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Only edit after approval", undefined, "permission-race").catch((error) => { failure = error; });
+		});
+		// The bar may still show the chat's mode, which Pi does not run in.
+		expect(conversationCommandState.send).not.toHaveBeenCalled();
+		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "pi" });
+	});
+
+	it("reports a refused switch as a switch failure, so the draft stays editable", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		conversationCommandState.send = vi.fn().mockRejectedValue(new switchFailure.ProviderSwitchFailed({ code: "PROVIDER_SWITCH_busy" }));
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex", model: "chosen-model" });
+		});
+		let failure: unknown;
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message").catch((error) => { failure = error; });
+		});
+		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
+		expect(await screen.findByText("Couldn't switch agent")).toBeInTheDocument();
+		// The previous agent keeps the chat, so the composer shows it again.
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
+	it("drops the outgoing agent's cached models when the chat's agent changes elsewhere", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(clearCatalogsMock).not.toHaveBeenCalled();
+		// Switched from another window: this one only sees the new agent.
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		expect(clearCatalogsMock).toHaveBeenCalledWith(client, session.id, undefined);
+	});
+
+	it("keeps the pick when a switch got no clear answer, until the chat shows its agent", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		conversationCommandState.send = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex" });
+		});
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message").catch(() => undefined);
+		});
+		// The daemon may not have switched, so a retry still asks for Codex.
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
+		// It had: the chat now runs Codex, and the pick is done.
+		// A new session object re-renders the memoized surface with the new snapshot.
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
+	it("sends a message with attachments and its switch in one request", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex", model: "chosen-model" });
+		});
+		const attachments = [{ mimeType: "image/png", data: "AA==" }];
+		await act(async () => {
+			await (sideMocks.workspaceSend as unknown as (text: string, attachments: unknown[], id: string) => Promise<void>)?.(
+				"Inspect this image.", attachments, "switch-message");
+		});
+		// No other switch can come between them and take the image.
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({
+			text: "Inspect this image.",
+			attachments,
+			clientMessageId: "switch-message",
+			providerSwitch: expect.objectContaining({ targetHarness: "codex" }),
+		}));
+		expect(providerSwitchMock).not.toHaveBeenCalled();
+		expect(conversationCommandState.echoBeforeSend).not.toHaveBeenCalled();
+	});
+});
+
+describe("SessionChatSurface prompt suggestions", () => {
+	function settleConversation() {
+		conversationState.snapshot = {
+			...snapshotFor(session.id),
+			turns: [{ id: "turn-1", state: "completed", requestedAt: "2026-10-12T00:00:00Z" }],
+		};
+		postMock.mockResolvedValue({ data: { turnId: "turn-1", prompt: "Explain the fix." } });
+	}
+
+	it("forwards a settled conversation suggestion and hides it while new work is fenced", async () => {
+		settleConversation();
+		const client = new QueryClient();
+		const tree = (newWorkDisabled = false) =>
+			<Wrapper client={client}><SessionChatSurface session={session} newWorkDisabled={newWorkDisabled} /></Wrapper>;
+		const view = render(tree());
+		await waitFor(() => expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent("Explain the fix."));
+		view.rerender(tree(true));
+		expect(screen.getByTestId("prompt-suggestion")).toBeEmptyDOMElement();
+		view.rerender(tree());
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent("Explain the fix.");
+		expect(postMock).toHaveBeenCalledOnce();
+	});
+
+	it("keeps an in-flight suggestion while a file pane temporarily hides the composer", async () => {
+		settleConversation();
+		let signal: AbortSignal | undefined;
+		let resolve!: (value: unknown) => void;
+		postMock.mockImplementation((_path, options: { signal: AbortSignal }) => {
+			signal = options.signal;
+			return new Promise((complete) => { resolve = complete; });
+		});
+		const client = new QueryClient();
+		const tree = (workspaceFileActive = false) => <Wrapper client={client}><SessionChatSurface session={session} workspaceFileActive={workspaceFileActive} /></Wrapper>;
+		const view = render(tree());
+		await waitFor(() => expect(postMock).toHaveBeenCalledOnce());
+		view.rerender(tree(true));
+		expect(signal?.aborted).toBe(false);
+		expect(screen.getByTestId("prompt-suggestion")).toBeEmptyDOMElement();
+		await act(async () => resolve({ data: { turnId: "turn-1", prompt: "Explain the fix." } }));
+		view.rerender(tree());
+		await waitFor(() => expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent("Explain the fix."));
+		expect(postMock).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		{ workspaceFileActive: true },
+		{ workspaceActiveTabKey: "file:README.md" },
+		{ reviewerChatSelected: true },
+		{ reviewerTarget: { kind: "reviewer" as const, handleId: "review-1", harness: "codex", sessionId: session.id } },
+		{ shellTarget: { kind: "shell" as const, handleId: "shell-1", generation: "generation-1", title: "Shell" } },
+		{ controllerTransitioning: true },
+		{ agentResuming: true },
+	])("does not generate while the primary chat is inactive or blocked %#", (props) => {
+		settleConversation();
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} {...props} /></Wrapper>);
+		expect(postMock).not.toHaveBeenCalled();
+		expect(screen.getByTestId("prompt-suggestion")).toBeEmptyDOMElement();
+	});
+});
+
 describe("SessionChatSurface link routing", () => {
+	it("keeps orchestrator chat mounted until its conversation and provisioning are ready", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
+		conversationState.snapshot = undefined;
+		conversationState.isLoading = true;
+		const tree = (provisionState: "provisioning" | "ready" = "provisioning") =>
+			<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState }} /></Wrapper>;
+		const view = render(tree());
+		const mounted = screen.getByText(`Mounted ${session.id}`);
+		expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
+		view.rerender(tree("ready"));
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		conversationState.snapshot = snapshotFor(session.id);
+		conversationState.isLoading = false;
+		view.rerender(tree());
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		view.rerender(tree("ready"));
+		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
+	it("releases project loading to show a failed orchestrator's retry UI", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
+		conversationState.snapshot = snapshotFor(session.id);
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, kind: "orchestrator", provisionState: "failed", provisionError: "branch already checked out" }} /></Wrapper>);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
 	it("keeps OpenCode approvals writable when its provider supplies Build/Plan mode", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.options = [{
@@ -234,6 +530,78 @@ describe("SessionChatSurface link routing", () => {
 		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
 
 		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
+	});
+
+	it("leaves switched-off models out of a provider's model option, keeping its current value", async () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
+		configState.loaded = true;
+		configState.options = [
+			{
+				id: "model", name: "Model", category: "model", type: "select", currentValue: "model-c",
+				choices: [{ value: "model-a", name: "A" }, { value: "model-b", name: "B" }, { value: "model-c", name: "C" }],
+			},
+			{
+				id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "build",
+				choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }],
+			},
+		];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { opencode: { disabledModels: ["model-b", "model-c"] } } }, error: undefined, response: { status: 200 } }
+			: { data: {}, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("model-a,model-c"));
+		expect(screen.getByTestId("config-option-mode")).toHaveTextContent("build,plan");
+	});
+
+	it("matches Claude's family aliases to the catalog models switched off in Settings", async () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "claude-code" };
+		configState.loaded = true;
+		configState.options = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "default",
+			choices: [{ value: "default", name: "Default" }, { value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }, { value: "haiku", name: "Haiku" }],
+		}];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-opus-5-5"] } } }, error: undefined, response: { status: 200 } }
+			: path === "/api/v1/agents/{agent}/models"
+				? { data: { agentId: "claude-code", models: [
+					{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+					{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+				] }, error: undefined, response: { status: 200 } }
+				: { data: {}, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("default,sonnet,haiku"));
+	});
+
+	it.each(["opus", undefined])("keeps the current Claude alias label when its concrete model is disabled (snapshot model %s)", async (snapshotModel) => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "claude-code", settings: { model: snapshotModel } };
+		configState.loaded = true;
+		configState.options = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
+			choices: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }],
+		}];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-opus-5-5"] } } }, error: undefined, response: { status: 200 } }
+			: path === "/api/v1/agents/{agent}/models"
+				? { data: { agentId: "claude-code", models: [
+					{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+					{ id: "claude-opus-4-9", label: "Claude Opus 4.9" },
+					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+				] }, error: undefined, response: { status: 200 } }
+				: { data: {}, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
+
+		await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Opus 5.5"));
+		expect(screen.getByTestId("config-option-model")).toHaveTextContent("opus,sonnet");
 	});
 
 	it("does not report idle work before the conversation snapshot loads", () => {
@@ -623,6 +991,11 @@ describe("SessionChatSurface link routing", () => {
 		const localSession = { ...session, id: "session-local-html" };
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		const openInBrowser = vi.fn().mockResolvedValue(undefined);
+		// The link is absolute, so the daemon says which root owns it before the
+		// page is previewed.
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/workspace/resolve"
+			? { data: { sessionId: localSession.id, kind: "workspace", path: "test-ui.html" }, error: undefined }
+			: { data: {}, error: undefined, response: { status: 200 } });
 		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={localSession} onOpenLinkInBrowser={openInBrowser} /></Wrapper>);
 		conversationState.snapshot = {
 			capabilities: [],
@@ -632,6 +1005,30 @@ describe("SessionChatSurface link routing", () => {
 		await waitFor(() => expect(openInBrowser).toHaveBeenCalledWith(
 			expect.stringContaining("/api/v1/sessions/session-local-html/preview/files/test-ui.html"),
 		));
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("does not automatically preview or open an absolute HTML link outside the session", async () => {
+		workspacePathsState.paths = ["test-ui.html"];
+		const localSession = { ...session, id: "session-outside-html" };
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const openInBrowser = vi.fn().mockResolvedValue(undefined);
+		const onOpenFile = vi.fn();
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/workspace/resolve"
+			? { data: { sessionId: localSession.id, kind: "outside", path: "" }, error: undefined }
+			: { data: {}, error: undefined, response: { status: 200 } });
+		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={localSession} onOpenFile={onOpenFile} onOpenLinkInBrowser={openInBrowser} /></Wrapper>);
+		conversationState.snapshot = {
+			capabilities: [],
+			items: [{ kind: "message", id: "assistant-outside-html", sequence: 1, revision: 1, role: "assistant", origin: "provider", text: "Done: [`test-ui.html`](/other-repo/test-ui.html)", streaming: false, createdAt: "2026-08-08T00:00:01Z" }],
+		};
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={localSession} onOpenFile={onOpenFile} onOpenLinkInBrowser={openInBrowser} /></Wrapper>);
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/resolve", {
+			params: { path: { sessionId: localSession.id }, query: { path: "/other-repo/test-ui.html" } },
+		}));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(openInBrowser).not.toHaveBeenCalled();
+		expect(onOpenFile).not.toHaveBeenCalled();
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
@@ -653,8 +1050,6 @@ describe("SessionChatSurface link routing", () => {
 		expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
 	});
 
-	// SessionView owns the switch-agent control on the primary session tab; the chat
-	// surface forwards it into ChatWorkspace.
 	it("forwards session tab actions into the chat workspace", () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -685,351 +1080,6 @@ describe("SessionChatSurface link routing", () => {
 		expect(screen.getByTestId("chat-new-work")).toHaveAttribute("data-disabled", "true");
 	});
 
-	it.each([
-		["workspace file", { workspaceFileActive: true }, undefined],
-		["conversation error", {}, "Could not load conversation"],
-	] as const)("does not acknowledge a switch presentation hidden by a %s", (_name, props, error) => {
-		agentSwitchState.data = [{
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "claude-code",
-			id: "switch-hidden",
-			state: "starting_target",
-			targetHarness: "codex",
-			updatedAt: "2026-08-28T00:00:00Z",
-		}];
-		conversationState.error = error;
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} {...props} />
-			</Wrapper>,
-		);
-
-		expect(visibilityMocks.presentation).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false }));
-	});
-
-	it.each([
-		[
-			"nonterminal progress",
-			{ id: "switch-progress", state: "starting_target" },
-			"in_progress",
-			true,
-		],
-		[
-			"restart recovery",
-			{ id: "switch-recovery", state: "starting_target", errorCode: "target_start_unconfirmed" },
-			"recovery",
-			false,
-		],
-	] as const)("restores durable %s presentation and locks Chat input after reload", async (_name, overrides, outcome, _buttonDisabled) => {
-		agentSwitchState.data = [
-			{
-				agentHandoffStatus: "not_attempted",
-				fromHarness: "claude-code",
-				targetHarness: "codex",
-				...overrides,
-			},
-		];
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", outcome);
-		});
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "true");
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", outcome);
-		if (outcome === "in_progress") {
-			const progress = screen.getByRole("list", { name: "Switching…" });
-			expect(progress.querySelector('[aria-current="step"]')).toHaveTextContent("Starting target agent");
-		} else {
-			expect(screen.queryByRole("list", { name: "Switching…" })).not.toBeInTheDocument();
-		}
-	});
-
-	it("uses a ready Chat controller as the completed takeover proof", async () => {
-		const completedSwitch = {
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "claude-code",
-			id: "switch-completed",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [completedSwitch];
-		conversationState.snapshot = {
-			capabilities: [],
-			controller: { state: "ready" },
-			harness: "codex",
-		};
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface
-					session={{
-						...session,
-						activeAgentSwitch: { ...completedSwitch, state: "target_ready" },
-					}}
-				/>
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"success",
-			);
-		});
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-		expect(screen.queryByRole("list", { name: "Switching…" })).not.toBeInTheDocument();
-	});
-
-	it("reconciles catalogs when the first fetched switch state is already completed", async () => {
-		const completedSwitch = {
-			agentHandoffStatus: "received",
-			fromHarness: "claude-code",
-			id: "switch-terminal-first",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [completedSwitch];
-		conversationState.snapshot = {
-			capabilities: ["config_options"],
-			controller: { state: "ready" },
-			harness: "codex",
-		};
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(clearCatalogsMock).toHaveBeenCalledWith(queryClient, session.id);
-			expect(invalidateCatalogsMock).toHaveBeenCalledWith(queryClient, session.id);
-		});
-		expect(catalogObserverState.enabled).toContain(false);
-		await waitFor(() => expect(catalogObserverState.enabled.at(-1)).toBe(true));
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-	});
-
-	it("waits for a ready or busy controller owned by the target harness", async () => {
-		const completedSwitch = {
-			agentHandoffStatus: "received",
-			fromHarness: "claude-code",
-			id: "switch-target-controller-proof",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [completedSwitch];
-		conversationState.snapshot = {
-			capabilities: ["config_options"],
-			controller: { state: "ready" },
-			harness: "claude-code",
-		};
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [completedSwitch]);
-		const targetSession = {
-			...session,
-			activeAgentSwitch: { ...completedSwitch, state: "target_ready" as const },
-		};
-		const view = render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={targetSession} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"in_progress",
-			);
-		});
-		expect(catalogObserverState.enabled.at(-1)).toBe(false);
-
-		conversationState.snapshot = {
-			capabilities: ["config_options"],
-			controller: { state: "busy" },
-			harness: "codex",
-		};
-		// SessionChatSurface is memoized; in the app the controller transition
-		// re-renders it through the useConversation subscription. Mimic that with a
-		// fresh session reference (same id) so the memo boundary re-reads state.
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...targetSession }} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"success",
-			);
-		});
-		expect(catalogObserverState.enabled.at(-1)).toBe(true);
-	});
-
-	it("ignores completed switch history when a stopped Chat controller reloads", () => {
-		const historicalSwitch = {
-			agentHandoffStatus: "received",
-			fromHarness: "claude-code",
-			id: "switch-historical-completion",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [historicalSwitch];
-		conversationState.snapshot = { capabilities: [], controller: { state: "stopped" } };
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [historicalSwitch]);
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-	});
-
-	it("keeps failure visible until a retry settles, then ignores a later controller stop", async () => {
-		const user = userEvent.setup();
-		const activeSwitch = {
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "claude-code",
-			id: "switch-failed-after-admission",
-			state: "starting_target",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		const failedSwitch = {
-			...activeSwitch,
-			errorCode: "target_binary_missing",
-			state: "failed",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [activeSwitch];
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		const view = render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, activeAgentSwitch: activeSwitch }} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"in_progress",
-			);
-		});
-
-		agentSwitchState.data = [failedSwitch];
-		act(() => {
-			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [failedSwitch]);
-		});
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"failure",
-		);
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveTextContent(
-			"Target agent is not installed",
-		);
-
-		await user.click(screen.getByRole("button", { name: "Close" }));
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-
-		const retrySwitch = {
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "codex",
-			id: "switch-successful-retry",
-			state: "starting_target",
-			targetHarness: "claude-code",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [retrySwitch, failedSwitch];
-		act(() => {
-			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [retrySwitch, failedSwitch]);
-		});
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, activeAgentSwitch: retrySwitch }} />
-			</Wrapper>,
-		);
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"in_progress",
-		);
-
-		const completedRetry = {
-			...retrySwitch,
-			state: "completed",
-		} satisfies AgentSwitchSummary;
-		vi.useFakeTimers();
-		conversationState.snapshot = {
-			capabilities: [],
-			controller: { state: "ready" },
-			harness: "claude-code",
-		};
-		agentSwitchState.data = [completedRetry, failedSwitch];
-		act(() => {
-			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [completedRetry, failedSwitch]);
-		});
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface
-					session={{ ...session, activeAgentSwitch: completedRetry, provider: "claude-code" }}
-				/>
-			</Wrapper>,
-		);
-
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"success",
-		);
-
-		conversationState.snapshot = { capabilities: [], controller: { state: "stopped" } };
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface
-					session={{ ...session, activeAgentSwitch: completedRetry, provider: "claude-code" }}
-				/>
-			</Wrapper>,
-		);
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"success",
-		);
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-
-		act(() => vi.advanceTimersByTime(3_000));
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-	});
-
 	it("keeps a selected shell renderable when the conversation is unavailable", () => {
 		conversationState.snapshot = undefined;
 		conversationState.unavailable = { message: "Controller is unavailable" };
@@ -1054,6 +1104,33 @@ describe("SessionChatSurface link routing", () => {
 
 		expect(screen.getByTestId("shell-target")).toHaveTextContent("shell-1");
 		expect(screen.queryByText("Conversation unavailable")).not.toBeInTheDocument();
+	});
+
+	it("offers the interface switch when the conversation is unavailable", () => {
+		conversationState.snapshot = undefined;
+		conversationState.unavailable = { message: "Controller is unavailable" };
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={session} interfaceSwitch={{ control: <button type="button">Switch to terminal UI</button> }} />
+			</Wrapper>,
+		);
+		expect(screen.getByText("Conversation unavailable")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
+	});
+
+	it("offers the interface switch when the conversation cannot be loaded", () => {
+		conversationState.snapshot = undefined;
+		conversationState.error = "Could not load this conversation.";
+		render(
+			<Wrapper client={new QueryClient()}>
+				<SessionChatSurface session={session} interfaceSwitch={{ control: <button type="button">Switch to terminal UI</button> }} />
+			</Wrapper>,
+		);
+		expect(screen.getByText("Could not load this conversation.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
 	});
 
 	it("remounts the chat workspace when switching between chat sessions", () => {
@@ -1088,18 +1165,25 @@ describe("SessionChatSurface link routing", () => {
 
 
 describe("controller catalogs during an interface handoff", () => {
+	it("hides a stale catalog error while a hibernated controller is offline", () => {
+		configState.error = "the agent controller for this session is not running";
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "hibernated" } };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(screen.getByTestId("config-option-error")).toBeEmptyDOMElement();
+	});
+
 	it.each(["stopped", "connecting", "ready"] as const)("waits through handoff with a %s snapshot, then loads catalogs", (state) => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state } };
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true);
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
 		}
 	});
 
@@ -1107,7 +1191,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 	});
 });
@@ -1132,5 +1216,152 @@ describe("project remembering waits for provider permissions", () => {
 		// session identity to model that notification through the memo boundary.
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(screen.getByTestId("remember-available")).toHaveTextContent("true");
+	});
+});
+
+
+describe("SessionChatSurface continuation identity", () => {
+	it("starts a fresh intent when undo makes a previously continued stop eligible again", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1", latestSequence: 1 };
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		const originalId = conversationCommandState.send.mock.calls[0]![0].clientMessageId;
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "", latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1", latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send.mock.calls[1]![0].clientMessageId).not.toBe(originalId);
+	});
+
+	it("reuses an intent id after an ambiguous failure and changes it for a new stopped turn", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1" };
+		conversationCommandState.send.mockRejectedValueOnce(new Error("response lost"));
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		const first = conversationCommandState.send.mock.calls[0]![0];
+		const second = conversationCommandState.send.mock.calls[1]![0];
+		expect(first.clientMessageId).toBeTruthy();
+		expect(second.clientMessageId).toBe(first.clientMessageId);
+		expect(first).toMatchObject({ text: "Continue from where you stopped.", continuation: true });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-2" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send.mock.calls[2]![0].clientMessageId).not.toBe(first.clientMessageId);
+	});
+});
+
+describe("side command routing", () => {
+	beforeEach(() => {
+		useUiStore.setState({ developerMode: true, sideChats: true });
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: ["resume"] };
+	});
+	afterEach(() => {
+		useUiStore.setState({ developerMode: false, sideChats: false });
+	});
+
+	it.each([
+		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
+		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
+	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
+		useUiStore.setState(flags);
+		sideMocks.create.mockReset();
+		const mainSend = conversationCommandState.send;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={{ ...session, provider }} />
+			</Wrapper>,
+		);
+		await act(async () => {
+			await sideMocks.workspaceSend!("/btw what is this?", undefined, "submission-main");
+		});
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+	});
+
+	it.each(["btw", "side"])(
+		"/%s creates a new side for every new submission and reuses a retry key",
+		async (command) => {
+			sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
+			sideMocks.send.mockReset().mockResolvedValue(undefined);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(
+				<Wrapper client={queryClient}>
+					<SessionChatSurface session={session} />
+				</Wrapper>,
+			);
+			await act(async () => {
+				await sideMocks.workspaceSend!(`/${command} first`, undefined, "submission-1");
+				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+			});
+			expect(sideMocks.create.mock.calls).toEqual([
+				[undefined, true, "submission-1"],
+				[undefined, true, "submission-2"],
+				[undefined, true, "submission-2"],
+			]);
+			expect(sideMocks.send).toHaveBeenNthCalledWith(
+				1,
+				"side-submission-1",
+				"first",
+				undefined,
+				undefined,
+				true,
+				"submission-1",
+			);
+			expect(sideMocks.send).toHaveBeenNthCalledWith(
+				2,
+				"side-submission-2",
+				"second",
+				undefined,
+				undefined,
+				true,
+				"submission-2",
+			);
+		},
+	);
+	it.each(["btw", "side"])("preserves provider /%s when resume is unavailable", async (command) => {
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [] };
+		sideMocks.create.mockReset();
+		const mainSend = vi.fn().mockResolvedValue(undefined);
+		(conversationCommandState as { send?: unknown }).send = mainSend;
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => { await sideMocks.workspaceSend!(`/${command} question`, undefined, "provider-command"); });
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: `/${command} question` }));
+		delete (conversationCommandState as { send?: unknown }).send;
+	});
+});
+
+describe("SessionChatSurface startup recovery", () => {
+	function conversationRefreshes(invalidate: { mock: { calls: unknown[][] } }) {
+		return invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify((filters as { queryKey?: unknown }).queryKey) === JSON.stringify(["conversation", session.id])).length;
+	}
+
+	it("refreshes the controller state when the daemon's recovery check settles", () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const tree = (statusReadiness: "checking" | "unavailable" | "ready") =>
+			<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness }} /></Wrapper>;
+		const view = render(tree("unavailable"));
+		view.rerender(tree("checking"));
+		expect(conversationRefreshes(invalidate)).toBe(0);
+		view.rerender(tree("ready"));
+		expect(conversationRefreshes(invalidate)).toBe(1);
+		view.rerender(tree("ready"));
+		expect(conversationRefreshes(invalidate)).toBe(1);
+	});
+
+	it("leaves a session that was ready from the start alone", () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		expect(conversationRefreshes(invalidate)).toBe(0);
 	});
 });

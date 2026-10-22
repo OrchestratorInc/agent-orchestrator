@@ -19,6 +19,23 @@ const (
 	maxWorkspaceFile = 1 << 20
 )
 
+// requestWorkspaceCheckout is an explicit session-open intent. The worker
+// acknowledges the request immediately and retries only if startup checkout
+// has not already completed.
+func (s *Server) requestWorkspaceCheckout(w http.ResponseWriter, r *http.Request) {
+	orgID, sessionID, ok := workspaceRoute(w, r)
+	if !ok {
+		return
+	}
+	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "workspace.checkout", json.RawMessage(`{}`))
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result)
+}
+
 func (s *Server) listWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 	orgID, sessionID, ok := workspaceRoute(w, r)
 	if !ok {
@@ -200,6 +217,75 @@ func (s *Server) runWorkspaceRequest(
 	orgID, sessionID, kind string,
 	payload json.RawMessage,
 ) (json.RawMessage, bool) {
+	payload, ok := withWorkspaceRepository(w, r, kind, payload)
+	if !ok {
+		return nil, false
+	}
+	return s.runWorkerRequest(w, r, orgID, sessionID, kind, payload, s.workerRequestTimeout)
+}
+
+// withWorkspaceRepository adds the request's optional "repository" query
+// parameter to a workspace request's payload: in a session of a project with
+// additional repositories it selects which checkout the request is about, by
+// folder name or GitHub owner/name; without it the request is about the main
+// repository. A worker that predates multi-repo projects ignores the field.
+// Checking out a branch always concerns the main repository.
+func withWorkspaceRepository(w http.ResponseWriter, r *http.Request, kind string, payload json.RawMessage) (json.RawMessage, bool) {
+	repository := strings.TrimSpace(r.URL.Query().Get("repository"))
+	if repository == "" || !strings.HasPrefix(kind, "workspace.") || kind == "workspace.checkout" {
+		return payload, true
+	}
+	if !validWorkspaceRepositorySelector(repository) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "repository must be a repository folder name or GitHub owner/name.")
+		return nil, false
+	}
+	fields := map[string]json.RawMessage{}
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "The workspace request could not be encoded.")
+			return nil, false
+		}
+	}
+	fields["repository"], _ = json.Marshal(repository)
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The workspace request could not be encoded.")
+		return nil, false
+	}
+	return encoded, true
+}
+
+// validWorkspaceRepositorySelector accepts a checkout folder name or a GitHub
+// owner/name: one or two segments of letters, digits, ".", "-" or "_".
+func validWorkspaceRepositorySelector(value string) bool {
+	if len(value) > 201 {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || len(part) > 100 {
+			return false
+		}
+		for _, character := range part {
+			if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+				character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (s *Server) runWorkerRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	orgID, sessionID, kind string,
+	payload json.RawMessage,
+	timeoutDuration time.Duration,
+) (json.RawMessage, bool) {
 	principal := principalFrom(r)
 	if strings.HasPrefix(kind, "workspace.") {
 		if _, err := s.store.ResumeSession(r.Context(), principal, orgID, sessionID); err != nil {
@@ -208,7 +294,7 @@ func (s *Server) runWorkspaceRequest(
 		}
 	}
 	request, err := s.store.CreateWorkspaceRequest(
-		r.Context(), principal, orgID, sessionID, kind, payload, s.workerRequestTimeout,
+		r.Context(), principal, orgID, sessionID, kind, payload, timeoutDuration,
 	)
 	if err != nil {
 		s.writeWorkspaceStoreError(w, r, err)
@@ -217,7 +303,7 @@ func (s *Server) runWorkspaceRequest(
 
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.NewTimer(s.workerRequestTimeout)
+	timeout := time.NewTimer(timeoutDuration)
 	defer timeout.Stop()
 	for {
 		select {

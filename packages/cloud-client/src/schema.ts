@@ -20,6 +20,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUserProviderConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/providers/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putUserAgentConnection"];
+        post?: never;
+        delete: operations["deleteUserAgentConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -114,13 +148,33 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        get: operations["getProject"];
         put?: never;
         post?: never;
         delete: operations["deleteProject"];
         options?: never;
         head?: never;
         patch: operations["updateProject"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected. */
+        patch: operations["updateProjectSettings"];
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/github/installations": {
@@ -251,6 +305,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/projects/standalone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create a project with no repository. Its sessions start in an empty, git-initialized folder, for a workspace template that brings its own code or work that needs none. It takes the same config as a repository project except additional repositories, and cannot open pull requests. Its repositoryUrl is a placeholder, https://scratch.ao.local/<id>. */
+        post: operations["createStandaloneProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions": {
         parameters: {
             query?: never;
@@ -263,6 +336,25 @@ export interface paths {
         get: operations["listSessions"];
         put?: never;
         post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the reconciler to resume the user's idle-paused sandboxes. */
+        post: operations["wakePausedSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -283,6 +375,65 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionInterfaceTransition"];
+        put?: never;
+        post: operations["startSessionInterfaceTransition"];
+        delete: operations["cancelSessionInterfaceTransition"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["acknowledgeSessionInterfaceTransitionNotice"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        post: operations["retrySessionStartup"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -346,6 +497,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["triggerSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendSessionReviewToWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateSessionPreferences"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["inspectSessionReviewerHarnesses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses/{harness}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["installSessionReviewerHarness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/messages": {
         parameters: {
             query?: never;
@@ -359,6 +626,26 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["sendMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Model and reasoning-effort choices available to this session's agent. */
+        get: operations["listChatModels"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -379,6 +666,46 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["cancelTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["steerTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
         head?: never;
@@ -461,7 +788,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -480,7 +810,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -499,7 +832,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file/diff": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -519,7 +855,10 @@ export interface paths {
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/diff": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -529,6 +868,26 @@ export interface paths {
         };
         /** @description Changed-file summary and line counts relative to the session compare base. */
         get: operations["getWorkspaceDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description The session's repository checkouts: the main one and, for a project with additional repositories, one per additional repository. A checkout's name is the value the workspace endpoints take as ?repository=. A single-repository session lists only the main checkout. */
+        get: operations["listWorkspaceRepositories"];
         put?: never;
         post?: never;
         delete?: never;
@@ -561,7 +920,7 @@ export interface paths {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -569,6 +928,85 @@ export interface paths {
         put: operations["putAgentProviderConnection"];
         post?: never;
         delete: operations["deleteAgentProviderConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sandbox-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the organization's default sandbox provider: the one sessions get when neither the request nor the project picks one (org admins). Only an organization offered more than one provider may set it (409 no_provider_choice otherwise); a provider the deployment does not offer is 403 provider_forbidden. An empty defaultProvider clears the choice. */
+        put: operations["putOrgSandboxProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization may not run on Coder; configured=false when it has no connection. */
+        get: operations["getOrgCoderConfig"];
+        /** @description Create or replace the organization's bring-your-own Coder connection (org admins). The token is required on first save and when baseUrl changes; otherwise an omitted token keeps the stored one. An omitted owner is derived from the token. */
+        put: operations["putOrgCoderConfig"];
+        post?: never;
+        delete: operations["deleteOrgCoderConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        /** @description The coder_parameter inputs the template's active version declares, read from the organization's own Coder connection (or the deployment's Coder when it has none). 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 502 coder_unavailable when Coder cannot be read. */
+        get: operations["getCoderTemplateParameters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The template's parameters with the given draft values applied. A template using Coder's dynamic parameters can declare a parameter only for certain values of another (for example a custom repository URL once "Other" is selected); evaluating with the draft values lists it, and each parameter carries Coder's diagnostics for its value. A template on Coder's classic parameter flow, or a Coder without dynamic parameters, answers with the same static parameters as the GET. 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 422 validation_error for invalid values; 502 coder_unavailable when Coder cannot be read. */
+        post: operations["evaluateCoderTemplateParameters"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -631,7 +1069,13 @@ export interface paths {
         /** @description Publishes one allowlisted event. `agent.activity` carries an explicit
          *     coding-agent lifecycle hook signal. `worker.ready` must identify the
          *     authenticated worker and epoch. `chat.assistant_delta` is fenced by both
-         *     the token epoch and the claimed turn attempt.
+         *     the token epoch and the claimed turn attempt. `workspace.setup` reports
+         *     the outcome of the project's Setup commands and is appended to the
+         *     session's event stream. `workspace.script.step` reports one step of a
+         *     Setup run (its start, live output updates and outcome, and the steps a
+         *     failure skipped); its output is redacted again and bounded before it
+         *     is appended. A control plane that predates an event type refuses it
+         *     with 400 `INVALID_EVENT_TYPE`.
          *      */
         post: operations["publishWorkerEvent"];
         delete?: never;
@@ -733,7 +1177,8 @@ export interface paths {
             cookie?: never;
         };
         /** @description Returns the valid default coding-agent credential selected by the
-         *     session harness. The secret must never be logged or persisted.
+         *     session harness, or the durable reviewer harness when reviewRunId is supplied.
+         *     The secret must never be logged or persisted.
          *      */
         get: operations["getWorkerCredential"];
         put?: never;
@@ -900,6 +1345,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/interface/chat-start-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The session's current worker reports it cannot start the session's
+         *     Chat controller (code CHAT_ADAPTER_UNAVAILABLE: Claude's Chat needs the
+         *     Claude ACP adapter, which the workspace lacks and the worker could not
+         *     install in time; CHAT_START_UNSUPPORTED: the worker cannot start
+         *     sessions in Chat). A session created in Chat that never started (no
+         *     interface transition ever touched it, no turn was claimed or settled,
+         *     and the agent never reported its conversation) moves to tui: its
+         *     terminal launches without the prompt and its queued first turn stays
+         *     for the terminal's turn forwarder, which delivers it once after the
+         *     agent starts (a session whose launch still carries the prompt has that
+         *     turn settled instead), and a failed tui-to-chat interface transition
+         *     carries the notice the desktop shows. A session the person switched to Chat, or
+         *     whose Chat already ran, does not move; the worker then stays on Chat.
+         *     Requires the worker:connect scope. A worker that reports the
+         *     agent.chat-start capability uses it; for one that does not, the
+         *     control plane makes the same move itself at bootstrap and reconnect.
+         *      */
+        post: operations["fallBackWorkerChatStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/terminals/agent": {
         parameters: {
             query?: never;
@@ -957,11 +1435,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Durably accepts one agent notification event for the authenticated worker epoch. */
+        post: operations["publishWorkerNotificationEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCloudNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Returns durable events as JSON, or an SSE replay/live stream when requested with Accept text/event-stream. */
+        get: operations["listCloudNotificationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/{notificationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["markCloudNotificationRead"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markAllCloudNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         EmptyObject: Record<string, never>;
+        AgentNotificationEvent: {
+            eventId: string;
+            /** @enum {string} */
+            type: "needs_input" | "agent_failed" | "agent_completed";
+            /** Format: date-time */
+            occurredAt: string;
+            payload: Record<string, never>;
+        };
+        NotificationAcceptance: {
+            /** @constant */
+            accepted: true;
+            eventId: string;
+            duplicate: boolean;
+        };
+        CloudNotification: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** Format: uuid */
+            projectId?: string;
+            /** Format: uuid */
+            sessionId?: string;
+            /** @constant */
+            source: "cloud";
+            type: string;
+            title: string;
+            body: string;
+            /** @enum {string} */
+            status: "unread" | "read";
+            eventId?: string;
+            metadata: Record<string, never>;
+            /** Format: date-time */
+            resolvedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CloudNotificationEvent: {
+            /** Format: int64 */
+            sequence: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** @enum {string} */
+            kind: "notification_created" | "notification_updated" | "notification_resolved";
+            eventId: string;
+            notification: components["schemas"]["CloudNotification"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotificationPage: {
+            items: components["schemas"]["CloudNotification"][];
+            page: {
+                hasMore: boolean;
+                nextCursor?: string;
+            };
+            unreadCount: number;
+            /** Format: int64 */
+            latestSequence: number;
+        };
+        NotificationEventPage: {
+            items: components["schemas"]["CloudNotificationEvent"][];
+            hasMore: boolean;
+        };
         /** @enum {string} */
         AuthProvider: "workos" | "local";
         /** @enum {string} */
@@ -980,10 +1609,47 @@ export interface components {
             slug: string;
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
+            offering?: components["schemas"]["Offering"];
+        };
+        PutOrgSandboxProviderInput: {
+            /** @description A provider from the organization's offering, or empty to clear the choice. */
+            defaultProvider: string;
+        };
+        /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
+        Offering: {
+            /** @description Sandbox providers the organization may use: coder and freestyle when the deployment offers them, and any other offered provider the capability gate allows. Freestyle sessions are billed; Coder sessions are billed unless the organization holds the coder capability. */
+            providers: string[];
+            /** @description Provider a session gets when none is chosen. With more than one provider, the organization's own choice (PUT /orgs/{orgId}/sandbox-provider) comes first. Then coder for an organization with the coder capability, freestyle for everyone else, then the deployment default when offered, then the first provider, then empty (no cloud sessions). A new project records this provider, so changing it later moves no existing project. */
+            defaultProvider: string;
+            /**
+             * @description off when the deployment has no Stripe configured or the organization is offered no billed provider; self_serve otherwise. Billed sandboxes need a plan for every organization, contract, internal and grandfathered ones included. contract is no longer sent and is kept for older clients.
+             * @enum {string}
+             */
+            billingMode: "self_serve" | "contract" | "off";
+            /**
+             * @description b2b when coder is the only allowed provider, b2c when only other providers are allowed, both for a mix, none when no provider is allowed.
+             * @enum {string}
+             */
+            kind: "b2b" | "b2c" | "both" | "none";
+            /** @description Plan feature flags; empty when none apply. */
+            features: string[];
+            /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
+            customCoder?: boolean;
+            /** @description A Coder session whose worker runs as the dedicated ao-worker user checks the main repository out in the project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). When false, a project's working folder applies only with the workspace user. Absent from older control planes; clients treat absent as false. */
+            coderWorkerWorkingFolder?: boolean;
+        };
+        /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
+        SandboxProviders: {
+            available: string[];
+            default: string;
         };
         CurrentAccount: {
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
+            offering?: components["schemas"]["Offering"];
+            sandboxProviders?: components["schemas"]["SandboxProviders"];
+            /** @description Harnesses a session can start in, or switch to, Chat with. */
+            chatHarnesses?: string[];
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -1021,6 +1687,263 @@ export interface components {
             hasMore: boolean;
             nextCursor?: string;
         };
+        /** @enum {string} */
+        CloudAgentHarness: "claude-code" | "codex" | "cursor" | "opencode";
+        ProjectAgentConfig: {
+            model?: string;
+            /**
+             * @description Cursor CLI mode. Omit or use an empty string for the agent default.
+             * @enum {string}
+             */
+            mode?: "" | "plan" | "ask";
+            /**
+             * @description Reasoning effort for Codex or Claude Code. Claude Code does not accept xhigh.
+             * @enum {string}
+             */
+            effort?: "" | "low" | "medium" | "high" | "xhigh" | "max";
+            /**
+             * @description Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+             * @enum {string}
+             */
+            permissions?: "" | "default" | "auto" | "accept-edits" | "bypass-permissions";
+        };
+        ProjectRoleConfig: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectRoleConfigPatch: {
+            agent?: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectReviewer: {
+            harness: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        /** @description Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence. */
+        ProjectConfig: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            worker?: components["schemas"]["ProjectRoleConfig"];
+            orchestrator?: components["schemas"]["ProjectRoleConfig"];
+            /** @description Empty or absent uses the session agent for reviews. */
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
+            autoReview?: boolean;
+            coder?: components["schemas"]["ProjectCoderConfig"];
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
+            repos?: components["schemas"]["ProjectAdditionalRepositories"];
+            agentStartsIn?: components["schemas"]["ProjectAgentStartsIn"];
+            workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
+            agentRules?: components["schemas"]["ProjectRules"];
+            orchestratorRules?: components["schemas"]["ProjectRules"];
+            /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
+            source?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
+        ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
+        ProjectRepository: {
+            /**
+             * Format: uri
+             * @description https://github.com/<owner>/<name>; stored canonicalized.
+             */
+            url: string;
+            /** @description Branch to clone; empty clones the repository's default branch. */
+            branch?: string;
+        };
+        /**
+         * @description Where the coding agent starts: repository (the default) is the main repository's checkout, with access to every other checkout; parent is the folder that holds every checkout.
+         * @enum {string}
+         */
+        ProjectAgentStartsIn: "repository" | "parent";
+        /** @description Where sessions work in a bring-your-own Coder workspace when AO runs as the workspace user, for example ~/work/{repo}; it overrides the Coder connection's working directory. Ignored otherwise. */
+        ProjectWorkingDirectory: string;
+        /** @description Standing instructions added to every session's system prompt (agentRules for workers, orchestratorRules for orchestrators). Only organization owners and admins may set them, like repos, agentStartsIn and workingDirectory. */
+        ProjectRules: string;
+        ProjectScriptStep: {
+            command: string;
+            /**
+             * Format: uri
+             * @description The project repository the command runs in (its URL, the main repository or one of repos); absent runs it in the main repository's checkout. Accepted on input only: the project stores every step as a plain command, a step in an additional repository as "(\ncd -- '../<folder>' || exit 1\n<command>\n)", so releases that predate per-repository steps keep and run it.
+             */
+            repository?: string;
+            /** @description The step's own time limit in whole minutes; absent is the default, 30 for a Setup step and 10 for a Cleanup step. Accepted on input only: a step with a limit is stored as a plain command led by the shell comment line "# ao-timeout: <N>m", so releases that predate per-step limits keep and run it (with their default limit). */
+            timeoutMinutes?: number;
+        };
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within its time limit (30 minutes unless the step sets timeoutMinutes, 1 to 120); a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder, Freestyle and Docker), best effort, each within its time limit (10 minutes unless the step sets timeoutMinutes) and the whole run within the sum of them (at least 10 minutes, at most 2 hours). Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. A stored step whose first line is "# ao-timeout: <N>m" runs with a time limit of N minutes (1 to 120). Only organization owners and admins may set them. */
+        ProjectScriptCommands: (string | components["schemas"]["ProjectScriptStep"])[];
+        /** @description Coder dev-kit settings inherited by every Coder session of the project. */
+        ProjectCoderConfig: {
+            /**
+             * Format: uuid
+             * @description Coder template; absent uses the organization or deployment default.
+             */
+            templateId?: string;
+            /** @enum {string} */
+            size?: "small" | "medium" | "large";
+            startupScript?: string;
+            extraRepos?: components["schemas"]["ProjectCoderRepository"][];
+            workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+            parameters?: components["schemas"]["CoderTemplateParameterValues"];
+        };
+        /** @description Values for the chosen template's coder_parameter inputs, by parameter name. A list(string) value is a JSON array string and a bool is "true" or "false". Requires a chosen template; names must be parameters the template declares. At workspace create they override the organization connection's parameters and are overridden by size and startupScript. */
+        CoderTemplateParameterValues: {
+            [key: string]: string;
+        };
+        CoderTemplateParameter: {
+            name: string;
+            displayName: string;
+            description: string;
+            /** @description Coder parameter type: "string", "number", "bool" or "list(string)". */
+            type: string;
+            /** @description Coder's form hint (for example dropdown, multi-select, switch); may be empty. */
+            formType: string;
+            /** @description False when the value can only be set when a workspace is created. */
+            mutable: boolean;
+            required: boolean;
+            defaultValue: string;
+            options: {
+                name: string;
+                value: string;
+                description: string;
+            }[];
+            order: number;
+            /** @description Coder's problems with the parameter's value; only set when evaluated against draft values. */
+            diagnostics?: {
+                /** @description "error" or "warning". */
+                severity: string;
+                summary: string;
+                detail?: string;
+            }[];
+        };
+        OrgCoderConfig: {
+            baseUrl: string;
+            owner: string;
+            templateId: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            startupTimeoutSeconds?: number;
+            workerUser: components["schemas"]["CoderWorkerUser"];
+            /** @description Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. */
+            readyProbe?: string;
+            /** @description Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user. */
+            reuseExistingCheckout: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. */
+            protectSecretFiles: boolean;
+        };
+        /**
+         * @description Who runs AO's worker and agent in the workspace: a dedicated ao-worker user (default; added to the docker group when one exists), or the workspace's own login user with its real HOME, groups and environment.
+         * @enum {string}
+         */
+        CoderWorkerUser: "ao-worker" | "workspace";
+        OrgCoderConfigResponse: {
+            configured: boolean;
+            /** @description The organization may save a connection (it holds the coder capability). False for an organization that may only read and clear a stored connection. Absent from older control planes, which only answer organizations that may save. */
+            editable?: boolean;
+            coderConfig?: components["schemas"]["OrgCoderConfig"];
+            validationState?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        PutOrgCoderConfigInput: {
+            /** @description Coder API token. Required on first save and when baseUrl changes; omit to keep the stored token. */
+            token?: string;
+            baseUrl: string;
+            /** @description Omit to derive from the token. */
+            owner?: string;
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            /** @description 0 (default 20 minutes) or 60..7200. */
+            startupTimeoutSeconds?: number;
+            workerUser?: components["schemas"]["CoderWorkerUser"];
+            readyProbe?: string;
+            /** @description 0 (default 900 when readyProbe is set) or 30..3600. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Omit for the default (true with the workspace user). */
+            reuseExistingCheckout?: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. Omit to keep the stored value (true when never set). */
+            protectSecretFiles?: boolean;
+        };
+        ProjectCoderRepository: {
+            /** Format: uri */
+            url: string;
+            branch?: string;
+        };
+        /** @description Names new Coder workspaces <prefix>-<short session id> (at most 32 characters). Lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen. Empty keeps the default ao-<id>; existing sessions keep their workspace. */
+        CoderWorkspaceNamePrefix: string;
+        ProjectSettingsConfigPatch: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            /** @description Null removes the worker override and uses the session agent selection. */
+            worker?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            /** @description Null removes the orchestrator override and uses the session agent selection. */
+            orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            autoReview?: boolean;
+            /** @description Only the workspace name prefix and the template parameters are editable after the project is created. parameters replaces the stored values as a whole and needs a project with a chosen template. */
+            coder?: {
+                workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+                parameters?: components["schemas"]["CoderTemplateParameterValues"];
+            };
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
+            repos?: components["schemas"]["ProjectAdditionalRepositories"];
+            agentStartsIn?: components["schemas"]["ProjectAgentStartsIn"];
+            workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
+            agentRules?: components["schemas"]["ProjectRules"];
+            orchestratorRules?: components["schemas"]["ProjectRules"];
+        };
+        ProjectSettingsInput: {
+            displayName?: string;
+            defaultBranch?: string;
+            config?: components["schemas"]["ProjectSettingsConfigPatch"];
+        };
+        CreateStandaloneProjectInput: {
+            displayName: string;
+            config?: components["schemas"]["ProjectConfig"];
+        };
+        WorkspaceRepositoryList: {
+            repositories: components["schemas"]["WorkspaceRepository"][];
+        };
+        WorkspaceRepository: {
+            /** @description The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session. */
+            name: string;
+            /** @description The name to show when it differs from the folder name, such as the main repository's own name. */
+            label?: string;
+            /** @description The repository's GitHub owner/name, when it is on GitHub. */
+            repository?: string;
+            /** @description Branch an additional repository was cloned from. */
+            branch?: string;
+            main?: boolean;
+            /** @description False for an additional repository that could not be cloned. */
+            present: boolean;
+        };
+        ProjectResponse: {
+            project: components["schemas"]["Project"];
+        };
         Project: {
             /** Format: uuid */
             id: string;
@@ -1032,9 +1955,9 @@ export interface components {
             defaultBranch: string;
             /** @description GitHub's integer repository ID encoded as a decimal string to preserve precision. */
             githubRepositoryId?: string;
-            config: {
-                [key: string]: unknown;
-            };
+            /** @description True for a project with no repository; its repositoryUrl is a placeholder that is never cloned. */
+            standalone?: boolean;
+            config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1048,6 +1971,7 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+            coder?: components["schemas"]["ProjectCoderConfig"];
         };
         UpdateProjectInput: {
             displayName: string;
@@ -1079,6 +2003,11 @@ export interface components {
             status: components["schemas"]["GitHubInstallationStatus"];
             /** @enum {string} */
             repositorySelection: "all" | "selected";
+            /**
+             * @description installation: the installation's whole repository selection. user: only the repositories the connecting user can access on GitHub.
+             * @enum {string}
+             */
+            accessScope?: "installation" | "user";
             syncStatus: components["schemas"]["GitHubSyncStatus"];
             /** Format: date-time */
             lastSyncedAt?: string;
@@ -1159,6 +2088,8 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude-code" | "codex" | "cursor";
                 prompt?: string;
+                /** @description The user's default session interface, as on a session create. With it the orchestrator starts in chat where its harness can; omitted, it starts in tui. The workers it spawns resolve their interface from the default stored here when the orchestrator is created, not from the user's current default. */
+                defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
             };
         };
         CreateGitHubScratchProjectResponse: {
@@ -1210,6 +2141,10 @@ export interface components {
             prompt: string;
             agentSessionId?: string;
             mode: components["schemas"]["SessionMode"];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
+            /** @description Coding-agent model to launch with; empty uses the harness default. */
+            model?: string;
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
             deniedCommands: string[];
             /** Format: uri */
             repositoryUrl: string;
@@ -1281,7 +2216,7 @@ export interface components {
             /** @enum {string} */
             harness: "claude-code" | "codex" | "cursor";
             /** @enum {string} */
-            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "notification" | "session-end";
+            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "stop-failure" | "notification" | "session-end";
             state?: components["schemas"]["SessionActivityState"];
             toolName?: string;
             toolUseId?: string;
@@ -1295,7 +2230,132 @@ export interface components {
             type: "agent.activity";
             payload: components["schemas"]["WorkerActivityPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"];
+        WorkerSetupPayload: {
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "timed_out";
+            /** @description The 1-based Setup command that failed or timed out; absent on success. */
+            step?: number;
+            /** @description The failed command's exit status; -1 when it timed out or could not run. */
+            exitCode: number;
+            durationMs: number;
+            /** @description Redacted tail of the failed (or last) command's combined output, at most 2 KiB. */
+            output?: string;
+            /** @description The failed step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. */
+            command?: string;
+            /** @description The repository folder the failed step ran in; absent for the main repository. */
+            repository?: string;
+            /** @description The directory the failed step ran in. */
+            dir?: string;
+            /** @description The Linux user the failed step ran as. */
+            user?: string;
+            /** @description The Linux groups the failed step ran with. */
+            groups?: string[];
+            /** @description The file in the sandbox that holds the failed step's full output. */
+            logPath?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+            /** @description The failed step's time limit in minutes; absent from a worker that predates per-step limits (the step had the Setup default, 30 minutes). */
+            timeoutMinutes?: number;
+            /** @description Set by the control plane, true on the event served to someone outside the session's organization (a share-grant holder): output, logPath, user, groups, dir and hint are absent. */
+            outputHidden?: boolean;
+        };
+        WorkerSetupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.setup";
+            payload: components["schemas"]["WorkerSetupPayload"];
+        };
+        /** @description One step of a project's Setup or Cleanup run. The newest event for a run's step carries everything needed to show it: a live update repeats the step's facts with the latest output tail. */
+        ScriptStepPayload: {
+            /** @enum {string} */
+            phase: "setup" | "cleanup";
+            /** @description The same for every step of one run of the whole list. */
+            runId: string;
+            /** @description 1-based. */
+            step: number;
+            /** @description Number of steps in the run. */
+            total: number;
+            /** @description The step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. Empty when a Cleanup run's output no longer names it. */
+            command: string;
+            /** @description The repository folder the step ran in; empty for the main repository. */
+            repository: string;
+            /**
+             * @description skipped is a step that never ran because an earlier one failed; it is sent once, at the end of the run.
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "failed" | "timed_out" | "skipped";
+            /** @description Set once the step finished (not on running or skipped); -1 when it timed out or could not run. */
+            exitCode?: number;
+            /**
+             * Format: date-time
+             * @description When the step started. Absent on a skipped step and on a Cleanup step whose start the output no longer shows.
+             */
+            startedAt?: string;
+            /** @description Set once the step finished, except on a Cleanup step whose start the output no longer shows. */
+            durationMs?: number;
+            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden. */
+            output: string;
+            /** @description True when the output's beginning was dropped. */
+            outputTruncated: boolean;
+            /** @description Set by the control plane, true on an event served to someone outside the session's organization (a share-grant holder): output is empty and logPath, user, groups, dir and hint are absent. Only the organization's members see a run's output. */
+            outputHidden?: boolean;
+            /** @description The file in the sandbox with the full output (for Cleanup, the whole run's). */
+            logPath?: string;
+            /** @description The Linux user a failed or timed-out step ran as. */
+            user?: string;
+            /** @description The Linux groups a failed or timed-out step ran with. */
+            groups?: string[];
+            /** @description The directory a failed or timed-out step ran in. */
+            dir?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+            /** @description The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had their kind's default, 30 minutes for Setup and 10 for Cleanup). */
+            timeoutMinutes?: number;
+            /**
+             * Format: date-time
+             * @description Set by the control plane on a running step's live update: when the step last wrote any output, by the control plane's clock (from the worker's outputAgeMs). It moves even when the output tail looks the same (a repeated line, a progress line redrawn with a carriage return): a worker updates a step that keeps writing at least every minute. Absent from an older worker; clients then use the event's createdAt.
+             */
+            outputAt?: string;
+        };
+        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
+        WorkerScriptStepEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"] & {
+                /** @enum {string} */
+                phase?: "setup";
+                /** @description On a running step's live update: how many milliseconds before the update the step last wrote any output. The control plane turns it into outputAt with its own clock and does not keep it; an outputAt the worker sends is replaced. */
+                outputAgeMs?: number;
+            };
+        };
+        /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands) and start the terminal agent a switch to the terminal made meanwhile. A failure becomes the session's startup error and stays until a later ready report clears it. */
+        WorkerWorkspaceStartupPayload: {
+            /** @enum {string} */
+            status: "failed" | "ready";
+            /**
+             * @description Required when status is failed.
+             * @enum {string}
+             */
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed";
+            /** @description User-facing explanation; required when status is failed. */
+            message?: string;
+            /** @description Redacted excerpt, for Setup the failed command's output tail. */
+            detail?: string;
+        };
+        WorkerWorkspaceStartupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.startup";
+            payload: components["schemas"]["WorkerWorkspaceStartupPayload"];
+        };
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"] | components["schemas"]["WorkerScriptStepEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;
@@ -1341,6 +2401,31 @@ export interface components {
             deniedCommands?: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
+            branch?: string;
+        };
+        ChatMessageInput: {
+            text: string;
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ChatApprovalDecisionInput: {
+            decisionId: string;
+        };
+        ChatModel: {
+            id: string;
+            displayName: string;
+            description?: string;
+            default: boolean;
+            efforts?: string[];
+            defaultEffort?: string;
+        };
+        ChatModelsResponse: {
+            models: components["schemas"]["ChatModel"][];
         };
         SendMessageInput: {
             text: string;
@@ -1519,6 +2604,13 @@ export interface components {
             /** @description Worker-safe failure message, limited by the server to 4 KiB. */
             message: string;
         };
+        WorkerChatStartFallbackInput: {
+            /** @enum {string} */
+            code: "CHAT_ADAPTER_UNAVAILABLE" | "CHAT_START_UNSUPPORTED";
+        };
+        WorkerChatStartFallbackResponse: {
+            movedToTui: boolean;
+        };
         WorkerAgentTerminalResponse: {
             /** Format: uuid */
             terminalId: string;
@@ -1542,6 +2634,47 @@ export interface components {
                 desiredState: "deleted";
             };
         };
+        SessionResponse: {
+            session: components["schemas"]["Session"];
+        };
+        /** @enum {string} */
+        SessionInterfaceMode: "tui" | "chat";
+        /** @enum {string} */
+        SessionInterfaceTransitionPolicy: "drain" | "interrupt";
+        /** @enum {string} */
+        SessionInterfaceTransitionPhase: "requested" | "preflighting" | "draining" | "source_stopping" | "source_stopped" | "target_starting" | "activating" | "completed" | "failed" | "cancelled" | "recovery_required";
+        SessionInterfaceTransition: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sessionId: string;
+            sourceMode: components["schemas"]["SessionInterfaceMode"];
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            phase: components["schemas"]["SessionInterfaceTransitionPhase"];
+            nativeConversationId?: string;
+            errorCode?: string;
+            errorDetail?: string;
+            /** Format: date-time */
+            noticeAcknowledgedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            completedAt?: string;
+        };
+        SessionInterfaceTransitionStatus: {
+            supported: boolean;
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            reasonCode?: string;
+            reason?: string;
+            transition?: components["schemas"]["SessionInterfaceTransition"];
+        };
+        StartSessionInterfaceTransitionInput: {
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+        };
         Session: {
             /** Format: uuid */
             id: string;
@@ -1551,22 +2684,47 @@ export interface components {
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            reviewerHarness?: string;
+            autoReviewEnabled: boolean;
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            terminateOnPrMerge: boolean;
             displayName: string;
             branch: string;
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launched with; empty means the harness default. */
+            model?: string;
             deniedCommands: string[];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
             status: components["schemas"]["SessionStatus"];
             capabilities?: components["schemas"]["AgentCapability"][];
             runtimeConnected: boolean;
             runtimeState?: string;
             runtimeError?: string;
+            startupError?: components["schemas"]["SessionStartupError"];
+            /**
+             * Format: uri
+             * @description The session's workspace page on the organization's own (bring-your-own) Coder deployment, as <baseUrl>/@<owner>/<workspace name>. Present only for sessions on a bring-your-own Coder connection, from the session's creation (the workspace may not exist yet); never set for AO's managed Coder or other providers.
+             */
+            coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
+        SessionStartupError: {
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
+            code: string;
+            /** @description Human-readable explanation suitable for display as-is. */
+            message: string;
+            /** Format: date-time */
+            at: string;
+            /** @description Redacted detail behind the error: operator detail for an organization's own (bring-your-own) compute, and the failed command's output for project_setup_failed. */
+            detail?: string;
         };
         CreateSessionInput: {
             /** Format: uuid */
@@ -1577,10 +2735,35 @@ export interface components {
             prompt: string;
             /** @default trusted */
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
+            model?: string;
             /** @default [] */
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+        };
+        UpdateSessionPreferencesInput: {
+            reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
+            autoReviewEnabled?: boolean;
+            autoInjectCI?: boolean;
+            autoInjectReview?: boolean;
+            terminateOnPrMerge?: boolean;
+        };
+        /** @enum {string} */
+        CloudReviewerHarness: "claude-code" | "codex" | "cursor";
+        HarnessStatus: {
+            harness: components["schemas"]["CloudReviewerHarness"];
+            /** @enum {string} */
+            status: "missing" | "ready" | "failed";
+            version?: string;
+            error?: string;
+        };
+        HarnessInspectResponse: {
+            harnesses: components["schemas"]["HarnessStatus"][];
         };
         SessionPage: {
             items: components["schemas"]["Session"][];
@@ -1665,6 +2848,14 @@ export interface components {
             pullRequestUrl: string;
             conflictFiles: components["schemas"]["PullRequestConflictFile"][];
         };
+        /** @description The person who started the session behind a pull request the AO GitHub App opened, so its author is the App's bot. Shown only to organization members. */
+        PullRequestOpener: {
+            /** @description Their AO display name; empty when they have none. */
+            name: string;
+            /** @description Their GitHub login, when they connected GitHub to AO. */
+            githubLogin?: string;
+            avatarUrl?: string;
+        };
         PullRequestSummary: {
             url: string;
             htmlUrl?: string;
@@ -1675,6 +2866,7 @@ export interface components {
             repository: string;
             author: string;
             authorAvatarUrl?: string;
+            openedBy?: components["schemas"]["PullRequestOpener"];
             sourceBranch: string;
             targetBranch: string;
             headSha: string;
@@ -1713,6 +2905,8 @@ export interface components {
             sessionId: string;
             batchId: string;
             harness: string;
+            /** @enum {string} */
+            triggerSource: "manual" | "auto";
             pullRequestUrl: string;
             targetSha: string;
             status: components["schemas"]["AOReviewRunStatus"];
@@ -1740,6 +2934,7 @@ export interface components {
             sessionId: string;
             reviewerHandleId?: string;
             reviewerHarness?: string;
+            availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
         };
@@ -1751,6 +2946,8 @@ export interface components {
             type: "chat.user_message";
             payload: {
                 text: string;
+                /** Format: uuid */
+                turnId?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -1837,7 +3034,33 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"];
+        TurnSteeredEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steered";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. A step's live updates (status running) are deleted once its final event is stored, so a replay shows only the final event and sequences may skip. */
+        ScriptStepEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -1923,18 +3146,30 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ProviderName: "daytona" | "claude-code" | "codex" | "cursor";
+        ProviderName: "daytona" | "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder" | "nodeops";
         ProviderPublicConfig: {
             /** Format: uri */
             apiUrl?: string;
             /** @enum {string} */
             target?: "us" | "eu";
             /** @enum {string} */
-            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json" | "personal_access_token" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** Format: uri */
+            baseUrl?: string;
+            owner?: string;
+            /** Format: uuid */
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
         };
         PutAgentProviderConnectionInput: {
             /** @enum {string} */
-            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json";
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
             secret: string;
         };
         WorkerCredentialResponse: {
@@ -2036,6 +3271,8 @@ export interface components {
         OrgId: string;
         ProjectId: string;
         SessionId: string;
+        /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+        WorkspaceRepository: string;
         TurnId: string;
         WorkerRequestId: string;
         TerminalId: string;
@@ -2050,6 +3287,8 @@ export interface components {
         EventLimit: number;
         /** @description Return events with a sequence strictly greater than this value. */
         After: number;
+        /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+        EventTypes: string[];
         /** @description Reusing a key with the same command returns the original result.
          *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
          *      */
@@ -2078,6 +3317,79 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CurrentAccount"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserProviderConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted provider connections owned by the authenticated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnections: components["schemas"]["RedactedProviderConnection"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The validated personal coding-agent credential was encrypted and stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnection: components["schemas"]["RedactedProviderConnection"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -2252,6 +3564,30 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project and normalized settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     deleteProject: {
         parameters: {
             query?: never;
@@ -2301,6 +3637,34 @@ export interface operations {
                     "application/json": {
                         project: components["schemas"]["Project"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Validated settings persisted atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2498,6 +3862,38 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    createStandaloneProject: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStandaloneProjectInput"];
+            };
+        };
+        responses: {
+            /** @description Standalone project created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -2559,6 +3955,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    wakePausedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resume requests were accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        woken: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSession: {
         parameters: {
             query?: never;
@@ -2604,6 +4026,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch readiness and the active transition, if any. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterfaceTransitionStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSessionInterfaceTransitionInput"];
+            };
+        };
+        responses: {
+            /** @description Interface switch accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface switch cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    acknowledgeSessionInterfaceTransitionNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch failure or recovery notice acknowledged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    retrySessionStartup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retry was accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
                 };
             };
             default: components["responses"]["Error"];
@@ -2684,6 +4235,172 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    triggerSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current commit was already reviewed or is ineligible. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            /** @description A reviewer terminal was started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review state after cancellation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendSessionReviewToWorker: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored review was accepted and durably queued for the worker agent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSessionPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionPreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cloud session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    inspectSessionReviewerHarnesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported reviewer CLI availability inside the live sandbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessInspectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installSessionReviewerHarness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The installed and verified reviewer CLI. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     sendMessage: {
         parameters: {
             query?: never;
@@ -2701,9 +4418,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    text: string;
-                };
+                "application/json": components["schemas"]["ChatMessageInput"];
             };
         };
         responses: {
@@ -2716,6 +4431,30 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listChatModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available Chat models. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2751,12 +4490,79 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    steerTurn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageInput"];
+            };
+        };
+        responses: {
+            /** @description Guidance for the active turn accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["TurnSteeredEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideChatApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatApprovalDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Approval decision accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     replayClientEvents: {
         parameters: {
             query?: {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
                 limit?: components["parameters"]["EventLimit"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {
@@ -2784,6 +4590,8 @@ export interface operations {
             query?: {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {
@@ -2864,6 +4672,8 @@ export interface operations {
     listWorkspaceFiles: {
         parameters: {
             query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path?: string;
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
@@ -2892,6 +4702,8 @@ export interface operations {
     readWorkspaceFile: {
         parameters: {
             query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path: string;
             };
             header?: never;
@@ -2917,7 +4729,10 @@ export interface operations {
     };
     writeWorkspaceFile: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -2946,6 +4761,8 @@ export interface operations {
     readWorkspaceDiffFile: {
         parameters: {
             query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
                 path: string;
             };
             header?: never;
@@ -2972,7 +4789,10 @@ export interface operations {
     };
     getWorkspaceDiff: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -2992,6 +4812,30 @@ export interface operations {
                 };
             };
             501: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkspaceRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's repository checkouts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRepositoryList"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -3026,7 +4870,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3056,7 +4900,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -3068,6 +4912,174 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgSandboxProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgSandboxProviderInput"];
+            };
+        };
+        responses: {
+            /** @description The organization's offering with its new default provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Offering"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection, or configured=false when there is none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgCoderConfigInput"];
+            };
+        };
+        responses: {
+            /** @description The validated connection was stored; the token is never returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description connection_in_use: sessions not yet fully deleted still run on the connection, so it is kept. Remove their projects or sessions first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template's parameters in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    evaluateCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Draft parameter values by name, encoded as in project config coder.parameters. */
+                    values: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The template's parameters for these values, in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -3291,7 +5303,10 @@ export interface operations {
     };
     getWorkerCredential: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Select the snapshotted reviewer credential for a running review owned by this session. */
+                reviewRunId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3595,6 +5610,37 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    fallBackWorkerChatStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerChatStartFallbackInput"];
+            };
+        };
+        responses: {
+            /** @description Whether the session moved to tui. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerChatStartFallbackResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            404: components["responses"]["WorkerRoutesDisabled"];
+            /** @description The code is not one the control plane knows. */
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
     ensureWorkerAgentTerminal: {
         parameters: {
             query?: never;
@@ -3678,6 +5724,146 @@ export interface operations {
             401: components["responses"]["WorkerUnauthorized"];
             403: components["responses"]["WorkerScopeRequired"];
             409: components["responses"]["Error"];
+        };
+    };
+    publishWorkerNotificationEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentNotificationEvent"];
+            };
+        };
+        responses: {
+            /** @description The exact event was already durably accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            /** @description The event was durably accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listCloudNotifications: {
+        parameters: {
+            query?: {
+                status?: "all" | "unread" | "read";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recipient-scoped cloud notification inbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCloudNotificationEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered durable cloud notification events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEventPage"];
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markCloudNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                notificationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    status: "read";
+                };
+            };
+        };
+        responses: {
+            /** @description The notification was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markAllCloudNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every unread notification for the current recipient was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
         };
     };
 }

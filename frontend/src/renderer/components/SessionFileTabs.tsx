@@ -39,12 +39,14 @@ export function SessionFileTabs({
 }
 
 export function SessionFileTab({
+ sourceLabel,
 	active,
 	dirty = false,
 	onActivate,
 	onClose,
 	path,
 }: {
+ sourceLabel?: string;
 	active: boolean;
 	dirty?: boolean;
 	onActivate: () => void;
@@ -52,7 +54,7 @@ export function SessionFileTab({
 	path: string;
 }) {
 	const { t } = useTranslation();
-	const name = basename(path);
+	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
 	// The close button overlays the file icon's slot and replaces it on hover,
 	// matching the shell terminal tabs. A dirty file keeps an always-visible dot
 	// in that slot; the dot swaps to the cross on hover.
@@ -78,10 +80,10 @@ export function SessionFileTab({
 							<>
 								<span
 									aria-hidden="true"
-									className="size-2 rounded-full bg-foreground group-hover:hidden"
+									className="size-2 rounded-full bg-foreground group-hover:hidden group-focus-within:hidden"
 									data-testid="unsaved-tab-indicator"
 								/>
-								<X aria-hidden="true" className="hidden size-icon-sm group-hover:block" />
+								<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-focus-within:block" />
 							</>
 						) : <X className="size-icon-sm" aria-hidden="true" />}
 					</button>
@@ -102,7 +104,7 @@ export function SessionFileTab({
 				onClick: onActivate,
 				role: "tab",
 				tabIndex: active ? 0 : -1,
-				title: path,
+				title: sourceLabel ? `${path} · ${sourceLabel}` : path,
 				type: "button",
 			}}
 			className="max-w-shell-tab-max"

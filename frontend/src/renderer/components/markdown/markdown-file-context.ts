@@ -1,8 +1,13 @@
+import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
 import { createContext } from "react";
 
 export type MarkdownFileContextValue = {
 	sessionId: string;
+	hostId?: string;
 	filePath: string;
+	/** Origin serving an artifact directory; set only for session artifact markdown. */
+	artifactOrigin?: string;
+ snapshotSource?: Extract<FilesSource,{kind:"snapshot"}>;
 	/**
 	 * The file detail's load timestamp. The blob route sets `no-store`, so this is
 	 * what makes a rewritten image reload — see `buildWorkspaceBlobUrl`.

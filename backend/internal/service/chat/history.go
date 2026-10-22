@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,9 @@ var (
 	ErrForkUnsupported = errors.New("chat driver cannot fork a conversation")
 	// ErrRenameUnsupported reports a provider whose thread carries no title.
 	ErrRenameUnsupported = errors.New("chat driver cannot set a thread title")
+	// ErrOrchestratorRename refuses a title for the project orchestrator's
+	// conversation: the orchestrator is never renamed.
+	ErrOrchestratorRename = errors.New("the project orchestrator cannot be renamed")
 	// ErrTurnRunning refuses a rollback while the agent is working. Retryable once
 	// the turn ends, which is why it is separate from every other refusal here.
 	ErrTurnRunning = errors.New("cannot roll back while a turn is running")
@@ -109,13 +113,11 @@ const maxTitleRunes = 80
 // not. The controller holds its dispatch lock across the check and the call, so
 // within AO the answer cannot change underneath.
 func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID string) (int, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return 0, err
-	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return 0, err
 	}
+	defer release()
 	if _, ok := controller.conv.(ports.ChatRollbacker); !ok {
 		return 0, ErrRollbackUnsupported
 	}
@@ -138,13 +140,11 @@ func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID stri
 // exists so the provider call is written, tested, and honest about what it returns,
 // rather than half-wired into a UI that cannot be correct.
 func (s *Service) ForkConversation(ctx context.Context, id domain.SessionID) (string, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return "", err
-	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err
 	}
+	defer release()
 	forker, ok := controller.conv.(ports.ChatForker)
 	if !ok {
 		return "", ErrForkUnsupported
@@ -165,12 +165,6 @@ func (s *Service) EditMessage(
 	turnID string,
 	msg ports.ChatUserMessage,
 ) (EditMessageResult, error) {
-	gate := s.controllerGate(domain.SessionConversationOwner(id))
-	if err := gate.lock(ctx); err != nil {
-		return EditMessageResult{}, err
-	}
-	defer gate.unlock()
-
 	requestJSON, err := encodeEditDeliveryRequest(turnID, msg)
 	if err != nil {
 		return EditMessageResult{}, err
@@ -197,6 +191,16 @@ func (s *Service) EditMessage(
 			return replayEditDelivery(delivery, requestJSON)
 		}
 	}
+	_, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return EditMessageResult{}, err
+	}
+	defer release()
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	if err := gate.lock(ctx); err != nil {
+		return EditMessageResult{}, err
+	}
+	defer gate.unlock()
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return EditMessageResult{}, err
 	}
@@ -322,7 +326,7 @@ func (s *Service) EditMessage(
 						SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 						DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 						Model: cfg.Model, Effort: cfg.Effort,
-						Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+						Permissions: cfg.Permissions, SystemPrompt: withHandoffNote(cfg.SystemPrompt, sourceBranch.HandoffNote),
 						ProviderScopeID:       sourceBranch.ProviderScopeID,
 						ProviderIDsScoped:     sourceBranch.ProviderIDsScoped,
 						AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -362,7 +366,7 @@ func (s *Service) EditMessage(
 					SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort,
 					Permissions:  cfg.Permissions,
-					SystemPrompt: cfg.SystemPrompt, AdditionalDirectories: cfg.AdditionalDirectories,
+					SystemPrompt: withHandoffNote(cfg.SystemPrompt, sourceBranch.HandoffNote), AdditionalDirectories: cfg.AdditionalDirectories,
 					MCPServers: cfg.MCPServers, ProviderScopeID: providerScopeID, ProviderIDsScoped: true,
 				})
 				if err == nil {
@@ -422,6 +426,8 @@ func (s *Service) EditMessage(
 		CreatedAt: s.now(), Strategy: domain.ConversationBranchStrategyNative,
 		ProviderScopeID:   providerScopeID,
 		ProviderIDsScoped: providerScopeID != "" || sourceBranch.ProviderIDsScoped,
+		// An edit after a switch is still on the agent the switch brought in.
+		HandoffNote: sourceBranch.HandoffNote,
 	}
 	if replayContent.Type != "" {
 		branch.Strategy = domain.ConversationBranchStrategyApproximateContext
@@ -430,7 +436,7 @@ func (s *Service) EditMessage(
 	}
 	conversation := source.conversation
 	conversation.ActiveBranchID = branchID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	if err := s.store.CreateAndActivateConversationBranch(
 		operationCtx, id, branch, generation, s.now(),
 	); err != nil {
@@ -589,7 +595,7 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 func withoutInternalReplayContent(content []ports.ChatContent) []ports.ChatContent {
 	filtered := make([]ports.ChatContent, 0, len(content))
 	for _, item := range content {
-		if ports.IsInternalReplayContent(item) {
+		if item.Internal {
 			continue
 		}
 		filtered = append(filtered, item)
@@ -828,6 +834,11 @@ func (s *Service) persistRejectedEditDelivery(
 // ActivateBranch resumes a durable provider branch in the same worktree and
 // swaps controllers without sending a new prompt.
 func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
+	_, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
 		return "", err
@@ -903,7 +914,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 		SessionID: cfg.SessionID, ProviderConversationID: branch.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cfg.Model, Effort: cfg.Effort,
-		Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		Permissions: cfg.Permissions, SystemPrompt: withHandoffNote(cfg.SystemPrompt, branch.HandoffNote),
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -921,7 +932,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
@@ -1004,11 +1015,18 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("rotate source browser capability after failed native edit: %w", err)
 	}
+	// The source comes back with the settings it had when it stopped, not the
+	// ones it was launched with: the user may have changed them since.
+	conversation := source.conversation
+	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
-		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
-		Model: cfg.Model, Effort: cfg.Effort,
-		Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		// A switch target that never answered may have no native session to resume.
+		FreshIfMissing: s.switchBranchUnanswered(recoveryCtx, conversation.ID, branch),
+		DataDir:        cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
+		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort,
+		Permissions:           cmp.Or(conversation.Settings.ApprovalMode, cfg.Permissions),
+		SystemPrompt:          withHandoffNote(cfg.SystemPrompt, branch.HandoffNote),
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -1016,11 +1034,21 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("resume source after failed native edit: %w", err)
 	}
+	// A fresh start in place of the missing session has its own id, and the
+	// branch must name it before it can be activated.
+	if fresh := provider.ProviderConversationID(); fresh != "" && fresh != providerConversationID {
+		if rebinder, ok := s.store.(branchProviderRebinder); ok {
+			if err := rebinder.RebindUnansweredBranchProvider(recoveryCtx, conversation.ID, branch.ID, providerConversationID, fresh); err != nil {
+				_ = provider.Close()
+				return fmt.Errorf("rebind source after failed native edit: %w", err)
+			}
+		}
+		providerConversationID = fresh
+	}
 	generation := s.newID()
-	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
-		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {
 		_ = provider.Close()
@@ -1115,9 +1143,13 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 	if normalized == "" {
 		return "", ErrTitleRequired
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err
+	}
+	defer release()
+	if controller.conversation.Scope == domain.ConversationScopeProject {
+		return "", ErrOrchestratorRename
 	}
 	renamer, ok := controller.conv.(ports.ChatRenamer)
 	if !ok {
@@ -1125,6 +1157,9 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 	}
 	if err := renamer.SetTitle(ctx, normalized); err != nil {
 		return "", classify(fmt.Errorf("set title for %s: %w", id, err))
+	}
+	if err := controller.applyThreadTitle(ctx, normalized, s.now()); err != nil {
+		return "", err
 	}
 	return normalized, nil
 }

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -23,6 +24,44 @@ func TestParseAttempt(t *testing.T) {
 		if got := parseAttempt(in); got != want {
 			t.Errorf("parseAttempt(%q) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+func TestAdvertisedBuildMatchesArch(t *testing.T) {
+	cases := []struct {
+		expected, arch string
+		want           bool
+	}{
+		{"", "arm64", true},
+		{"amd64", "amd64", true},
+		{" ARM64 ", "arm64", true},
+		{"amd64", "arm64", false},
+		{"arm64", "amd64", false},
+	}
+	for _, tc := range cases {
+		if got := advertisedBuildMatchesArch(tc.expected, tc.arch); got != tc.want {
+			t.Errorf("advertisedBuildMatchesArch(%q, %q) = %v, want %v", tc.expected, tc.arch, got, tc.want)
+		}
+	}
+}
+
+// A worker must never download and re-exec a build for another architecture:
+// with a mismatched AO_WORKER_EXPECTED_ARCH, self-update is a no-op even when the
+// advertised hash differs from the running binary and the endpoint is down.
+func TestSelfUpdateSkipsForeignArchitecture(t *testing.T) {
+	foreign := "arm64"
+	if runtime.GOARCH == "arm64" {
+		foreign = "amd64"
+	}
+	t.Setenv("AO_WORKER_EXPECTED_SHA256", hashHex([]byte("a build for another cpu")))
+	t.Setenv("AO_WORKER_EXPECTED_ARCH", foreign)
+	t.Setenv("AO_WORKER_HELPER_EXPECTED_SHA256", "")
+	dataDir := t.TempDir()
+	if err := selfUpdateIfStale(context.Background(), slog.Default(), "http://127.0.0.1:1", dataDir); err != nil {
+		t.Fatalf("selfUpdateIfStale: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "bin", "ao-worker")); !os.IsNotExist(err) {
+		t.Fatalf("foreign-architecture build was staged: %v", err)
 	}
 }
 

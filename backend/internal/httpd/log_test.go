@@ -12,7 +12,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -87,43 +86,47 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 	}
 }
 
-func TestRequestLoggerSuppressesOnlySagaOwnedSentryCapture(t *testing.T) {
-	tests := []struct {
-		name         string
-		owner        ownership.Owner
-		wantCaptures int
-	}{
-		{name: "pre-admission HTTP owner captures", owner: ownership.OwnerHTTP, wantCaptures: 1},
-		{name: "post-admission saga owner is suppressed", owner: ownership.OwnerAgentSwitchSaga, wantCaptures: 0},
+func TestRequestLoggerIncludesBrowserFailureMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	sink := &captureSink{}
+	handler := requestLogger(log, sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope.SetTelemetryField(r, "browser_command", "snapshot")
+		envelope.WriteError(w, r, apierr.Unavailable("BROWSER_RUNTIME_RECONNECTING", "retry shortly"))
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/browser/commands", nil))
+
+	if len(sink.events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one event", sink.events)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			log := slog.New(slog.NewTextHandler(&buf, nil))
-			sink := &captureSink{}
-			captures := 0
-			handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string) {
-				captures++
-			})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				envelope.WriteError(w, r, ownership.Own(errors.New("switch settlement failed"), tc.owner))
-			}))
+	payload := sink.events[0].Payload
+	if got := payload["browser_command"]; got != "snapshot" {
+		t.Fatalf("payload.browser_command = %#v, want snapshot", got)
+	}
+	if got := payload["runtime_link_state"]; got != "reconnecting" {
+		t.Fatalf("payload.runtime_link_state = %#v, want reconnecting", got)
+	}
+}
 
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/switch-agent", nil))
+func TestRequestLoggerPreservesObservedDisconnectedStateOnTimeout(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	sink := &captureSink{}
+	handler := requestLogger(log, sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope.SetTelemetryField(r, "browser_command", "snapshot")
+		envelope.SetTelemetryField(r, "runtime_link_state", "disconnected")
+		envelope.WriteError(w, r, apierr.Unavailable("BROWSER_COMMAND_TIMEOUT", "timed out"))
+	}))
 
-			if captures != tc.wantCaptures {
-				t.Fatalf("Sentry captures = %d, want %d", captures, tc.wantCaptures)
-			}
-			if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), `"message":"Internal server error"`) {
-				t.Fatalf("response changed: status=%d body=%s", rec.Code, rec.Body.String())
-			}
-			if !strings.Contains(buf.String(), "switch settlement failed") {
-				t.Fatalf("local log lost error: %s", buf.String())
-			}
-			if len(sink.events) != 1 || sink.events[0].Name != "ao.http.5xx" {
-				t.Fatalf("HTTP telemetry events = %#v, want one ao.http.5xx", sink.events)
-			}
-		})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/browser/commands", nil))
+	if len(sink.events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one event", sink.events)
+	}
+	if got := sink.events[0].Payload["runtime_link_state"]; got != "disconnected" {
+		t.Fatalf("runtime_link_state = %#v, want disconnected", got)
 	}
 }
 

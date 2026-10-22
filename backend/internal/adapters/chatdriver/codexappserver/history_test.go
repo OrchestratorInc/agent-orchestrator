@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -269,6 +270,28 @@ func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
 // The provider refuses a rollback while a turn runs. That refusal must reach the
 // caller as a conflict, not as an internal failure: it is an ordinary thing to press
 // undo a moment too early.
+func TestRollbackUsesRevertWhenTheProviderRemovedRollback(t *testing.T) {
+	for _, code := range []int{-32600, -32601} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			conv, srv := openConversation(t)
+			srv.reply("thread/read", threadWithTurns)
+			srv.replyError("thread/rollback", code, "Invalid request: unknown variant `thread/rollback`")
+			srv.reply("thread/revert", `{"thread":{"id":"thread-1"}}`)
+			if err := conv.Rollback(context.Background(), "turn-b"); err != nil {
+				t.Fatal(err)
+			}
+			sent := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/revert" })
+			var params map[string]any
+			if err := json.Unmarshal(sent.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if len(params) != 2 || params["threadId"] != "thread-1" || params["beforeTurnId"] != "turn-b" {
+				t.Fatalf("revert target = %v, want thread-1 before turn-b", params)
+			}
+		})
+	}
+}
+
 func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.reply("thread/read", threadWithTurns)
@@ -280,6 +303,9 @@ func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 	}
 	if !isRefusal(err) {
 		t.Errorf("err = %v, want a provider refusal", err)
+	}
+	if srv.sentMethod("thread/revert") {
+		t.Fatal("a busy refusal must not trigger a destructive fallback")
 	}
 	if !strings.Contains(err.Error(), "turn is in progress") {
 		t.Errorf("err = %v, want the provider's own explanation carried through", err)

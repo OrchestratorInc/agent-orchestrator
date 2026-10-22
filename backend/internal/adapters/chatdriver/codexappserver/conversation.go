@@ -1,6 +1,7 @@
 package codexappserver
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,9 +53,19 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
-	events          chan ports.ChatEvent
+	disableNetwork  bool
+	// launchMode is the permission mode the thread started or resumed with;
+	// a turn without its own approval setting runs under it.
+	launchMode ports.PermissionMode
+	events     chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
+	// Guarded by sendMu: whether the last turn put the thread on the fast tier
+	// or in plan mode, and each model's fast tier id as last listed.
+	fastTier, planMode bool
+	// A reconnected thread may be on any tier and in either collaboration mode.
+	tierUnknown, planUnknown bool
+	fastTiers                map[string]string
 
 	mu      sync.Mutex
 	pending map[string]*parkedRequest
@@ -91,6 +102,7 @@ type conversation struct {
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 
 // Asserted here so a refactor cannot silently drop model listing: the service
 // feature-detects this interface, and a missed method would just mean "no models"
@@ -161,29 +173,40 @@ func (c *conversation) pump() {
 		close(c.events)
 	}()
 	retries := make(map[string]ports.ChatEvent)
+	citations := newCitationFormatter()
+	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		now := time.Now()
+		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
 		// envelope so child-thread recovery cannot settle the root's retry.
 		var scope struct {
 			ThreadID string `json:"threadId"`
 		}
 		_ = json.Unmarshal(n.Params, &scope)
+		citations.observeNotification(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
-		for _, ev := range normalizeNotification(n, time.Now()) {
+		for _, ev := range normalizeNotification(n, now) {
+			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
 			}
 			if threadID == "" {
 				threadID = c.threadID
+			}
+			var visible bool
+			ev, visible = citations.formatEvent(threadID, ev)
+			if !visible {
+				continue
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {
@@ -291,6 +314,25 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	}
 }
 
+// configuredServiceTier is the service_tier the user's Codex config sets, or
+// "" for none or when it cannot be read.
+func (c *conversation) configuredServiceTier(ctx context.Context) string {
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var resp struct {
+		Config struct {
+			ServiceTier string `json:"service_tier"`
+		} `json:"config"`
+	}
+	if err := c.conn.request(readCtx, "config/read", map[string]any{}, &resp); err != nil {
+		return ""
+	}
+	return resp.Config.ServiceTier
+}
+
+// codexFastServiceTier is the fast tier's id before a model list is read.
+const codexFastServiceTier = "priority"
+
 // SendTurn delivers one message to the provider.
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	if strings.TrimSpace(msg.Text) == "" {
@@ -311,7 +353,31 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings, c.readOnly)
+	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
+	// A service tier sticks to the thread once set, so leaving the fast tier
+	// has to be said: an explicit null returns the thread to its default.
+	if msg.Settings.Fast {
+		params["serviceTier"] = cmp.Or(c.fastTiers[msg.Settings.Model], c.fastTiers[c.threadModel], codexFastServiceTier)
+	} else if c.fastTier || c.tierUnknown && c.configuredServiceTier(ctx) == "" {
+		params["serviceTier"] = nil
+	}
+
+	// Plan mode is a collaboration mode, sticky too, so leaving it sends the
+	// default mode. The mode names its model; with none known nothing is sent.
+	planMode := c.planMode
+	if model := cmp.Or(msg.Settings.Model, c.threadModel); (msg.Settings.Plan != c.planMode || c.planUnknown) && model != "" {
+		mode := "default"
+		if msg.Settings.Plan {
+			mode = "plan"
+		}
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if effort := cmp.Or(msg.Settings.Effort, c.threadEffort); effort != "" {
+			settings["reasoning_effort"] = effort
+		}
+		params["collaborationMode"] = map[string]any{"mode": mode, "settings": settings}
+		planMode = msg.Settings.Plan
+	}
+	planKnown := params["collaborationMode"] != nil
 
 	var resp struct {
 		Turn struct {
@@ -321,6 +387,9 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
 	}
+	c.fastTier = msg.Settings.Fast
+	c.planMode = planMode
+	c.tierUnknown, c.planUnknown = false, c.planUnknown && !planKnown
 
 	c.mu.Lock()
 	c.activeTurn = resp.Turn.ID
@@ -334,7 +403,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly bool) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly, disableNetwork bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -354,9 +423,11 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
+		// Reviewers need gh and ao review submit; text-only background calls
+		// explicitly disable that tool network access.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
-		params["sandboxPolicy"] = turnSandboxPolicy("read-only")
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": !disableNetwork}
 	}
 }
 
@@ -383,6 +454,15 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	if err != nil {
 		return nil, err
 	}
+	fastTiers := make(map[string]string, len(models))
+	for _, model := range models {
+		if model.FastTier != "" {
+			fastTiers[model.ID] = model.FastTier
+		}
+	}
+	c.sendMu.Lock()
+	c.fastTiers = fastTiers
+	c.sendMu.Unlock()
 	// Thread settings include the user's config; model/list only has generic defaults.
 	for i := range models {
 		// An omitted turn model inherits thread/start (including config.toml),
@@ -401,16 +481,21 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {
 	type modelListResponse struct {
 		Data []struct {
-			ID          string `json:"id"`
-			Model       string `json:"model"`
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			IsDefault   bool   `json:"isDefault"`
-			Hidden      bool   `json:"hidden"`
-			DefaultEff  string `json:"defaultReasoningEffort"`
+			ID          string   `json:"id"`
+			Model       string   `json:"model"`
+			DisplayName string   `json:"displayName"`
+			Description string   `json:"description"`
+			IsDefault   bool     `json:"isDefault"`
+			Hidden      bool     `json:"hidden"`
+			DefaultEff  string   `json:"defaultReasoningEffort"`
+			Inputs      []string `json:"inputModalities"`
 			Efforts     []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
+			ServiceTiers []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"serviceTiers"`
 		} `json:"data"`
 		NextCursor *string `json:"nextCursor"`
 	}
@@ -449,9 +534,19 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			if display == "" {
 				display = id
 			}
+			// The faster tier is named "Fast" and ids "priority"; the name identifies it.
+			fastTier := ""
+			for _, tier := range entry.ServiceTiers {
+				if strings.EqualFold(tier.Name, "fast") || tier.ID == "fast" {
+					fastTier = tier.ID
+					break
+				}
+			}
 			models = append(models, ports.ChatModel{
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
+				FastTier: fastTier,
+				Inputs:   entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {
@@ -725,6 +820,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
 	}
+	if c.disableNetwork {
+		return nil, errors.New("background task does not permit approval or input requests")
+	}
 
 	requestID := rawID(req.ID)
 	if requestID == "" {
@@ -935,6 +1033,32 @@ func (c *conversation) Terminate() error {
 	})
 	return c.closeErr
 }
+
+// CanHibernate reads Codex's live exec registry, since a settled turn can leave
+// a terminal running and terminating app-server also terminates those commands.
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// Subset of Codex 0.160.1's experimental background-terminal response.
+	var resp struct {
+		Data       []json.RawMessage `json:"data"`
+		NextCursor *string           `json:"nextCursor"`
+	}
+	if err := c.conn.request(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": c.threadID, "limit": 1}, &resp); err != nil {
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			return false, nil // Older builds cannot prove that background work ended.
+		}
+		return false, err
+	}
+	if resp.Data == nil {
+		return false, errors.New("background-terminal response is missing data")
+	}
+	return len(resp.Data) == 0 && (resp.NextCursor == nil || *resp.NextCursor == ""), nil
+}
+
+// Hibernate stops the app-server but leaves its native thread on disk for Resume.
+func (c *conversation) Hibernate() error { return c.Terminate() }
 
 // approvalPayload is the subset of an approval request AO renders.
 type approvalPayload struct {

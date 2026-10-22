@@ -18,6 +18,12 @@ export type AgentAvailability = Schemas["AgentAvailability"];
 export type AgentProfile = Schemas["AgentProfile"];
 
 export type Project = Schemas["Project"];
+export type ProjectConfig = Schemas["ProjectConfig"];
+export type ProjectCoderConfig = Schemas["ProjectCoderConfig"];
+export type ProjectAgentConfig = Schemas["ProjectAgentConfig"];
+export type ProjectRoleConfig = Schemas["ProjectRoleConfig"];
+export type ProjectReviewer = Schemas["ProjectReviewer"];
+export type ProjectSettingsInput = Schemas["ProjectSettingsInput"];
 export type CreateProjectInput = Schemas["CreateProjectInput"];
 export type UpdateProjectInput = Schemas["UpdateProjectInput"];
 export type DeleteProjectResponse = Schemas["DeleteProjectResponse"];
@@ -42,6 +48,7 @@ export type CreateGitHubScratchProjectResponse =
   Schemas["CreateGitHubScratchProjectResponse"];
 
 export type Session = Schemas["Session"];
+export type SessionStartupError = Schemas["SessionStartupError"];
 export type SessionKind = Schemas["SessionKind"];
 export type SessionMode = Schemas["SessionMode"];
 export type SessionActivityState = Schemas["SessionActivityState"];
@@ -50,6 +57,17 @@ export type Turn = Schemas["Turn"];
 export type CreateSessionInput = Schemas["CreateSessionInput"];
 export type DeleteSessionResponse = Schemas["DeleteSessionResponse"];
 export type SessionPage = Schemas["SessionPage"];
+export type SessionInterfaceMode = Schemas["SessionInterfaceMode"];
+export type SessionInterfaceTransitionPolicy =
+  Schemas["SessionInterfaceTransitionPolicy"];
+export type SessionInterfaceTransitionPhase =
+  Schemas["SessionInterfaceTransitionPhase"];
+export type SessionInterfaceTransition =
+  Schemas["SessionInterfaceTransition"];
+export type SessionInterfaceTransitionStatus =
+  Schemas["SessionInterfaceTransitionStatus"];
+export type StartSessionInterfaceTransitionInput =
+  Schemas["StartSessionInterfaceTransitionInput"];
 
 export type PullRequestState = Schemas["PullRequestState"];
 export type CIState = Schemas["CIState"];
@@ -133,6 +151,11 @@ export type WorkerCheckoutGrantResponse =
   Schemas["WorkerCheckoutGrantResponse"];
 export type CreateWorkerChildInput = Schemas["CreateWorkerChildInput"];
 export type SendMessageInput = Schemas["SendMessageInput"];
+export type ChatMessageInput = Schemas["ChatMessageInput"];
+export type ChatApprovalDecisionInput = Schemas["ChatApprovalDecisionInput"];
+export type TurnSteeredEvent = Schemas["TurnSteeredEvent"];
+export type ChatModel = Schemas["ChatModel"];
+export type ChatModelsResponse = Schemas["ChatModelsResponse"];
 export type WorkerWorkspaceListPayload =
   Schemas["WorkerWorkspaceListPayload"];
 export type WorkerWorkspaceReadPayload =

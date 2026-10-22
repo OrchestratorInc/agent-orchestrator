@@ -1,13 +1,13 @@
 name: Feature request
 description: Propose a new capability or improvement.
 title: "[Feature]: "
-labels: ["enhancement"]
+labels: ["enhancement", "needs-discussion"]
 body:
   - type: markdown
     attributes:
       value: |
         Lead with the **problem**, not only the solution.
-        For larger ideas, confirm scope on [Discord](https://discord.com/invite/UZv7JjxbwG) or the daily sync (10:00 PM IST) before building.
+        If you want to work on this, comment "Can I work on this?" and wait for core-team approval on the issue.
 
   - type: textarea
     id: problem

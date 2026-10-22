@@ -7,6 +7,10 @@ in the approved template image, launches it through the workspace's existing
 provider-neutral reconciler used by NodeOps. Older templates remain compatible:
 AO verifies the baked binaries and falls back to the PTY upload on a hash miss.
 
+For customers connecting their own Coder, the setup guide (workspace user,
+working directory, ready check, and the project's Setup and Cleanup scripts) is
+[bring-your-own-coder.md](bring-your-own-coder.md).
+
 The first implementation is deployment-scoped: every AO organization on that
 control plane uses the same Coder connection and approved template. It does not
 yet decrypt a separate Coder connection per AO organization.
@@ -75,6 +79,34 @@ path, must exist as a non-symlink mount point, and must survive Coder `stop` the
 `start`. The template must include the `mountpoint` utility so bootstrap can
 verify the contract before writing state.
 
+A bring-your-own (organization) Coder connection relaxes this contract, because
+customer templates commonly keep home on the root filesystem and run as a user
+other than `coder`:
+
+- The durable root defaults to `$HOME` (also accepted as `~`), resolved inside
+  the workspace to the agent user's home directory at bootstrap. An explicit
+  absolute path is still accepted.
+- The root need not be a mount point; it is created (owned by the workspace
+  user) if missing, and the session identity marker alone refuses another
+  session's state. Set `requireMountedDurableRoot: true` on the connection to
+  keep the strict check. A symbolic link is always refused.
+- `startupTimeoutSeconds` on the connection (default 1200, 60-7200) is that
+  session's ready wait and startup ceiling, replacing the deployment
+  `AO_CLOUD_SANDBOX_STARTUP_TIMEOUT` and the 10-minute ceiling.
+- On a startup failure AO marks the session failed and records a user-facing
+  `startupError`, but never stops or deletes the customer's workspace; only a
+  user-initiated session delete removes the workspace AO created.
+
+AO bootstraps only once the agent is `connected` and its `lifecycle_state` is
+`ready`, `start_error`, or `start_timeout`: `created` and `starting` mean the
+template's startup script is still preparing the workspace. (Coder's
+`start_blocks_login` is enforced by clients, not the agent, so AO waits on the
+lifecycle itself.) A workspace terminal that closes before the bootstrap
+begins is retried with backoff, is not counted as a repair attempt, and is
+logged with the agent's status and lifecycle at each attempt. The worker build follows the agent's declared architecture (the
+`coder_agent` `arch`), verified with `uname -m` before anything is installed;
+`amd64` and `arm64` workspaces are supported.
+
 AO derives every stateful path beneath that root:
 
 | State | Path relative to the durable root |
@@ -91,8 +123,22 @@ are stamped into each session's provider plan. Reconciliation binds the current
 deployment-scoped Coder connection credential to that stored profile, so a
 later configuration change does not move or recreate existing sessions with
 new defaults. Coder workspace responses must match the planned owner,
-deterministic workspace name, and template ID before AO adopts the workspace,
-accepts a provider ID, or uploads worker credentials. Configure
+workspace name, and template ID before AO adopts the workspace, accepts a
+provider ID, or uploads worker credentials. The workspace name is chosen once,
+when the session is created, and stored on the profile (`workspaceName`,
+`<prefix>-o-<id12>` or `<prefix>-w-<word>-<id12>`, plus a longer
+`workspaceNameRetry`); profiles written before that keep the name computed
+from the prefix and session id, and so do new sessions while
+`AO_CLOUD_CODER_READABLE_NAMES` is off ([Coder rollout
+flags](deployment.md#coder-rollout-flags)). Lookup only ever uses the session's own stored
+or computed name. A workspace that already held that name more than five
+minutes before the session chose it is treated as another session's: AO never
+adopts or deletes it. The workspace's creation time is read on the control
+plane's clock, corrected by how far the Coder server's clock is off (the Date
+header of its answer), so a Coder whose clock runs behind never makes the
+session's own workspace look like another's. When Coder refuses the create as a name conflict, the
+reconciler records the retry name as the session's workspace name (fenced by
+its lease) and provisions again under it; a second conflict fails the create. Configure
 `AO_CLOUD_CODER_OWNER` as the canonical owner name returned by Coder, not an
 alias such as `me`.
 

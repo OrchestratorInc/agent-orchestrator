@@ -13,7 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -40,6 +43,7 @@ type Manager interface {
 	// local repository as a project.
 	Clone(ctx context.Context, in CloneInput) (Project, error)
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
+	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
 	// InitializeRepository prepares a selected folder for project registration.
@@ -49,6 +53,8 @@ type Manager interface {
 	// and per-project config, returning the updated read-model.
 	UpdateSettings(ctx context.Context, id domain.ProjectID, in UpdateSettingsInput) (Project, error)
 	SetPermissions(ctx context.Context, id domain.ProjectID, in SetPermissionsInput) (Project, error)
+	// ForgetPermissions clears the remembered policy, so new sessions use the agent's own default.
+	ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error)
 
 	// SetConfig replaces a project's per-project config, returning the updated
 	// read-model.
@@ -203,15 +209,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
-	if in.ClonePreparationID != "" {
-		markerID, exists, markerErr := readClonePreparationID(path)
-		if markerErr != nil {
-			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
-		}
-		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
-			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
-		}
-	}
 
 	activeProjects, err := m.store.ListProjects(ctx)
 	if err != nil {
@@ -258,6 +255,16 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 			"existingProjectId":  existing.ID,
 			"suggestedProjectId": string(m.suggestID(ctx, id)),
 		})
+	}
+
+	if in.ClonePreparationID != "" {
+		markerID, exists, markerErr := readClonePreparationID(path)
+		if markerErr != nil {
+			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
+		}
+		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
+			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
+		}
 	}
 
 	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {
@@ -1007,10 +1014,33 @@ func isGitRepo(path string) bool {
 	return samePath(top, comparablePath(path))
 }
 
+// defaultProjectID derives a valid project id from the folder name, so any
+// folder can be added without typing an id: accents fold to plain letters
+// ("café" -> "cafe"), every other run of characters the id alphabet rejects
+// becomes one "-" ("app (v2)" -> "app-v2"), and a name with nothing usable
+// left falls back to "project".
 func defaultProjectID(path string) domain.ProjectID {
-	id := strings.ToLower(filepath.Base(path))
-	id = strings.TrimSpace(id)
-	id = strings.ReplaceAll(id, " ", "-")
+	name := norm.NFD.String(strings.ToLower(strings.TrimSpace(filepath.Base(path))))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+			// Combining accent split off by NFD.
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		case !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+	}
+	id := b.String()
+	for strings.Contains(id, "..") {
+		id = strings.ReplaceAll(id, "..", ".")
+	}
+	id = strings.TrimLeftFunc(id, func(r rune) bool { return (r < 'a' || r > 'z') && (r < '0' || r > '9') })
+	id = strings.TrimRight(id, "-")
+	if id == "" {
+		id = "project"
+	}
 	return domain.ProjectID(id)
 }
 
@@ -1064,6 +1094,18 @@ func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in Se
 	if in.SourceHarness == domain.HarnessCodex && permissions == domain.PermissionModeDefault {
 		permissions = domain.PermissionModeBypassPermissions
 	}
+	return m.storePermissions(ctx, id, permissions)
+}
+
+// ForgetPermissions clears the remembered approval policy. Existing sessions keep theirs.
+func (m *Service) ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error) {
+	if err := validateProjectID(id); err != nil {
+		return Project{}, err
+	}
+	return m.storePermissions(ctx, id, "")
+}
+
+func (m *Service) storePermissions(ctx context.Context, id domain.ProjectID, permissions domain.PermissionMode) (Project, error) {
 	row, ok, err := m.store.SetProjectPermissions(ctx, string(id), permissions)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_PERMISSIONS_UPDATE_FAILED", "Failed to update project permissions")

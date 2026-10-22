@@ -301,6 +301,10 @@ func TestBootstrapWorkerStreamsArchiveWithoutSecretsInURL(t *testing.T) {
 				"chgrp",
 				"chmod g+wx",
 				"sudo -n -b -u",
+				// The worker runs without a controlling terminal so a git
+				// prompt cannot SIGTTIN-stop it on sudo use_pty images.
+				"command -v setsid",
+				"$ao_setsid sh -c",
 			} {
 				if !strings.Contains(command, expected) {
 					t.Errorf("bootstrap command missing durable path contract %q", expected)
@@ -431,7 +435,7 @@ func TestPreinstalledBootstrapUsesExactHashesAndLaunchOnlyArchive(t *testing.T) 
 		t.Fatalf("launch-only archive is missing launch configuration: %+v", files)
 	}
 
-	command := bootstrapCommandForArchive(bootstrap, len(base64.StdEncoding.EncodeToString(archive)), true)
+	command := bootstrapCommandForArchive(bootstrap, "", len(base64.StdEncoding.EncodeToString(archive)), true)
 	workerHash := sha256.Sum256(bootstrap.Binary)
 	helperHash := sha256.Sum256(bootstrap.HelperBinary)
 	for _, expected := range []string{
@@ -497,7 +501,7 @@ func TestPreinstalledBootstrapCommandWiresHTTPSelfHeal(t *testing.T) {
 
 	// The heal shell must be embedded in the real bootstrap command, and the
 	// launch-only fast path must not reinstall a staged binary.
-	command := bootstrapCommandForArchive(bootstrap, 128, true)
+	command := bootstrapCommandForArchive(bootstrap, "", 128, true)
 	if !strings.Contains(command, "/api/cloud/v1/worker/binary/") || !strings.Contains(command, preinstalledMiss) {
 		t.Fatal("bootstrap command does not embed the HTTP self-heal and PTY fallback")
 	}
@@ -1344,4 +1348,86 @@ func readArchive(t *testing.T, compressed []byte) map[string]string {
 		files[header.Name] = string(contents)
 	}
 	return files
+}
+
+// A minimal client — base URL and token only, no owner or template — can be
+// built. This is the shape a bring-your-own-Coder org first saves: its owner is
+// derived from the token (CurrentUser) and its template is chosen per project.
+func TestNewAllowsMinimalConnection(t *testing.T) {
+	t.Parallel()
+	client, err := New(Config{BaseURL: "https://coder.example.com", Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New(minimal) = %v", err)
+	}
+	if client.owner != "" || client.templateID != "" {
+		t.Fatalf("minimal client carried owner=%q template=%q", client.owner, client.templateID)
+	}
+}
+
+// Create on a client with no owner/template fails with a clear message instead of
+// POSTing a malformed workspace request.
+func TestCreateRequiresOwnerAndTemplate(t *testing.T) {
+	t.Parallel()
+	client, err := New(Config{BaseURL: "https://coder.example.com", Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := client.Create(context.Background(), sandbox.Spec{SessionID: "session-1"}); err == nil ||
+		!strings.Contains(err.Error(), "owner is required") {
+		t.Fatalf("Create without owner error = %v", err)
+	}
+	withOwner, err := New(Config{BaseURL: "https://coder.example.com", Token: "test-token", Owner: "ao-bot"})
+	if err != nil {
+		t.Fatalf("New(owner): %v", err)
+	}
+	if _, err := withOwner.Create(context.Background(), sandbox.Spec{SessionID: "session-1"}); err == nil ||
+		!strings.Contains(err.Error(), "template must be selected") {
+		t.Fatalf("Create without template error = %v", err)
+	}
+}
+
+// CurrentUser resolves the username the API token authenticates as, so a
+// connection saved with only a base URL and token can derive its workspace owner.
+func TestCurrentUserResolvesUsername(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Coder-Session-Token") != "test-token" {
+			t.Errorf("missing Coder token header")
+		}
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v2/users/me" {
+			http.Error(writer, "unexpected route", http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"u1","username":"derived-bot"}`))
+	}))
+	defer server.Close()
+	client, err := New(Config{BaseURL: server.URL, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	owner, err := client.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentUser: %v", err)
+	}
+	if owner != "derived-bot" {
+		t.Fatalf("CurrentUser = %q, want derived-bot", owner)
+	}
+}
+
+// A /users/me response with no username is an error, not a blank owner.
+func TestCurrentUserRejectsEmptyUsername(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"u1","username":""}`))
+	}))
+	defer server.Close()
+	client, err := New(Config{BaseURL: server.URL, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := client.CurrentUser(context.Background()); err == nil {
+		t.Fatal("CurrentUser accepted an empty username")
+	}
 }

@@ -10,11 +10,8 @@ type InputValue = string | number | boolean | string[];
 type PropertyEntry = [string, Record<string, unknown>];
 
 /**
- * A pending question docks above the composer rather than landing in the
- * transcript: it is something to answer now, not something to read back. The
- * chrome is the queued-message dock's, so the two things that can sit on the
- * composer read as one surface, and the footer is the approval card's, because
- * both are a decision the turn is waiting on.
+ * Pending questions dock above the composer. After resolution, their prompt and
+ * submitted answers remain readable in the transcript through ElicitationHistory.
  */
 export function ElicitationDock({
 	activity,
@@ -59,7 +56,7 @@ export function ElicitationDock({
 			)}
 
 			{error ? (
-				<p role="alert" className="px-3 pb-2 text-[11px] leading-snug text-destructive">
+				<p role="alert" className="px-3 pb-2 text-xs leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}
@@ -67,15 +64,89 @@ export function ElicitationDock({
 	);
 }
 
-/** The dock's one-line header: what is being asked, and where you are in it. */
+export function ElicitationHistory({ activity }: { activity: ConversationActivity }) {
+	const response = activity.inputResponse;
+	const answered = (activity.status === "resolved" || activity.status === "completed") && response?.action === "accept";
+	const outcome = activity.status === "failed" ? "Question expired"
+		: activity.status === "cancelled" || response?.action === "cancel" ? "Cancelled"
+			: response?.action === "decline" ? "Skipped"
+				: answered ? "Answered" : "Question closed";
+	const schema = activity.detail?.schema;
+	const properties = Object.entries(schema?.properties ?? {});
+	const groups = claudeQuestionGroups(properties);
+	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
+	const content = answered ? response.content : undefined;
+
+	return (
+		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
+			<p className="font-medium text-muted-foreground">{outcome}</p>
+			{groups ? groups.map((group) => {
+				const question = group[0];
+				if (!question) return null;
+				return (
+					<div key={question[0]} className="space-y-1">
+						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
+							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
+						</p>
+						{answered ? <HistoryAnswers properties={group} content={content} /> : null}
+					</div>
+				);
+			}) : (
+				<div className="space-y-1">
+					<p className="whitespace-pre-wrap break-words font-medium text-foreground">{message}</p>
+					{schema?.description ? <p className="whitespace-pre-wrap break-words">{schema.description}</p> : null}
+					{answered && properties.length > 0 ? <HistoryAnswers properties={properties} content={content} /> : null}
+				</div>
+			)}
+			{activity.detail?.inputMode === "url" && activity.detail.url ? (
+				<p className="break-all text-muted-foreground">{activity.detail.url}</p>
+			) : null}
+		</section>
+	);
+}
+
+function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; content?: Record<string, unknown> }) {
+	const answers = properties.filter(([name]) => {
+		const value = content?.[name];
+		return value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0);
+	});
+	if (answers.length === 0) {
+		return <p className="text-muted-foreground">{content ? "No answer provided" : "Answer unavailable"}</p>;
+	}
+	return (
+		<dl className="space-y-1">
+			{answers.map(([name, property]) => {
+				const value = content?.[name];
+				const options = enumOptions(property);
+				function label(value: unknown): string {
+					if (typeof value === "boolean") return value ? "Yes" : "No";
+					if (typeof value === "number") return String(value);
+					if (typeof value !== "string") return "Answer unavailable";
+					const option = options.find((option) => option.value === value);
+					return option ? [option.label, option.description].filter(Boolean).join(" — ") : value;
+				}
+				return (
+					<div key={name} className="min-w-0">
+						<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
+						<dd className="whitespace-pre-wrap break-words text-foreground">
+							{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
+						</dd>
+					</div>
+				);
+			})}
+		</dl>
+	);
+}
+
+/** The full question stays visible above its answers, alongside the step count. */
 function DockHeader({ id, title, pager }: { id?: string; title: string; pager?: string }) {
 	return (
-		<div className="flex min-h-8 items-center gap-2 px-3 py-2">
-			<p id={id} className="min-w-0 flex-1 text-xs font-medium leading-relaxed text-foreground line-clamp-2" title={title}>
+		<div className="flex min-h-8 items-start gap-2 px-3 py-2">
+			<p id={id} className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-foreground">
 				{title}
 			</p>
 			{pager ? (
-				<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{pager}</span>
+				<span className="shrink-0 text-caption tabular-nums text-muted-foreground">{pager}</span>
 			) : null}
 		</div>
 	);
@@ -122,18 +193,18 @@ function URLRequest({
 				<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
 					<div className="min-w-0 flex-1">
 						<p className="truncate text-xs leading-relaxed text-foreground">{parsed.hostname}</p>
-						<p className="mt-0.5 break-all font-mono text-[11px] leading-relaxed text-muted-foreground">
+						<p className="mt-0.5 break-all font-mono text-caption leading-relaxed text-muted-foreground">
 							{parsed.href}
 						</p>
 					</div>
 				</div>
 			) : (
-				<p role="alert" className="px-3 py-2 text-[11px] leading-snug text-destructive">
+				<p role="alert" className="px-3 py-2 text-xs leading-snug text-destructive">
 					The provider supplied an unsafe or invalid URL. It was not opened.
 				</p>
 			)}
 			{openError ? (
-				<p role="alert" className="px-3 pb-1 text-[11px] leading-snug text-destructive">
+				<p role="alert" className="px-3 pb-1 text-xs leading-snug text-destructive">
 					{openError}
 				</p>
 			) : null}
@@ -185,10 +256,12 @@ function FormRequest({
 	const hasNextQuestion = questionGroups !== undefined && activeQuestion < questionGroups.length - 1;
 	const headerId = useId();
 
-	// A Claude question carries its own prompt, so the header asks it and the
-	// field below drops the legend that would otherwise repeat it verbatim.
-	const askedQuestion = questionGroups ? propertyLabel(visibleProperties[0]) : undefined;
-	const title = askedQuestion ?? activity.detail?.message ?? schema?.title ?? activity.summary;
+	// Claude puts a single prompt in message and each prompt of a multi-question
+	// form in its field description. The field title is only a short topic label.
+	const question = questionGroups ? visibleProperties[0] : undefined;
+	const title = question
+		? questionPrompt(question, questionGroups?.length === 1 ? activity.detail?.message : undefined)
+		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
 			? `${activeQuestion + 1} of ${questionGroups.length}`
@@ -214,7 +287,7 @@ function FormRequest({
 		<form onSubmit={submit}>
 			<DockHeader id={headerId} title={title} pager={pager} />
 			{!questionGroups && schema?.description ? (
-				<p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">{schema.description}</p>
+				<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
 			) : null}
 			<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
 				{visibleProperties.map(([name, property], index) => (
@@ -321,13 +394,13 @@ function FormField({
 				aria-describedby={invalid ? errorId : undefined}
 			>
 				{labelledBy ? null : (
-					<legend className="px-3 pb-1 text-[11px] font-medium text-muted-foreground">
+					<legend className="px-3 pb-1 text-xs font-medium text-muted-foreground">
 						{label}
 						{required ? " *" : ""}
 					</legend>
 				)}
 				{description && !labelledBy ? (
-					<p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">{description}</p>
+					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{description}</p>
 				) : null}
 				<div className={cn(rows ? "flex flex-col" : "flex flex-col px-1")}>
 					{options.map((option) => {
@@ -356,7 +429,7 @@ function FormField({
 								<span className="min-w-0 flex-1">
 									<span className="block text-xs leading-relaxed text-foreground">{option.label}</span>
 									{option.description ? (
-										<span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
+										<span className="mt-0.5 block text-caption leading-relaxed text-muted-foreground">
 											{option.description}
 										</span>
 									) : null}
@@ -366,7 +439,7 @@ function FormField({
 					})}
 				</div>
 				{invalid ? (
-					<p id={errorId} className="px-3 pt-1 text-[11px] text-destructive">
+					<p id={errorId} className="px-3 pt-1 text-xs text-destructive">
 						Choose an answer.
 					</p>
 				) : null}
@@ -396,14 +469,14 @@ function FormField({
 					<span className="min-w-0 flex-1">
 						<span className="block text-xs leading-relaxed text-foreground">{label}</span>
 						{description ? (
-							<span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
+							<span className="mt-0.5 block text-caption leading-relaxed text-muted-foreground">
 								{description}
 							</span>
 						) : null}
 					</span>
 				</label>
 				{invalid ? (
-					<p id={errorId} className={cn("px-3 text-[11px] text-destructive", rows ? "pb-1" : "pt-1")}>
+					<p id={errorId} className={cn("px-3 text-xs text-destructive", rows ? "pb-1" : "pt-1")}>
 						This field is required.
 					</p>
 				) : null}
@@ -446,7 +519,7 @@ function FormField({
 				<div className="flex min-w-0 items-start gap-2.5 px-3 py-2">
 					<span aria-hidden="true" className="size-3 shrink-0" />
 					<span className="flex min-w-0 flex-1 flex-col">
-						<label htmlFor={id} className="text-[11px] leading-snug text-muted-foreground">
+						<label htmlFor={id} className="text-xs leading-snug text-muted-foreground">
 							{label}
 							{required ? " *" : ""}
 						</label>
@@ -454,7 +527,7 @@ function FormField({
 					</span>
 				</div>
 				{invalid ? (
-					<p id={errorId} className="px-3 pb-1 text-[11px] text-destructive">
+					<p id={errorId} className="px-3 pb-1 text-xs text-destructive">
 						This field is required.
 					</p>
 				) : null}
@@ -469,16 +542,21 @@ function FormField({
 				{required ? " *" : ""}
 			</span>
 			{description ? (
-				<span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">{description}</span>
+				<span className="mt-0.5 block text-caption leading-relaxed text-muted-foreground">{description}</span>
 			) : null}
 			{control}
 			{invalid ? (
-				<span id={errorId} className="mt-1 block text-[11px] text-destructive">
+				<span id={errorId} className="mt-1 block text-xs text-destructive">
 					This field is required.
 				</span>
 			) : null}
 		</label>
 	);
+}
+
+function questionPrompt(question: PropertyEntry, message?: string): string {
+	const description = question[1].description;
+	return (typeof description === "string" && description.trim() ? description : undefined) ?? message ?? propertyLabel(question);
 }
 
 function propertyLabel([name, property]: PropertyEntry): string {

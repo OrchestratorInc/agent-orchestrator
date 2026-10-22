@@ -12,14 +12,31 @@ describe("Android native compatibility boundaries", () => {
 		expect(existsSync(path)).toBe(true);
 		const android = existsSync(path) ? source("./sidebar-navigation-shell.android.tsx") : "";
 		expect(android).toContain("PanResponder");
+		// The closed drawer's swipe responder starts below the safe-area-adjusted
+		// header. A fixed top offset overlaps the menu button on tall cutouts.
 		expect(android).toContain("edgeGestureTarget");
+		expect(android).toContain("top: insets.top + 64");
+		// Keep the smooth native animation, but commit the closed state only after
+		// it settles so Fabric measures the header button at its final position.
+		// The visible scrim must disappear as soon as closing starts, independently
+		// of that delayed interaction state, or it flashes over the settled screen.
+		expect(android).toContain("useNativeDriver: true");
+		expect(android).toContain("const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);");
+		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(!finished\) return;[\s\S]*if \(!nextOpen\) setOpen\(false\);/);
+		expect(android).toMatch(/open \? \([\s\S]*scrimVisible \? \([\s\S]*styles\.dismissLayer[\s\S]*styles\.dismissBlocker/);
+		expect(android).toContain("(open ? panResponder.panHandlers : {})");
+		// A gesture can reverse an in-flight spring, but it must continue from the
+		// drawer's live position rather than snapping to an open/closed endpoint.
+		expect(android).toContain("settling: drawerSettling.current");
+		expect(android).toContain("progress.stopAnimation((value) => {");
+		expect(android).toContain("gestureStartProgress.current = value");
+		expect(android).toContain("startProgress: gestureStartProgress.current");
 		expect(android).toContain("retainedDrawerOpen");
 		expect(android).not.toContain("DrawerLayoutAndroid");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).not.toContain("RNHostView");
 		expect(android).toContain('pointerEvents={open ? "auto" : "none"}');
 		expect(android).toContain('importantForAccessibility={open ? "yes" : "no-hide-descendants"}');
-		expect(android).toMatch(/edgeGestureTarget:[\s\S]*bottom:\s*88/);
 	});
 
 	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
@@ -35,6 +52,20 @@ describe("Android native compatibility boundaries", () => {
 			expect(android).toContain("Feather");
 			expect(android).not.toContain("@expo/ui");
 		}
+		const headerButton = source("./native-header-button.android.tsx");
+		expect(headerButton).toContain(
+			"hitSlop={{ top: space.sm, right: space.md, bottom: space.sm, left: space.xl }}",
+		);
+		// Fabric can omit Pressable.onPress when a native transform settles between
+		// touch-down and touch-up. Recover only a stationary, uncancelled touch, and
+		// wait long enough for the normal onPress path to win first.
+		expect(headerButton).toContain("onTouchStart");
+		expect(headerButton).toContain("onTouchMove");
+		expect(headerButton).toContain("onTouchEnd");
+		expect(headerButton).toContain("onTouchCancel");
+		expect(headerButton).toContain("pressHandledSequence");
+		expect(headerButton).toContain("PRESS_FALLBACK_DELAY_MS");
+		expect(headerButton).toMatch(/setTimeout\(\(\) => \{[\s\S]*pressHandledSequence\.current === sequence[\s\S]*movement > TAP_SLOP[\s\S]*onPress\(\);/);
 	});
 
 	it("keeps SwiftUI and percentage native widths out of the cross-platform Spawn route", () => {
@@ -70,12 +101,18 @@ describe("Android native compatibility boundaries", () => {
 	// top one answered a swipe down.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
+		const icons = source("./icons.tsx");
 		expect(android).toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
 		expect(android).not.toContain("Picker");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).toContain("AgentLogo");
+		expect(android).toContain("option.sectionBreakBefore && styles.optionSectionBreak");
+		expect(android).toContain('icon={selectedProject?.icon ?? "folder"}');
+		expect(android).toContain('option.icon ? <Feather name={option.icon}');
+		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
+		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
 	});
 
 	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {
@@ -152,13 +189,6 @@ describe("Android native compatibility boundaries", () => {
 		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
 	});
 
-	it("waits for the Android destination route before closing the drawer", () => {
-		const drawer = source("./sidebar-navigation-shell.android.tsx");
-		expect(drawer).toContain("pendingClosePath");
-		expect(drawer).toContain("sidebarNavigationSettled");
-		expect(drawer).toMatch(/pendingClosePath[\s\S]*router\.replace\(destination\.href\)/);
-	});
-
 	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
 		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
 		expect(existsSync(path)).toBe(true);
@@ -187,8 +217,19 @@ describe("Android native compatibility boundaries", () => {
 
 	it("pins conversation actions to one Android detent on first open", () => {
 		const layout = source("../app/_layout.tsx");
-		expect(layout).toContain('name === "sheets/conversation-actions" && Platform.OS === "android"');
-		expect(layout).toContain("sheetAllowedDetents: [0.6]");
+		expect(layout).toContain('{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
+		expect(layout).toContain('Platform.OS === "android" && androidDetents ? [...androidDetents]');
+	});
+
+	// With two detents Material only hid the sheet after a drag past half its
+	// height, so a normal swipe down snapped back and closing felt random.
+	it("pins Android review actions to one 60% detent so a swipe down closes it", () => {
+		const layout = source("../app/_layout.tsx");
+		const actions = source("../app/sheets/review-actions.tsx");
+		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
+		expect(layout).toContain("sheetInitialDetentIndex: 0");
+		expect(layout).toContain("sheetGrabberVisible: true");
+		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
 	});
 
 	it("does not register the built-in Android sound as a missing custom asset", () => {
@@ -196,7 +237,7 @@ describe("Android native compatibility boundaries", () => {
 	});
 
 	it("presents Settings from the root stack above the preserved drawer", () => {
-		const rootSettingsPath = fileURLToPath(new URL("../app/settings.tsx", import.meta.url));
+		const rootSettingsPath = fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url));
 		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
 		expect(existsSync(rootSettingsPath)).toBe(true);
 		expect(existsSync(nestedSettingsPath)).toBe(false);

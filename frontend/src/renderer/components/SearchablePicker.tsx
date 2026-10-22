@@ -1,9 +1,13 @@
-import { Check, ChevronDown, Lock, Search } from "lucide-react";
+import { Check, ChevronDown, Loader2, Lock, Plus, Search } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
+import { LiveStatus } from "./LiveStatus";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
+
+/** Lists with more options than this get a search box. */
+const SEARCH_THRESHOLD = 10;
 export interface SearchablePickerOption {
 	value: string;
 	label: string;
@@ -21,6 +25,11 @@ export function SearchablePicker({
 	disabled = false,
 	fixedScroll = false,
 	className,
+	action,
+	defaultOpen = false,
+	onDismiss,
+	loading = false,
+	loadingText,
 }: {
 	ariaLabel: string;
 	placeholder: string;
@@ -31,11 +40,23 @@ export function SearchablePicker({
 	disabled?: boolean;
 	fixedScroll?: boolean;
 	className?: string;
+	/** An action pinned below the options (e.g. "Connect more repositories"). */
+	action?: { label: string; onSelect: () => void; disabled?: boolean };
+	/** Opens the list on mount (e.g. a row the user just added). */
+	defaultOpen?: boolean;
+	/** Called when the list closes without a choice (Escape, outside click, trigger). */
+	onDismiss?: () => void;
+	/** The options are still loading: an empty list says `loadingText`, not "No matches". */
+	loading?: boolean;
+	loadingText?: string;
 }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
+	const [open, setOpen] = useState(defaultOpen && !disabled);
 	const [search, setSearch] = useState("");
 	const selected = options.find((option) => option.value === value);
+	// A short list is easier to scan than to search; offer search only once the
+	// list is long enough to need it.
+	const searchable = options.length > SEARCH_THRESHOLD;
 	const filtered = options.filter((option) =>
 		`${option.label} ${option.description ?? ""}`.toLowerCase().includes(search.trim().toLowerCase()),
 	);
@@ -67,7 +88,16 @@ export function SearchablePicker({
 	}, []);
 
 	return (
-		<Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setSearch(""); }}>
+		<Popover
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) {
+					setSearch("");
+					onDismiss?.();
+				}
+			}}
+		>
 			<PopoverTrigger asChild>
 				<button
 					type="button"
@@ -86,18 +116,22 @@ export function SearchablePicker({
 					<ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
 				</button>
 			</PopoverTrigger>
+			{/* Mounted with the picker, so the list saying it is loading is heard. */}
+			<LiveStatus text={open && filtered.length === 0 && loading ? loadingText ?? t("common.loading") : ""} />
 			<PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] min-w-56 overflow-hidden p-0 shadow-xl">
-				<div className="flex h-10 items-center gap-2 border-b border-border px-3">
-					<Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-					<input
-						autoFocus
-						aria-label={searchPlaceholder}
-						placeholder={searchPlaceholder}
-						value={search}
-						onChange={(event) => setSearch(event.target.value)}
-						className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-					/>
-				</div>
+				{searchable ? (
+					<div className="flex h-10 items-center gap-2 border-b border-border px-3">
+						<Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+						<input
+							autoFocus
+							aria-label={searchPlaceholder}
+							placeholder={searchPlaceholder}
+							value={search}
+							onChange={(event) => setSearch(event.target.value)}
+							className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+						/>
+					</div>
+				) : null}
 				<div
 					ref={listRef}
 					id={`${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-options`}
@@ -105,10 +139,15 @@ export function SearchablePicker({
 					aria-label={ariaLabel}
 					className={cn(
 						"overscroll-contain p-1",
-						fixedScroll ? "repository-picker-scrollbar h-72 overflow-y-scroll" : "settings-thin-scrollbar max-h-72 overflow-y-auto",
+						fixedScroll ? "repository-picker-scrollbar max-h-72 overflow-y-auto" : "settings-thin-scrollbar max-h-72 overflow-y-auto",
 					)}
 				>
-					{filtered.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">{t("common.noMatches", { defaultValue: "No matches" })}</p> : null}
+					{filtered.length === 0 && loading ? (
+						<p className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground">
+							<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+							{loadingText ?? t("common.loading")}
+						</p>
+					) : filtered.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">{t("common.noMatches", { defaultValue: "No matches" })}</p> : null}
 					{filtered.map((option) => (
 						<button
 							key={option.value}
@@ -128,6 +167,19 @@ export function SearchablePicker({
 						</button>
 					))}
 				</div>
+				{action ? (
+					<div className="border-t border-border p-1">
+						<button
+							type="button"
+							disabled={action.disabled}
+							onClick={() => { setOpen(false); action.onSelect(); }}
+							className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:opacity-60"
+						>
+							<Plus className="size-3.5 shrink-0" aria-hidden="true" />
+							<span className="min-w-0 flex-1 truncate">{action.label}</span>
+						</button>
+					</div>
+				) : null}
 			</PopoverContent>
 		</Popover>
 	);

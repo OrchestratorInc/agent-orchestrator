@@ -234,10 +234,11 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		if input.Timezone != nil {
 			timezone = *input.Timezone
 		}
+		anchorTimezone := ""
 		if input.RRule == nil && input.Cron == nil {
-			rruleText = rec.RRuleText
+			rruleText, anchorTimezone = rec.RRuleText, rec.Timezone
 		}
-		schedule, scheduleErr := CanonicalizeSchedule(ScheduleInput{RRule: rruleText, Cron: cronText, Timezone: timezone}, now)
+		schedule, scheduleErr := CanonicalizeSchedule(ScheduleInput{RRule: rruleText, Cron: cronText, Timezone: timezone, AnchorTimezone: anchorTimezone}, now)
 		if scheduleErr != nil {
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", scheduleErr.Error(), nil)
 		}

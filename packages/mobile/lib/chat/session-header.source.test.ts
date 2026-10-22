@@ -18,10 +18,22 @@ describe("session header controls", () => {
 		expect(session).toContain('icon="more" label="Conversation actions"');
 	});
 
-	it("leaves no raw control in the actions slot", () => {
+	it("uses the PR restore control beside the shared actions button", () => {
 		const start = session.indexOf('glassHeaderControl("right", (');
 		expect(start).toBeGreaterThan(-1);
-		expect(session.slice(start, start + 400)).not.toContain("Pressable");
+		const actions = session.slice(start, start + 900);
+		expect(actions).toContain('testID="header-pullRequest"');
+		expect(actions).toContain('accessibilityLabel="Show PR card"');
+		expect(actions).toContain('<NativeHeaderButton icon="more" label="Conversation actions"');
+	});
+
+	// Files are reached from the actions menu and the composer's changes pill;
+	// the header keeps only the PR restore control and the actions button.
+	it("keeps session files out of the header", () => {
+		const start = session.indexOf('glassHeaderControl("right", (');
+		const end = session.indexOf("glassHeaderControl(\"right\"),", start);
+		expect(session.slice(start, end)).not.toContain("file-diff");
+		expect(session).toContain("onFiles: filesNavigation.openChanges");
 	});
 
 	it("gives every platform an icon for the more control", () => {

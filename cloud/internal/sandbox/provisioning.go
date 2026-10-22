@@ -6,20 +6,37 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 const (
-	ProviderDocker  = "docker"
-	ProviderDaytona = "daytona"
-	ProviderECS     = "ecs"
-	ProviderNodeOps = "nodeops"
-	ProviderCoder   = "coder"
+	ProviderDocker    = "docker"
+	ProviderDaytona   = "daytona"
+	ProviderECS       = "ecs"
+	ProviderNodeOps   = "nodeops"
+	ProviderCoder     = "coder"
+	ProviderFreestyle = "freestyle"
 
 	DefaultProvider       = ProviderDocker
 	DefaultWorkerTokenTTL = 15 * time.Minute
 )
+
+// ErrCoderTemplateRequired is returned when a Coder session resolves to no
+// template at all — the organization set no default template and the project
+// chose none. A bring-your-own-Coder org picks its template per project, so this
+// is a user-fixable condition the HTTP edge surfaces as "choose a template"
+// rather than a deployment misconfiguration.
+var ErrCoderTemplateRequired = errors.New("a Coder template must be selected for this session")
+
+// ErrCoderTemplateUnavailable is returned when a session on the deployment's
+// own Coder picks a template outside CoderConfig.AllowedTemplateIDs: test or
+// bring-your-own templates on the shared Coder that the deployment's sessions
+// cannot boot (different agent, no durable volume).
+var ErrCoderTemplateUnavailable = errors.New("this Coder template is not available for sessions on AO's Coder")
 
 type NodeOpsConfig struct {
 	BaseURL       string
@@ -46,6 +63,47 @@ func (c NodeOpsConfig) rootFSForHarness(harness string) string {
 	return strings.TrimSpace(c.DefaultRootFS)
 }
 
+// FreestyleConfig configures Freestyle VMs. Sessions boot from a prepared
+// snapshot (the NodeOps workspace layout plus one harness and the worker), so
+// SnapshotByHarness plays the role NodeOps' per-harness rootfs plays.
+type FreestyleConfig struct {
+	BaseURL           string
+	APIKey            string
+	DefaultSnapshot   string
+	SnapshotByHarness map[string]string
+	WorkerTokenTTL    time.Duration
+	AutoPauseSeconds  int
+}
+
+// snapshotForHarness resolves the snapshot one session boots from.
+func (c FreestyleConfig) snapshotForHarness(harness string) string {
+	if snapshot := strings.TrimSpace(c.SnapshotByHarness[strings.TrimSpace(harness)]); snapshot != "" {
+		return snapshot
+	}
+	return strings.TrimSpace(c.DefaultSnapshot)
+}
+
+func (c FreestyleConfig) Validate() error {
+	if strings.TrimSpace(c.APIKey) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_API_KEY is required")
+	}
+	if strings.TrimSpace(c.DefaultSnapshot) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT is required")
+	}
+	if c.BaseURL != "" {
+		if _, err := url.ParseRequestURI(c.BaseURL); err != nil {
+			return fmt.Errorf("AO_CLOUD_FREESTYLE_BASE_URL must be a valid URL: %w", err)
+		}
+	}
+	if c.WorkerTokenTTL <= 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL must be positive")
+	}
+	if c.AutoPauseSeconds < 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS must not be negative")
+	}
+	return nil
+}
+
 type DockerConfig struct {
 	Host           string
 	WorkerImage    string
@@ -62,6 +120,30 @@ type CoderConfig struct {
 	Parameters     map[string]string
 	DurableRoot    string
 	WorkerTokenTTL time.Duration
+	// AllowedTemplateIDs limits the templates a session on this deployment's
+	// Coder may pick; empty allows any. The default TemplateID is always
+	// allowed. Bring-your-own connections are not limited.
+	AllowedTemplateIDs []string
+	// WorkerWorkingFolder stamps the project's working folder as the checkout
+	// of a session whose worker runs as the dedicated ao-worker user
+	// (config.Config.CoderWorkerWorkingFolder). Off, such sessions keep the
+	// durable root's repository folder; a stamped folder is honored either way.
+	WorkerWorkingFolder bool
+}
+
+// TemplateAllowed reports whether a session on this deployment's Coder may use
+// the template.
+func (c CoderConfig) TemplateAllowed(templateID string) bool {
+	templateID = strings.TrimSpace(templateID)
+	if len(c.AllowedTemplateIDs) == 0 || templateID == strings.TrimSpace(c.TemplateID) {
+		return true
+	}
+	for _, allowed := range c.AllowedTemplateIDs {
+		if strings.TrimSpace(allowed) == templateID {
+			return true
+		}
+	}
+	return false
 }
 
 // CoderSessionProfile is the non-secret provider contract stamped onto one
@@ -74,6 +156,98 @@ type CoderSessionProfile struct {
 	AgentName   string            `json:"agentName"`
 	Parameters  map[string]string `json:"parameters"`
 	DurableRoot string            `json:"durableRoot"`
+	// WorkspaceNamePrefix replaces the default "ao" workspace name prefix.
+	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// WorkspaceName is the Coder workspace name AO chose when the session was
+	// created (see domain.CoderWorkspaceName and StampCoderWorkspaceName). It
+	// is fixed for the session's lifetime: create, lookup, identity checks and
+	// the workspace link all use it. Empty on rows written before the field
+	// existed, whose workspaces keep the name computed from the prefix and
+	// session id.
+	WorkspaceName string `json:"workspaceName,omitempty"`
+	// WorkspaceNameRetry is the one name a create retries with when Coder
+	// reports WorkspaceName as taken by another workspace
+	// (domain.CoderWorkspaceNames). Using it moves it to WorkspaceName and
+	// clears it, so a session retries at most once.
+	WorkspaceNameRetry string `json:"workspaceNameRetry,omitempty"`
+	// WorkspaceNameIssuedAt is when WorkspaceName was chosen. A workspace that
+	// already carried the name well before then belongs to another session (an
+	// id collision) and is never adopted. Nil on older rows.
+	WorkspaceNameIssuedAt *time.Time `json:"workspaceNameIssuedAt,omitempty"`
+	// RequireMountedDurableRoot is nil on rows written before the field
+	// existed; RequiresMountedDurableRoot supplies the historical default.
+	RequireMountedDurableRoot *bool `json:"requireMountedDurableRoot,omitempty"`
+	// StartupTimeoutSeconds overrides the deployment startup budget for this
+	// session's ready wait and startup ceiling. Zero keeps the deployment value.
+	StartupTimeoutSeconds int `json:"startupTimeoutSeconds,omitempty"`
+	// WorkerUser is CoderWorkerUserWorkspace when the worker and agent run as
+	// the workspace's own login user. Empty (rows written before the field
+	// existed, and the default) keeps the dedicated ao-worker user.
+	WorkerUser string `json:"workerUser,omitempty"`
+	// ReadyProbe, when set, is a shell command the workspace user must see
+	// exit 0 before AO launches the worker, polled for at most
+	// ReadyProbeTimeoutSeconds.
+	ReadyProbe               string `json:"readyProbe,omitempty"`
+	ReadyProbeTimeoutSeconds int    `json:"readyProbeTimeoutSeconds,omitempty"`
+	// ReuseExistingCheckout tells the worker to adopt a checkout of the
+	// session repository the template already cloned. Only meaningful with
+	// the workspace worker user.
+	ReuseExistingCheckout bool `json:"reuseExistingCheckout,omitempty"`
+	// WorkingDirectory is the connection's working directory template (see
+	// domain.OrgCoderConfig). Only meaningful with the workspace worker user;
+	// empty on rows written before the field existed.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// ProtectSecretFiles keeps the coding agent out of secret environment
+	// files. Nil on rows written before the field existed, which keeps the
+	// historical behavior (no protection).
+	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
+	// CheckoutDirectory, with the dedicated ao-worker user, is where AO checks
+	// the session's main repository out instead of <durable root>/repository:
+	// the project's working folder with {repo} resolved when the session was
+	// created (domain.CoderCheckoutDirectory), for example ~/work/alice, where
+	// "~" is the workspace login user's home. Empty (every session created
+	// before the field existed, and projects without a working folder) keeps
+	// the durable root checkout. Never set with the workspace worker user,
+	// whose working directory is WorkingDirectory.
+	CheckoutDirectory string `json:"checkoutDirectory,omitempty"`
+	// CheckoutSiblings are the folder names of the project's additional
+	// repositories, prepared beside CheckoutDirectory.
+	CheckoutSiblings []string `json:"checkoutSiblings,omitempty"`
+	// CheckoutDirectoryUnusable, with the dedicated ao-worker user and no
+	// CheckoutDirectory, is why the project's working folder could not be the
+	// session's checkout when the session was created
+	// (domain.CoderCheckoutDirectoryUnusableMessage): the session stops with
+	// a working_directory_unusable startup error instead of starting in the
+	// durable root checkout. A release that predates the field ignores it and
+	// keeps the durable root checkout.
+	CheckoutDirectoryUnusable string `json:"checkoutDirectoryUnusable,omitempty"`
+}
+
+// ProtectsSecretFiles reports whether the session's coding agent must not
+// read or edit secret environment files.
+func (p CoderSessionProfile) ProtectsSecretFiles() bool {
+	return p.ProtectSecretFiles != nil && *p.ProtectSecretFiles
+}
+
+// CoderWorkerUserWorkspace is the CoderSessionProfile.WorkerUser value that
+// runs the worker as the workspace's own login user.
+const CoderWorkerUserWorkspace = domain.CoderWorkerUserWorkspace
+
+// RunsAsWorkspaceUser reports whether the session's worker runs as the
+// workspace's own login user.
+func (p CoderSessionProfile) RunsAsWorkspaceUser() bool {
+	return p.WorkerUser == CoderWorkerUserWorkspace
+}
+
+// RequiresMountedDurableRoot reports whether bootstrap must find a mounted
+// volume at the durable root. Profiles written before the flag existed keep
+// the strict check for the deployment Coder and drop it for a bring-your-own
+// connection, whose templates commonly keep home on the root filesystem.
+func (p CoderSessionProfile) RequiresMountedDurableRoot(byoConnection bool) bool {
+	if p.RequireMountedDurableRoot != nil {
+		return *p.RequireMountedDurableRoot
+	}
+	return !byoConnection
 }
 
 // CoderSessionOptions are the per-session Coder choices a client may make when
@@ -87,6 +261,88 @@ type CoderSessionOptions struct {
 	TemplateID    string
 	Size          string
 	StartupScript string
+	// WorkspaceNamePrefix starts the session's workspace name instead of the
+	// default "ao" (see domain.CoderWorkspaceName). It applies with or without
+	// a picked template.
+	WorkspaceNamePrefix string
+	// Parameters are the project's values for the picked template's rich
+	// parameters. Like Size and StartupScript they apply only with a picked
+	// template; they override the connection's parameters and are overridden
+	// by Size and StartupScript.
+	Parameters map[string]string
+	// CheckoutDirectory and CheckoutSiblings are the project's working-folder
+	// checkout (see CoderSessionProfile.CheckoutDirectory). They apply with or
+	// without a picked template, and are dropped when the session's worker
+	// runs as the workspace user.
+	CheckoutDirectory string
+	CheckoutSiblings  []string
+	// CheckoutDirectoryUnusable is why the project's working folder could not
+	// be resolved to a checkout (see CoderSessionProfile.CheckoutDirectoryUnusable).
+	CheckoutDirectoryUnusable string
+}
+
+// CoderDeploymentOverride redirects a session's Coder provisioning to a specific
+// (per-organization, bring-your-own) Coder deployment in place of the
+// deployment-default config (ProvisioningDefaults.Coder). Every field replaces
+// its deployment-default counterpart; the worker-token TTL is deployment policy
+// and is not overridable here. A nil override keeps the deployment default, so
+// existing deployment-level Coder sessions are unchanged.
+type CoderDeploymentOverride struct {
+	BaseURL     string
+	Owner       string
+	TemplateID  string
+	AgentName   string
+	Parameters  map[string]string
+	DurableRoot string
+	// RequireMountedDurableRoot opts a bring-your-own connection back into the
+	// deployment's strict mounted-volume check. Off by default.
+	RequireMountedDurableRoot bool
+	// StartupTimeoutSeconds is the connection's startup budget. Zero selects
+	// DefaultBYOCoderStartupTimeout.
+	StartupTimeoutSeconds int
+	// WorkerUser, ReadyProbe, ReadyProbeTimeoutSeconds and
+	// ReuseExistingCheckout are the connection's dev-environment options,
+	// stamped onto each session profile (see CoderSessionProfile).
+	WorkerUser               string
+	ReadyProbe               string
+	ReadyProbeTimeoutSeconds int
+	ReuseExistingCheckout    bool
+	// WorkingDirectory is stamped the same way; it applies only with the
+	// workspace worker user.
+	WorkingDirectory string
+	// ProtectSecretFiles keeps Claude Code out of .env files (any worker user).
+	ProtectSecretFiles bool
+	// DefaultWorkspaceNamePrefix names the session's workspace when the
+	// project sets no prefix of its own, so a bring-your-own Coder shows
+	// <project>-w-<word>-<id> rather than ao-w-<word>-<id>. Must pass
+	// domain.ValidateCoderWorkspaceNamePrefix; see
+	// domain.CoderWorkspaceNamePrefixFor.
+	DefaultWorkspaceNamePrefix string
+}
+
+// readyProbeStartupMargin is the startup budget a session keeps after its
+// ready check passes: worker install, repository checkout and first check-in.
+const readyProbeStartupMargin = 10 * time.Minute
+
+// DefaultBYOCoderStartupTimeout is the startup budget for a bring-your-own
+// Coder connection that does not set one. Customer templates routinely clone
+// several repositories in a blocking startup script before accepting terminals.
+const DefaultBYOCoderStartupTimeout = 20 * time.Minute
+
+// CoderHomeDurableRoot resolves the durable root to the workspace user's home
+// directory at bootstrap time. A bring-your-own template may not run as the
+// "coder" user, so AO cannot know the absolute path in advance.
+const CoderHomeDurableRoot = "$HOME"
+
+// NormalizeCoderDurableRoot maps the accepted spellings of the home-directory
+// root ("$HOME", "~") onto CoderHomeDurableRoot and trims anything else.
+func NormalizeCoderDurableRoot(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case CoderHomeDurableRoot, "~", "${HOME}":
+		return CoderHomeDurableRoot
+	}
+	return value
 }
 
 // CoderWorkspaceLayout is the provider-specific filesystem contract between AO
@@ -105,16 +361,16 @@ type CoderWorkspaceLayout struct {
 // NewCoderWorkspaceLayout validates and expands the configured Coder volume
 // mount. Bootstrap separately verifies that DurableRoot is an actual mount point
 // inside the workspace before AO writes anything beneath it.
+//
+// CoderHomeDurableRoot is accepted as a symbolic root: every derived path keeps
+// the "$HOME/" prefix and the provider substitutes the workspace user's real
+// home directory before it writes anything.
 func NewCoderWorkspaceLayout(durableRoot string) (CoderWorkspaceLayout, error) {
-	durableRoot = strings.TrimSpace(durableRoot)
+	durableRoot = NormalizeCoderDurableRoot(durableRoot)
 	if durableRoot == "" {
 		return CoderWorkspaceLayout{}, errors.New("AO_CLOUD_CODER_DURABLE_ROOT is required")
 	}
-	if len(durableRoot) > 1024 || !strings.HasPrefix(durableRoot, "/") ||
-		path.Clean(durableRoot) != durableRoot || durableRoot == "/" ||
-		strings.IndexFunc(durableRoot, func(character rune) bool {
-			return character < ' ' || character == 0x7f
-		}) >= 0 {
+	if durableRoot != CoderHomeDurableRoot && !SafeCoderDurableRoot(durableRoot) {
 		return CoderWorkspaceLayout{}, errors.New(
 			"AO_CLOUD_CODER_DURABLE_ROOT must be a safe absolute non-root path",
 		)
@@ -130,6 +386,16 @@ func NewCoderWorkspaceLayout(durableRoot string) (CoderWorkspaceLayout, error) {
 		CodexHome:       path.Join(home, ".codex"),
 		DurableIdentity: path.Join(aoRoot, "durable-session-id"),
 	}, nil
+}
+
+// SafeCoderDurableRoot reports whether an absolute durable root is safe to
+// splice into the bootstrap shell and derive workspace paths from.
+func SafeCoderDurableRoot(durableRoot string) bool {
+	return len(durableRoot) <= 1024 && strings.HasPrefix(durableRoot, "/") &&
+		path.Clean(durableRoot) == durableRoot && durableRoot != "/" &&
+		strings.IndexFunc(durableRoot, func(character rune) bool {
+			return character < ' ' || character == 0x7f
+		}) < 0
 }
 
 // DecodeCoderSessionProfile reads and validates the Coder contract stored in a
@@ -173,7 +439,152 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 		return CoderSessionProfile{}, err
 	}
 	profile.DurableRoot = layout.DurableRoot
+	profile.WorkspaceNamePrefix = strings.TrimSpace(profile.WorkspaceNamePrefix)
+	if err := domain.ValidateCoderWorkspaceNamePrefix(profile.WorkspaceNamePrefix); err != nil {
+		return CoderSessionProfile{}, err
+	}
+	profile.WorkspaceName = strings.TrimSpace(profile.WorkspaceName)
+	profile.WorkspaceNameRetry = strings.TrimSpace(profile.WorkspaceNameRetry)
+	if profile.WorkspaceName == "" {
+		profile.WorkspaceNameRetry = ""
+	}
+	for _, name := range []string{profile.WorkspaceName, profile.WorkspaceNameRetry} {
+		if name == "" {
+			continue
+		}
+		if err := domain.ValidateCoderWorkspaceName(name); err != nil {
+			return CoderSessionProfile{}, err
+		}
+	}
+	if profile.StartupTimeoutSeconds < 0 {
+		return CoderSessionProfile{}, errors.New("Coder session startup timeout must not be negative")
+	}
+	profile.WorkerUser = strings.TrimSpace(profile.WorkerUser)
+	if profile.WorkerUser == domain.CoderWorkerUserAOWorker {
+		profile.WorkerUser = ""
+	}
+	if profile.WorkerUser != "" && profile.WorkerUser != CoderWorkerUserWorkspace {
+		return CoderSessionProfile{}, fmt.Errorf("Coder session worker user %q is not supported", profile.WorkerUser)
+	}
+	profile.ReadyProbe = strings.TrimSpace(profile.ReadyProbe)
+	if profile.ReadyProbeTimeoutSeconds < 0 {
+		return CoderSessionProfile{}, errors.New("Coder session ready check timeout must not be negative")
+	}
+	if !profile.RunsAsWorkspaceUser() {
+		profile.ReuseExistingCheckout = false
+		profile.WorkingDirectory = ""
+	} else {
+		profile.CheckoutDirectory = ""
+		profile.CheckoutSiblings = nil
+		profile.CheckoutDirectoryUnusable = ""
+	}
+	profile.CheckoutDirectoryUnusable = strings.TrimSpace(profile.CheckoutDirectoryUnusable)
+	profile.WorkingDirectory = strings.TrimSpace(profile.WorkingDirectory)
+	if err := domain.ValidateCoderWorkingDirectory(profile.WorkingDirectory); err != nil {
+		return CoderSessionProfile{}, err
+	}
+	profile.CheckoutDirectory = strings.TrimSpace(profile.CheckoutDirectory)
+	if profile.CheckoutDirectory == "" {
+		profile.CheckoutSiblings = nil
+	} else if err := domain.ValidateCoderCheckoutDirectory(profile.CheckoutDirectory); err != nil {
+		return CoderSessionProfile{}, fmt.Errorf("Coder session checkout directory: %w", err)
+	}
+	if len(profile.CheckoutSiblings) > domain.MaxCoderCheckoutSiblings {
+		return CoderSessionProfile{}, errors.New("Coder session has too many checkout siblings")
+	}
+	for _, name := range profile.CheckoutSiblings {
+		if !domain.ValidCoderCheckoutSibling(name) {
+			return CoderSessionProfile{}, fmt.Errorf("Coder session checkout sibling %q is invalid", name)
+		}
+	}
 	return profile, nil
+}
+
+// StampCoderWorkspaceName records, on a Coder session's resource profile, the
+// workspace name AO will create for it and the one retry name for a name
+// conflict (domain.CoderWorkspaceNames from the profile's prefix, the session
+// kind, its display name at creation and its id), and when they were chosen. It runs once, when the sandbox row is
+// written, because the session id is only known then. A profile without a
+// Coder section, or one that already names its workspace, is returned
+// unchanged. Every other field keeps its value exactly.
+func StampCoderWorkspaceName(raw json.RawMessage, kind, displayName, sessionID string, issuedAt time.Time) (json.RawMessage, error) {
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, fmt.Errorf("decode Coder session resource profile: %w", err)
+	}
+	section, ok := resource["coder"]
+	if !ok || string(section) == "null" {
+		return raw, nil
+	}
+	var coder map[string]json.RawMessage
+	if err := json.Unmarshal(section, &coder); err != nil {
+		return nil, fmt.Errorf("decode Coder session profile: %w", err)
+	}
+	var existing, prefix string
+	if value, ok := coder["workspaceName"]; ok {
+		if err := json.Unmarshal(value, &existing); err != nil {
+			return nil, fmt.Errorf("decode Coder workspace name: %w", err)
+		}
+	}
+	if strings.TrimSpace(existing) != "" {
+		return raw, nil
+	}
+	if value, ok := coder["workspaceNamePrefix"]; ok {
+		if err := json.Unmarshal(value, &prefix); err != nil {
+			return nil, fmt.Errorf("decode Coder workspace name prefix: %w", err)
+		}
+	}
+	primary, retry := domain.CoderWorkspaceNames(prefix, kind, displayName, sessionID)
+	for key, value := range map[string]any{
+		"workspaceName": primary, "workspaceNameRetry": retry, "workspaceNameIssuedAt": issuedAt.UTC(),
+	} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		coder[key] = encoded
+	}
+	var err error
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return nil, err
+	}
+	return json.Marshal(resource)
+}
+
+// UseCoderWorkspaceRetryName returns the resource profile with its retry
+// workspace name made the workspace name and the retry cleared, along with
+// both names. ok is false when the profile has no retry name left.
+func UseCoderWorkspaceRetryName(raw json.RawMessage) (updated json.RawMessage, from, to string, ok bool, err error) {
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, "", "", false, fmt.Errorf("decode Coder session resource profile: %w", err)
+	}
+	var coder map[string]json.RawMessage
+	if section, present := resource["coder"]; !present || json.Unmarshal(section, &coder) != nil || coder == nil {
+		return nil, "", "", false, errors.New("Coder session resource profile is required")
+	}
+	for key, target := range map[string]*string{"workspaceName": &from, "workspaceNameRetry": &to} {
+		if value, present := coder[key]; present {
+			if err := json.Unmarshal(value, target); err != nil {
+				return nil, "", "", false, fmt.Errorf("decode Coder %s: %w", key, err)
+			}
+		}
+	}
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || to == from {
+		return nil, "", "", false, nil
+	}
+	if coder["workspaceName"], err = json.Marshal(to); err != nil {
+		return nil, "", "", false, err
+	}
+	delete(coder, "workspaceNameRetry")
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return nil, "", "", false, err
+	}
+	if updated, err = json.Marshal(resource); err != nil {
+		return nil, "", "", false, err
+	}
+	return updated, from, to, true, nil
 }
 
 func normalizedCoderBaseURL(value string) (string, error) {
@@ -268,11 +679,12 @@ func (c NodeOpsConfig) Validate() error {
 }
 
 type ProvisioningDefaults struct {
-	Provider string
-	Release  string
-	NodeOps  NodeOpsConfig
-	Docker   DockerConfig
-	Coder    CoderConfig
+	Provider  string
+	Release   string
+	NodeOps   NodeOpsConfig
+	Docker    DockerConfig
+	Coder     CoderConfig
+	Freestyle FreestyleConfig
 }
 
 type Plan struct {
@@ -295,14 +707,16 @@ func (d ProvisioningDefaults) SessionPlan(harness string) (Plan, error) {
 // The caller is responsible for confirming the provider is one the control
 // plane offers before calling; this method only builds the plan.
 func (d ProvisioningDefaults) SessionPlanForProvider(harness, providerOverride string) (Plan, error) {
-	return d.SessionPlanForProviderWithCoder(harness, providerOverride, nil)
+	return d.SessionPlanForProviderWithCoder(harness, providerOverride, nil, nil)
 }
 
 // SessionPlanForProviderWithCoder is SessionPlanForProvider with optional
-// per-session Coder options (chosen template + its size/startup form). A nil
-// coder argument, or an empty TemplateID, yields exactly the default-template
-// plan, so existing callers and the "Default" picker choice are unchanged.
-func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerOverride string, coder *CoderSessionOptions) (Plan, error) {
+// per-session Coder options (chosen template + its size/startup form) and an
+// optional per-organization Coder deployment override. A nil coder argument, or
+// an empty TemplateID, yields exactly the default-template plan; a nil override
+// keeps the deployment-default Coder connection — so existing callers, the
+// "Default" picker choice, and deployment-level Coder are all unchanged.
+func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerOverride string, coder *CoderSessionOptions, override *CoderDeploymentOverride) (Plan, error) {
 	provider := normalizeProvider(providerOverride)
 	if provider == "" {
 		provider = normalizeProvider(d.Provider)
@@ -345,6 +759,19 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			"workerTokenTtlSeconds": int64(d.NodeOps.WorkerTokenTTL / time.Second),
 			"autoPauseSeconds":      d.NodeOps.AutoPauseSeconds,
 		}
+	} else if provider == ProviderFreestyle {
+		if err := d.Freestyle.Validate(); err != nil {
+			return Plan{}, err
+		}
+		// The snapshot is stamped on the session so a later recreate boots the
+		// same build even after the deployment moves to newer snapshots.
+		freestyle := map[string]any{
+			"snapshot":              d.Freestyle.snapshotForHarness(harness),
+			"workerTokenTtlSeconds": int64(d.Freestyle.WorkerTokenTTL / time.Second),
+			"autoPauseSeconds":      d.Freestyle.AutoPauseSeconds,
+		}
+		resourceProfile["freestyle"] = freestyle
+		bootstrapContext["freestyle"] = freestyle
 	} else if provider == ProviderDocker {
 		if err := d.Docker.Validate(); err != nil {
 			return Plan{}, err
@@ -361,20 +788,90 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			"namespace":   strings.TrimSpace(d.Docker.Namespace),
 		}
 	} else if provider == ProviderCoder {
-		if err := d.Coder.Validate(); err != nil {
+		// A per-organization override replaces the deployment-default connection's
+		// non-secret fields (URL/owner/template/agent/params/durable root). The
+		// worker-token TTL stays deployment policy; a bring-your-own-only
+		// deployment may leave the deployment default unset, so borrow a sane TTL
+		// when the override supplies one and the default did not.
+		coderCfg := d.Coder
+		// The deployment Coder is AO-operated: its templates mount a dedicated
+		// volume at the durable root and boot inside the deployment budget. A
+		// bring-your-own connection relaxes the mount check (unless it opts back
+		// in) and carries its own, longer startup budget.
+		requireMountedDurableRoot := true
+		startupTimeoutSeconds := 0
+		if override != nil {
+			coderCfg.BaseURL = override.BaseURL
+			coderCfg.Owner = override.Owner
+			coderCfg.TemplateID = override.TemplateID
+			coderCfg.AgentName = override.AgentName
+			coderCfg.Parameters = override.Parameters
+			coderCfg.DurableRoot = override.DurableRoot
+			if coderCfg.WorkerTokenTTL <= 0 {
+				coderCfg.WorkerTokenTTL = DefaultWorkerTokenTTL
+			}
+			requireMountedDurableRoot = override.RequireMountedDurableRoot
+			startupTimeoutSeconds = override.StartupTimeoutSeconds
+			if startupTimeoutSeconds <= 0 {
+				startupTimeoutSeconds = int(DefaultBYOCoderStartupTimeout / time.Second)
+			}
+			// A ready check can hold the worker back for its whole timeout, so the
+			// session's startup budget must outlast it with room to spare.
+			if strings.TrimSpace(override.ReadyProbe) != "" {
+				readyBudget := override.ReadyProbeTimeoutSeconds
+				if readyBudget <= 0 {
+					readyBudget = domain.DefaultCoderReadyProbeTimeoutSeconds
+				}
+				startupTimeoutSeconds = max(startupTimeoutSeconds, readyBudget+int(readyProbeStartupMargin/time.Second))
+			}
+		}
+		workspaceNamePrefix := ""
+		if coder != nil {
+			workspaceNamePrefix = strings.TrimSpace(coder.WorkspaceNamePrefix)
+		}
+		if workspaceNamePrefix == "" && override != nil {
+			workspaceNamePrefix = strings.TrimSpace(override.DefaultWorkspaceNamePrefix)
+		}
+		if err := domain.ValidateCoderWorkspaceNamePrefix(workspaceNamePrefix); err != nil {
 			return Plan{}, err
 		}
-		parameters, err := normalizedCoderParameters(d.Coder.Parameters)
+		// Resolve the effective template first: a per-project pick wins, otherwise
+		// the org/deployment default. A bring-your-own-Coder org leaves its default
+		// empty and chooses the template per project, so a session with neither is a
+		// user error surfaced as ErrCoderTemplateRequired — not a deployment misconfig
+		// buried deep in reconcile. The resolved value is folded back into the config
+		// so the shared Validate (which requires a template) sees it.
+		pickedTemplate := coder != nil && strings.TrimSpace(coder.TemplateID) != ""
+		templateID := strings.TrimSpace(coderCfg.TemplateID)
+		if pickedTemplate {
+			templateID = strings.TrimSpace(coder.TemplateID)
+		}
+		if templateID == "" {
+			return Plan{}, ErrCoderTemplateRequired
+		}
+		if override == nil && !d.Coder.TemplateAllowed(templateID) {
+			return Plan{}, ErrCoderTemplateUnavailable
+		}
+		coderCfg.TemplateID = templateID
+		if err := coderCfg.Validate(); err != nil {
+			return Plan{}, err
+		}
+		parameters, err := normalizedCoderParameters(coderCfg.Parameters)
 		if err != nil {
 			return Plan{}, err
 		}
-		// Default template + default params unless the client explicitly picked a
-		// non-default template. Only then do we override the template and layer on
-		// its size/startup form values — the default template does not declare
-		// those rich parameters, so sending them would make Coder reject the build.
-		templateID := strings.TrimSpace(d.Coder.TemplateID)
-		if coder != nil && strings.TrimSpace(coder.TemplateID) != "" {
-			templateID = strings.TrimSpace(coder.TemplateID)
+		// Layer on the project's values for the picked template's parameters,
+		// then its size/startup form values, only when the client explicitly
+		// picked a non-default template: the default template does not declare
+		// those rich parameters, so sending them would make Coder reject the
+		// build. Merge order: connection parameters, then the project's
+		// parameters, then AO's own size/startup mapping.
+		if pickedTemplate {
+			for name, value := range coder.Parameters {
+				if name = strings.TrimSpace(name); name != "" {
+					parameters[name] = value
+				}
+			}
 			if size := strings.TrimSpace(coder.Size); size != "" {
 				parameters["size"] = size
 			}
@@ -382,20 +879,37 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 				parameters["startup_script"] = startup
 			}
 		}
-		resourceProfile["coder"] = map[string]any{
-			"baseUrl":               strings.TrimRight(strings.TrimSpace(d.Coder.BaseURL), "/"),
-			"owner":                 strings.TrimSpace(d.Coder.Owner),
-			"templateId":            templateID,
-			"agentName":             strings.TrimSpace(d.Coder.AgentName),
-			"parameters":            parameters,
-			"durableRoot":           strings.TrimSpace(d.Coder.DurableRoot),
-			"workerTokenTtlSeconds": int64(d.Coder.WorkerTokenTTL / time.Second),
+		durableRoot := NormalizeCoderDurableRoot(coderCfg.DurableRoot)
+		coderProfile := map[string]any{
+			"baseUrl":                   strings.TrimRight(strings.TrimSpace(coderCfg.BaseURL), "/"),
+			"owner":                     strings.TrimSpace(coderCfg.Owner),
+			"templateId":                templateID,
+			"agentName":                 strings.TrimSpace(coderCfg.AgentName),
+			"parameters":                parameters,
+			"durableRoot":               durableRoot,
+			"workerTokenTtlSeconds":     int64(coderCfg.WorkerTokenTTL / time.Second),
+			"requireMountedDurableRoot": requireMountedDurableRoot,
 		}
+		if workspaceNamePrefix != "" {
+			coderProfile["workspaceNamePrefix"] = workspaceNamePrefix
+		}
+		if startupTimeoutSeconds > 0 {
+			coderProfile["startupTimeoutSeconds"] = startupTimeoutSeconds
+		}
+		if override != nil {
+			addCoderDevEnvironment(coderProfile, override)
+		}
+		if d.Coder.WorkerWorkingFolder {
+			if err := addCoderCheckoutDirectory(coderProfile, coder, override); err != nil {
+				return Plan{}, err
+			}
+		}
+		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{
-			"owner":       strings.TrimSpace(d.Coder.Owner),
+			"owner":       strings.TrimSpace(coderCfg.Owner),
 			"templateId":  templateID,
-			"agentName":   strings.TrimSpace(d.Coder.AgentName),
-			"durableRoot": strings.TrimSpace(d.Coder.DurableRoot),
+			"agentName":   strings.TrimSpace(coderCfg.AgentName),
+			"durableRoot": durableRoot,
 		}
 	}
 	resourceJSON, err := json.Marshal(resourceProfile)
@@ -413,6 +927,122 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 	}, nil
 }
 
+// addCoderDevEnvironment stamps a bring-your-own connection's dev-environment
+// options onto a session's Coder profile. The default (ao-worker user, no
+// ready check, no checkout reuse) adds nothing, so those profiles keep their
+// historical shape.
+func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeploymentOverride) {
+	if strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		coderProfile["workerUser"] = CoderWorkerUserWorkspace
+		if override.ReuseExistingCheckout {
+			coderProfile["reuseExistingCheckout"] = true
+		}
+	}
+	if probe := strings.TrimSpace(override.ReadyProbe); probe != "" {
+		timeout := override.ReadyProbeTimeoutSeconds
+		if timeout <= 0 {
+			timeout = domain.DefaultCoderReadyProbeTimeoutSeconds
+		}
+		coderProfile["readyProbe"] = probe
+		coderProfile["readyProbeTimeoutSeconds"] = timeout
+	}
+	if override.ProtectSecretFiles {
+		coderProfile["protectSecretFiles"] = true
+	}
+	if strings.ToLower(strings.TrimSpace(override.WorkerUser)) != CoderWorkerUserWorkspace {
+		return
+	}
+	if directory := strings.TrimSpace(override.WorkingDirectory); directory != "" {
+		coderProfile["workingDirectory"] = directory
+	}
+}
+
+// addCoderCheckoutDirectory stamps the project's working-folder checkout onto
+// a session whose worker runs as the dedicated ao-worker user (the deployment
+// Coder, or a bring-your-own connection's default), so the path is decided
+// once, when the session is created. The workspace worker user works in its
+// WorkingDirectory instead, and a session without one keeps the durable root
+// checkout and its historical profile shape.
+func addCoderCheckoutDirectory(coderProfile map[string]any, coder *CoderSessionOptions, override *CoderDeploymentOverride) error {
+	if coder == nil {
+		return nil
+	}
+	if override != nil && strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		return nil
+	}
+	if strings.TrimSpace(coder.CheckoutDirectory) == "" {
+		if unusable := strings.TrimSpace(coder.CheckoutDirectoryUnusable); unusable != "" {
+			coderProfile["checkoutDirectoryUnusable"] = unusable
+		}
+		return nil
+	}
+	directory := strings.TrimSpace(coder.CheckoutDirectory)
+	if err := domain.ValidateCoderCheckoutDirectory(directory); err != nil {
+		return err
+	}
+	if len(coder.CheckoutSiblings) > domain.MaxCoderCheckoutSiblings {
+		return errors.New("too many additional repository folders for the working folder")
+	}
+	for _, name := range coder.CheckoutSiblings {
+		if !domain.ValidCoderCheckoutSibling(name) {
+			return fmt.Errorf("additional repository folder %q is invalid", name)
+		}
+	}
+	coderProfile["checkoutDirectory"] = directory
+	if len(coder.CheckoutSiblings) > 0 {
+		coderProfile["checkoutSiblings"] = slices.Clone(coder.CheckoutSiblings)
+	}
+	return nil
+}
+
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+// FreestyleSnapshot returns the snapshot a Freestyle plan boots from, or "" for
+// any other provider's plan.
+func FreestyleSnapshot(plan Plan) string {
+	var profile struct {
+		Freestyle struct {
+			Snapshot string `json:"snapshot"`
+		} `json:"freestyle"`
+	}
+	if err := json.Unmarshal(plan.ResourceProfile, &profile); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(profile.Freestyle.Snapshot)
+}
+
+// WithFreestyleSnapshot returns plan booting from snapshot instead, used when
+// the session's project has a prepared snapshot for its harness. The harness
+// snapshot it replaces is kept as baseSnapshot, which a later create or
+// recreate boots if the project snapshot has been collected by then.
+func WithFreestyleSnapshot(plan Plan, snapshot string) (Plan, error) {
+	rewrite := func(raw json.RawMessage) (json.RawMessage, error) {
+		var document map[string]any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return nil, err
+		}
+		freestyle, ok := document["freestyle"].(map[string]any)
+		if !ok {
+			return nil, errors.New("plan has no freestyle section")
+		}
+		if _, stamped := freestyle["baseSnapshot"]; !stamped {
+			if base, ok := freestyle["snapshot"].(string); ok && strings.TrimSpace(base) != "" {
+				freestyle["baseSnapshot"] = base
+			}
+		}
+		freestyle["snapshot"] = snapshot
+		return json.Marshal(document)
+	}
+	resourceProfile, err := rewrite(plan.ResourceProfile)
+	if err != nil {
+		return Plan{}, err
+	}
+	bootstrapContext, err := rewrite(plan.BootstrapContext)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.ResourceProfile, plan.BootstrapContext = resourceProfile, bootstrapContext
+	return plan, nil
 }

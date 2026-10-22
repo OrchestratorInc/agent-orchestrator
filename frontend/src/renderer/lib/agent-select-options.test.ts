@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, type RoleSession } from "./agent-select-options";
+import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, isLaunchableAgent, type RoleSession } from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -99,6 +99,14 @@ describe("buildRankedAgentOptions", () => {
 
 		expect(options[0]).toMatchObject({ id: "claude-code", disabled: false, status: "Install unknown" });
 		expect(options[1]).toMatchObject({ id: "codex", disabled: true, status: "Needs auth" });
+	});
+
+	it("keeps harnesses without installation checks selectable and launchable", () => {
+		const unchecked = agent("codex", "unknown", "unknown");
+		unchecked.installation.reasonCode = "install_check_unsupported";
+		const options = buildRankedAgentOptions({ agents: [unchecked], priorityRank, fallbackAgents: [] });
+		expect(options[0]).toMatchObject({ disabled: false, status: "Install unknown" });
+		expect(isLaunchableAgent(unchecked)).toBe(true);
 	});
 
 	it("keeps stale known-good agents selectable while checking", () => {

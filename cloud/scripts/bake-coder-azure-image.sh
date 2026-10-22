@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Bake the native Azure Coder workspace image used by the ao-azure-vm template
 # (cloud/coder-azure-vm/main.tf). The image is Ubuntu + node + ALL AO harnesses
-# (claude-code, codex, cursor-agent) + gh + the release-matched ao-worker/ao
-# binaries + a `coder` user with NOPASSWD sudo. Nothing runs in a container at
+# (claude-code, codex, cursor-agent, opencode) + gh + the agent browser (Chromium +
+# agent-browser) + the release-matched ao-worker/ao binaries + a `coder` user with
+# NOPASSWD sudo. Nothing runs in a container at
 # runtime; the coder agent + AO worker run NATIVELY (the template's cloud-init
 # starts the coder agent as a systemd service and the control plane bootstraps
 # the baked ao-worker over it), mirroring eleven_x's AWS EC2 dev-kit.
@@ -30,10 +31,18 @@ BAKE_VM="${AO_AZURE_BAKE_VM:-ao-bake-tmp}"
 ADMIN_USER="${AO_AZURE_ADMIN_USER:-azureadmin}"
 VM_SIZE="${AO_AZURE_BAKE_VM_SIZE:-Standard_D2s_v5}"
 
-CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.228}"
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.287}"
 CODEX_VERSION="${CODEX_VERSION:-0.147.0}"
 CURSOR_AGENT_VERSION="${CURSOR_AGENT_VERSION:-2026.08.11-e8db854}"
+OPENCODE_VERSION="${OPENCODE_VERSION:-1.18.32}"
 GH_VERSION="${GH_VERSION:-2.97.0}"
+# Agent browser, as in coder/Sandbox.Dockerfile: Playwright's Chromium (Ubuntu's
+# chromium package is a snap stub) and agent-browser. Keep PLAYWRIGHT_VERSION in
+# step with frontend/package-lock.json, and the agent-browser version and sha256
+# (linux-x64) in lockstep with frontend/scripts/prepare-agent-browser.mjs.
+PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.60.0}"
+AGENT_BROWSER_VERSION="${AGENT_BROWSER_VERSION:-0.38.1}"
+AGENT_BROWSER_SHA256="${AGENT_BROWSER_SHA256:-5100149a1903211c889de4e545bf36d90803740cea4f99aa22651649f9205ea1}"
 
 echo "=== resolve source image ${SOURCE_IMAGE_NAME} ==="
 SRC_ID="$(az image show -g "$RG" -n "$SOURCE_IMAGE_NAME" --query id -o tsv)"
@@ -54,12 +63,16 @@ az vm create -g "$RG" -n "$BAKE_VM" \
   --output none
 echo "bake VM created"
 
-echo "=== install missing harnesses (codex + cursor-agent) + verify all three ==="
+echo "=== install missing harnesses (codex + cursor-agent + opencode) + agent browser + verify all ==="
 az vm run-command invoke -g "$RG" -n "$BAKE_VM" --command-id RunShellScript --scripts "
 set -e
 export DEBIAN_FRONTEND=noninteractive
 # codex (node already present from the base image)
 sudo npm install --global '@openai/codex@${CODEX_VERSION}'
+# opencode (npm global; the linux-x64 platform binary rides as an optional dep,
+# so no per-user runtime download — the worker's PATH picks up the global bin the
+# same way it finds codex)
+sudo npm install --global 'opencode-ai@${OPENCODE_VERSION}'
 # cursor-agent (native tarball; amd64 -> x64)
 sudo mkdir -p '/opt/cursor-agent/${CURSOR_AGENT_VERSION}'
 curl --fail --location --silent --show-error \
@@ -72,6 +85,20 @@ if ! command -v gh >/dev/null 2>&1; then
     'https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz' \
     | sudo tar --strip-components=2 -xzf - -C /usr/local/bin 'gh_${GH_VERSION}_linux_amd64/bin/gh'
 fi
+# agent browser: fonts, Playwright's Chromium under a root-owned path every user
+# can read (linked to /usr/local/bin/chromium), and agent-browser (amd64 -> x64)
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends \
+  fonts-liberation fonts-noto-cjk fonts-noto-color-emoji fonts-noto-core
+sudo env PLAYWRIGHT_BROWSERS_PATH=/opt/ao-browser \
+  npx --yes 'playwright@${PLAYWRIGHT_VERSION}' install --with-deps --no-shell chromium
+set -- /opt/ao-browser/chromium-*/chrome-linux*/chrome
+if [ \"\$#\" -ne 1 ] || [ ! -x \"\$1\" ]; then echo \"expected one Playwright Chromium, found: \$*\"; exit 1; fi
+sudo ln -sfn \"\$1\" /usr/local/bin/chromium
+sudo curl --fail --location --silent --show-error -o /usr/local/bin/agent-browser \
+  'https://github.com/vercel-labs/agent-browser/releases/download/v${AGENT_BROWSER_VERSION}/agent-browser-linux-x64'
+echo '${AGENT_BROWSER_SHA256}  /usr/local/bin/agent-browser' | sha256sum -c -
+sudo chmod 0755 /usr/local/bin/agent-browser
 echo '--- versions ---'
 # HOME must be set: the cursor-agent launcher reads \$HOME under 'set -u', and
 # az run-command runs with no HOME. At worker runtime HOME is always exported.
@@ -79,7 +106,26 @@ export HOME=\"\${HOME:-/root}\"
 claude --version || echo 'claude MISSING'
 codex --version || echo 'codex MISSING'
 cursor-agent --version || echo 'cursor-agent MISSING'
+opencode --version || echo 'opencode MISSING'
 gh --version | head -1 || echo 'gh MISSING'
+chromium --version || echo 'chromium MISSING'
+agent-browser --version || echo 'agent-browser MISSING'
+# opencode must resolve on the default PATH (the worker guard does LookPath).
+command -v opencode || echo 'opencode NOT ON PATH'
+# Pre-warm opencode's models.dev catalog into a baked, read-only path. opencode
+# (a multi-provider aggregator) downloads the whole ~5MB catalog on startup, so a
+# fresh sandbox otherwise pays ~10s before the TUI appears (claude/codex have no
+# such fetch). The worker copies this into the per-session HOME before launch
+# (seedOpenCodeModelsCache), so opencode starts from a warm cache.
+opencode models >/dev/null 2>&1 || echo 'opencode models warm failed'
+sudo mkdir -p /opt/ao/opencode
+if [ -f \"\$HOME/.cache/opencode/models.json\" ]; then
+  sudo cp \"\$HOME/.cache/opencode/models.json\" /opt/ao/opencode/models.json
+  sudo chmod 0644 /opt/ao/opencode/models.json
+  echo \"baked opencode models.json: \$(wc -c < /opt/ao/opencode/models.json) bytes\"
+else
+  echo 'opencode models.json NOT FOUND to bake'
+fi
 # make the freshly installed tools available to the coder user by default
 ls -l /usr/local/bin/cursor-agent
 " --query 'value[0].message' -o tsv

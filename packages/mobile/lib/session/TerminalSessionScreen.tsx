@@ -2,16 +2,16 @@ import { Feather } from "../icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, BackHandler, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
-import { ApiError, getPreview, isTerminalStatus, killSession, sendMessage } from "../api";
-import { authHeaders, isConfigured, loadConfig, type ServerConfig } from "../config";
+import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
+import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { MinimalBackButton } from "../MinimalBackButton";
 import { MuxClient, type MuxStatus } from "../mux";
+import { filesRoute } from "../files/navigation";
 import { glassHeaderControl } from "../native-header-items";
 import { Composer } from "./Composer";
 import { dockInset, rootKeyboardPad } from "./keyboardInset";
@@ -38,25 +38,14 @@ import {
 } from "./useInterfaceTransition";
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
 import { adjustTerminalViewport } from "./terminalViewport";
-import type { RouteSession } from "./sessionRoute";
+import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
+import { userFacingError } from "../connectionError";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
+import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
-
-/**
- * Touch padding for the two icon-only controls in the preview bar.
- *
- * The glyph sits in a box of roughly 23x19pt, well under the 44pt touch target.
- * Growing the box itself would grow the bar, so the padding goes outside it: 12pt
- * on every side except the one facing the other control, where the 8pt gap leaves
- * room for 4. Asymmetric on purpose — symmetric padding of 8 swapped this pair's
- * targets for the path text between them, and padding wide enough to reach 44 on
- * both sides would make the reload and close targets overlap, which is worse than
- * either being slightly small.
- */
-const PREVIEW_RELOAD_SLOP = { top: 12, bottom: 12, left: 12, right: 4 } as const;
-const PREVIEW_CLOSE_SLOP = { top: 12, bottom: 12, left: 4, right: 12 } as const;
 
 // Injected into the xterm WebView after load. xterm has its own touch handlers
 // that scroll by discrete lines (the janky "1 line per swipe"). We intercept in
@@ -539,12 +528,6 @@ const TERMINAL_ENHANCE_JS = `
 true;
 `;
 
-const statusLabel: Record<MuxStatus, string> = {
-	connecting: "Connecting…",
-	open: "live",
-	closed: "disconnected",
-	error: "error",
-};
 const statusColorFor = (t: Theme): Record<MuxStatus, string> => ({
 	connecting: t.amber,
 	open: t.green,
@@ -555,7 +538,7 @@ const statusColorFor = (t: Theme): Record<MuxStatus, string> => ({
 function terminalInterfacePhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining":
-			return "Waiting for the current terminal turn to finish. New AO messages are queued safely.";
+			return "Waiting for the current terminal turn to finish. New messages are queued safely.";
 		case "source_stopping":
 			return "Stopping the terminal controller before Chat starts.";
 		case "source_stopped":
@@ -577,10 +560,13 @@ function terminalInterfacePhaseLabel(phase?: string): string {
  */
 export default function TerminalScreen({ session: resolved }: { session?: RouteSession }) {
 	const t = useTheme();
-	const { scheme } = useThemeState();
+	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
-	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string }>();
+	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string; hostId?: string }>();
 	const shellOnly = Boolean(params.handleId);
+	// A reviewer pane is attached by handle like a shell, but the daemon does not
+	// own it as a shell terminal: closing it means stopping the worker's reviewer.
+	const reviewerPane = params.kind === "reviewer" && Boolean(params.sessionId);
 	const id = String(params.handleId ?? params.id ?? "");
 	const sessionId = shellOnly ? String(params.sessionId ?? "") : id;
 	const projectId = params.projectId ? String(params.projectId) : undefined;
@@ -617,7 +603,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// full-screen TUI doesn't mis-render. The WebView crops/scales it locally.
 	const authRef = useRef<{ cols: number; rows: number } | null>(null);
 
-	const [cfg, setCfg] = useState<ServerConfig | null>(null);
 	const [status, setStatus] = useState<MuxStatus>("connecting");
 	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 	const [banner, setBanner] = useState<string | null>(null);
@@ -630,16 +615,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
 	const [restoring, setRestoring] = useState(false);
-	// In-app browser: shows the static preview file the agent generated (an
-	// index.html). We poll the daemon's on-demand detector while the terminal is
-	// open, but we deliberately DO NOT auto-open the overlay: the detector falls back
-	// to any previewable file (e.g. a repo's README.md), so auto-popping would steal
-	// the screen with an unbuilt/blank page. Instead the globe button lights up with a
-	// green dot when the agent has produced something to view (any previewable file
-	// except the repo README); the user taps it to open.
-	const [browserOpen, setBrowserOpen] = useState(false);
+	// Poll generated previews so the globe can advertise the optional App preview tab.
 	const [preview, setPreview] = useState<{ entry: string; url: string } | null>(null);
-	const previewWebRef = useRef<WebView>(null);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
 	const known =
@@ -651,7 +628,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// tmux. Older daemons omit terminalHandleId and retain the historical
 	// session-id handle, which keeps the fallback backward-compatible.
 	const terminalHandleId = shellOnly ? id : known?.terminalHandleId || id;
-	const interfaceSwitch = useInterfaceTransition(cfg, shellOnly ? "" : sessionId, refresh);
+	const interfaceSwitch = useInterfaceTransition(activeConfig, shellOnly ? "" : sessionId, refresh);
 	// Owned by the screen rather than the hook: the background poll calls the same
 	// `refresh()`, so a hook-wide busy flag would let a poll tick disable the
 	// user's own button and swallow the very tap the recheck exists to serve.
@@ -687,7 +664,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const interfaceTransitionNoticeText =
 		interfaceTransitionNotice?.errorDetail ||
 		(interfaceTransitionRecovered
-			? "AO restored the session in its last committed interface."
+			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
 				: "The interface switch failed; Terminal UI remains available.");
@@ -703,7 +680,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			known.activity === "waiting_input" ||
 			known.activity === "blocked"),
 	);
-	const dead = notFound || (!shellOnly && known ? isTerminalStatus(known.status) : false);
+	const dead = notFound || (!shellOnly && known ? isRuntimeGone(known) : false);
 	// What counts as a live preview: any file the daemon surfaces (an .html build, or
 	// a generated doc like plan.md / a report) EXCEPT a repo's README, which the
 	// detector's markdown fallback always matches on a fresh checkout. Filtering the
@@ -807,19 +784,14 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Wi-Fi hands the session to Tailscale or the tunnel — and a mux still
 	// pointed at the previous address stays disconnected on a blank screen
 	// until the screen is closed and reopened.
-	const activeBaseUrl = activeConfig
-		? `${activeConfig.secure ? "https" : "http"}://${activeConfig.host}:${activeConfig.httpPort}`
-		: "";
-
 	useEffect(() => {
 		let disposed = false;
 		(async () => {
-			// Prefer the endpoint the race settled on; fall back to storage on the
-			// first render, before the store has resolved one.
-			const config = activeConfig ?? (await loadConfig());
+			// A selected machine without a verified connection has no terminal.
+			// The global saved config may belong to a different machine.
+			const config = activeConfig;
 			if (disposed) return;
-			setCfg(config);
-			if (!isConfigured(config)) return;
+			if (!config || !isConfigured(config)) return;
 
 			const mux = new MuxClient(config, {
 				onStatus: (s) => setStatus(s),
@@ -833,7 +805,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				},
 				onTerminalExited: (tid, code) => {
 					if (tid === terminalHandleId) {
-						setBanner(`Session exited (code ${code})`);
+						setBanner(terminalExitedCopy(code));
 						setNotFound(true);
 					}
 				},
@@ -841,8 +813,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					if (tid !== terminalHandleId) return;
 					// A missing PTY means the session is terminated - offer Restore
 					// instead of surfacing it as a raw error banner.
-					if (/not found/i.test(msg)) setNotFound(true);
-					else setBanner(msg);
+					if (isTerminalGoneError(msg)) setNotFound(true);
+					else setBanner(terminalErrorCopy(msg));
 				},
 				onTerminalResize: (tid, cols, rows) => {
 					if (tid !== terminalHandleId) return;
@@ -863,15 +835,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			xtermReadyRef.current = false;
 			pendingOutputRef.current = [];
 		};
-		// activeBaseUrl, not activeConfig: the object identity changes on every
-		// resolve, and rebuilding the mux on each one would tear down a healthy
-		// terminal for no reason.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [terminalHandleId, activeBaseUrl]);
+		// The store preserves config identity when the endpoint and credential
+		// did not change, so this also handles two hosts sharing one URL.
+	}, [terminalHandleId, activeConfig]);
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
-	}, [scheme]);
+	}, [scheme, style]);
 
 	// Poll the daemon's on-demand preview detector while the terminal is open, just
 	// to keep `preview` current for the globe button. We never auto-open the overlay
@@ -879,14 +849,14 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// repo README, so auto-popping would surface a blank/unbuilt page.
 	useEffect(() => {
 		if (shellOnly) return;
-		if (!cfg || !isConfigured(cfg)) return;
+		if (!activeConfig || !isConfigured(activeConfig)) return;
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const tick = async () => {
 			try {
-				const p = await getPreview(cfg, id);
+				const p = await getPreview(activeConfig, id);
 				if (cancelled) return;
-				setPreview(p);
+				setPreview(p ? { entry: p.entry, url: p.url } : null);
 			} catch {
 				/* transient - keep polling */
 			}
@@ -897,7 +867,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			cancelled = true;
 			if (timer) clearTimeout(timer);
 		};
-	}, [cfg, id, shellOnly]);
+	}, [activeConfig, id, shellOnly]);
 
 	// The WebView reports the phone's NATURAL fit (proposeDimensions, measure-only).
 	// We forward it to the daemon as this client's requested size — used only when
@@ -999,8 +969,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		}
 		setSending(true);
 		try {
-			const config = cfg ?? (await loadConfig());
-			await sendMessage(config, id, text);
+			if (!activeConfig) throw new Error("No active machine connection");
+			await sendMessage(activeConfig, id, text);
 			haptics.success();
 			setMsg("");
 		} catch (e) {
@@ -1015,12 +985,12 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				setBanner(REROUTED_NOTICE);
 			} else {
 				haptics.error();
-				setBanner(`Send failed: ${e instanceof Error ? e.message : String(e)}`);
+				setBanner(`Message not sent. ${userFacingError(e)}`);
 			}
 		} finally {
 			setSending(false);
 		}
-	}, [msg, sendTarget, cfg, id, terminalHandleId, projectId, status]);
+	}, [msg, sendTarget, activeConfig, id, terminalHandleId, projectId, status]);
 
 	// Push-to-talk dictation, captured on the PHONE rather than by the harness.
 	//
@@ -1053,36 +1023,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		if (voice.error) setBanner(voice.error);
 	}, [voice.error]);
 
-	// Toggle the in-app browser. The poll above keeps `preview` current, so a tap
-	// just shows/hides the overlay. A bare README (the detector's markdown fallback)
-	// reports "no preview yet" instead of surfacing an unbuilt repo doc.
+	// Preview is one session-level destination: the live desktop browser first,
+	// with the generated app/document preview available as a second tab.
 	const toggleBrowser = useCallback(() => {
 		haptics.tap();
-		if (browserOpen) {
-			setBrowserOpen(false);
-			return;
-		}
-		if (!hasPreview) {
-			setBanner("No preview yet. Waiting for the agent to generate a page or document…");
-			return;
-		}
-		setBrowserOpen(true);
-	}, [browserOpen, hasPreview]);
-
-	// Android's back gesture closes what is on top. The preview is a full-screen
-	// overlay drawn inside this route, so without this it answered back by leaving
-	// the session — the whole terminal, not the panel the user was looking at —
-	// while the same gesture closed the drawer correctly. Registered only while the
-	// overlay is up, so it never competes with the drawer's handler for the back
-	// press on a route where only one of the two can be on screen.
-	useEffect(() => {
-		if (Platform.OS !== "android" || !browserOpen) return;
-		const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-			setBrowserOpen(false);
-			return true;
+		router.push({
+			pathname: "/preview/[id]",
+			params: {
+				id: sessionId,
+				hostId: params.hostId,
+				previewUrl: known && "previewUrl" in known ? known.previewUrl ?? undefined : undefined,
+			},
 		});
-		return () => subscription.remove();
-	}, [browserOpen]);
+	}, [known, params.hostId, router, sessionId]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
@@ -1090,7 +1043,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				await interfaceSwitch.start("chat", policy);
 				setBanner(null);
 			} catch (cause) {
-				setBanner(`Switch failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+				setBanner(`Couldn't switch interface. ${userFacingError(cause)}`);
 			}
 		},
 		[interfaceSwitch],
@@ -1152,7 +1105,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			"Switch to Chat?",
 			known?.activity === "waiting_input" || known?.activity === "blocked"
 				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
-				: "Keep the same AO session, worktree, and native agent conversation.",
+				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
 			[
 				{ text: "Keep Terminal UI", style: "cancel" },
 				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
@@ -1223,46 +1176,63 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					</Pressable>
 					<Pressable
 						hitSlop={12}
-						accessibilityLabel={browserOpen ? "Close preview" : "Open preview"}
+						accessibilityLabel="Open preview"
 						onPress={toggleBrowser}
 						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
 					>
 						<Feather
 							name="globe"
 							size={iconSize.lg}
-							color={browserOpen ? t.accent : hasPreview ? t.green : t.textSecondary}
+							color={hasPreview ? t.green : t.textSecondary}
 						/>
-						{hasPreview && !browserOpen && <View style={styles.browserReadyDot} />}
+						{hasPreview && <View style={styles.browserReadyDot} />}
+					</Pressable>
+					<Pressable
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel="Session files and changes"
+						onPress={() => { haptics.tap(); router.push(filesRoute(sessionId, params.hostId, params.title)); }}
+						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
+					>
+						<Feather name="file-diff" size={iconSize.lg} color={t.textSecondary} />
 					</Pressable>
 				</View>
 			),
 		});
-	}, [headerRightReady, navigation, browserOpen, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch]);
+	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch, router, sessionId, params.hostId, params.title]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
 			try {
-				const config = cfg ?? (await loadConfig());
-				if (shellOnly) await closeShellTerminal(config, id);
-				else await killSession(config, id);
+				if (!activeConfig) throw new Error("No active machine connection");
+				if (reviewerPane) await killSessionReviewer(activeConfig, String(params.sessionId));
+				else if (shellOnly) await closeShellTerminal(activeConfig, id);
+				else await killSession(activeConfig, id);
 				haptics.success();
 				leave();
 			} catch (e) {
 				haptics.error();
-				setBanner(`Kill failed: ${e instanceof Error ? e.message : String(e)}`);
+				setBanner(`${reviewerPane ? "Couldn't stop the reviewer" : shellOnly ? "Couldn't close the shell" : "Couldn't archive the session"}. ${userFacingError(e)}`);
 			}
 		};
 		if (Platform.OS === "web") {
 			doKill();
 			return;
 		}
-		// Cautionary buzz as the destructive confirmation dialog is raised.
+		if (reviewerPane) {
+			haptics.warning();
+			Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
+				{ text: "Keep reviewer", style: "cancel" },
+				{ text: "Stop reviewer", style: "destructive", onPress: doKill },
+			]);
+			return;
+		}
 		haptics.warning();
-		Alert.alert(shellOnly ? "Close shell?" : "Kill session?", shellOnly ? "This stops the worktree shell." : `This stops ${id}.`, [
-			{ text: "Cancel", style: "cancel" },
-			{ text: shellOnly ? "Close" : "Kill", style: "destructive", onPress: doKill },
+		Alert.alert(shellOnly ? "Close shell?" : ARCHIVE_SESSION_CONFIRM.title, shellOnly ? "This stops the worktree shell." : ARCHIVE_SESSION_CONFIRM.message, [
+			{ text: shellOnly ? "Cancel" : ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+			{ text: shellOnly ? "Close" : ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: doKill },
 		]);
-	}, [cfg, id, leave, shellOnly]);
+	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly]);
 
 	// Restore a terminated session: the daemon re-attaches its worktree agent and
 	// its PTY comes back, so we re-open the terminal once restore succeeds.
@@ -1282,7 +1252,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
 			}, 1200);
 		} catch (e) {
-			setBanner(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
+			setBanner(`Couldn't restore the session. ${userFacingError(e)}`);
 		} finally {
 			setRestoring(false);
 		}
@@ -1298,7 +1268,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			fastScrollSensitivity: 8,
 			// The terminal's own palette, not the product one: agent TUIs own the
 			// meaning of the ANSI slots.
-			theme: terminalTheme(scheme),
+			theme: terminalTheme(scheme, style),
 			// Agent TUIs pick their colours assuming a dark canvas, so on the light
 			// theme they can land white-on-white — the prompt row is exactly that
 			// once its background band is collapsed away. xterm nudges any pair that
@@ -1306,9 +1276,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			// more reliable than trying to anticipate every colour a TUI might emit.
 			minimumContrastRatio: 4.5,
 		}),
-		// `scheme` matters: without it the terminal keeps the palette it was built
-		// with and stays dark after a theme switch.
-		[scheme],
+		// `scheme` and `style` matter: without them the terminal keeps the palette
+		// it was built with and stays dark after a theme switch.
+		[scheme, style],
 	);
 
 	// Adjust only the phone's CSS viewport. The xterm renderer, mux attachment,
@@ -1331,15 +1301,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			nestedScrollEnabled: true,
 			// Surface an Android WebView render-process crash instead of a silent black
 			// screen, so the user can tell the terminal died vs. never loaded.
-			onRenderProcessGone: () => setBanner("Terminal renderer crashed. Go back and reopen the session."),
+			onRenderProcessGone: () => setBanner("The terminal view stopped working. Go back and open the session again."),
 		}),
 		[],
 	);
 
-	if (cfg && !isConfigured(cfg)) {
+	if (activeConfig && !isConfigured(activeConfig)) {
 		return (
 			<View style={styles.center}>
-				<Text style={styles.bannerText}>No server configured.</Text>
+				<Text style={styles.bannerText}>No machine paired.</Text>
 			</View>
 		);
 	}
@@ -1358,7 +1328,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				{/* Status-bar chrome: capped so the toolbar keeps its height and the
 				    terminal grid keeps its rows at accessibility text sizes. */}
 				<Text style={styles.statusText} numberOfLines={1} maxFontSizeMultiplier={1.4}>
-					{statusLabel[status]}
+					{TERMINAL_STATUS_LABEL[status]}
 				</Text>
 				{size && !dead && (
 					<Text style={styles.dims} numberOfLines={1} maxFontSizeMultiplier={1.4}>
@@ -1398,15 +1368,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						<Text style={styles.restoreText}>{restoring ? "Restoring…" : "Restore"}</Text>
 					</Pressable>
 				) : (
-					// Icon-only: the trash glyph reads as "destroy this session" on its
-					// own, so the label would only cost width. Hence accessibilityLabel.
+					// Icon-only: the archive glyph matches the restorable action on the
+					// workers board. The accessible label carries the full operation.
 					<Pressable
 						hitSlop={8}
-						accessibilityLabel={shellOnly ? "Close shell" : "Kill session"}
+						accessibilityLabel={shellOnly ? "Close shell" : "Archive session"}
 						onPress={confirmKill}
 						style={({ pressed }) => [styles.killBtn, pressed && { opacity: press.opacity }]}
 					>
-						<Feather name={shellOnly ? "x" : "trash-2"} size={iconSize.sm} color={t.red} />
+						<Feather name={shellOnly ? "x" : "archive"} size={iconSize.sm} color={shellOnly ? t.red : t.textSecondary} />
 					</Pressable>
 				)}
 			</View>
@@ -1459,7 +1429,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				<XtermJsWebView
 					// Remount only on theme changes: xterm applies its palette at
 					// construction, so already-painted rows otherwise keep old colours.
-					key={`term-${scheme}`}
+					key={`term-${style}-${scheme}`}
 					ref={xtermRef}
 					autoFit={false}
 					xtermOptions={xtermOptions}
@@ -1512,48 +1482,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 							<Feather name="rotate-ccw" size={iconSize.sm} color={t.onAccent} />
 							<Text style={styles.restoreCtaText}>{restoring ? "Restoring…" : "Restore session"}</Text>
 						</Pressable> : null}
-					</View>
-				)}
-
-				{/* In-app browser overlay: the agent's generated preview file. Sits over
-				    the terminal (which keeps running underneath) with its own bar. */}
-				{browserOpen && preview && (
-					<View style={styles.browserOverlay}>
-						<View style={styles.browserBar}>
-							<Feather name="globe" size={iconSize.xs} color={t.textTertiary} />
-							<Text style={styles.browserPath} numberOfLines={1}>
-								{preview.entry}
-							</Text>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Reload preview"
-								hitSlop={PREVIEW_RELOAD_SLOP}
-								onPress={() => { haptics.tap(); previewWebRef.current?.reload(); }}
-								style={styles.browserAction}
-							>
-								<Feather name="rotate-cw" size={iconSize.sm} color={t.accent} />
-							</Pressable>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Close preview"
-								hitSlop={PREVIEW_CLOSE_SLOP}
-								onPress={() => { haptics.tap(); setBrowserOpen(false); }}
-								style={styles.browserAction}
-							>
-								<Feather name="x" size={iconSize.md} color={t.textSecondary} />
-							</Pressable>
-						</View>
-						<WebView
-							ref={previewWebRef}
-							// The preview route lives behind the daemon's connection-password
-							// auth (Bearer). Without this header the WebView's request 401s and
-							// renders the JSON error body instead of the page. cfg carries the
-							// password we paired with; authHeaders() turns it into the Bearer.
-							source={{ uri: preview.url, headers: cfg ? authHeaders(cfg) : undefined }}
-							originWhitelist={["*"]}
-							style={styles.browserWeb}
-							onError={() => setBanner("Preview failed to load.")}
-						/>
 					</View>
 				)}
 			</View>
@@ -1721,20 +1649,6 @@ const makeStyles = (t: Theme) =>
 		borderWidth: 1,
 		borderColor: t.bgSurface,
 	},
-	browserOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
-	browserBar: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.sm,
-		paddingHorizontal: space.md,
-		paddingVertical: space.sm,
-		backgroundColor: t.bgSurface,
-		borderBottomWidth: 1,
-		borderBottomColor: t.borderSubtle,
-	},
-	browserPath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption1.fontSize },
-	browserAction: { paddingHorizontal: space.xxs, paddingVertical: space.hair },
-	browserWeb: { flex: 1, backgroundColor: "#ffffff" },
 	restoreBtn: {
 		flexDirection: "row",
 		alignItems: "center",

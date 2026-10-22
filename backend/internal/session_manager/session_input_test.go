@@ -11,80 +11,9 @@ import (
 
 func newInputLeaseTestManager() *Manager {
 	return &Manager{
-		agentOperations:     make(map[domain.SessionID]agentOperationKind),
-		switchDecisionInput: make(map[domain.SessionID]domain.AgentSwitchID),
-		retainedSwitches:    make(map[domain.SessionID]struct{}),
-		inputLeases:         make(map[domain.SessionID]int),
-		inputDrained:        make(map[domain.SessionID]chan struct{}),
-	}
-}
-
-func TestAgentOperationClosesAdmissionThenDrainsExistingInput(t *testing.T) {
-	m := newInputLeaseTestManager()
-	release, ok := m.AcquireSessionInput("worker-1")
-	if !ok {
-		t.Fatal("initial input lease was refused")
-	}
-
-	beginDone := make(chan error, 1)
-	go func() {
-		beginDone <- m.beginAgentOperation(context.Background(), "worker-1", agentOperationSwitch)
-	}()
-
-	eventuallySessionInput(t, time.Second, func() bool { return m.SessionMutationInProgress("worker-1") })
-	if _, admitted := m.AcquireSessionInput("worker-1"); admitted {
-		t.Fatal("new input was admitted after mutation intent registered")
-	}
-	select {
-	case err := <-beginDone:
-		t.Fatalf("operation began before existing pane write drained: %v", err)
-	default:
-	}
-
-	release()
-	if err := <-beginDone; err != nil {
-		t.Fatalf("begin operation after drain: %v", err)
-	}
-	if _, admitted := m.AcquireSessionInput("worker-1"); admitted {
-		t.Fatal("input admitted while operation owns the session")
-	}
-
-	m.endAgentOperation("worker-1", agentOperationSwitch)
-	releaseAfter, admitted := m.AcquireSessionInput("worker-1")
-	if !admitted {
-		t.Fatal("input gate did not reopen after operation")
-	}
-	releaseAfter()
-}
-
-func TestAgentSwitchDecisionInputIsNarrowAndDrained(t *testing.T) {
-	m := newInputLeaseTestManager()
-	id := domain.SessionID("worker-1")
-	switchID := domain.AgentSwitchID("switch-1")
-	if err := m.beginAgentOperation(context.Background(), id, agentOperationSwitch); err != nil {
-		t.Fatal(err)
-	}
-	m.allowAgentSwitchDecisionInput(id, switchID)
-
-	release, admitted := m.AcquireSessionInput(id)
-	if !admitted {
-		t.Fatal("human permission input was not admitted")
-	}
-	closed := make(chan error, 1)
-	go func() {
-		closed <- m.closeAgentSwitchDecisionInput(context.Background(), id, switchID)
-	}()
-	select {
-	case err := <-closed:
-		t.Fatalf("permission lane closed before admitted input drained: %v", err)
-	default:
-	}
-	release()
-	if err := <-closed; err != nil {
-		t.Fatal(err)
-	}
-	if _, admitted := m.AcquireSessionInput(id); admitted {
-		t.Fatal("ordinary input remained open after permission lane closed")
+		agentOperations: make(map[domain.SessionID]agentOperationKind),
+		inputLeases:     make(map[domain.SessionID]int),
+		inputDrained:    make(map[domain.SessionID]chan struct{}),
 	}
 }
 
@@ -130,6 +59,52 @@ func TestAgentOperationAndInputLeaseAreScopedPerSession(t *testing.T) {
 		t.Fatalf("worker-2 operation was incorrectly blocked: %v", err)
 	}
 	m.endAgentOperation("worker-2", agentOperationRestore)
+}
+
+func TestResumeWaitsForHibernation(t *testing.T) {
+	m := newInputLeaseTestManager()
+	id := domain.SessionID("worker-1")
+	if err := m.beginAgentOperation(context.Background(), id, agentOperationHibernate); err != nil {
+		t.Fatal(err)
+	}
+	resumed := make(chan error, 1)
+	go func() { resumed <- m.beginAgentResume(context.Background(), id) }()
+	select {
+	case err := <-resumed:
+		t.Fatalf("resume overtook hibernation: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	m.endAgentOperation(id, agentOperationHibernate)
+	if err := <-resumed; err != nil {
+		t.Fatal(err)
+	}
+	m.endAgentResume(id)
+}
+
+func TestExplicitOperationsWaitForHibernation(t *testing.T) {
+	for _, kind := range []agentOperationKind{agentOperationKill, agentOperationExit, agentOperationProviderSwitch, agentOperationRestore} {
+		t.Run(string(kind), func(t *testing.T) {
+			m := newInputLeaseTestManager()
+			id := domain.SessionID("worker-1")
+			if err := m.beginAgentOperation(context.Background(), id, agentOperationHibernate); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			acquired := make(chan error, 1)
+			go func() { acquired <- m.beginAgentOperation(ctx, id, kind) }()
+			select {
+			case err := <-acquired:
+				t.Fatalf("explicit operation failed/overtook hibernation: %v", err)
+			case <-time.After(30 * time.Millisecond):
+			}
+			m.endAgentOperation(id, agentOperationHibernate)
+			if err := <-acquired; err != nil {
+				t.Fatal(err)
+			}
+			m.endAgentOperation(id, kind)
+		})
+	}
 }
 
 func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool) {

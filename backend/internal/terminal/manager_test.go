@@ -750,3 +750,38 @@ func TestEnqueueDataUnblocksOnConnClose(t *testing.T) {
 		t.Fatal("cancelling the connection must release a waiting data frame")
 	}
 }
+
+// A shell that starts on its first sized attach must still start when only a
+// secondary viewer (the phone) has reported a grid, including next to a primary
+// that attached without one (a desktop tab parked before it measured).
+func TestLargestGridFallsBackToSecondaryWhenNoPrimaryHasASize(t *testing.T) {
+	phone := &connState{}
+	parkedDesktop := &connState{}
+	members := map[*connState]*termMember{
+		phone:         {cols: 45, rows: 30, primary: false},
+		parkedDesktop: {cols: 0, rows: 0, primary: true},
+	}
+	if cols, rows := largestGrid(members); cols != 45 || rows != 30 {
+		t.Fatalf("largestGrid = %dx%d, want the phone's 45x30", cols, rows)
+	}
+
+	members[parkedDesktop].cols, members[parkedDesktop].rows = 151, 38
+	if cols, rows := largestGrid(members); cols != 151 || rows != 38 {
+		t.Fatalf("largestGrid once the desktop measures = %dx%d, want 151x38", cols, rows)
+	}
+}
+
+func TestTerminalReportsAreNotInput(t *testing.T) {
+	for _, raw := range []string{"\x1b[I", "\x1b[O", "\x1b[?1;2c", "\x1b[12;40R", "\x1b]11;rgb:0000/0000/0000\x07", "\x1b[I\x1b[O",
+		"\x1b[?2026;2$y", "\x1b[?0u", "\x1b[8;38;151t", "\x1bP>|xterm.js(5.5.0)\x1b\\"} {
+		if !terminalReports.MatchString(raw) {
+			t.Errorf("%q should be a terminal report", raw)
+		}
+	}
+	// Keys under the kitty keyboard protocol: Enter, and Ctrl+A.
+	for _, raw := range []string{"a", "\r", "\x1b[A", "hello\x1b[I", "\x03", "\x1b[13u", "\x1b[97;5u"} {
+		if terminalReports.MatchString(raw) {
+			t.Errorf("%q should count as input", raw)
+		}
+	}
+}

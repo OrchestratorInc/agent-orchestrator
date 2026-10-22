@@ -4,10 +4,12 @@ import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { agentLabel } from "../lib/agent-options";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	buildRankedAgentOptions,
+	isLaunchableAgent,
 	isReadyAgent,
 	type AgentInfo,
 	type RankedAgentOption,
@@ -28,7 +30,7 @@ import {
 	OptionMenuTrigger,
 } from "./ui/option-menu";
 
-const REVIEWER_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "muse", "aider"] as const;
+const REVIEWER_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "muse", "aider"] as const;
 const REVIEWER_AGENT_PRIORITY_RANK = new Map<string, number>(
 	REVIEWER_AGENT_PRIORITY.map((agent, index) => [agent, index]),
 );
@@ -55,6 +57,7 @@ export function ReviewerSelect({
 	model = "",
 	mode = "",
 	projectId,
+	hostId,
 	triggerClassName,
 	ariaLabel,
 	defaultHarness,
@@ -70,6 +73,7 @@ export function ReviewerSelect({
 	model?: string;
 	mode?: string;
 	projectId?: string;
+	hostId?: string;
 	triggerClassName?: string;
 	ariaLabel?: string;
 	defaultHarness: string;
@@ -96,8 +100,9 @@ export function ReviewerSelect({
 		priorityRank: REVIEWER_AGENT_PRIORITY_RANK,
 		fallbackAgents,
 	});
+	const isSelectable = hostId ? isLaunchableAgent : isReadyAgent;
 	const selectableOptions = options.filter((agent) => {
-		if (agents !== undefined && !isReadyAgent(agent)) return false;
+		if (agents !== undefined && !isSelectable(agent)) return false;
 		if (agent.id === excludedHarness) return false;
 		if (agent.id === defaultHarness) return false;
 		return true;
@@ -105,10 +110,10 @@ export function ReviewerSelect({
 	const catalogDefaultLabel = options.find((agent) => agent.id === defaultHarness)?.label;
 	const defaultHarnessLabel = catalogDefaultLabel && catalogDefaultLabel !== defaultHarness ? catalogDefaultLabel : agentLabel(defaultHarness);
 	const effectiveHarness = value || defaultHarness;
-	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isReadyAgent(agent)));
-	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined);
+	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isSelectable(agent)));
+	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined, hostId);
 	const menuProjectID = projectId ?? "";
-	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID));
+	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId));
 
 	useEffect(() => {
 		if (!menuOpen) return;
@@ -119,10 +124,11 @@ export function ReviewerSelect({
 		}
 		for (const harness of harnesses) {
 			if (!harness) continue;
-			void queryClient.prefetchQuery(agentModelsQueryOptions(harness, menuProjectID));
+			void queryClient.prefetchQuery(agentModelsQueryOptions(harness, menuProjectID, hostId));
 		}
-	}, [defaultHarness, menuOpen, menuProjectID, queryClient, selectableOptions]);
-	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, t("settings.models.modelNotReported"));
+	}, [defaultHarness, hostId, menuOpen, menuProjectID, queryClient, selectableOptions]);
+	// An unidentified model is left off the trigger rather than labelled.
+	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, "");
 	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
 		.filter(Boolean)
 		.join(" · ");
@@ -157,6 +163,7 @@ export function ReviewerSelect({
 						onConfigChange?.(nextHarness, nextConfig);
 					}}
 					projectId={menuProjectID}
+					hostId={hostId}
 					harnessOnly={harnessOnly}
 					resolvedHarness={defaultHarness}
 					persistHarness=""
@@ -175,6 +182,7 @@ export function ReviewerSelect({
 							onConfigChange?.(nextHarness, nextConfig);
 						}}
 						projectId={menuProjectID}
+						hostId={hostId}
 						harnessOnly={harnessOnly}
 						resolvedHarness={agent.id}
 						persistHarness={agent.id}
@@ -194,6 +202,7 @@ function ReviewerHarnessOption({
 	currentMode,
 	onSelect,
 	projectId,
+	hostId,
 	harnessOnly,
 	resolvedHarness,
 	persistHarness,
@@ -205,6 +214,7 @@ function ReviewerHarnessOption({
 	currentMode: string;
 	onSelect: (harness: string, config: ReviewerAgentConfig) => void;
 	projectId: string;
+	hostId?: string;
 	harnessOnly: boolean;
 	resolvedHarness: string;
 	persistHarness: string;
@@ -213,7 +223,7 @@ function ReviewerHarnessOption({
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const catalogQuery = useQuery({
-		...agentModelsQueryOptions(resolvedHarness, projectId),
+		...agentModelsQueryOptions(resolvedHarness, projectId, hostId),
 		enabled: false,
 	});
 	const catalog = catalogQuery.data;
@@ -221,7 +231,11 @@ function ReviewerHarnessOption({
 	const effectivePersistHarness = persistHarness || resolvedHarness;
 	const isCurrentHarness = effectiveCurrentHarness !== "" && effectiveCurrentHarness === effectivePersistHarness;
 	const isCurrentDefaultSelection = isCurrentHarness && currentModel === "" && currentMode === "";
-	const options = modelOptions(catalog);
+	const { models: offeredModels } = useOfferedModels(resolvedHarness, catalog?.models, {
+		hostId,
+		keep: isCurrentHarness ? [currentModel, currentMode] : [],
+	});
+	const options = modelOptions(catalog, offeredModels);
 	const catalogKnown = catalogQuery.data !== undefined || catalogQuery.isFetched;
 	const defaultModel = catalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id;
 	const selectDefault = () => onSelect(persistHarness, {});
@@ -271,14 +285,14 @@ function ReviewerHarnessOption({
 				/>
 			</OptionMenuSubTrigger>
 			<OptionMenuSubContent className="w-[15rem]">
-				{!catalogKnown ? (
-					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
-				) : null}
-				{isCurrentHarness && !isCurrentDefaultSelection && !defaultModel && (
+				{(!isCurrentHarness || (!isCurrentDefaultSelection && !defaultModel)) && (
 					<OptionMenuItem onSelect={selectDefault}>
 						{t(catalog?.selectionMode === "mode" ? "settings.models.useAgentMode" : "settings.models.useAgentModel")}
 					</OptionMenuItem>
 				)}
+				{!catalogKnown ? (
+					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
+				) : null}
 				{options.map((option) => {
 					const config = option.value === defaultModel ? {} : option.kind === "mode" ? { mode: option.value } : { model: option.value };
 					const selected =
@@ -304,10 +318,10 @@ function ReviewerHarnessOption({
 	);
 }
 
-function modelOptions(catalog?: AgentModelCatalog): Array<{ kind: "model" | "mode"; label: string; value: string }> {
+function modelOptions(catalog?: AgentModelCatalog, models = catalog?.models ?? []): Array<{ kind: "model" | "mode"; label: string; value: string }> {
 	if (!catalog) return [];
 	if (catalog.selectionMode !== "catalog" && catalog.selectionMode !== "mode" && catalog.selectionMode !== "text") return [];
-	return (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+	return models.filter((item) => isConcreteModelID(item.id)).map((item) => ({
 		kind: catalog.selectionMode === "mode" ? "mode" : "model",
 		label: modelChoiceLabel(item),
 		value: item.id,

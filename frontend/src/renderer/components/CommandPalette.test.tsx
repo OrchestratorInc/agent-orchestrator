@@ -1,9 +1,9 @@
 import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceSummary } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -15,9 +15,11 @@ const openExternalMock = vi.hoisted(() => vi.fn());
 const writeTextMock = vi.hoisted(() => vi.fn());
 const restoreMock = vi.hoisted(() => vi.fn());
 const workspaceSubscriptionMock = vi.hoisted(() => vi.fn());
+const cloudSearchMock = vi.hoisted(() => vi.fn());
 const createProjectFlowMock = vi.hoisted(() => ({
 	props: null as null | {
 		existingProjectPaths?: readonly string[];
+		onCreateStandaloneAgent?: () => void;
 		onOpenExistingProject?: (path: string) => void | Promise<void>;
 	},
 	lastOpenSignal: 0,
@@ -92,7 +94,7 @@ const ctx = vi.hoisted(() => {
 		},
 	];
 	return {
-		params: {} as { projectId?: string; sessionId?: string },
+		params: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		enabled: true,
 		workspaces,
 	};
@@ -106,6 +108,15 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../hooks/useCommandPaletteEnabled", () => ({
 	useCommandPaletteEnabled: () => ctx.enabled,
 	useAppVersion: () => "0.0.0-test",
+}));
+
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({
+		client: { searchWorkspaceReview: cloudSearchMock },
+		ready: true,
+		baseUrl: "https://cloud.example.test",
+		userId: "user-1",
+	}),
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -136,10 +147,17 @@ vi.mock("../lib/api-client", () => ({
 	},
 }));
 
+vi.mock("../lib/host-clients", () => ({
+	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
+}));
+
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
-		app: { openExternal: openExternalMock },
+		app: {
+			openExternal: openExternalMock,
+			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+		},
 		clipboard: { writeText: writeTextMock },
 	},
 }));
@@ -168,6 +186,7 @@ vi.mock("./TaskComposer", () => ({
 		<div data-testid="task-composer">
 			<span>composer {props.projectId}</span>
 			<StubNestedLayer />
+			<input aria-label="stub-composer-input" />
 			<button type="button" onClick={() => props.onDirtyChange?.(true)}>
 				stub-dirty
 			</button>
@@ -197,6 +216,7 @@ vi.mock("./CreateProjectFlow", () => ({
 }));
 
 import { CommandPalette } from "./CommandPalette";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 
 function renderPalette() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -225,23 +245,21 @@ function pressEscape(init: KeyboardEventInit = {}): KeyboardEvent {
 	return event;
 }
 
-function focusTerminal() {
-	const xterm = document.createElement("div");
-	xterm.className = "xterm";
-	const input = document.createElement("textarea");
-	xterm.appendChild(input);
-	document.body.appendChild(xterm);
-	input.focus();
-	return xterm;
-}
-
 const paletteInput = () => screen.queryByPlaceholderText(/search projects/i);
 
 beforeEach(() => {
 	ctx.params = {};
 	ctx.enabled = true;
 	ctx.workspaces[0].orchestratorAgent = "codex";
+	delete ctx.workspaces[0].hostId;
+	delete ctx.workspaces[0].kind;
 	ctx.workspaces[1].orchestratorAgent = "codex";
+	delete ctx.workspaces[1].hostId;
+	delete ctx.workspaces[1].kind;
+	for (const session of ctx.workspaces.flatMap((workspace) => workspace.sessions)) {
+		delete session.cloud;
+		delete session.hostId;
+	}
 	ctx.workspaces[0].sessions[0].prs = [];
 	navigateMock.mockReset();
 	spawnMock.mockReset();
@@ -252,6 +270,7 @@ beforeEach(() => {
 	writeTextMock.mockReset();
 	restoreMock.mockReset();
 	workspaceSubscriptionMock.mockReset();
+	cloudSearchMock.mockReset();
 	createProjectFlowMock.props = null;
 	createProjectFlowMock.lastOpenSignal = 0;
 	restoreMock.mockResolvedValue({ status: "success" });
@@ -262,6 +281,7 @@ beforeEach(() => {
 			resolvedTheme: "dark",
 			restartingProjectIds: new Set(),
 			settingsModal: null,
+			workspaceFileOpenRequest: null,
 		});
 	});
 });
@@ -300,28 +320,135 @@ describe("CommandPalette gating", () => {
 	});
 });
 
-describe("CommandPalette shortcut (Windows/Linux)", () => {
-	it("opens on Ctrl+K and toggles closed on a second Ctrl+K", async () => {
+describe("CommandPalette workspace file search", () => {
+	it("searches the current session and requests the selected file without navigating", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockImplementation(async (path: string) => path.includes("/workspace/search")
+			? { data: { query: "App", results: [{ path: "src/components/App.tsx", status: "modified", size: 42, binary: false, fileFingerprint: "v1" }], truncated: false } }
+			: { data: {} });
 		renderPalette();
-		pressKey({ key: "k", ctrlKey: true });
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "App" } });
+
+		const file = await screen.findByText("App.tsx", {}, { timeout: 2_000 });
+		fireEvent.click(file);
+
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
+			sessionId: "w-fix",
+			path: "src/components/App.tsx",
+		});
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("asks for a worktree on a project page before searching", async () => {
+		ctx.params = { projectId: "proj-1" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search projects/i);
+
+		fireEvent.click(screen.getByText("Search files…"));
+		expect(await screen.findByPlaceholderText("Choose a session")).toBeInTheDocument();
+		expect(screen.getByText("ship banner")).toBeInTheDocument();
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		expect(screen.queryByText("orchestrate")).not.toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+
+		fireEvent.click(screen.getByText("fix flake"));
+		expect(await screen.findByPlaceholderText("Search files in fix flake…")).toBeInTheDocument();
+	});
+
+	it("does not call workspace search until two characters settle", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValue({ data: { query: "", results: [], truncated: false } });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "A" } });
+		await new Promise((resolve) => window.setTimeout(resolve, 250));
+		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+
+		fireEvent.change(input, { target: { value: "Ap" } });
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
+			expect.stringContaining("/workspace/search"),
+			expect.objectContaining({ params: expect.objectContaining({ query: { query: "Ap", limit: 20 } }) }),
+		));
+	});
+
+	it("uses Cloud workspace search for a Cloud session", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		ctx.workspaces[0].kind = "cloud";
+		ctx.workspaces[0].sessions[1]!.cloud = { orgId: "org-1" };
+		cloudSearchMock.mockResolvedValue({
+			query: "cloud",
+			results: [{ path: "src/cloud.ts", status: "added", size: 10, binary: false, fileFingerprint: "v1" }],
+			truncated: false,
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "cloud" } });
+
+		expect(await screen.findByText("cloud.ts", {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(cloudSearchMock).toHaveBeenCalledWith(
+			"org-1",
+			"w-fix",
+			{ query: "cloud", limit: 20 },
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
+		);
+		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+	});
+
+	it("navigates to the selected connected-host worktree before opening its file", async () => {
+		ctx.params = { hostId: "host-a", projectId: "proj-1" };
+		ctx.workspaces[0].hostId = "host-a";
+		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
+		getMock.mockResolvedValue({
+			data: { query: "app", results: [{ path: "src/app.ts", status: "modified", size: 5, binary: false, fileFingerprint: "v1" }], truncated: false },
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.click(screen.getByText("Search files…"));
+		fireEvent.click(await screen.findByText("fix flake"));
+		const input = await screen.findByPlaceholderText("Search files in fix flake…");
+		fireEvent.change(input, { target: { value: "app" } });
+		fireEvent.click(await screen.findByText("app.ts", {}, { timeout: 2_000 }));
+
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "host-a", projectId: "proj-1", sessionId: "w-fix" },
+		});
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ hostId: "host-a", sessionId: "w-fix", path: "src/app.ts" });
+	});
+});
+
+// Chords are matched in the main process (see main/app-shortcuts.ts and its
+// tests, which also cover the Windows/Linux terminal yield); the palette only
+// reacts to the resulting command.
+describe("CommandPalette shortcuts", () => {
+	it("opens on the palette command and toggles closed on a second one", async () => {
+		renderPalette();
+		act(() => appShortcutBus.emit({ id: "command-palette" }));
 		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
-		pressKey({ key: "k", ctrlKey: true });
+		act(() => appShortcutBus.emit({ id: "command-palette" }));
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 
-	it("ignores Cmd+K off macOS (the opening modifier is platform-gated)", () => {
+	it("quick-opens file search for the session on screen and toggles closed on a second press", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		renderPalette();
-		const event = pressKey({ key: "k", metaKey: true });
-		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
-		expect(event.defaultPrevented).toBe(false);
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		expect(await screen.findByPlaceholderText("Search files in fix flake…")).toBeInTheDocument();
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 
-	it("yields Ctrl+K to a focused terminal (does not open, does not preventDefault)", () => {
+	it("quick-open falls back to the plain palette when no session is on screen", async () => {
+		ctx.params = {};
 		renderPalette();
-		focusTerminal();
-		const event = pressKey({ key: "k", ctrlKey: true });
-		expect(event.defaultPrevented).toBe(false);
-		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
 	});
 
 	it("does not open over an already-open modal", () => {
@@ -331,7 +458,7 @@ describe("CommandPalette shortcut (Windows/Linux)", () => {
 		modal.setAttribute("data-state", "open");
 		modal.setAttribute("data-fake-modal", "");
 		document.body.appendChild(modal);
-		pressKey({ key: "k", ctrlKey: true });
+		act(() => appShortcutBus.emit({ id: "command-palette" }));
 		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
 	});
 
@@ -348,37 +475,6 @@ describe("CommandPalette shortcut (Windows/Linux)", () => {
 	it("does not swallow Cmd+digit while the palette is closed (project switch still works)", () => {
 		renderPalette();
 		const event = pressKey({ key: "1", metaKey: true });
-		expect(event.defaultPrevented).toBe(false);
-	});
-});
-
-describe("CommandPalette shortcut (macOS)", () => {
-	beforeEach(() => {
-		vi.stubGlobal("navigator", {
-			...globalThis.navigator,
-			userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-		});
-	});
-
-	afterEach(() => vi.unstubAllGlobals());
-
-	it("opens on Cmd+K", async () => {
-		renderPalette();
-		pressKey({ key: "k", metaKey: true });
-		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
-	});
-
-	it("opens on Cmd+K even when a terminal is focused", async () => {
-		renderPalette();
-		focusTerminal();
-		pressKey({ key: "k", metaKey: true });
-		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
-	});
-
-	it("ignores Ctrl+K on macOS, leaving the system kill-to-end-of-line binding alone", () => {
-		renderPalette();
-		const event = pressKey({ key: "k", ctrlKey: true });
-		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
 		expect(event.defaultPrevented).toBe(false);
 	});
 });
@@ -626,6 +722,17 @@ describe("CommandPalette actions", () => {
 		expect(useUiStore.getState().isCommandPaletteOpen).toBe(true);
 	});
 
+	it("navigates home from search and closes", async () => {
+		ctx.params = { projectId: "proj-1" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "home" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+		await waitFor(() => expect(paletteInput()).toBeNull());
+	});
+
 	it("toggles the theme and closes", async () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
@@ -644,6 +751,17 @@ describe("CommandPalette actions", () => {
 		fireEvent.click(screen.getByText("New project"));
 		await waitFor(() => expect(choosePathMock).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(paletteInput()).toBeNull());
+	});
+
+	it("offers standalone agent creation from the new-project picker", async () => {
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.click(screen.getByText("New project"));
+		await waitFor(() => expect(createProjectFlowMock.props?.onCreateStandaloneAgent).toBeTypeOf("function"));
+
+		act(() => createProjectFlowMock.props?.onCreateStandaloneAgent?.());
+		expect(useUiStore.getState().newTaskRequest?.projectId).toBe(STANDALONE_WORKSPACE_ID);
 	});
 
 	it("opens an already registered project selected by the import flow", async () => {
@@ -1017,6 +1135,38 @@ describe("CommandPalette inline task composer", () => {
 		pressEscape();
 		expect(await screen.findByText(/discard this draft/i)).toBeInTheDocument();
 		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
+	});
+
+	it("announces the discard prompt as an alert and focuses Keep editing", async () => {
+		await openComposer();
+		fireEvent.click(screen.getByText("stub-dirty"));
+		pressEscape();
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(/discard this draft/i);
+		const keepEditing = within(alert).getByRole("button", { name: /keep editing/i });
+		await waitFor(() => expect(keepEditing).toHaveFocus());
+
+		fireEvent.click(keepEditing);
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+		await waitFor(() => expect(screen.getByLabelText("stub-composer-input")).toHaveFocus());
+		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
+	});
+
+	it("lets Tab and Shift+Tab out of the composer to the dialog's focus trap but keeps other keys from cmdk", async () => {
+		const composer = await openComposer();
+		const seen: string[] = [];
+		const onKeyDown = (event: KeyboardEvent) => seen.push(event.key);
+		document.addEventListener("keydown", onKeyDown);
+		try {
+			const input = within(composer).getByLabelText("stub-composer-input");
+			fireEvent.keyDown(input, { key: "Tab" });
+			fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+			fireEvent.keyDown(input, { key: "a" });
+			fireEvent.keyDown(input, { key: "ArrowDown" });
+			expect(seen).toEqual(["Tab", "Tab"]);
+		} finally {
+			document.removeEventListener("keydown", onKeyDown);
+		}
 	});
 
 	it("blocks dismissal while a create is in flight, then navigates on completion", async () => {

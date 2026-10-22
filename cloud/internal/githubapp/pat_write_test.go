@@ -3,6 +3,7 @@ package githubapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 )
 
 type stubPATStore struct {
@@ -17,6 +19,147 @@ type stubPATStore struct {
 	claimInput  domain.PullRequest
 	createCalls int
 	claimCalls  int
+}
+
+type interruptedReviewStore struct {
+	stubPATStore
+	completionCalls int
+	failCompletions int
+	claimed         bool
+}
+
+func (s *interruptedReviewStore) BeginReviewPublication(
+	_ context.Context, _, _, _ string, _ domain.SubmitReviewResult,
+) (bool, error) {
+	if s.claimed {
+		return false, nil
+	}
+	s.claimed = true
+	return true, nil
+}
+
+func (s *interruptedReviewStore) MarkReviewPublicationUncertain(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (s *interruptedReviewStore) ReviewRunPullRequest(context.Context, string, string) (domain.ReviewRunPullRequest, error) {
+	return domain.ReviewRunPullRequest{
+		ReviewRun:             domain.ReviewRun{ID: "review-run", ReviewSessionID: "session", Status: contract.AOReviewRunRunning},
+		PullRequestRepository: "octo/widgets", PullRequestNumber: 17,
+	}, nil
+}
+
+func (s *interruptedReviewStore) CompleteAndDeliverReviewRun(
+	_ context.Context, _, _, _ string, result domain.SubmitReviewResult, providerID string,
+) (domain.ReviewRun, error) {
+	s.completionCalls++
+	if s.completionCalls <= s.failCompletions {
+		return domain.ReviewRun{}, errors.New("durable completion unavailable")
+	}
+	return domain.ReviewRun{ID: "review-run", Status: contract.AOReviewRunDelivered,
+		Verdict: result.Verdict, Body: result.Body, ProviderReviewID: providerID}, nil
+}
+
+func TestPATReviewRetryAfterDurableCompletionFailurePostsOnce(t *testing.T) {
+	var postedBodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/octo/widgets/pulls/17/reviews" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch r.Method {
+		case http.MethodPost:
+			var input struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			postedBodies = append(postedBodies, input.Body)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 81})
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 81, "body": postedBodies[0]}})
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	store := &interruptedReviewStore{failCompletions: 1}
+	svc := NewPATWriteService(NewRESTClient(server.URL, server.Client()), store)
+	result := domain.SubmitReviewResult{Verdict: contract.AOReviewVerdictApproved, Body: "Looks good"}
+	if _, err := svc.SubmitReview(context.Background(), "org", "session", "review-run", testPAT, result); err == nil {
+		t.Fatal("first submission should report the durable completion failure")
+	}
+	got, err := svc.SubmitReview(context.Background(), "org", "session", "review-run", testPAT, result)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if len(postedBodies) != 1 || got.ProviderReviewID != "81" {
+		t.Fatalf("GitHub posts=%d recovered review=%+v; want one post and provider id 81", len(postedBodies), got)
+	}
+}
+
+func TestPATReviewRetryAfterLostGitHubResponseReconcilesMarker(t *testing.T) {
+	var postedBodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/octo/widgets/pulls/17/reviews" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch r.Method {
+		case http.MethodPost:
+			var input struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			postedBodies = append(postedBodies, input.Body)
+			// The review was created, but its response did not contain an ID.
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 0})
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 82, "body": postedBodies[0]}})
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	store := &interruptedReviewStore{}
+	svc := NewPATWriteService(NewRESTClient(server.URL, server.Client()), store)
+	result := domain.SubmitReviewResult{Verdict: contract.AOReviewVerdictApproved, Body: "Looks good"}
+	if _, err := svc.SubmitReview(context.Background(), "org", "session", "review-run", testPAT, result); !errors.Is(err, ErrReviewPublicationUncertain) {
+		t.Fatalf("lost response error = %v, want uncertain publication", err)
+	}
+	got, err := svc.SubmitReview(context.Background(), "org", "session", "review-run", testPAT, result)
+	if err != nil || got.ProviderReviewID != "82" || len(postedBodies) != 1 {
+		t.Fatalf("retry: run=%+v err=%v posts=%d", got, err, len(postedBodies))
+	}
+}
+
+func TestPATReviewRetryWithNoGitHubMarkerDoesNotRepost(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusBadGateway)
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode([]any{})
+		}
+	}))
+	defer server.Close()
+	svc := NewPATWriteService(NewRESTClient(server.URL, server.Client()), &interruptedReviewStore{})
+	result := domain.SubmitReviewResult{Verdict: contract.AOReviewVerdictApproved, Body: "Looks good"}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := svc.SubmitReview(context.Background(), "org", "session", "review-run", testPAT, result); !errors.Is(err, ErrReviewPublicationUncertain) {
+			t.Fatalf("attempt %d error = %v, want uncertain publication", attempt+1, err)
+		}
+	}
+	if posts != 1 {
+		t.Fatalf("GitHub posts = %d, want one", posts)
+	}
 }
 
 type createRecordArgs struct {
@@ -43,6 +186,32 @@ func (s *stubPATStore) ClaimPullRequestRecord(
 	s.claimCalls++
 	s.claimInput = input
 	return input, nil
+}
+
+func (s *stubPATStore) ReviewRunPullRequest(context.Context, string, string) (domain.ReviewRunPullRequest, error) {
+	return domain.ReviewRunPullRequest{}, postgres.ErrNotFound
+}
+
+func (s *stubPATStore) BeginReviewPublication(context.Context, string, string, string, domain.SubmitReviewResult) (bool, error) {
+	return true, nil
+}
+
+func (s *stubPATStore) MarkReviewPublicationUncertain(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (s *stubPATStore) CompleteAndDeliverReviewRun(
+	context.Context, string, string, string, domain.SubmitReviewResult, string,
+) (domain.ReviewRun, error) {
+	return domain.ReviewRun{}, nil
+}
+
+func (s *stubPATStore) FailReviewRun(context.Context, string, string, string, string) (domain.ReviewRun, error) {
+	return domain.ReviewRun{}, nil
+}
+
+func (s *stubPATStore) CloseReviewTerminal(context.Context, string, string, string) error {
+	return nil
 }
 
 const testPAT = "ghp_TESTPATtoken000000000000000000000"

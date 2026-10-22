@@ -53,13 +53,29 @@ func newTunedWedgeHarness(t *testing.T, tune func(*Broker)) *wedgeHarness {
 	if err := enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion}); err != nil {
 		t.Fatal(err)
 	}
+	dec := json.NewDecoder(conn)
+	// The broker answers an accepted hello explicitly (#6466); consume that
+	// reply so later frame reads see commands and pings, not the handshake.
+	expectHelloOK(t, dec)
 	waitConnected(t, broker)
 	return &wedgeHarness{
 		broker: broker,
 		addr:   ln.Addr().String(),
 		conn:   conn,
 		enc:    enc,
-		dec:    json.NewDecoder(conn),
+		dec:    dec,
+	}
+}
+
+// expectHelloOK consumes the broker's hello-ok reply to an accepted hello.
+func expectHelloOK(t *testing.T, dec *json.Decoder) {
+	t.Helper()
+	var reply wireMessage
+	if err := dec.Decode(&reply); err != nil {
+		t.Fatalf("read hello reply: %v", err)
+	}
+	if reply.Type != "hello-ok" {
+		t.Fatalf("hello reply = %#v, want hello-ok", reply)
 	}
 }
 
@@ -228,6 +244,8 @@ func TestBrokerNewConnectionFailsStalePending(t *testing.T) {
 	if err := replacementEnc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion}); err != nil {
 		t.Fatal(err)
 	}
+	replacementDec := json.NewDecoder(replacement)
+	expectHelloOK(t, replacementDec)
 	waitConnected(t, h.broker)
 
 	select {
@@ -250,7 +268,7 @@ func TestBrokerNewConnectionFailsStalePending(t *testing.T) {
 	}()
 	_ = replacement.SetReadDeadline(time.Now().Add(browserRuntimeTestTimeout()))
 	var command wireMessage
-	if err := json.NewDecoder(replacement).Decode(&command); err != nil {
+	if err := replacementDec.Decode(&command); err != nil {
 		t.Fatal(err)
 	}
 	if err := replacementEnc.Encode(wireMessage{
@@ -278,7 +296,7 @@ func startPonger(t *testing.T, h *wedgeHarness) <-chan wireMessage {
 	t.Helper()
 	frames := make(chan wireMessage, 16)
 	go func() {
-		dec := json.NewDecoder(h.conn)
+		dec := h.dec
 		for {
 			var msg wireMessage
 			if err := dec.Decode(&msg); err != nil {
@@ -402,6 +420,15 @@ func TestBrokerHelloVersionNegotiation(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = stale.SetReadDeadline(time.Now().Add(time.Second))
+	// A refused hello is answered with hello-rejected (#6466); the broker then
+	// closes the socket and never accepts the runtime.
+	var rejection wireMessage
+	if err := json.NewDecoder(stale).Decode(&rejection); err != nil {
+		t.Fatalf("read hello reply: %v", err)
+	}
+	if rejection.Type != "hello-rejected" {
+		t.Fatalf("hello reply = %#v, want hello-rejected", rejection)
+	}
 	if _, err := stale.Read(make([]byte, 1)); err == nil {
 		t.Fatal("protocol v1 runtime connection remained open")
 	}
@@ -455,11 +482,17 @@ func TestBrokerLegacyRuntimeGetsNoPings(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
+	// The accepted hello is answered explicitly (#6466); consume that reply
+	// before asserting that a v2 runtime is never probed afterward.
+	dec := json.NewDecoder(conn)
+	_ = conn.SetReadDeadline(time.Now().Add(browserRuntimeTestTimeout()))
+	expectHelloOK(t, dec)
+
 	// Several liveness windows pass: a legacy runtime must not see a single
 	// ping frame, and the broker must keep treating it as connected.
 	_ = conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 	var frame wireMessage
-	if err := json.NewDecoder(conn).Decode(&frame); err == nil {
+	if err := dec.Decode(&frame); err == nil {
 		t.Fatalf("legacy runtime received an unexpected frame: %#v", frame)
 	} else {
 		var netErr net.Error

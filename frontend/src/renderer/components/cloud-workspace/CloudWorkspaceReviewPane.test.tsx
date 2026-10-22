@@ -13,7 +13,7 @@ import { CloudWorkspaceReviewPane } from "./CloudWorkspaceReviewPane";
 vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: ({ file, split }: { file: CloudCpWorkspaceReviewFileSummary; split: boolean }) => <div data-split={String(split)} data-testid={`diff:${file.path}`} /> }));
 
 const changed = (path: string): CloudCpWorkspaceReviewFileSummary => ({ path, status: "modified", additions: 2, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: `fp:${path}` });
-const annotation: FileAnnotationModel = { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 
 function data(): CloudCpWorkspaceReviewResponse {
 	const unstaged = changed("src/App.tsx");

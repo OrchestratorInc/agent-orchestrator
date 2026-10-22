@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -20,8 +23,13 @@ func (s *Store) CreateProject(
 	idempotencyKey string,
 	input domain.CreateProject,
 ) (domain.Project, error) {
+	config, err := domain.NormalizeProjectConfig(input.Config)
+	if err != nil {
+		return domain.Project{}, ErrInvalid
+	}
+	input.Config = config
 	var project domain.Project
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		payload, err := json.Marshal(input)
 		if err != nil {
 			return err
@@ -71,7 +79,7 @@ func (s *Store) CreateProject(
 			config,
 		), &project)
 		if err != nil {
-			return normalizeConstraintError(err)
+			return projectRepositoryConflict(err, input.RepositoryURL)
 		}
 		if _, err := tx.Exec(
 			ctx,
@@ -224,7 +232,7 @@ func loadIdempotentProject(
 		return err
 	}
 	if kind != expectedKind || status != "succeeded" ||
-		!jsonEqual(storedPayload, payload) || projectID == "" {
+		!projectCreatePayloadEqual(storedPayload, payload, "Config") || projectID == "" {
 		return ErrIdempotencyMismatch
 	}
 	return scanProject(tx.QueryRow(
@@ -324,7 +332,8 @@ func (s *Store) CreateSession(
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		var err error
 		session, err = createSessionTx(
-			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, input, input.ParentSessionID, principal.UserID,
+			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing.forPrincipal(principal, orgID), input, input.ParentSessionID, principal.UserID,
+			s.coderReadableNames,
 		)
 		return err
 	})
@@ -372,9 +381,17 @@ func (s *Store) CreateGitHubScratchProject(
 	maxActiveSandboxes int,
 	input domain.CreateGitHubScratchProject,
 ) (domain.Project, domain.Session, error) {
+	if len(input.Config) == 0 {
+		input.Config = json.RawMessage(`{"source":"scratch"}`)
+	}
+	config, err := domain.NormalizeProjectConfig(input.Config)
+	if err != nil {
+		return domain.Project{}, domain.Session{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	input.Config = config
 	var project domain.Project
 	var session domain.Session
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		payload, err := json.Marshal(struct {
 			RepositoryID            int64                `json:"repositoryId"`
 			InstallationID          int64                `json:"installationId"`
@@ -426,7 +443,7 @@ func (s *Store) CreateGitHubScratchProject(
 				return err
 			}
 			if kind != "github.scratch.create" || status != "succeeded" ||
-				!jsonEqual(storedPayload, payload) ||
+				!projectCreatePayloadEqual(storedPayload, payload, "config") ||
 				projectID == "" || sessionID == "" {
 				return ErrIdempotencyMismatch
 			}
@@ -533,6 +550,7 @@ func (s *Store) CreateGitHubScratchProject(
 				  AND grant_row.github_repository_id = $4
 				  AND grant_row.revoked_at IS NULL
 				  AND installation.status = 'active'
+				  AND `+githubUserScopeIntactSQL+`
 				RETURNING id, org_id, display_name, repository_url, default_branch,
 					github_repository_id, config, created_at, updated_at`,
 				orgID,
@@ -555,9 +573,11 @@ func (s *Store) CreateGitHubScratchProject(
 			orgID,
 			"github-scratch:"+commandID,
 			maxActiveSandboxes,
+			s.billing.forPrincipal(principal, orgID),
 			input.Session,
 			"",
 			principal.UserID,
+			s.coderReadableNames,
 		)
 		if err != nil {
 			return err
@@ -596,19 +616,52 @@ func (s *Store) CreateGitHubScratchProject(
 	return project, session, err
 }
 
+// sessionDefaultInterfaceKey is the key of ao_sessions.agent_config that holds
+// the user's default session interface the session was created with
+// (domain.CreateSession.DefaultInterface). The workers an orchestrator spawns
+// resolve their interface from it (CreateOrchestratorChild); a session created
+// without one has no key, which reads as the TUI default. It lives beside the
+// agent config, outside domain.ProjectAgentConfig, so project settings never
+// accept it and every reader of the agent config ignores it.
+const sessionDefaultInterfaceKey = "defaultInterface"
+
+// sessionAgentConfigJSON is a new session's agent_config: its agent config
+// and, when the client sent one, its default session interface.
+func sessionAgentConfigJSON(agentConfig domain.ProjectAgentConfig, defaultInterface domain.SessionInterface) ([]byte, error) {
+	encoded, err := json.Marshal(agentConfig)
+	if err != nil || !defaultInterface.Valid() {
+		return encoded, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	fields[sessionDefaultInterfaceKey] = string(defaultInterface)
+	return json.Marshal(fields)
+}
+
 func createSessionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	orgID, idempotencyKey string,
 	maxActiveSandboxes int,
+	billing billingPolicy,
 	input domain.CreateSession,
 	parentSessionID, actorUserID string,
+	readableCoderNames bool,
 ) (domain.Session, error) {
 	if input.Mode == "" {
 		input.Mode = "standard"
 	}
 	if input.DeniedCommands == nil {
 		input.DeniedCommands = []string{}
+	}
+	// The idempotency payload keeps its historical shape, an interface that
+	// always reads tui unless one was requested; the interface the session
+	// starts in is resolved below, once the harness is known.
+	requestedInterface := input.Interface
+	if !input.Interface.Valid() {
+		input.Interface = domain.SessionInterfaceTUI
 	}
 	var session domain.Session
 
@@ -665,6 +718,28 @@ func createSessionTx(
 		return domain.Session{}, err
 	}
 
+	var projectConfig json.RawMessage
+	var defaultBranch string
+	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Session{}, ErrNotFound
+		}
+		return domain.Session{}, err
+	}
+	prefix, err := domain.ProjectSessionPrefix(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	// A requested branch is checked before the sandbox quota and plan limits,
+	// so a branch that can never work is reported as such rather than as a
+	// full organization the caller would wait out for nothing.
+	if input.Branch != "" {
+		if err := checkRequestedBranchTx(ctx, tx, orgID, input.ProjectID, input.Branch, defaultBranch, prefix, projectConfig); err != nil {
+			return domain.Session{}, err
+		}
+	}
+
 	var activeSandboxes int
 	if err := tx.QueryRow(
 		ctx,
@@ -678,39 +753,84 @@ func createSessionTx(
 	if maxActiveSandboxes < 1 || activeSandboxes >= maxActiveSandboxes {
 		return domain.Session{}, ErrSandboxQuotaExceeded
 	}
+	// The plan's slots and usage limits, checked under the same organization
+	// lock as the quota above, so concurrent creators cannot both take the
+	// last slot. This covers sessions an orchestrator spawns too. Freestyle
+	// sandboxes are billed, and Coder ones unless the organization holds the
+	// coder capability or runs them on its own Coder; a spawned worker
+	// inherits its parent's billing.
+	billed, err := sandboxBilledTx(
+		ctx, tx, orgID, sessionProvider(input.Provider), input.SandboxConnectionID, input.CoderCapability, parentSessionID,
+	)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	if billed {
+		if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
+			return domain.Session{}, err
+		}
+	}
+	harness, agentConfig, err := domain.SessionAgentConfig(projectConfig, input.Kind, input.Harness, input.Model)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	input.Harness, input.Model = harness, agentConfig.Model
+	input.Interface = domain.StartInterface(input.Kind, requestedInterface, input.DefaultInterface, input.Harness)
+	agentConfigJSON, err := sessionAgentConfigJSON(agentConfig, input.DefaultInterface)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	// The project's auto-review setting seeds each new worker's own toggle, as
+	// local projects do. The session toggle alone decides afterwards.
+	settings, err := domain.DecodeProjectSettings(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	autoReview := input.Kind == "worker" && settings.AutoReview != nil && *settings.AutoReview
 
+	// A Chat session's opening prompt is its first queued turn (below), so its
+	// terminal launch carries no prompt: a later switch to the terminal starts
+	// the agent without it, as a local Chat session's does, and the terminal's
+	// turn forwarder runs the queued turn once if Chat never claimed it.
+	launchPrompt := input.Prompt
+	if input.Interface == domain.SessionInterfaceChat {
+		launchPrompt = ""
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
-			prompt, mode, denied_commands, parent_session_id, created_by_user_id
+			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
+			auto_review_enabled
 		)
-		SELECT id, $1, $2, $3, $4, $5, 'ao/' || left(id::text, 8),
-			$6, $7, $8, NULLIF($9, '')::uuid, NULLIF($10, '')::uuid
+		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
-		RETURNING id, org_id, project_id, kind, harness, display_name, branch,
-			mode, denied_commands, activity_state, is_terminated,
-			false, '', '', '', '', '', 0, created_at, updated_at`,
+		RETURNING `+sessionInsertReturning,
 		orgID,
 		input.ProjectID,
 		input.Kind,
 		input.Harness,
 		input.DisplayName,
-		input.Prompt,
+		launchPrompt,
 		input.Mode,
+		input.Model,
 		input.DeniedCommands,
+		input.Interface,
 		parentSessionID,
 		actorUserID,
+		input.ReasoningEffort,
+		agentConfigJSON,
+		prefix,
+		autoReview,
+		input.Branch,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 
-	provider := strings.ToLower(strings.TrimSpace(input.Provider))
-	if provider == "" {
-		provider = sandbox.DefaultProvider
-	}
+	provider := sessionProvider(input.Provider)
 	if input.SandboxConnectionID != "" {
 		var connectionProvider string
 		if err := tx.QueryRow(
@@ -735,6 +855,19 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, err
 	}
+	if provider == sandbox.ProviderCoder && readableCoderNames {
+		// The Coder workspace name is chosen here, the only point that knows
+		// the new session id, from the session's kind and its display name
+		// at creation. It is stored on the immutable profile, so a later
+		// rename of the session never changes it. Without readable names
+		// (SetCoderReadableWorkspaceNames) nothing is stored and the session
+		// keeps the <prefix>-<id> name every release computes.
+		if resourceProfile, err = sandbox.StampCoderWorkspaceName(
+			resourceProfile, session.Kind, session.DisplayName, session.ID, time.Now(),
+		); err != nil {
+			return domain.Session{}, ErrInvalid
+		}
+	}
 	bootstrapContext, err := patchSandboxJSON(
 		input.BootstrapContext, provider, orgID, session.ID,
 		input.Release, input.SandboxConnectionID, true,
@@ -746,18 +879,27 @@ func createSessionTx(
 		ctx,
 		`INSERT INTO ao_sandboxes (
 			session_id, org_id, provider, provider_connection_id,
-			resource_profile, bootstrap_context
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6)`,
+			resource_profile, bootstrap_context, billed
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7)`,
 		session.ID, orgID, provider, input.SandboxConnectionID,
-		resourceProfile, bootstrapContext,
+		resourceProfile, bootstrapContext, billed,
 	); err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt,
-		); err != nil {
+		event, err := appendUserMessageEvent(
+			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
+		)
+		if err != nil {
 			return domain.Session{}, err
+		}
+		// A TUI agent gets the prompt on its command line. The Chat controller
+		// takes work only from the turn queue, so a session that starts in Chat
+		// queues its prompt as the first turn (and launches without it, above).
+		if session.Interface == domain.SessionInterfaceChat {
+			if err := queueInitialChatTurnTx(ctx, tx, orgID, session.ID, event); err != nil {
+				return domain.Session{}, err
+			}
 		}
 	}
 
@@ -943,40 +1085,171 @@ func (s *Store) GetSession(
 	return session, err
 }
 
+func (s *Store) SetCloudSessionAutoInjectCI(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	enabled bool,
+) (domain.Session, error) {
+	var session domain.Session
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE ao_sessions SET auto_inject_ci = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, orgID, sessionID, enabled)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		return getSession(ctx, tx, orgID, sessionID, &session)
+	})
+	return session, err
+}
+
+func (s *Store) SetCloudSessionAutoInjectReview(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	enabled bool,
+) (domain.Session, error) {
+	return s.setCloudSessionBooleanPolicy(ctx, principal, orgID, sessionID, "auto_inject_review", enabled)
+}
+
+func (s *Store) SetCloudSessionTerminateOnPRMerge(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	enabled bool,
+) (domain.Session, error) {
+	return s.setCloudSessionBooleanPolicy(ctx, principal, orgID, sessionID, "terminate_on_pr_merge", enabled)
+}
+
+func (s *Store) setCloudSessionBooleanPolicy(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID, column string,
+	enabled bool,
+) (domain.Session, error) {
+	var session domain.Session
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		query := `UPDATE ao_sessions SET ` + column + ` = $3, updated_at = now() WHERE org_id = $1 AND id = $2`
+		tag, err := tx.Exec(ctx, query, orgID, sessionID, enabled)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		return getSession(ctx, tx, orgID, sessionID, &session)
+	})
+	return session, err
+}
+
 const sessionSelect = `
 	SELECT session.id, session.org_id, session.project_id, session.kind,
-		session.harness, session.display_name, session.branch,
-		session.mode, session.denied_commands,
+		session.harness, session.reviewer_harness, session.auto_review_enabled,
+		session.display_name, session.branch,
+		session.mode, session.model, session.denied_commands, session.interface,
 		CASE
 			WHEN EXISTS (
 				SELECT 1 FROM ao_turns turn
 				WHERE turn.org_id = session.org_id AND turn.session_id = session.id
 					AND turn.state IN ('queued', 'claimed', 'running')
+					-- A task queued behind a failed workspace startup is not
+					-- work in flight (see queuedBehindFailedStartupSQL).
+					AND NOT (turn.state = 'queued' AND COALESCE(sandbox.startup_error_code, '') IN (` + workspaceStartupErrorCodesSQL + `)
+						AND NOT COALESCE(sandbox.last_busy_at > now() - ` + workerBusyRecentSQL + `, false))
 			) THEN 'active'
+			-- The project's Setup is running: the agent has not started, but the
+			-- session is busy, not idle (the worker already reports it busy, which
+			-- holds off idle pause; this is only what the session reads as). Setup
+			-- runs before the agent, so while it runs its step events are the
+			-- session's newest, and only the newest few are read. A step's running
+			-- updates are deleted once its final event lands, so a running step
+			-- event newer than the run's summary (workspace.setup) and the agent's
+			-- start (agent.ready) is a step still in progress; one whose worker is
+			-- gone is not.
+			WHEN EXISTS (
+				SELECT 1 FROM ao_worker_connections live
+				WHERE live.org_id = session.org_id AND live.session_id = session.id AND live.disconnected_at IS NULL
+			) AND COALESCE((
+				SELECT recent.type = '` + worker.ScriptStepEventType + `'
+					AND recent.payload->>'phase' = '` + worker.ScriptPhaseSetup + `'
+					AND recent.payload->>'status' = '` + worker.ScriptStepRunning + `'
+				FROM (
+					SELECT newest.sequence, newest.type, newest.payload
+					FROM ao_events newest
+					WHERE newest.org_id = session.org_id AND newest.session_id = session.id
+					ORDER BY newest.sequence DESC
+					LIMIT 20
+				) recent
+				WHERE recent.type IN ('` + worker.ScriptStepEventType + `', '` + worker.SetupEventType + `', 'agent.ready')
+				ORDER BY recent.sequence DESC
+				LIMIT 1
+			), false) THEN 'active'
 			ELSE session.activity_state
 		END AS activity_state,
 		session.is_terminated,
+		session.auto_inject_ci,
+		session.auto_inject_review,
+		session.terminate_on_pr_merge,
 		EXISTS (
 			SELECT 1 FROM ao_worker_connections worker
 			WHERE worker.session_id = session.id AND worker.disconnected_at IS NULL
 		),
+		sandbox.worker_last_seen_at,
+		COALESCE(sandbox.startup_attempts, 0),
 		COALESCE(sandbox.provider, ''),
 		COALESCE(sandbox.desired_state, ''),
 		COALESCE(sandbox.observed_state, ''),
 		COALESCE(sandbox.observed_state, ''),
 		COALESCE(sandbox.last_error, ''),
+		COALESCE(sandbox.startup_error_code, ''),
+		COALESCE(sandbox.startup_error_message, ''),
+		sandbox.startup_error_at,
+		-- Operator detail is shown only for an organization's own (BYO) compute,
+		-- or when it is the output of the project's own Setup commands.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL
+				OR sandbox.startup_error_code = '` + domain.WorkspaceStartupErrorProjectSetup + `'
+			THEN COALESCE(sandbox.startup_error_detail, '') ELSE '' END,
+		-- The workspace link is shown only for an organization's own (BYO)
+		-- Coder (customers have no login on AO's managed deployment). The
+		-- origin, owner and prefix are recorded when AO plans the workspace,
+		-- so the link is known from the session's creation and names the
+		-- workspace AO creates.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'baseUrl', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceName', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
 			WHERE terminal.org_id = session.org_id
 				AND terminal.session_id = session.id
-				AND terminal.kind = 'agent'
+				AND terminal.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = terminal.org_id
+				  AND review_terminal_run.review_terminal_id = terminal.id
+			)
 		), 0),
 		session.created_at, session.updated_at
 	FROM ao_sessions session
 	LEFT JOIN ao_sandboxes sandbox
 		ON sandbox.org_id = session.org_id AND sandbox.session_id = session.id
 `
+
+// sessionInsertReturning matches scanSession exactly. Keep the persisted
+// preference defaults explicit here: INSERT ... RETURNING cannot use the
+// joined sessionSelect used by subsequent reads.
+const sessionInsertReturning = `id, org_id, project_id, kind, harness,
+	'' AS reviewer_harness, auto_review_enabled,
+	display_name, branch, mode, model, denied_commands, interface,
+	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
+	terminate_on_pr_merge, false, NULL::timestamptz, 0,
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', '', 0, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1002,7 +1275,7 @@ type scanner interface {
 }
 
 func scanProject(row scanner, project *domain.Project) error {
-	return row.Scan(
+	if err := row.Scan(
 		&project.ID,
 		&project.OrgID,
 		&project.DisplayName,
@@ -1012,35 +1285,91 @@ func scanProject(row scanner, project *domain.Project) error {
 		&project.Config,
 		&project.CreatedAt,
 		&project.UpdatedAt,
-	)
+	); err != nil {
+		return err
+	}
+	var err error
+	project.Config, err = domain.NormalizeProjectConfig(project.Config)
+	return err
 }
 
 func scanSession(row scanner, session *domain.Session) error {
 	var activity string
+	var interfaceValue string
+	var coderWorkspace domain.CoderWorkspaceRef
 	err := row.Scan(
 		&session.ID,
 		&session.OrgID,
 		&session.ProjectID,
 		&session.Kind,
 		&session.Harness,
+		&session.ReviewerHarness,
+		&session.AutoReviewEnabled,
 		&session.DisplayName,
 		&session.Branch,
 		&session.Mode,
+		&session.Model,
 		&session.DeniedCommands,
+		&interfaceValue,
 		&activity,
 		&session.IsTerminated,
+		&session.AutoInjectCI,
+		&session.AutoInjectReview,
+		&session.TerminateOnPRMerge,
 		&session.RuntimeConnected,
+		&session.WorkerLastSeenAt,
+		&session.StartupAttempts,
 		&session.SandboxProvider,
 		&session.DesiredState,
 		&session.ObservedState,
 		&session.RuntimeState,
 		&session.RuntimeError,
+		&session.StartupErrorCode,
+		&session.StartupErrorMessage,
+		&session.StartupErrorAt,
+		&session.StartupErrorDetail,
+		&coderWorkspace.BaseURL,
+		&coderWorkspace.Owner,
+		&coderWorkspace.NamePrefix,
+		&coderWorkspace.Name,
 		&session.WorkerEpoch,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)
+	session.BYOCoderWorkspace = nil
+	if coderWorkspace.BaseURL != "" && coderWorkspace.Owner != "" {
+		session.BYOCoderWorkspace = &coderWorkspace
+	}
+	session.Interface = domain.SessionInterface(interfaceValue).Normalized()
 	session.ActivityState = contract.ActivityState(activity)
 	return err
+}
+
+// Creation commands written before nested settings retain their original
+// payload. Compare canonical configs without rewriting that durable history.
+func projectCreatePayloadEqual(left, right []byte, configKey string) bool {
+	normalize := func(payload []byte) ([]byte, error) {
+		var request map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &request); err != nil || request == nil {
+			return nil, ErrInvalid
+		}
+		config := request[configKey]
+		if bytes.Equal(bytes.TrimSpace(config), []byte("null")) {
+			config = nil
+		}
+		var err error
+		request[configKey], err = domain.NormalizeProjectConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(request)
+	}
+	left, err := normalize(left)
+	if err != nil {
+		return false
+	}
+	right, err = normalize(right)
+	return err == nil && jsonEqual(left, right)
 }
 
 func jsonEqual(left, right []byte) bool {
@@ -1102,4 +1431,161 @@ func cursorID(cursor *domain.Cursor) any {
 		return nil
 	}
 	return cursor.ID
+}
+
+// BranchRefusedError says why a requested session branch was refused. It
+// matches ErrBranchInUse when a live session already works on the branch and
+// ErrInvalidBranch otherwise.
+type BranchRefusedError struct {
+	// Reason is a domain.SessionBranch* reason, or BranchReasonInUse.
+	Reason string
+	Branch string
+	// Repository is the additional repository whose base branch it is
+	// (domain.SessionBranchRepositoryBase).
+	Repository string
+	// SessionID and SessionName name the live session already on the branch
+	// (BranchReasonInUse).
+	SessionID, SessionName string
+}
+
+// BranchReasonInUse: a live session of the project already works on the
+// requested branch.
+const BranchReasonInUse = "in_use"
+
+func (e *BranchRefusedError) Error() string {
+	return "session branch " + e.Branch + " refused: " + e.Reason
+}
+
+func (e *BranchRefusedError) Is(target error) bool {
+	if e.Reason == BranchReasonInUse {
+		return target == ErrBranchInUse
+	}
+	return target == ErrInvalidBranch
+}
+
+// Message explains the refusal in words the orchestrator can act on.
+func (e *BranchRefusedError) Message() string {
+	switch e.Reason {
+	case domain.SessionBranchDefault:
+		return fmt.Sprintf("%q is the project's default branch, which a worker would push to directly. Choose another branch.", e.Branch)
+	case domain.SessionBranchPrefix:
+		return fmt.Sprintf("%q is the project's session prefix. Choose a branch under it, such as %s/<name>, or another name.", e.Branch, e.Branch)
+	case domain.SessionBranchRepositoryBase:
+		return fmt.Sprintf("%q is the base branch of the project's repository %s, which a worker would push to directly. Choose another branch.", e.Branch, e.Repository)
+	case BranchReasonInUse:
+		name := e.SessionName
+		if name == "" {
+			name = e.SessionID
+		}
+		return fmt.Sprintf("%q is already the branch of live session %s (%s). Have that session push its work, kill it, then retry.", e.Branch, name, e.SessionID)
+	default:
+		return fmt.Sprintf("%q is not a valid session branch: it must follow git's branch-name rules and must not read as another ref (refs/..., heads/..., origin/..., FETCH_HEAD).", e.Branch)
+	}
+}
+
+// checkRequestedBranchTx refuses a requested session branch that breaks the
+// branch rules (domain.SessionBranchProblem), is the base branch of one of the
+// project's additional repositories (its configured branch, or its GitHub
+// default branch where the organization's grants know it), or is already the
+// branch of a live session of the project.
+func checkRequestedBranchTx(
+	ctx context.Context, tx pgx.Tx, orgID, projectID, branch, defaultBranch, prefix string, projectConfig json.RawMessage,
+) error {
+	repos := domain.ProjectAdditionalRepos(projectConfig)
+	bases := make([]string, 0, len(repos))
+	baseRepository := map[string]string{}
+	fullNames := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		_, fullName, err := domain.CanonicalGitHubRepoURL(repo.URL)
+		if err != nil {
+			fullName = repo.URL
+		} else {
+			fullNames = append(fullNames, strings.ToLower(fullName))
+		}
+		if repo.Branch != "" {
+			bases = append(bases, repo.Branch)
+			baseRepository[strings.ToLower(repo.Branch)] = fullName
+		}
+	}
+	if len(fullNames) > 0 {
+		rows, err := tx.Query(ctx,
+			`SELECT DISTINCT repository.full_name, repository.default_branch
+			FROM ao_github_repository_grants grant_row
+			JOIN ao_github_repositories repository
+			  ON repository.github_repository_id = grant_row.github_repository_id
+			WHERE grant_row.org_id = $1
+			  AND grant_row.revoked_at IS NULL
+			  AND lower(repository.full_name) = ANY($2::text[])`,
+			orgID, fullNames,
+		)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var fullName, base string
+			if err := rows.Scan(&fullName, &base); err != nil {
+				rows.Close()
+				return err
+			}
+			if base = strings.TrimSpace(base); base != "" {
+				bases = append(bases, base)
+				if _, known := baseRepository[strings.ToLower(base)]; !known {
+					baseRepository[strings.ToLower(base)] = fullName
+				}
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	// The main repository's GitHub default branch is protected too: the
+	// project's default branch is editable and can differ from it.
+	var mainName, mainDefault string
+	switch err := tx.QueryRow(ctx,
+		`SELECT repository.full_name, repository.default_branch
+		FROM ao_projects project
+		JOIN ao_github_repositories repository
+		  ON repository.github_repository_id = project.github_repository_id
+		WHERE project.org_id = $1 AND project.id = $2`,
+		orgID, projectID,
+	).Scan(&mainName, &mainDefault); {
+	case err == nil:
+		if mainDefault = strings.TrimSpace(mainDefault); mainDefault != "" && !strings.EqualFold(mainDefault, strings.TrimSpace(defaultBranch)) {
+			bases = append(bases, mainDefault)
+			if _, known := baseRepository[strings.ToLower(mainDefault)]; !known {
+				baseRepository[strings.ToLower(mainDefault)] = mainName
+			}
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+	if reason := domain.SessionBranchProblem(branch, defaultBranch, prefix, bases); reason != "" {
+		return &BranchRefusedError{Reason: reason, Branch: branch, Repository: baseRepository[strings.ToLower(branch)]}
+	}
+	var sessionID, sessionName string
+	err := tx.QueryRow(ctx,
+		`SELECT id::text, display_name FROM ao_sessions s
+		WHERE s.org_id = $1 AND s.project_id = $2 AND s.is_terminated = false AND lower(s.branch) = lower($3)
+		  AND `+sessionHoldsBranchSQL("s")+`
+		ORDER BY s.created_at LIMIT 1`,
+		orgID, projectID, branch,
+	).Scan(&sessionID, &sessionName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return &BranchRefusedError{Reason: BranchReasonInUse, Branch: branch, SessionID: sessionID, SessionName: sessionName}
+}
+
+// sessionHoldsBranchSQL keeps a session (the given alias) out of the live
+// sessions holding a branch once it was killed: `ao kill` only marks its
+// sandboxes deleted, and is_terminated flips after the reconciler tears them
+// down, so the documented kill-then-spawn on that branch would otherwise be
+// refused until teardown finishes. A session with no sandbox yet is starting.
+func sessionHoldsBranchSQL(alias string) string {
+	return `(NOT EXISTS (SELECT 1 FROM ao_sandboxes sb WHERE sb.org_id = ` + alias + `.org_id AND sb.session_id = ` + alias + `.id)
+		OR EXISTS (SELECT 1 FROM ao_sandboxes sb WHERE sb.org_id = ` + alias + `.org_id AND sb.session_id = ` + alias + `.id AND sb.desired_state <> 'deleted'))`
 }

@@ -300,7 +300,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const initialKeyRef = useRef(initialKey);
 	const listenerTokenRef = useRef(Symbol("file-attachment-listener"));
 	const pendingReadsRef = useRef<Set<Promise<unknown>>>(new Set());
-	const addQueueRef = useRef<Promise<void>>(Promise.resolve());
+	const addQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 	const queuedAddsRef = useRef(0);
 	const generationRef = useRef(0);
 
@@ -327,9 +327,9 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		});
 	}, [initialKey, onAttachmentsChange]);
 
-	const processFiles = useCallback(async (files: File[], generation: number, sharedWork?: SharedAttachmentWork) => {
-		if (generationRef.current !== generation) return;
-		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+	const processFiles = useCallback(async (files: File[], generation: number, sharedWork?: SharedAttachmentWork): Promise<FileAttachment[]> => {
+		if (generationRef.current !== generation) return [];
+		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
 		// Filter out directories - they have type "" and size 0 in most browsers
 		const validFiles = files.filter((file) => {
 			// Exclude directories (they typically have no type and size 0)
@@ -340,7 +340,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			return true;
 		});
 
-		if (validFiles.length === 0) return;
+		if (validFiles.length === 0) return [];
 
 		const errors = new Set<string>();
 		// Block SVG files for security (active content)
@@ -389,8 +389,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		pendingReadsRef.current.add(pendingReads);
 		const results = await pendingReads;
 		pendingReadsRef.current.delete(pendingReads);
-		if (generationRef.current !== generation) return;
-		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+		if (generationRef.current !== generation) return [];
+		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
 
 		const fresh: FileAttachment[] = [];
 		for (const { file, result } of results) {
@@ -427,29 +427,31 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			acceptedFresh.push(a);
 			total += a.bytes;
 		}
+		let added: FileAttachment[] = [];
 		if (acceptedFresh.length > 0) {
 			let prepared = acceptedFresh;
 			if (prepareAttachments) {
 				try {
 					prepared = await prepareAttachments(acceptedFresh);
-					if (generationRef.current !== generation) return;
-					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+					if (generationRef.current !== generation) return [];
+					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
 					if (prepared.length !== acceptedFresh.length) {
 						throw new Error("Attachment staging returned an incomplete result");
 					}
 				} catch {
-					if (generationRef.current !== generation) return;
-					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+					if (generationRef.current !== generation) return [];
+					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
 					errors.add("Files couldn’t be saved. Nothing was attached.");
 					const message = Array.from(errors).join(" ");
 					setError(message);
 					if (initialKey) notifySharedAttachmentEntry(initialKey, { error: message });
-					return;
+					return [];
 				}
 			}
 			// Read the live list after async preparation. A removal that happened while
 			// bytes were being staged must not resurrect an older attachment snapshot.
 			const next = [...attachmentsRef.current, ...prepared];
+			added = prepared;
 			attachmentsRef.current = next;
 			setAttachments(next);
 			onAttachmentsChange?.(next);
@@ -464,14 +466,16 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		const nextError = errors.size > 0 ? Array.from(errors).join(" ") : null;
 		setError(nextError);
 		if (initialKey) notifySharedAttachmentEntry(initialKey, { error: nextError });
+		return added;
 	}, [initialKey, onAttachmentsChange, prepareAttachments]);
 
-	const addFiles = useCallback((files: Iterable<File>): Promise<void> => {
+	/** Resolves with the attachments this batch actually added, staged when staging is on. */
+	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {
 		// Serialize batches. Two paste/drop events can arrive before React publishes
 		// `preparing`; processing both against the same attachment snapshot could
 		// otherwise exceed count/byte caps or overwrite one batch with the other.
 		const batch = Array.from(files);
-		if (batch.length === 0) return Promise.resolve();
+		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey) : undefined;
@@ -485,8 +489,9 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				? processFiles(batch, generation, sharedWork)
 				: addQueueRef.current.then(() => processFiles(batch, generation, sharedWork));
 		const settled = run
-			.catch(() => {
+			.catch((): FileAttachment[] => {
 				setError("Some files couldn’t be prepared and were skipped.");
+				return [];
 			})
 			.finally(() => {
 				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);

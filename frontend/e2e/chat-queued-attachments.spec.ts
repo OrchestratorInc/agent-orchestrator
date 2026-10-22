@@ -134,7 +134,8 @@ test("queued image edits preserve attachments and the ordinary draft @T0", async
 	await expect.poll(() => edits.length).toBe(1);
 	expect(edits[0]).toEqual({
 		clientMessageId: expect.any(String),
-		text: `Inspect the screenshot\n\nAttached files (read these files in the workspace):\n- ${path}`,
+		// The pasted image's inline chip names its path where it was pasted.
+		text: `Inspect the screenshot ${path}\n\nAttached files (read these files in the workspace):\n- ${path}`,
 		attachments: [{ mimeType: "image/png", data: png }],
 		retainedContent: [],
 		expectedRevision: 0,
@@ -146,13 +147,13 @@ test("queued image edits preserve attachments and the ordinary draft @T0", async
 	await expect.poll(() => edits.length).toBe(2);
 	expect(edits[1]).toEqual(edits[0]);
 	expect(message.revision).toBe(1);
-	await expect(field).toHaveText("Keep my ordinary draft");
+	await expect(field).toHaveText(/^Keep my ordinary draft Image 1\s*$/);
 	await expect(page.getByLabel("Remove ordinary.png")).toBeVisible();
 	await expect(page.getByText("Queued message edits cannot include attachments.")).toHaveCount(0);
 
 	await page.getByRole("button", { name: "Edit queued message" }).click();
 	await expect(page.getByLabel("Remove attachment-queue.png")).toBeVisible();
-	await expect(field).toHaveText("Inspect the screenshot");
+	await expect(field).toHaveText(/^Inspect the screenshot Image 1\s*$/);
 	await field.fill("Inspect it carefully");
 	await page.getByRole("button", { name: "Send message", exact: true }).click();
 	await expect.poll(() => edits.length).toBe(3);
@@ -166,10 +167,10 @@ test("queued image edits preserve attachments and the ordinary draft @T0", async
 	await expect.poll(() => edits.length).toBe(4);
 	expect(edits[3]).toEqual({ clientMessageId: expect.any(String), text: "Inspect it carefully", retainedContent: [], expectedRevision: 2 });
 	expect(message.content).toHaveLength(0);
-	await expect(field).toHaveText("Keep my ordinary draft");
+	await expect(field).toHaveText(/^Keep my ordinary draft Image 1\s*$/);
 	await page.getByRole("button", { name: "Edit queued message" }).click();
 	await field.fill("Discard this edit");
 	await page.getByRole("button", { name: "Cancel edit" }).click();
-	await expect(field).toHaveText("Keep my ordinary draft");
+	await expect(field).toHaveText(/^Keep my ordinary draft Image 1\s*$/);
 	await expect(page.getByLabel("Remove ordinary.png")).toBeVisible();
 });

@@ -1,6 +1,7 @@
-import posthog from "posthog-js/dist/module.full.no-external";
+import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
+import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -22,6 +23,7 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 	"ao.renderer.loaded": "ao.v2.renderer.loaded",
 	"ao.renderer.api_error": "ao.v2.renderer.api_error",
 	"ao.renderer.daemon_failure": "ao.v2.renderer.daemon_failure",
+	"ao.renderer.session_management_summary": "ao.v2.renderer.session_management_summary",
 };
 
 let initPromise: Promise<boolean> | null = null;
@@ -160,7 +162,141 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 }
 
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
-	return { ...telemetryContext, ...properties, $process_person_profile: false };
+	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
+	// the flag is left to the SDK, which processes the identified person.
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }) };
+}
+
+// Who this install is. The GitHub login and AO Cloud user ID ride every event as
+// super properties; email is only ever a person property set at identify time.
+let cloudUser: { id: string; email: string } | null = null;
+let githubLogin: string | null = null;
+let identifiedId: string | null = null;
+let posthogReady = false;
+let analyticsOptedOut = false;
+
+function registerBaseProperties(): void {
+	posthog.register({
+		...telemetryContext,
+		surface: "renderer",
+		...(githubLogin ? { github_actor: githubLogin } : {}),
+		...(cloudUser ? { ao_cloud_user_id: cloudUser.id } : {}),
+	});
+}
+
+/**
+ * Identifies the signed-in AO Cloud user with the AO Cloud user ID. Email is a
+ * person property only. An unlinked install starts with its ins_ ID and can be
+ * merged into the Cloud person; a linked install starts with a fresh anon_ ID.
+ * The signed-in daemon sends events under the Cloud user ID directly.
+ */
+export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
+	cloudUser = user;
+	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
+	// A sign-out, a different account or an opt-out may have landed while init
+	// was pending; this continuation must not identify who is no longer current.
+	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
+	// Switching accounts without a sign-out: never layer B onto A's person.
+	if (identifiedId !== null) posthog.reset();
+	registerBaseProperties();
+	posthog.identify(user.id, {
+		email: user.email,
+		ao_cloud_user_id: user.id,
+		...(githubLogin ? { github_login: githubLogin } : {}),
+	});
+	identifiedId = user.id;
+}
+
+/**
+ * Sign-out: stop attributing renderer events to the user.
+ * ponytail: reset() mints a random anonymous ID that lasts until the next
+ * launch, when the bootstrap restores the ins_ install ID.
+ */
+export function clearCloudUser(): void {
+	cloudUser = null;
+	if (!posthogReady || identifiedId === null) return;
+	identifiedId = null;
+	posthog.reset();
+	registerBaseProperties();
+}
+
+/**
+ * Applies the in-app analytics opt-out. Opting out stops capture and calls
+ * posthog.reset() so no identity survives in the SDK. Opting back in resumes
+ * capture, initializing the client first if this launch started opted out.
+ * ponytail: after an in-session opt-in the SDK uses a fresh anonymous ID until
+ * the next launch chooses an install ID or a fresh anonymous ID from the
+ * durable binding state.
+ */
+export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
+	analyticsOptedOut = optedOut;
+	if (optedOut) {
+		if (posthogReady) {
+			posthog.opt_out_capturing();
+			posthog.reset();
+		}
+		identifiedId = null;
+		return;
+	}
+	if (posthogReady) {
+		posthog.opt_in_capturing({ captureEventName: false });
+		registerBaseProperties();
+	} else {
+		initPromise = null;
+		await initTelemetry();
+	}
+	if (cloudUser) await identifyCloudUser(cloudUser);
+}
+
+// A fresh install often has no GitHub token yet, so the daemon-resolved login is
+// polled on a short bounded schedule rather than read once.
+const GITHUB_LOGIN_RETRY_MS = [2_000, 30_000, 120_000, 600_000];
+
+async function syncGithubLogin(): Promise<void> {
+	for (const delay of GITHUB_LOGIN_RETRY_MS) {
+		await new Promise((resolve) => setTimeout(resolve, delay));
+		if (analyticsOptedOut) return;
+		const login = await Promise.resolve()
+			.then(() => aoBridge.telemetry.getGithubLogin())
+			.catch(() => null);
+		if (!login) continue;
+		githubLogin = login;
+		registerBaseProperties();
+		if (identifiedId) posthog.setPersonProperties({ github_login: login });
+		return;
+	}
+}
+
+// The signed-in cloud org, tagged on every event and exception once /me has
+// resolved: the org id only as a hash, plus the offering's kind and billing
+// mode from a fixed vocabulary.
+let cloudContext: TelemetryProperties = {};
+const CLOUD_ORG_KINDS = new Set(["b2b", "b2c", "both", "none", "unknown"]);
+const CLOUD_BILLING_MODES = new Set(["self_serve", "contract", "off", "unknown"]);
+
+function enumValue(value: unknown, allowed: ReadonlySet<string>, fallback = "unknown"): string {
+	return typeof value === "string" && allowed.has(value) ? value : fallback;
+}
+
+export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string }): void {
+	const next: TelemetryProperties = {
+		cloud_org_kind: enumValue(context.orgKind, CLOUD_ORG_KINDS),
+		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
+	};
+	cloudContext = { ...cloudContext, ...next };
+	void hashedTelemetryID(context.orgId).then((hash) => {
+		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
+	});
+}
+
+function omitKey(properties: TelemetryProperties, key: string): TelemetryProperties {
+	const { [key]: _omitted, ...rest } = properties;
+	return rest;
+}
+
+/** Test seam. */
+export function resetCloudTelemetryContextForTest(): void {
+	cloudContext = {};
 }
 
 export function postHogEventName(event: string): string {
@@ -350,7 +486,26 @@ function routeSurface(pathname: string): string {
 		return "project_board";
 	}
 	if (/^\/sessions\/[^/]+$/.test(pathname)) return "session_detail";
+	if (/^\/automations(?:\/|$)/.test(pathname)) return "automations";
+	if (/^\/artifacts(?:\/|$)/.test(pathname)) return "artifacts";
 	return "other";
+}
+
+const AUTOMATION_SCHEDULE_PRESET_SET = new Set(["daily", "weekly", "custom"]);
+const AUTOMATION_PROMPT_LENGTH_BUCKET_SET = new Set(["xs", "s", "m", "l", "xl"]);
+
+/**
+ * Coarse size of an automation prompt, never the prompt itself. Measured in
+ * bytes because that is what the daemon's 4096 cap counts; counting UTF-16
+ * units instead would compress the bands for non-Latin prompts.
+ */
+export function automationPromptLengthBucket(prompt: string): string {
+	const length = new TextEncoder().encode(prompt).length;
+	if (length <= 80) return "xs";
+	if (length <= 240) return "s";
+	if (length <= 800) return "m";
+	if (length <= 2000) return "l";
+	return "xl";
 }
 
 async function sha256Hex(raw: string): Promise<string> {
@@ -438,8 +593,103 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 	if (projectIDHash) {
 		safe.project_id_hash = projectIDHash;
 	}
+	const sessionIDHash = await hashedTelemetryID(properties?.session_id);
+	if (sessionIDHash) {
+		safe.session_id_hash = sessionIDHash;
+	}
 	return safe;
 }
+
+// Values the cloud funnel events may carry. Anything outside a vocabulary is
+// reported as "other" so a free-form string can never leak through.
+const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
+const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
+const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
+const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
+const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
+const CLOUD_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const CLOUD_PLAN_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+function cloudCode(value: unknown): string {
+	return typeof value === "string" && CLOUD_CODE_PATTERN.test(value) ? value : "other";
+}
+
+function cloudPlan(value: unknown): string {
+	return typeof value === "string" && CLOUD_PLAN_PATTERN.test(value) ? value : "other";
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
+async function sanitizeCloudFunnelProperties(event: string, properties?: TelemetryProperties): Promise<TelemetryProperties> {
+	const safe: TelemetryProperties = {};
+	switch (event) {
+		case "ao.renderer.cloud_signed_in":
+			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
+			break;
+		case "ao.renderer.cloud_offering_resolved": {
+			safe.org_kind = enumValue(properties?.org_kind, CLOUD_ORG_KINDS);
+			safe.billing_mode = enumValue(properties?.billing_mode, CLOUD_BILLING_MODES);
+			safe.default_provider = enumValue(properties?.default_provider, CLOUD_PROVIDERS, "other");
+			for (const key of ["provider_count", "org_count"]) {
+				const value = nonNegativeNumber(properties?.[key]);
+				if (value !== undefined) safe[key] = value;
+			}
+			break;
+		}
+		case "ao.renderer.cloud_project_created":
+		case "ao.renderer.cloud_session_create_requested":
+		case "ao.renderer.cloud_session_ready":
+		case "ao.renderer.cloud_session_failed": {
+			safe.provider = enumValue(properties?.provider, CLOUD_PROVIDERS, "other");
+			const projectIDHash = await hashedTelemetryID(properties?.project_id);
+			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if (event !== "ao.renderer.cloud_project_created") {
+				safe.session_kind = enumValue(properties?.session_kind, CLOUD_SESSION_KINDS, "other");
+			}
+			const ttr = nonNegativeNumber(properties?.ttr_ms);
+			if (ttr !== undefined && event !== "ao.renderer.cloud_session_create_requested") safe.ttr_ms = ttr;
+			if (event === "ao.renderer.cloud_session_failed") {
+				safe.stage = enumValue(properties?.stage, CLOUD_FAILURE_STAGES, "other");
+				safe.code = cloudCode(properties?.code);
+				const status = nonNegativeNumber(properties?.status);
+				if (status !== undefined) safe.status = status;
+			}
+			break;
+		}
+		case "ao.renderer.cloud_upgrade_viewed":
+			safe.source = enumValue(properties?.source, CLOUD_UPGRADE_SOURCES, "other");
+			break;
+		case "ao.renderer.cloud_checkout_started":
+		case "ao.renderer.cloud_checkout_completed": {
+			safe.plan = cloudPlan(properties?.plan);
+			const duration = nonNegativeNumber(properties?.duration_ms);
+			if (duration !== undefined && event === "ao.renderer.cloud_checkout_completed") safe.duration_ms = duration;
+			break;
+		}
+		case "ao.renderer.cloud_plan_refusal_shown":
+		case "ao.renderer.cloud_limit_reached":
+			safe.code = cloudCode(properties?.code);
+			if (typeof properties?.shown === "boolean") safe.shown = properties.shown;
+			break;
+	}
+	return safe;
+}
+
+const CLOUD_FUNNEL_EVENTS = new Set([
+	"ao.renderer.cloud_signed_in",
+	"ao.renderer.cloud_offering_resolved",
+	"ao.renderer.cloud_project_created",
+	"ao.renderer.cloud_session_create_requested",
+	"ao.renderer.cloud_session_ready",
+	"ao.renderer.cloud_session_failed",
+	"ao.renderer.cloud_upgrade_viewed",
+	"ao.renderer.cloud_checkout_started",
+	"ao.renderer.cloud_checkout_completed",
+	"ao.renderer.cloud_plan_refusal_shown",
+	"ao.renderer.cloud_limit_reached",
+]);
 
 const ORCHESTRATOR_SPAWN_SOURCE_SET = new Set<string>(ORCHESTRATOR_SPAWN_SOURCES);
 
@@ -450,6 +700,7 @@ export async function sanitizeRendererProperties(
 	event: string,
 	properties?: TelemetryProperties,
 ): Promise<TelemetryProperties> {
+	if (CLOUD_FUNNEL_EVENTS.has(event)) return sanitizeCloudFunnelProperties(event, properties);
 	const safe: TelemetryProperties = {};
 	switch (event) {
 		case "ao.app.active":
@@ -459,6 +710,11 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.surface === "string" && properties.surface.trim() !== "") {
 				safe.surface = properties.surface;
 			}
+			break;
+		case "ao.onboarding.step_viewed":
+		case "ao.onboarding.step_completed":
+		case "ao.onboarding.step_abandoned":
+			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
 		case "ao.renderer.project_add_requested":
 		case "ao.renderer.loaded":
@@ -507,6 +763,29 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
+		case "ao.renderer.automation_create_opened":
+			break;
+		case "ao.renderer.automation_create_requested":
+		case "ao.renderer.automation_create_succeeded":
+		case "ao.renderer.automation_create_failed": {
+			// Which kind of automation a prompt describes stays on the machine;
+			// only the schedule shape and a size band ride along.
+			const projectIDHash = await hashedTelemetryID(properties?.project_id);
+			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if (typeof properties?.schedule_preset === "string" && AUTOMATION_SCHEDULE_PRESET_SET.has(properties.schedule_preset)) {
+				safe.schedule_preset = properties.schedule_preset;
+			}
+			if (typeof properties?.prompt_length_bucket === "string" && AUTOMATION_PROMPT_LENGTH_BUCKET_SET.has(properties.prompt_length_bucket)) {
+				safe.prompt_length_bucket = properties.prompt_length_bucket;
+			}
+			break;
+		}
+		case "ao.renderer.artifact_create_requested":
+		case "ao.renderer.artifact_create_succeeded":
+		case "ao.renderer.artifact_create_failed":
+			// Where the session lives, never which project.
+			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
+			break;
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
@@ -631,6 +910,37 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.enabled === "boolean") safe.enabled = properties.enabled;
 			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;
 			break;
+		case "ao.renderer.session_management_summary": {
+			const numericKeys = [
+				"measurement_schema_version",
+				"window_duration_seconds",
+				"orchestrator_active_seconds",
+				"worker_active_seconds",
+				"transition_orchestrator_to_worker_count",
+				"transition_orchestrator_same_count",
+				"transition_orchestrator_switch_count",
+				"transition_worker_to_orchestrator_count",
+				"transition_worker_same_count",
+				"transition_worker_switch_count",
+				"manual_worker_open_count",
+				"direct_worker_chat_steer_count",
+				"direct_worker_terminal_input_burst_count",
+				"direct_worker_lifecycle_action_count",
+				"pattern_orchestrator_worker_orchestrator_count",
+				"pattern_orchestrator_multiple_workers_count",
+			] as const;
+			for (const key of numericKeys) {
+				const value = properties?.[key];
+				if (typeof value === "number" && Number.isFinite(value) && value >= 0) safe[key] = value;
+			}
+			if (typeof properties?.window_id === "string" && /^[0-9a-f-]{36}$/i.test(properties.window_id)) {
+				safe.window_id = properties.window_id;
+			}
+			if (properties?.flush_reason === "interval" || properties?.flush_reason === "startup") {
+				safe.flush_reason = properties.flush_reason;
+			}
+			break;
+		}
 	}
 	return safe;
 }
@@ -668,7 +978,17 @@ function bindErrorHandlers() {
 	});
 }
 
-type PostHogInitOptions = NonNullable<Parameters<typeof posthog.init>[1]>;
+type PostHogClient = typeof posthogModule;
+type PostHogInitOptions = NonNullable<Parameters<PostHogClient["init"]>[1]>;
+
+// The SDK (~650 KB) is loaded inside initTelemetry instead of at module load, so
+// it stays off the renderer's first-paint path. Every use below runs after
+// initTelemetry() resolved true, which is where this is assigned.
+let posthog!: PostHogClient;
+
+async function loadPostHog(): Promise<PostHogClient> {
+	return (await import("posthog-js/dist/module.full.no-external")).default;
+}
 
 export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 	return {
@@ -693,7 +1013,13 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 		// an upgrade; the AO-owned heartbeat and route reservations continue to
 		// use window.localStorage independently.
 		persistence: "memory",
-		person_profiles: "never",
+		// Anonymous (no profile) until identifyCloudUser() runs on an AO Cloud
+		// sign-in; only then does PostHog process a person.
+		person_profiles: "identified_only",
+		// The SDK flags a localhost page as an internal user, which turns person
+		// processing on for every event; a dev build driving the real export path
+		// would otherwise bill anonymous events as identified.
+		internal_or_test_user_hostname: null,
 		bootstrap: {
 			distinctID: distinctId,
 			isIdentifiedID: false,
@@ -720,12 +1046,21 @@ export async function initTelemetry(): Promise<boolean> {
 		if (!bootstrap) return false;
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
+		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
+		// could only set the flag then, so honor it before any client exists.
+		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
+		posthog = await loadPostHog();
+		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
+		// both SDK initialization and the unconditional opt-in below.
+		if (analyticsOptedOut) return false;
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
-		posthog.register({
-			...telemetryContext,
-			surface: "renderer",
-		});
+		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
+		// source of truth and the bootstrap is only handed out when it is absent.
+		posthog.opt_in_capturing({ captureEventName: false });
+		posthogReady = true;
+		registerBaseProperties();
+		void syncGithubLogin();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog
 		// product analytics are intentionally independent of that preference.
 		void initSentry({

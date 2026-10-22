@@ -63,8 +63,8 @@ const (
 	// SuppressedBusy means the session is mid-turn on a harness that cannot
 	// safely steer an active turn (coordination writes only).
 	SuppressedBusy
-	// SuppressedInputGated means an exclusive session mutation (for example an
-	// agent switch, resume, restore, or kill) closed pane-input admission before
+	// SuppressedInputGated means an exclusive session mutation (for example a
+	// resume, restore, or kill) closed pane-input admission before
 	// this write acquired a lease.
 	SuppressedInputGated
 	// SuppressedStartupPending means a TUI session has not yet received its
@@ -215,6 +215,20 @@ func (g *Guard) DeliverUnderMutation(ctx context.Context, id domain.SessionID, m
 	})
 }
 
+// DeliverUnderMutationChecked adds one caller-owned proof immediately before
+// an admitted mutation writes to the pane. Callers use it to ensure
+// the target runtime generation still owns the terminal after readiness wait.
+func (g *Guard) DeliverUnderMutationChecked(
+	ctx context.Context,
+	id domain.SessionID,
+	msg string,
+	preWrite func(context.Context, domain.SessionRecord) error,
+) (Outcome, error) {
+	return g.sendAdmittedChecked(ctx, id, msg, func(rec domain.SessionRecord) (Outcome, bool) {
+		return SuppressedAwaitingUser, rec.Activity.State == domain.ActivityBlocked
+	}, preWrite)
+}
+
 // CoordinationUnderMutation writes an AO coordination message while the caller
 // owns the session's exclusive mutation fence. It intentionally bypasses the
 // ordinary input lease (which the mutation has already closed), but re-reads
@@ -234,7 +248,7 @@ func (g *Guard) CoordinationUnderMutation(
 
 // CoordinationUnderMutationChecked adds one caller-owned proof immediately
 // after the durable session/activity read and immediately before the runtime
-// write. Agent switching uses it to revalidate the exact runtime handle and
+// write. Callers use it to revalidate the exact runtime handle and
 // generation at the pane-write boundary. The runtime's safe exit sink remains
 // the final defense if the child exits during a chunked paste.
 func (g *Guard) CoordinationUnderMutationChecked(

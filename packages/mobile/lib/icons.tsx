@@ -35,10 +35,22 @@ import Disc from "lucide-react-native/icons/disc";
 import CloudDownload from "lucide-react-native/icons/cloud-download";
 import Pen from "lucide-react-native/icons/pen";
 import PenLine from "lucide-react-native/icons/pen-line";
+import Eye from "lucide-react-native/icons/eye";
+import EyeOff from "lucide-react-native/icons/eye-off";
 import ExternalLink from "lucide-react-native/icons/external-link";
 import FeatherGlyph from "lucide-react-native/icons/feather";
 import File from "lucide-react-native/icons/file";
 import FileText from "lucide-react-native/icons/file-text";
+import FileDiff from "lucide-react-native/icons/file-diff";
+import FileMinus from "lucide-react-native/icons/file-minus";
+import FilePen from "lucide-react-native/icons/file-pen";
+import FilePlus from "lucide-react-native/icons/file-plus";
+import FileSymlink from "lucide-react-native/icons/file-symlink";
+import ListTree from "lucide-react-native/icons/list-tree";
+import MessageSquareText from "lucide-react-native/icons/message-square-text";
+import Sparkles from "lucide-react-native/icons/sparkles";
+import UnfoldVertical from "lucide-react-native/icons/unfold-vertical";
+import WrapText from "lucide-react-native/icons/text-wrap";
 import Folder from "lucide-react-native/icons/folder";
 import FolderOpen from "lucide-react-native/icons/folder-open";
 import Flag from "lucide-react-native/icons/flag";
@@ -53,6 +65,7 @@ import Inbox from "lucide-react-native/icons/inbox";
 import Info from "lucide-react-native/icons/info";
 import Italic from "lucide-react-native/icons/italic";
 import KeyRound from "lucide-react-native/icons/key-round";
+import Laptop from "lucide-react-native/icons/laptop";
 import Layers from "lucide-react-native/icons/layers";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
@@ -63,13 +76,21 @@ import Maximize from "lucide-react-native/icons/maximize";
 import Menu from "lucide-react-native/icons/menu";
 import MessageCircle from "lucide-react-native/icons/message-circle";
 import MessageSquare from "lucide-react-native/icons/message-square";
+import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
 import Mic from "lucide-react-native/icons/mic";
 import MicOff from "lucide-react-native/icons/mic-off";
 import Minus from "lucide-react-native/icons/minus";
 import CircleMinus from "lucide-react-native/icons/circle-minus";
 import Monitor from "lucide-react-native/icons/monitor";
+import MonitorCog from "lucide-react-native/icons/monitor-cog";
+import MonitorOff from "lucide-react-native/icons/monitor-off";
+import MonitorSmartphone from "lucide-react-native/icons/monitor-smartphone";
+import RouteOff from "lucide-react-native/icons/route-off";
+import Timer from "lucide-react-native/icons/timer";
+import Unplug from "lucide-react-native/icons/unplug";
 import Moon from "lucide-react-native/icons/moon";
 import Ellipsis from "lucide-react-native/icons/ellipsis";
+import Palette from "lucide-react-native/icons/palette";
 import Paperclip from "lucide-react-native/icons/paperclip";
 import Pin from "lucide-react-native/icons/pin";
 import PinOff from "lucide-react-native/icons/pin-off";
@@ -149,10 +170,17 @@ export const glyphs = {
 	"download-cloud": CloudDownload,
 	"edit-2": Pen,
 	"edit-3": PenLine,
+	"eye": Eye,
+	"eye-off": EyeOff,
 	"external-link": ExternalLink,
 	"feather": FeatherGlyph,
 	"file": File,
 	"file-text": FileText,
+	"file-diff": FileDiff,
+	"file-minus": FileMinus,
+	"file-pen": FilePen,
+	"file-plus": FilePlus,
+	"file-symlink": FileSymlink,
 	"folder": Folder,
 	"folder-open": FolderOpen,
 	"flag": Flag,
@@ -167,9 +195,11 @@ export const glyphs = {
 	"info": Info,
 	"italic": Italic,
 	"key": KeyRound,
+	"laptop": Laptop,
 	"layers": Layers,
 	"link": Link,
 	"list": List,
+	"list-tree": ListTree,
 	"loader": LoaderCircle,
 	"log-out": LogOut,
 	"map": Map,
@@ -177,13 +207,19 @@ export const glyphs = {
 	"menu": Menu,
 	"message-circle": MessageCircle,
 	"message-square": MessageSquare,
+	"message-square-plus": MessageSquarePlus,
+	"message-square-text": MessageSquareText,
 	"mic": Mic,
 	"mic-off": MicOff,
 	"minus": Minus,
 	"minus-circle": CircleMinus,
 	"monitor": Monitor,
+	"monitor-cog": MonitorCog,
+	"monitor-off": MonitorOff,
+	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
 	"more-horizontal": Ellipsis,
+	"palette": Palette,
 	"paperclip": Paperclip,
 	"pin": Pin,
 	"pin-off": PinOff,
@@ -196,6 +232,7 @@ export const glyphs = {
 	"repeat": Repeat,
 	"rotate-ccw": RotateCcw,
 	"rotate-cw": RotateCw,
+	"route-off": RouteOff,
 	"save": Save,
 	"search": Search,
 	"send": Send,
@@ -205,6 +242,7 @@ export const glyphs = {
 	"shield-off": ShieldOff,
 	"shuffle": Shuffle,
 	"sliders": SlidersHorizontal,
+	"sparkles": Sparkles,
 	"smartphone": Smartphone,
 	"square": Square,
 	"star": Star,
@@ -212,12 +250,16 @@ export const glyphs = {
 	"table": Table,
 	"terminal": Terminal,
 	"tool": Wrench,
+	"timer": Timer,
 	"trash": Trash,
 	"trash-2": Trash,
 	"type": Type,
 	"underline": Underline,
+	"unfold-vertical": UnfoldVertical,
+	"unplug": Unplug,
 	"user": User,
 	"wifi-off": WifiOff,
+	"wrap-text": WrapText,
 	"x": X,
 	"x-circle": CircleX,
 	"x-octagon": OctagonX,

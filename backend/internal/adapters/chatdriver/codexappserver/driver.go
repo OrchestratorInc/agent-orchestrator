@@ -128,6 +128,7 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityUsage:       true,
 		ports.ChatCapabilityDiffs:       true,
 		ports.ChatCapabilityPlans:       true,
+		ports.ChatCapabilityPlanMode:    true,
 		ports.ChatCapabilityInteractive: true,
 		ports.ChatCapabilityModels:      true,
 		// The account's quota position is both pushed (account/rateLimits/updated)
@@ -291,7 +292,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false,
 	)
 	if err != nil {
 		return nil, err
@@ -305,6 +306,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.disableNetwork = cfg.DisableNetwork
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"cwd":               cfg.WorkspacePath,
 		"approvalPolicy":    policy,
@@ -320,8 +323,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// thread/start has no top-level effort field either; carry the durable AO
 	// choice as a config override like thread/resume does, so a fresh thread
 	// does not silently fall back to the provider default.
-	if cfg.Effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt
@@ -349,6 +352,12 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
+// Reconnect attaches to a surviving provider without launching a replacement.
+func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	cfg.ReconnectOnly = true
+	return d.Resume(ctx, cfg)
+}
+
 // Resume reattaches to a stored Codex thread after a daemon or app-server
 // restart. A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
@@ -363,7 +372,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -373,12 +382,17 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
+		conv.launchMode = cfg.Permissions
+		// Neither the tier nor the collaboration mode the thread was left on is
+		// known; the next turn states both.
+		conv.tierUnknown, conv.planUnknown = true, true
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"threadId":          cfg.ProviderConversationID,
 		"cwd":               cfg.WorkspacePath,
@@ -392,8 +406,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// thread/resume has no top-level effort field. Codex exposes persistent
 	// reasoning effort as a config override, so carry the durable AO choice into
 	// the resumed thread instead of silently falling back to the provider default.
-	if cfg.Effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
 	}
 	// Developer instructions are launch context, not durable conversation
 	// history. Reapply AO's current standing role when app-server reconstructs a
@@ -404,19 +418,99 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	resumeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	var resp struct {
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoningEffort"`
+		Model           string  `json:"model"`
+		ReasoningEffort string  `json:"reasoningEffort"`
+		ServiceTier     *string `json:"serviceTier"`
 	}
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
+	if err != nil && cfg.FreshIfMissing && codexThreadMissing(err) {
+		// The caller proved the thread never had a turn (a switch target that
+		// had not answered), so Codex never saved it: a new thread loses nothing.
+		delete(params, "threadId")
+		var started struct {
+			Thread struct {
+				ID string `json:"id"`
+			} `json:"thread"`
+			Model           string `json:"model"`
+			ReasoningEffort string `json:"reasoningEffort"`
+		}
+		if err = conv.conn.request(resumeCtx, "thread/start", params, &started); err == nil && started.Thread.ID == "" {
+			err = errors.New("thread/start returned no thread id")
+		}
+		if err != nil {
+			_ = conv.Terminate()
+			return nil, fmt.Errorf("%w: start in place of a missing thread: %w", ports.ErrChatResumeFailed, err)
+		}
+		conv.start(started.Thread.ID, started.Model, started.ReasoningEffort)
+		return conv, nil
+	}
 	if err != nil {
 		_ = conv.Terminate()
-		// Deliberately not falling back to thread/start: silently opening a new
+		// Otherwise not falling back to thread/start: silently opening a new
 		// conversation would present unrelated history as continuous.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
+	// A tier sticks to the thread. One AO left it on is undone by the first turn
+	// here; one the user configured is theirs, as on a new thread.
+	conv.fastTier = resp.ServiceTier != nil && conv.configuredServiceTier(ctx) == ""
+	// thread/resume does not report the collaboration mode, and Plan sticks to
+	// the thread across a restart, so the next turn states it.
+	conv.planUnknown = true
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
+}
+
+// codexThreadMissing reports a thread/resume refused because Codex has no
+// saved thread under that id: none at all, or the empty rollout a thread that
+// never had a turn leaves behind ("rollout at … is empty").
+func codexThreadMissing(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no rollout found") ||
+		strings.Contains(message, "thread not found") ||
+		(strings.Contains(message, "rollout") && strings.Contains(message, "is empty"))
+}
+
+// threadConfig is the config override sent with thread/start and
+// thread/resume. Codex layers it above config.toml for this thread only.
+//
+// AO's own "ao" server (html_preview, html_render) is pre-approved. AO answers
+// no mcpServer/elicitation/request, so a prompt could only fail the call.
+// Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
+// request under on-request and was refused under never/read-only, and
+// default_tools_approval_mode "approve" removed both.
+func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
+	config := map[string]any{}
+	if effort != "" {
+		config["model_reasoning_effort"] = effort
+	}
+	if len(servers) == 0 {
+		return config
+	}
+	mcpServers := make(map[string]any, len(servers))
+	for _, server := range servers {
+		entry := map[string]any{}
+		if server.Name == "ao" {
+			entry["default_tools_approval_mode"] = "approve"
+		}
+		if server.Type == "http" {
+			entry["url"] = server.URL
+			if len(server.Headers) > 0 {
+				entry["http_headers"] = server.Headers
+			}
+		} else {
+			entry["command"] = server.Command
+			if len(server.Args) > 0 {
+				entry["args"] = server.Args
+			}
+			if len(server.Env) > 0 {
+				entry["env"] = server.Env
+			}
+		}
+		mcpServers[server.Name] = entry
+	}
+	config["mcp_servers"] = mcpServers
+	return config
 }
 
 // connect spawns app-server and completes the initialize handshake.
@@ -446,10 +540,14 @@ func (d *Driver) connectSession(
 	env map[string]string,
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
+	reconnectOnly bool,
 ) (*conversation, bool, error) {
 	// Injected driver tests intentionally retain the direct pipe launcher. The
 	// shipped driver uses spawnAppServer and therefore the persistent host.
 	if !d.persistent {
+		if reconnectOnly {
+			return nil, false, ports.ErrChatHostNotRunning
+		}
 		if prepareEnv != nil {
 			var err error
 			env, err = prepareEnv(ctx)
@@ -460,16 +558,21 @@ func (d *Driver) connectSession(
 		conv, err := d.connect(ctx, workdir, env, providerScopeID)
 		return conv, false, err
 	}
-	bin, err := d.plugin.ResolveBinary(ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+	var bin string
+	if !reconnectOnly {
+		var err error
+		bin, err = d.plugin.ResolveBinary(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+		}
 	}
 	hostConfig := persistenthost.Config{
-		SessionID: string(sessionID),
-		DataDir:   dataDir,
-		Workdir:   workdir,
-		Env:       envSlice(env),
-		Argv:      []string{bin, "app-server"},
+		SessionID:     string(sessionID),
+		ReconnectOnly: reconnectOnly,
+		DataDir:       dataDir,
+		Workdir:       workdir,
+		Env:           envSlice(env),
+		Argv:          []string{bin, "app-server"},
 	}
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -484,6 +587,9 @@ func (d *Driver) connectSession(
 	}
 	transport, err := d.connectHost(ctx, hostConfig)
 	if err != nil {
+		if errors.Is(err, persistenthost.ErrNotRunning) {
+			return nil, false, ports.ErrChatHostNotRunning
+		}
 		if errors.Is(err, persistenthost.ErrOwnershipInconclusive) ||
 			errors.Is(err, persistenthost.ErrAttached) ||
 			errors.Is(err, persistenthost.ErrIncompatible) ||
@@ -500,14 +606,27 @@ func (d *Driver) connectSession(
 		stop:          transport.Stdin.Close,
 		terminate: func() error {
 			_ = transport.Stdin.Close()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// As for ACP hosts: the host's own shutdown can take about 6 s.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			return persistenthost.Shutdown(shutdownCtx, dataDir, string(sessionID))
 		},
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
-		return conv, true, nil
+		// A daemon stopped mid-initialize leaves a host whose app-server never
+		// was, failing every call "Not initialized". An initialized one refuses
+		// a second initialize and keeps its state.
+		fresh, err := initializeIfNeeded(ctx, conv.conn)
+		if err != nil {
+			_ = conv.Close()
+			return nil, false, err
+		}
+		if !fresh {
+			return conv, true, nil
+		}
+		proc.reconnected = false
+		return conv, false, nil
 	}
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()
@@ -518,6 +637,17 @@ func (d *Driver) connectSession(
 
 func (d *Driver) initialize(ctx context.Context, conv *conversation) error {
 	return initializeConnection(ctx, conv.conn)
+}
+
+// initializeIfNeeded initializes an app-server reached through a live host. It
+// reports whether the app-server had not been initialized before.
+func initializeIfNeeded(ctx context.Context, connection *conn) (bool, error) {
+	err := initializeConnection(ctx, connection)
+	var refused *rpcError
+	if errors.As(err, &refused) && refused.Code == -32600 && strings.EqualFold(refused.Message, "Already initialized") {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func initializeConnection(ctx context.Context, connection *conn) error {
@@ -561,6 +691,24 @@ func approvalReviewer(mode ports.PermissionMode) string {
 		return "auto_review"
 	}
 	return "user"
+}
+
+// SandboxAllowsNetwork reports whether this thread's agent can reach the
+// network. Codex's workspace-write sandbox, used for accept-edits and auto, has
+// no network (AO never grants it), while full access and the read-only
+// reviewer sandbox do.
+func (c *conversation) SandboxAllowsNetwork(turnMode ports.PermissionMode) bool {
+	if c.disableNetwork {
+		return false
+	}
+	if c.readOnly {
+		return true
+	}
+	if turnMode == "" {
+		turnMode = c.launchMode
+	}
+	_, sandbox := approvalSettings(turnMode)
+	return sandbox == "danger-full-access"
 }
 
 func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, sandbox, reviewer string) {
@@ -656,4 +804,72 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	}
 	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
 	return envSlice(overlay)
+}
+
+// ForkIntoHost starts an inclusive native fork in an independent provider host.
+func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
+		return nil, errors.New("source thread and exact turn anchor are required")
+	}
+	if !filepath.IsAbs(cfg.WorkspacePath) {
+		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
+	}
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	if err != nil {
+		return nil, err
+	}
+	if reconnected {
+		_ = conv.Close()
+		return nil, errors.New("side provider host already owns a conversation")
+	}
+	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	conv.readOnly = cfg.ReadOnly
+	conv.disableNetwork = cfg.DisableNetwork
+	conv.launchMode = cfg.Permissions
+	params := map[string]any{
+		"threadId":          sourceProviderConversationID,
+		"cwd":               cfg.WorkspacePath,
+		"approvalPolicy":    policy,
+		"approvalsReviewer": reviewer,
+		"sandbox":           sandbox,
+	}
+	params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
+	// The child retains native context; copied turns are not needed in this response.
+	params["excludeTurns"] = true
+	if cfg.Model != "" {
+		params["model"] = cfg.Model
+	}
+	// Same overrides as thread/start and thread/resume: without the MCP servers
+	// a fresh fork has no AO tools until a restart resumes it.
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
+	}
+	if cfg.SystemPrompt != "" {
+		params["developerInstructions"] = cfg.SystemPrompt
+	}
+	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
+	}
+	if err := conv.conn.request(openCtx, "thread/fork", params, &resp); err != nil {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("thread/fork in side host: %w", err)
+	}
+	if resp.Thread.ID == "" || resp.Thread.ID == sourceProviderConversationID {
+		_ = conv.Terminate()
+		return nil, errors.New("thread/fork returned no independent thread id")
+	}
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(context.WithoutCancel(ctx), resp.Thread.ID); err != nil {
+			_ = conv.Terminate()
+			return nil, fmt.Errorf("record Codex fork: %w", err)
+		}
+	}
+	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	return conv, nil
 }

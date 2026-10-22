@@ -78,6 +78,10 @@ func TestProviderHelper(t *testing.T) {
 	if os.Getenv("AO_CHAT_HOST_DELAY_EXIT") == "1" {
 		time.Sleep(300 * time.Millisecond)
 	}
+	if os.Getenv("AO_CHAT_HOST_IGNORE_STDIN") == "1" {
+		// Like Cursor and Grok: only a signal ends it.
+		time.Sleep(10 * time.Second)
+	}
 	os.Exit(0)
 }
 
@@ -344,6 +348,7 @@ func TestHostReconnectsSameProviderAndReplaysDetachedOutput(t *testing.T) {
 	}
 	if second == nil {
 		t.Fatal("host never released first controller")
+		return
 	}
 	if !second.Reconnected || second.NextRequestID != 8 {
 		t.Fatalf("reattach metadata = reconnected:%v next:%d", second.Reconnected, second.NextRequestID)
@@ -588,6 +593,7 @@ func TestConnectOrStartPreparesOnlyWhenLaunchingProvider(t *testing.T) {
 			_ = Shutdown(context.Background(), dataDir, cfg.SessionID)
 			<-done
 		})
+		cfg.ReconnectOnly = true
 		prepareCalls := 0
 		cfg.Prepare = func(context.Context) (PreparedProvider, error) {
 			prepareCalls++
@@ -985,4 +991,18 @@ func requestProviderPID(t *testing.T, transport *Transport, id int64, method str
 		t.Fatalf("provider response = id:%d pid:%s", response.ID, strconv.Itoa(response.Result.PID))
 	}
 	return response.Result.PID
+}
+
+func TestReconnectOnlyNeverPreparesOrStartsMissingHost(t *testing.T) {
+	cfg := Config{SessionID: "missing", DataDir: t.TempDir(), Workdir: t.TempDir(), ReconnectOnly: true}
+	cfg.Prepare = func(context.Context) (PreparedProvider, error) {
+		t.Fatal("health check prepared a provider launch")
+		return PreparedProvider{}, nil
+	}
+	if _, err := ConnectOrStart(context.Background(), cfg); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("error = %v, want stopped host", err)
+	}
+	if _, err := readDescriptor(cfg.DataDir, cfg.SessionID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("health check wrote a descriptor: %v", err)
+	}
 }

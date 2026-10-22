@@ -22,6 +22,13 @@ const mocks = vi.hoisted(() => ({
   notifyRenderers: vi.fn(),
   openExternal: vi.fn(),
   showMessageBox: vi.fn(),
+  providerAuthenticate: vi.fn(),
+}));
+
+// The browser login itself is exercised in provider-auth-flow tests; here it
+// just returns a captured credential.
+vi.mock("./provider-auth-flow", () => ({
+  providerAuthFlow: () => ({ authenticate: mocks.providerAuthenticate }),
 }));
 
 vi.mock("@workos-inc/node", () => ({
@@ -58,8 +65,10 @@ import {
   getCloudSession,
   handleCloudDeepLink,
   installCloudIPC,
+  readAuthStore,
   showCloudSignInFailure,
   signOutCloud,
+  writeAuthStore,
 } from "./cloud-auth";
 
 describe("native WorkOS authentication", () => {
@@ -104,7 +113,7 @@ describe("native WorkOS authentication", () => {
         provider: "authkit",
         prompt: "login",
         maxAge: 0,
-        redirectUri: "ao-app://callback",
+        redirectUri: "https://api.aoagents.dev/app/auth/return",
       }),
     );
 
@@ -127,6 +136,80 @@ describe("native WorkOS authentication", () => {
     });
   });
 
+  it("silently accepts the same completed callback without exchanging its code again", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const account = await handleCloudDeepLink(callback, dataDir);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("exchanges a callback once when the OS delivers it concurrently", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const accounts = await Promise.all([
+      handleCloudDeepLink(callback, dataDir),
+      handleCloudDeepLink(callback, dataDir),
+    ]);
+
+    expect(accounts[0]).toEqual(accounts[1]);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores callbacks with no login pending without changing the signed-in account", async () => {
+    await beginCloudSignIn(dataDir);
+    const account = await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    await expect(handleCloudDeepLink(
+      "ao-app://callback?code=different_code&state=state_123", dataDir,
+    )).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(
+      "ao-app://callback?code=code_123&state=unverified_state", dataDir,
+    )).resolves.toEqual(account);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("quietly returns to an account saved before callback deduplication was added", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const account = await handleCloudDeepLink(callback, dataDir);
+    const store = await readAuthStore(dataDir);
+    delete store.completedCallback;
+    await writeAuthStore(dataDir, store);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore a signed-out account when its old return button is clicked", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    await handleCloudDeepLink(callback, dataDir);
+    await signOutCloud(dataDir);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).rejects.toThrow("No WorkOS sign-in is pending");
+    await expect(getCloudSession(dataDir)).resolves.toBeNull();
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a newer pending login when an already completed callback repeats", async () => {
+    await beginCloudSignIn(dataDir);
+    const callback = "ao-app://callback?code=code_123&state=state_123";
+    const account = await handleCloudDeepLink(callback, dataDir);
+    mocks.getAuthorizationUrlWithPKCE.mockResolvedValueOnce({
+      url: "https://workos.example/authorize", state: "state_456", codeVerifier: "verifier_456",
+    });
+    await beginCloudSignIn(dataDir);
+
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await handleCloudDeepLink("ao-app://callback?code=code_456&state=state_456", dataDir);
+    expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(2);
+    expect(mocks.authenticateWithCode).toHaveBeenLastCalledWith(expect.objectContaining({
+      code: "code_456", codeVerifier: "verifier_456",
+    }));
+  });
+
   it("requires an AO Cloud session before starting provider login", async () => {
     const handler = mocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === "cloud:connectProviderAuth",
@@ -135,10 +218,47 @@ describe("native WorkOS authentication", () => {
     await expect(
       handler?.({}, {
         baseUrl: "https://cloud.example",
-        orgId: "org-123",
         provider: "codex",
       }),
     ).rejects.toThrow("Sign in to AO Cloud before connecting a provider.");
+  });
+
+  describe("Claude browser login local fallback token", () => {
+    const tokenFile = () => path.join(dataDir, "harnesses", "claude-code", "oauth-token");
+    const connect = async () => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "claude-code", persistLocalClaudeToken: true });
+    };
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+      mocks.providerAuthenticate.mockResolvedValue({
+        provider: "claude-code",
+        credentialType: "oauth_token",
+        secret: "sk-ant-oat01-test-token",
+      });
+    });
+
+    it("keeps the local token once the cloud credential is saved", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+      await connect();
+      await expect(readFile(tokenFile(), "utf8")).resolves.toBe("sk-ant-oat01-test-token");
+    });
+
+    it("does not leave a local token behind when the cloud save fails", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 500 }));
+      await expect(connect()).rejects.toThrow("AO Cloud could not save the provider credential.");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("does not leave a local token behind when the cloud is unreachable", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+      await expect(connect()).rejects.toThrow("fetch failed");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   it("rejects callbacks whose OAuth state does not match", async () => {

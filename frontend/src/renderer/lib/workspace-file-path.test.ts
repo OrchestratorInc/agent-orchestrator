@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
+	isAbsoluteFileReference,
 	matchWorkspaceFilePath,
+	workspaceFileOpenTarget,
 	normalizeWorkspaceFileReference,
+	workspaceFileReferenceLine,
 } from "./workspace-file-path";
 
 describe("matchWorkspaceFilePath", () => {
@@ -39,6 +42,22 @@ describe("matchWorkspaceFilePath", () => {
 		).toBe("docs/report.md");
 	});
 
+	it("keeps an absolute reference as the open target instead of its file-list match", () => {
+		expect(workspaceFileOpenTarget("/other-repo/src/a.ts:12", "src/a.ts")).toBe("/other-repo/src/a.ts");
+		expect(workspaceFileOpenTarget("file:///other-repo/src/a.ts", "src/a.ts")).toBe("/other-repo/src/a.ts");
+		expect(workspaceFileOpenTarget("C:\\repo\\src\\a.ts", "src/a.ts")).toBe("C:/repo/src/a.ts");
+		expect(workspaceFileOpenTarget("a.ts:12", "src/a.ts")).toBe("src/a.ts");
+		expect(workspaceFileOpenTarget("./src/a.ts", "src/a.ts")).toBe("src/a.ts");
+	});
+
+	it("recognizes absolute file references", () => {
+		expect(isAbsoluteFileReference("/Users/me/repo/src/app.ts")).toBe(true);
+		expect(isAbsoluteFileReference("~/notes/plan.md")).toBe(true);
+		expect(isAbsoluteFileReference("C:/repo/src/app.ts")).toBe(true);
+		expect(isAbsoluteFileReference("src/app.ts")).toBe(false);
+		expect(isAbsoluteFileReference("./src/app.ts")).toBe(false);
+	});
+
 	it("falls back to the normalized request when nothing matches", () => {
 		expect(matchWorkspaceFilePath("missing.txt", files)).toBe("missing.txt");
 	});
@@ -71,5 +90,13 @@ describe("matchWorkspaceFilePath", () => {
 
 	it("normalizes Windows file references", () => {
 		expect(normalizeWorkspaceFileReference("C:\\repo\\src\\app.ts:9")).toBe("C:/repo/src/app.ts");
+	});
+
+	it("extracts editor line locations without confusing columns or ranges", () => {
+		expect(workspaceFileReferenceLine("src/app.ts:42")).toBe(42);
+		expect(workspaceFileReferenceLine("src/app.ts:42:7")).toBe(42);
+		expect(workspaceFileReferenceLine("src/app.ts#L12-L18")).toBe(12);
+		expect(workspaceFileReferenceLine("file:///repo/src/app.ts%3A27")).toBe(27);
+		expect(workspaceFileReferenceLine("src/app.ts")).toBeUndefined();
 	});
 });

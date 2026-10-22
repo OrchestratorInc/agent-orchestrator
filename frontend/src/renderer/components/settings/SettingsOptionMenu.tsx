@@ -1,8 +1,8 @@
-import { type ReactNode, type Ref, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, type Ref, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import {
 	SETTINGS_MENU_ITEM,
 	SETTINGS_MENU_SURFACE,
@@ -14,12 +14,15 @@ export type SettingsOption<T extends string> = {
 	label: string;
 	icon?: ReactNode;
 	disabled?: boolean;
+	/** Heading for a run of consecutive options; shown above the first of each run. */
+	group?: string;
 };
 
 export function SettingsOptionMenu<T extends string>({
 	value,
 	options,
 	onChange,
+	onHighlight,
 	disabled,
 	placeholder,
 	renderMenuItem,
@@ -39,6 +42,8 @@ export function SettingsOptionMenu<T extends string>({
 	value: T;
 	options: SettingsOption<T>[];
 	onChange: (value: T) => void;
+	/** Called with the pointer- or keyboard-highlighted option, and `null` when the menu closes. */
+	onHighlight?: (value: T | null) => void;
 	disabled?: boolean;
 	placeholder?: string;
 	renderMenuItem?: (option: SettingsOption<T>, selected: boolean) => ReactNode;
@@ -84,12 +89,20 @@ export function SettingsOptionMenu<T extends string>({
 		return () => observer.disconnect();
 	}, [menuOpen, updateScrollCue, visibleOptions.length]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
+	// Radix skips onOpenChange when an open menu unmounts (e.g. a shortcut closes
+	// the settings view), so end any highlight here or a preview would stick.
+	const highlightCleanupRef = useRef<(() => void) | null>(null);
+	highlightCleanupRef.current = menuOpen && onHighlight ? () => onHighlight(null) : null;
+	useEffect(() => () => highlightCleanupRef.current?.(), []);
 
 	return (
 		<DropdownMenu
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (!open) setSearch("");
+				if (!open) {
+					setSearch("");
+					onHighlight?.(null);
+				}
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
@@ -123,7 +136,7 @@ export function SettingsOptionMenu<T extends string>({
 							value={search}
 							onChange={(event) => setSearch(event.target.value)}
 							placeholder={searchPlaceholder ?? t("settings.options.searchPlaceholder")}
-							className="settings-inline-input w-full"
+							className="menu-search-input"
 						/>
 					</div>
 				)}
@@ -136,11 +149,13 @@ export function SettingsOptionMenu<T extends string>({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
-						{visibleOptions.map((option) => (
+						{visibleOptions.map((option, index) => (
+							<Fragment key={option.value}>
+							{option.group && option.group !== visibleOptions[index - 1]?.group ? <DropdownMenuLabel>{option.group}</DropdownMenuLabel> : null}
 							<DropdownMenuItem
-								key={option.value}
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
+								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
 								className={cn(
 									SETTINGS_MENU_ITEM,
 									option.value === value && "border-settings-menu bg-settings-menu-selected text-settings-title",
@@ -156,6 +171,7 @@ export function SettingsOptionMenu<T extends string>({
 									</>
 								)}
 							</DropdownMenuItem>
+							</Fragment>
 						))}
 						{visibleOptions.length === 0 && (
 							<p className="px-2 py-1.5 text-xs text-settings-muted">{emptyLabel ?? t("settings.options.noMatches")}</p>

@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -648,7 +649,7 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	case codexproto.MethodError:
 		var p codexproto.ErrorNotification
 		if err := json.Unmarshal(n.Params, &p); err == nil &&
-			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil) {
+			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil || p.Error.CodexErrorInfo != nil) {
 			failure := codexProviderFailure(p.Error)
 			if failure == nil {
 				return nil
@@ -694,21 +695,35 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	}
 }
 
-// codexErrorInfo is metadata, not display copy. Only an explicit unauthorized
-// reason invokes the existing authentication path; other errors remain readable.
+// Native reasons distinguish quota exhaustion from throttling and authentication
+// failures even when the provider's display copy does not name the limit.
 func codexProviderFailure(turnErr codexproto.TurnError) error {
 	detail := ""
 	if turnErr.AdditionalDetails != nil {
 		detail = *turnErr.AdditionalDetails
 	}
 	var cause error
-	if turnErr.CodexErrorInfo != nil && string(*turnErr.CodexErrorInfo) == `"unauthorized"` {
-		cause = ports.ErrChatAuthRequired
+	if turnErr.CodexErrorInfo != nil {
+		var reason string
+		_ = json.Unmarshal(*turnErr.CodexErrorInfo, &reason)
+		switch reason {
+		case "unauthorized":
+			cause = ports.ErrChatAuthRequired
+		case "usageLimitExceeded":
+			cause = errCodexUsageLimitExceeded
+		}
 	}
 	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && cause == nil {
 		return nil
 	}
-	return ports.NewChatProviderFailure(turnErr.Message, detail, cause)
+	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && errors.Is(cause, errCodexUsageLimitExceeded) {
+		return ports.NewChatProviderFailure("Usage limit exceeded", "", cause)
+	}
+	failure := ports.NewChatProviderFailure(turnErr.Message, detail, cause)
+	if errors.Is(cause, errCodexUsageLimitExceeded) && domain.ParseConversationUsageLimit(failure.Error(), nil) == nil {
+		return ports.NewChatProviderFailure("Usage limit exceeded", failure.Error(), cause)
+	}
+	return failure
 }
 
 // turnIDFallback reads a top-level turnId, which some builds send instead of
@@ -1205,10 +1220,10 @@ func activityDetail(it threadItem) []byte {
 		// What the tool was called WITH. A tool call with no arguments shown is a
 		// claim the user cannot check: "called search" says nothing about what was
 		// searched for. Capped, because a tool can be handed a whole file.
-		detail["arguments"] = truncatedJSON(it.Arguments)
+		detail["arguments"] = commanddetail.TruncatedJSON(it.Arguments)
 	}
 	if len(it.Result) > 0 && !isJSONNull(it.Result) {
-		detail["result"] = truncatedJSON(it.Result)
+		detail["result"] = commanddetail.TruncatedJSON(it.Result)
 	}
 	if it.Error != nil && it.Error.Message != "" {
 		detail["error"] = it.Error.Message
@@ -1226,27 +1241,6 @@ func activityDetail(it threadItem) []byte {
 		return nil
 	}
 	return encodeDetail(detail)
-}
-
-// maxToolPayloadChars caps one tool call's arguments or result.
-//
-// A tool can be handed a whole file and can hand one back, and this payload is
-// re-read by every conversation snapshot poll. 8K is well past what a card shows
-// and far short of what an unbounded result would cost; over the cap the JSON is
-// replaced by a marker rather than cut, because half a JSON document is not JSON
-// and a client that tried to parse it would fail on valid provider data.
-const maxToolPayloadChars = 8 * 1024
-
-// truncatedJSON keeps a payload only while it is small enough to be worth keeping.
-func truncatedJSON(raw json.RawMessage) any {
-	if len(raw) <= maxToolPayloadChars {
-		return raw
-	}
-	return map[string]any{
-		"truncated": true,
-		"bytes":     len(raw),
-		"note":      "payload exceeded the daemon's tool payload cap and was not stored",
-	}
 }
 
 func isJSONNull(raw json.RawMessage) bool {

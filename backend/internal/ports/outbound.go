@@ -221,6 +221,19 @@ type RuntimeConfig struct {
 	// not determine whether a terminal survives an app launch. Agent runtimes
 	// leave it disabled to retain scrollback and manual recovery.
 	ExitOnCommandCompletion bool
+	// StartOnAttach defers starting Argv until a viewer first attaches with its
+	// grid, so the process starts at the size that viewer shows. A shell started
+	// at a guessed grid lays its first prompt out for the wrong width (zsh's
+	// partial-line marker then leaks as a stray "%"). Only for terminals a user
+	// opened to look at: agents and scripted command terminals must start
+	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
+	StartOnAttach bool
+	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
+	// GetStyledOutput is first called for this terminal. Rendering every byte
+	// costs CPU on heavy output; terminals nothing probes for styled output
+	// (user and command shells, not agents) need not pay it continuously.
+	// Runtimes that always render ignore it.
+	LazyStyledOutput bool
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -246,6 +259,14 @@ type SupervisedProcessInspector interface {
 	IsSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
 }
 
+// RuntimeProcessRootInspector exposes the operating-system pids at the root of
+// a runtime's process tree (a tmux pane leader, a PTY host). Memory accounting
+// walks their descendants. It is an optional capability: a runtime without it
+// simply reports no memory reading rather than zero.
+type RuntimeProcessRootInspector interface {
+	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
+}
+
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
 // at agent-switch ownership boundaries. Unlike SupervisedProcessInspector it
 // must never treat an arbitrary child of a preserved shell as the requested
@@ -253,6 +274,24 @@ type SupervisedProcessInspector interface {
 // supervisor's managed agent child are both alive.
 type ExactSupervisedProcessInspector interface {
 	IsExactSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
+}
+
+// WorkloadCommandInspector counts the commands an agent is running in its
+// terminal: shells under the exact supervised agent of ref, and whatever runs
+// in them. A tool call, test run or dev server shows up here; an agent's own
+// helper processes (MCP servers, for example) do not. Restarting the agent
+// would kill those commands, so a restart waits while any run. An error means
+// the count could not be proved.
+type WorkloadCommandInspector interface {
+	RunningWorkloadCommands(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (int, error)
+}
+
+// SupervisedProcessRecordInspector reports whether a runtime handle contains
+// any AO supervisor. Review liveness uses this to keep pre-supervisor reviewer
+// launches working while still requiring an exact launch match for supervised
+// processes.
+type SupervisedProcessRecordInspector interface {
+	HasSupervisedProcessRecord(ctx context.Context, handle RuntimeHandle) (bool, error)
 }
 
 // ContainerReaper removes Docker containers a worker session owns, identified
@@ -491,6 +530,20 @@ var (
 	// fmt.Errorf so callers can match it with errors.Is.
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
+
+// WorkspaceTaskNamer finalizes an unlaunched task's branch and directory names.
+// Even on error, the returned info describes the current paths and branches.
+type WorkspaceTaskNamer interface {
+	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
+	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
+}
+
+// WorkspaceTaskNamingRecovery keeps an interrupted rename recoverable until
+// the caller acknowledges that the resulting paths are durably stored.
+type WorkspaceTaskNamingRecovery interface {
+	RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (WorkspaceProjectInfo, bool, error)
+	CompleteTaskWorkspaceNaming(ctx context.Context, info WorkspaceProjectInfo) error
+}
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {

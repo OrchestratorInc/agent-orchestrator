@@ -5,12 +5,43 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// InstallationOwnedByAnotherOrgError reports that a GitHub App installation the
+// caller tried to connect is already connected by a different AO organization
+// under the legacy global-unique constraint, so a per-org record could not be
+// created for the caller. It classifies as ErrConflict (via Is) for callers
+// that only branch on the error class, while carrying the GitHub account login
+// so the callback can render a specific, actionable page instead of a generic
+// failure. It names the GitHub account (public information the connecting admin
+// already has) rather than the owning organization, which is deliberately not
+// disclosed across the tenant boundary.
+type InstallationOwnedByAnotherOrgError struct {
+	GitHubInstallationID int64
+	AccountLogin         string
+	// OwnerOrgID is the AO organization that already holds the installation. It
+	// is populated for logging/diagnostics and is never rendered to the caller.
+	OwnerOrgID string
+}
+
+func (e *InstallationOwnedByAnotherOrgError) Error() string {
+	return fmt.Sprintf(
+		"github installation %d is already connected to another organization",
+		e.GitHubInstallationID,
+	)
+}
+
+// Is lets errors.Is(err, ErrConflict) recognise this as a conflict so existing
+// conflict handling keeps working while errors.As can still recover the owner.
+func (e *InstallationOwnedByAnotherOrgError) Is(target error) bool {
+	return target == ErrConflict
+}
 
 func (s *Store) CreateGitHubInstallAttempt(
 	ctx context.Context,
@@ -276,50 +307,14 @@ func (s *Store) CompleteGitHubInstallation(
 		if err != nil {
 			return err
 		}
-		err = tx.QueryRow(
+		if err := s.upsertGitHubInstallationForOrg(
 			ctx,
-			`INSERT INTO ao_github_installations (
-				org_id, github_installation_id, github_account_id,
-				account_login, account_type, status, repository_selection,
-				permissions, events, installed_by_user_id,
-				sync_status
-			) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, 'pending')
-			ON CONFLICT (github_installation_id) DO UPDATE
-			SET account_login = EXCLUDED.account_login,
-			    account_type = EXCLUDED.account_type,
-			    status = 'active',
-			    repository_selection = EXCLUDED.repository_selection,
-			    permissions = EXCLUDED.permissions,
-			    events = EXCLUDED.events,
-			    sync_status = 'pending',
-			    sync_generation = ao_github_installations.sync_generation + 1,
-			    suspended_at = NULL,
-			    disconnected_at = NULL,
-			    deleted_at = NULL,
-			    updated_at = now()
-			WHERE ao_github_installations.org_id = EXCLUDED.org_id
-			RETURNING id, org_id, github_installation_id, github_account_id,
-				account_login, account_type, status, repository_selection,
-				permissions, events, sync_status, sync_generation,
-				last_synced_at, last_error,
-				installed_by_user_id, created_at, updated_at`,
+			tx,
 			route.orgID,
-			installation.GitHubInstallationID,
-			installation.GitHubAccountID,
-			installation.AccountLogin,
-			installation.AccountType,
-			installation.RepositorySelection,
-			permissions,
-			installation.Events,
 			route.userID,
-		).Scan(githubInstallationScanTargets(&installation)...)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrConflict
-			}
-			if isUniqueViolation(err) {
-				return ErrConflict
-			}
+			&installation,
+			permissions,
+		); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(
@@ -327,10 +322,8 @@ func (s *Store) CompleteGitHubInstallation(
 			`INSERT INTO ao_github_installation_routes (
 				github_installation_id, org_id, installation_id
 			) VALUES ($1, $2, $3)
-			ON CONFLICT (github_installation_id) DO UPDATE
-			SET org_id = EXCLUDED.org_id,
-			    installation_id = EXCLUDED.installation_id
-			WHERE ao_github_installation_routes.org_id = EXCLUDED.org_id`,
+			ON CONFLICT (github_installation_id, org_id) DO UPDATE
+			SET installation_id = EXCLUDED.installation_id`,
 			installation.GitHubInstallationID,
 			route.orgID,
 			installation.ID,
@@ -389,59 +382,97 @@ func (s *Store) CompleteGitHubInstallation(
 	return installation, err
 }
 
+// ErrGitHubUserScopeNeedsPersonalOrg refuses a user-scoped installation
+// connection into an organization with other members: their access would come
+// from the connecting user's GitHub permissions rather than their own.
+var ErrGitHubUserScopeNeedsPersonalOrg = errors.New(
+	"a GitHub installation you do not administer can only be connected to an organization where you are the only member")
+
+// githubUserScopeIntactSQL keeps a grant only while its connection is whole,
+// or user-scoped with its scope user still the organization's only active
+// member (see ao_github_user_scope_intact). Queries that read grants alias the
+// connection as installation and run with ao.org_id set.
+const githubUserScopeIntactSQL = `(installation.access_scope <> 'user' OR ao_github_user_scope_intact(installation.org_id, installation.scope_user_id))`
+
+func githubUserScopeIntact(ctx context.Context, tx pgx.Tx, orgID, userID string) (bool, error) {
+	if userID == "" {
+		return false, nil
+	}
+	var intact bool
+	err := tx.QueryRow(ctx, `SELECT ao_github_user_scope_intact($1::uuid, $2::uuid)`, orgID, userID).Scan(&intact)
+	return intact, err
+}
+
+// GitHubUserScopeIntact reports whether userID is still the only active member
+// of the organization, which a user-scoped connection backed by their GitHub
+// access requires.
+func (s *Store) GitHubUserScopeIntact(ctx context.Context, orgID, userID string) (bool, error) {
+	var intact bool
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var err error
+		intact, err = githubUserScopeIntact(ctx, tx, orgID, userID)
+		return err
+	})
+	return intact, err
+}
+
+// GitHubConnectOthersTarget describes the AO side of connecting the rest of a
+// user's GitHub installations after the App installation callback: the
+// user's email, shown so the person in the browser sees which AO account they
+// are connecting to, and whether the organization is theirs alone (the only
+// place other installations may be connected without asking each teammate).
+func (s *Store) GitHubConnectOthersTarget(ctx context.Context, orgID, userID string) (email string, onlyMember bool, err error) {
+	err = s.withTenant(ctx, domain.Principal{UserID: userID}, orgID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT email FROM ao_users WHERE id = $1`, userID).Scan(&email); err != nil {
+			return err
+		}
+		onlyMember, err = githubUserScopeIntact(ctx, tx, orgID, userID)
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, ErrNotFound
+	}
+	return email, onlyMember, err
+}
+
+// BindGitHubInstallation connects a GitHub App installation to the
+// organization. A user-scoped installation (installation.AccessScope ==
+// domain.GitHubAccessScopeUser, ScopeUserID the principal) is accepted only
+// into an organization whose only active member is the principal.
 func (s *Store) BindGitHubInstallation(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID string,
 	installation domain.GitHubInstallation,
 ) (domain.GitHubInstallation, error) {
+	if installation.UserScoped() && installation.ScopeUserID != principal.UserID {
+		return domain.GitHubInstallation{}, ErrInvalid
+	}
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		if err := requireOrgAdmin(ctx, tx, orgID, principal.UserID); err != nil {
 			return err
+		}
+		if installation.UserScoped() {
+			intact, err := githubUserScopeIntact(ctx, tx, orgID, principal.UserID)
+			if err != nil {
+				return err
+			}
+			if !intact {
+				return ErrGitHubUserScopeNeedsPersonalOrg
+			}
 		}
 		permissions, err := json.Marshal(installation.Permissions)
 		if err != nil {
 			return err
 		}
-		err = tx.QueryRow(
+		if err := s.upsertGitHubInstallationForOrg(
 			ctx,
-			`INSERT INTO ao_github_installations (
-				org_id, github_installation_id, github_account_id,
-				account_login, account_type, status, repository_selection,
-				permissions, events, installed_by_user_id, sync_status
-			) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, 'pending')
-			ON CONFLICT (github_installation_id) DO UPDATE
-			SET account_login = EXCLUDED.account_login,
-			    account_type = EXCLUDED.account_type,
-			    status = 'active',
-			    repository_selection = EXCLUDED.repository_selection,
-			    permissions = EXCLUDED.permissions,
-			    events = EXCLUDED.events,
-			    sync_status = 'pending',
-			    suspended_at = NULL,
-			    disconnected_at = NULL,
-			    deleted_at = NULL,
-			    updated_at = now()
-			WHERE ao_github_installations.org_id = EXCLUDED.org_id
-			RETURNING id, org_id, github_installation_id, github_account_id,
-				account_login, account_type, status, repository_selection,
-				permissions, events, sync_status, sync_generation,
-				last_synced_at, last_error,
-				installed_by_user_id, created_at, updated_at`,
+			tx,
 			orgID,
-			installation.GitHubInstallationID,
-			installation.GitHubAccountID,
-			installation.AccountLogin,
-			installation.AccountType,
-			installation.RepositorySelection,
-			permissions,
-			installation.Events,
 			principal.UserID,
-		).Scan(githubInstallationScanTargets(&installation)...)
-		if errors.Is(err, pgx.ErrNoRows) || isUniqueViolation(err) {
-			return ErrConflict
-		}
-		if err != nil {
+			&installation,
+			permissions,
+		); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(
@@ -449,10 +480,8 @@ func (s *Store) BindGitHubInstallation(
 			`INSERT INTO ao_github_installation_routes (
 				github_installation_id, org_id, installation_id
 			) VALUES ($1, $2, $3)
-			ON CONFLICT (github_installation_id) DO UPDATE
-			SET org_id = EXCLUDED.org_id,
-			    installation_id = EXCLUDED.installation_id
-			WHERE ao_github_installation_routes.org_id = EXCLUDED.org_id`,
+			ON CONFLICT (github_installation_id, org_id) DO UPDATE
+			SET installation_id = EXCLUDED.installation_id`,
 			installation.GitHubInstallationID,
 			orgID,
 			installation.ID,
@@ -467,12 +496,13 @@ func (s *Store) BindGitHubInstallation(
 			) VALUES (
 				$1, $2, 'github.installation.bound_for_scratch',
 				'github_installation', $3,
-				jsonb_build_object('githubInstallationId', $4::bigint)
+				jsonb_build_object('githubInstallationId', $4::bigint, 'accessScope', $5::text)
 			)`,
 			orgID,
 			principal.UserID,
 			installation.ID,
 			installation.GitHubInstallationID,
+			installation.AccessScope,
 		)
 		return err
 	})
@@ -492,7 +522,8 @@ func (s *Store) ListGitHubInstallations(
 				account_login, account_type, status, repository_selection,
 				permissions, events, sync_status, sync_generation,
 				last_synced_at, last_error,
-				installed_by_user_id, created_at, updated_at
+				installed_by_user_id, created_at, updated_at,
+				access_scope, COALESCE(scope_user_id::text, '')
 			FROM ao_github_installations
 			WHERE org_id = $1
 			ORDER BY created_at, id`,
@@ -530,7 +561,8 @@ func (s *Store) GitHubInstallationForSync(
 				account_login, account_type, status, repository_selection,
 				permissions, events, sync_status, sync_generation,
 				last_synced_at, last_error,
-				installed_by_user_id, created_at, updated_at
+				installed_by_user_id, created_at, updated_at,
+				access_scope, COALESCE(scope_user_id::text, '')
 			FROM ao_github_installations
 			WHERE org_id = $1 AND id = $2 AND status = 'active'`,
 			orgID,
@@ -682,6 +714,28 @@ func (s *Store) ReconcileGitHubRepositories(
 			); err != nil {
 				return err
 			}
+			// A reconnect can create a new grant row after the old installation's
+			// grant was revoked. Existing projects must follow the newly verified
+			// grant so their running sessions can obtain checkout credentials again.
+			if _, err := tx.Exec(
+				ctx,
+				`UPDATE ao_projects project
+				SET github_repository_grant_id = grant_row.id,
+				    updated_at = now()
+				FROM ao_github_repository_grants grant_row
+				WHERE project.org_id = $1
+				  AND project.github_repository_id = $2
+				  AND project.repository_url = $3
+				  AND grant_row.org_id = project.org_id
+				  AND grant_row.github_repository_id = project.github_repository_id
+				  AND grant_row.revoked_at IS NULL
+				  AND project.github_repository_grant_id IS DISTINCT FROM grant_row.id`,
+				orgID,
+				repository.GitHubRepositoryID,
+				repository.HTMLURL,
+			); err != nil {
+				return err
+			}
 		}
 		if len(active) == 0 {
 			if _, err := tx.Exec(
@@ -811,7 +865,8 @@ func (s *Store) DisconnectGitHubInstallation(
 				account_login, account_type, status, repository_selection,
 				permissions, events, sync_status, sync_generation,
 				last_synced_at, last_error,
-				installed_by_user_id, created_at, updated_at
+				installed_by_user_id, created_at, updated_at,
+				access_scope, COALESCE(scope_user_id::text, '')
 			FROM ao_github_installations WHERE org_id = $1 AND id = $2`,
 			orgID,
 			installationID,
@@ -839,7 +894,7 @@ func (s *Store) ListGitHubRepositories(
 			ctx,
 			`WITH latest_grant AS (
 				SELECT DISTINCT ON (github_repository_id)
-					id, github_repository_id, granted_at, revoked_at
+					id, github_repository_id, installation_id, granted_at, revoked_at
 				FROM ao_github_repository_grants
 				WHERE org_id = $1
 				ORDER BY github_repository_id, granted_at DESC, id DESC
@@ -855,7 +910,10 @@ func (s *Store) ListGitHubRepositories(
 			FROM latest_grant grant_row
 			JOIN ao_github_repositories repository
 			  ON repository.github_repository_id = grant_row.github_repository_id
+			JOIN ao_github_installations installation
+			  ON installation.org_id = $1 AND installation.id = grant_row.installation_id
 			WHERE (grant_row.granted_at, grant_row.id) < ($2, $3)
+			  AND `+githubUserScopeIntactSQL+`
 			ORDER BY grant_row.granted_at DESC, grant_row.id DESC
 			LIMIT $4`,
 			orgID,
@@ -934,6 +992,7 @@ func (s *Store) GitHubInstallationForRepository(
 			  AND installation.suspended_at IS NULL
 			  AND installation.disconnected_at IS NULL
 			  AND installation.deleted_at IS NULL
+			  AND `+githubUserScopeIntactSQL+`
 			  AND repository.is_archived = false
 			  AND repository.is_disabled = false`,
 			orgID, repository,
@@ -948,14 +1007,58 @@ func (s *Store) GitHubInstallationForRepository(
 	return installationID, repositoryID, nil
 }
 
+// GitHubRepositoryAccessScope returns the access scope (and scope user) of the
+// organization's installation connection that grants repository, resolved the
+// same way as GitHubInstallationForRepository.
+func (s *Store) GitHubRepositoryAccessScope(
+	ctx context.Context,
+	orgID, repository string,
+) (scope, scopeUserID string, err error) {
+	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		return tx.QueryRow(
+			ctx,
+			`WITH latest_grant AS (
+				SELECT DISTINCT ON (github_repository_id)
+					id, github_repository_id, installation_id, revoked_at
+				FROM ao_github_repository_grants
+				WHERE org_id = $1
+				ORDER BY github_repository_id, granted_at DESC, id DESC
+			)
+			SELECT installation.access_scope, COALESCE(installation.scope_user_id::text, '')
+			FROM ao_github_repositories repository
+			JOIN latest_grant grant_row
+			  ON grant_row.github_repository_id = repository.github_repository_id
+			JOIN ao_github_installations installation
+			  ON installation.org_id = $1 AND installation.id = grant_row.installation_id
+			WHERE repository.full_name = $2
+			  AND grant_row.revoked_at IS NULL
+			  AND installation.status = 'active'
+			  AND installation.suspended_at IS NULL
+			  AND installation.disconnected_at IS NULL
+			  AND installation.deleted_at IS NULL
+			  AND `+githubUserScopeIntactSQL+``,
+			orgID, repository,
+		).Scan(&scope, &scopeUserID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	return scope, scopeUserID, err
+}
+
 func (s *Store) CreateGitHubProject(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, idempotencyKey string,
 	input domain.CreateGitHubProject,
 ) (domain.Project, error) {
+	config, err := domain.NormalizeProjectConfig(input.Config)
+	if err != nil {
+		return domain.Project{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	input.Config = config
 	var project domain.Project
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		payload, err := json.Marshal(input)
 		if err != nil {
 			return err
@@ -1006,9 +1109,13 @@ func (s *Store) CreateGitHubProject(
 			FROM ao_github_repository_grants grant_row
 			JOIN ao_github_repositories repository
 			  ON repository.github_repository_id = grant_row.github_repository_id
+			JOIN ao_github_installations installation
+			  ON installation.org_id = grant_row.org_id
+			 AND installation.id = grant_row.installation_id
 			WHERE grant_row.org_id = $1
 			  AND grant_row.github_repository_id = $4
 			  AND grant_row.revoked_at IS NULL
+			  AND `+githubUserScopeIntactSQL+`
 			RETURNING id, org_id, display_name, repository_url, default_branch,
 				github_repository_id, config, created_at, updated_at`,
 			orgID,
@@ -1020,7 +1127,11 @@ func (s *Store) CreateGitHubProject(
 			return ErrForbidden
 		}
 		if err != nil {
-			return normalizeConstraintError(err)
+			// The App path authorizes by repository id and derives the URL
+			// server-side, so it is not available here; the API renders a
+			// repository-agnostic message when the org already has a project for
+			// this repository.
+			return projectRepositoryConflict(err, "")
 		}
 		if _, err := tx.Exec(
 			ctx,
@@ -1110,6 +1221,34 @@ func (s *Store) InsertGitHubWebhook(
 	return false, nil
 }
 
+// RecentOpenedPullRequestWebhooks replays verified GitHub facts when a worker
+// reports a custom branch after its opened webhook was already processed.
+func (s *Store) RecentOpenedPullRequestWebhooks(ctx context.Context, repositoryID int64, since time.Time, limit int) ([]domain.GitHubWebhookDelivery, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	rows, err := s.pool.Query(ctx, `SELECT github_delivery_id, event, action,
+		COALESCE(github_installation_id, 0), COALESCE(github_repository_id, 0), payload
+		FROM ao_github_webhook_deliveries
+		WHERE github_repository_id = $1 AND event = 'pull_request' AND action = 'opened'
+		  AND received_at >= $2
+		ORDER BY received_at DESC LIMIT $3`, repositoryID, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deliveries []domain.GitHubWebhookDelivery
+	for rows.Next() {
+		var delivery domain.GitHubWebhookDelivery
+		if err := rows.Scan(&delivery.DeliveryID, &delivery.Event, &delivery.Action,
+			&delivery.GitHubInstallationID, &delivery.GitHubRepositoryID, &delivery.Payload); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
 func (s *Store) ClaimGitHubWebhook(
 	ctx context.Context,
 	owner string,
@@ -1138,10 +1277,15 @@ func (s *Store) ClaimGitHubWebhook(
 				candidate_row.lease_until IS NULL
 				OR candidate_row.lease_until < now()
 			  )
+			  -- SCM webhooks refresh current GitHub state, so a retrying PR must
+			  -- not hold every later event for the same installation. Installation
+			  -- changes still run in receipt order because they mutate routing.
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM ao_github_webhook_deliveries earlier
-				WHERE candidate_row.github_installation_id IS NOT NULL
+				WHERE candidate_row.event IN ('installation', 'installation_repositories')
+				  AND earlier.event IN ('installation', 'installation_repositories')
+				  AND candidate_row.github_installation_id IS NOT NULL
 				  AND earlier.github_installation_id = candidate_row.github_installation_id
 				  AND earlier.status IN ('pending', 'retry', 'processing')
 				  AND (earlier.received_at, earlier.github_delivery_id) <
@@ -1231,22 +1375,95 @@ func (s *Store) RetryGitHubWebhook(
 	return nil
 }
 
-func (s *Store) GitHubInstallationRoute(
+// GitHubInstallationRoutes returns every organization route for a GitHub App
+// installation. Because an installation may be connected by multiple
+// organizations, a webhook delivery must fan out to each one; the caller
+// iterates the returned routes. It returns ErrNotFound when no organization
+// routes the installation.
+// GitHubRepositoryTracked reports whether any organization routed through the
+// installation tracks the repository: a project on it, a recorded pull
+// request in it, or worker branch refs reported for it. SCM webhooks for any
+// other repository cannot change AO state, so the receiver drops them instead
+// of queueing them. An installation with no routes tracks nothing.
+func (s *Store) GitHubRepositoryTracked(
+	ctx context.Context,
+	githubInstallationID, githubRepositoryID int64,
+) (bool, error) {
+	routes, err := s.GitHubInstallationRoutes(ctx, githubInstallationID)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, route := range routes {
+		var tracked bool
+		err := s.withOrg(ctx, route.OrgID, func(tx pgx.Tx) error {
+			return tx.QueryRow(
+				ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM ao_projects
+					WHERE org_id = $1 AND github_repository_id = $2
+				) OR EXISTS (
+					SELECT 1 FROM ao_projects project
+					JOIN ao_github_repositories repository ON repository.github_repository_id = $2
+					WHERE project.org_id = $1 AND project.archived_at IS NULL
+					  AND `+projectDeclaresRepositorySQL+`
+				) OR EXISTS (
+					SELECT 1 FROM ao_worker_git_refs
+					WHERE org_id = $1 AND github_repository_id = $2
+				) OR EXISTS (
+					SELECT 1
+					FROM ao_pull_requests pull_request
+					JOIN ao_github_repositories repository
+					  ON lower(repository.full_name) = lower(pull_request.repository)
+					WHERE pull_request.org_id = $1
+					  AND repository.github_repository_id = $2
+				)`,
+				route.OrgID, githubRepositoryID,
+			).Scan(&tracked)
+		})
+		if err != nil {
+			return false, err
+		}
+		if tracked {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) GitHubInstallationRoutes(
 	ctx context.Context,
 	githubInstallationID int64,
-) (string, string, error) {
-	var orgID, installationID string
-	err := s.pool.QueryRow(
+) ([]domain.GitHubInstallationRoute, error) {
+	rows, err := s.pool.Query(
 		ctx,
 		`SELECT org_id, installation_id
 		FROM ao_github_installation_routes
-		WHERE github_installation_id = $1`,
+		WHERE github_installation_id = $1
+		ORDER BY created_at, org_id`,
 		githubInstallationID,
-	).Scan(&orgID, &installationID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", ErrNotFound
+	)
+	if err != nil {
+		return nil, err
 	}
-	return orgID, installationID, err
+	defer rows.Close()
+	var routes []domain.GitHubInstallationRoute
+	for rows.Next() {
+		var route domain.GitHubInstallationRoute
+		if err := rows.Scan(&route.OrgID, &route.InstallationID); err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(routes) == 0 {
+		return nil, ErrNotFound
+	}
+	return routes, nil
 }
 
 func (s *Store) GitHubInstallationByRoute(
@@ -1261,7 +1478,8 @@ func (s *Store) GitHubInstallationByRoute(
 				account_login, account_type, status, repository_selection,
 				permissions, events, sync_status, sync_generation,
 				last_synced_at, last_error,
-				installed_by_user_id, created_at, updated_at
+				installed_by_user_id, created_at, updated_at,
+				access_scope, COALESCE(scope_user_id::text, '')
 			FROM ao_github_installations WHERE org_id = $1 AND id = $2`,
 			orgID,
 			installationID,
@@ -1272,8 +1490,11 @@ func (s *Store) GitHubInstallationByRoute(
 
 func (s *Store) ApplyGitHubInstallationEvent(
 	ctx context.Context,
-	orgID, installationID, action string,
+	orgID, installationID, action, source string,
 ) error {
+	if source != "webhook" && source != "reconcile" {
+		return ErrInvalid
+	}
 	return s.withGitHubOrg(ctx, orgID, "", func(tx pgx.Tx) error {
 		status := "active"
 		switch action {
@@ -1317,11 +1538,12 @@ func (s *Store) ApplyGitHubInstallationEvent(
 				) VALUES (
 					$1, 'github.installation.' || $3,
 					'github_installation', $2,
-					jsonb_build_object('source', 'webhook')
+					jsonb_build_object('source', $4::text)
 				)`,
 				orgID,
 				installationID,
 				action,
+				source,
 			)
 			return err
 		}
@@ -1348,11 +1570,12 @@ func (s *Store) ApplyGitHubInstallationEvent(
 			) VALUES (
 				$1, 'github.installation.' || $3,
 				'github_installation', $2,
-				jsonb_build_object('source', 'webhook')
+				jsonb_build_object('source', $4::text)
 			)`,
 			orgID,
 			installationID,
 			action,
+			source,
 		)
 		return err
 	})
@@ -1447,6 +1670,8 @@ func githubInstallationScanTargets(installation *domain.GitHubInstallation) []an
 		&installation.InstalledByUserID,
 		&installation.CreatedAt,
 		&installation.UpdatedAt,
+		&installation.AccessScope,
+		&installation.ScopeUserID,
 	}
 }
 
@@ -1456,6 +1681,170 @@ func scanGitHubInstallation(row pgx.Row, installation *domain.GitHubInstallation
 		return ErrNotFound
 	}
 	return err
+}
+
+// githubInstallationColumns is the column list every installation query returns,
+// matching the order of githubInstallationScanTargets.
+const githubInstallationColumns = `id, org_id, github_installation_id, github_account_id,
+	account_login, account_type, status, repository_selection,
+	permissions, events, sync_status, sync_generation,
+	last_synced_at, last_error,
+	installed_by_user_id, created_at, updated_at,
+				access_scope, COALESCE(scope_user_id::text, '')`
+
+// upsertGitHubInstallationForOrg reconnects the organization's own installation
+// row for github_installation_id, or inserts a fresh per-org record when the
+// organization has none. Several organizations may each hold their own row for
+// one github_installation_id: they share the underlying GitHub installation
+// (and its org-agnostic access tokens) but keep isolated AO sessions, projects
+// and repository grants. Only a caller that has already proven the connecting
+// user is a GitHub admin of the installation reaches here.
+//
+// If a fresh row cannot be inserted because a different organization already
+// holds the installation under the legacy global-unique constraint (for example
+// migration 00055 has not been applied, or the relaxation was rolled back), it
+// returns *InstallationOwnedByAnotherOrgError so the callback can name the
+// GitHub account and tell the user it is connected elsewhere, instead of a
+// generic failure.
+func (s *Store) upsertGitHubInstallationForOrg(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, userID string,
+	installation *domain.GitHubInstallation,
+	permissions []byte,
+) error {
+	// An explicit scope comes from a caller that checked it: 'installation'
+	// only after proving the user administers the installation, 'user'
+	// otherwise. An empty scope (a caller that did not decide) never changes an
+	// existing row's scope, so it can never widen a user-scoped connection to
+	// the whole installation; a new row without one is a whole connection, as
+	// before user-scoped connections existed.
+	scope := installation.AccessScope
+	switch scope {
+	case domain.GitHubAccessScopeUser, domain.GitHubAccessScopeInstallation, "":
+	default:
+		return ErrInvalid
+	}
+	err := tx.QueryRow(
+		ctx,
+		`UPDATE ao_github_installations
+		SET account_login = $3,
+		    account_type = $4,
+		    status = 'active',
+		    repository_selection = $5,
+		    permissions = $6,
+		    events = $7,
+		    sync_status = 'pending',
+		    sync_generation = sync_generation + 1,
+		    suspended_at = NULL,
+		    disconnected_at = NULL,
+		    deleted_at = NULL,
+		    -- A live whole-installation connection is never narrowed by a
+		    -- later user-scoped connect into the same organization.
+		    -- A user-scoped connection is widened only by an explicit,
+		    -- administration-checked 'installation' scope.
+		    access_scope = CASE
+		        WHEN $8 = '' THEN access_scope
+		        WHEN $8 = 'user' AND access_scope = 'installation' AND status = 'active'
+		         AND disconnected_at IS NULL AND deleted_at IS NULL THEN 'installation'
+		        ELSE $8 END,
+		    scope_user_id = CASE
+		        WHEN $8 = '' THEN scope_user_id
+		        WHEN $8 = 'user' AND access_scope = 'installation' AND status = 'active'
+		         AND disconnected_at IS NULL AND deleted_at IS NULL THEN NULL
+		        WHEN $8 = 'user' THEN NULLIF($9, '')::uuid
+		        ELSE NULL END,
+		    updated_at = now()
+		WHERE org_id = $1 AND github_installation_id = $2
+		RETURNING `+githubInstallationColumns,
+		orgID,
+		installation.GitHubInstallationID,
+		installation.AccountLogin,
+		installation.AccountType,
+		installation.RepositorySelection,
+		permissions,
+		installation.Events,
+		scope,
+		installation.ScopeUserID,
+	).Scan(githubInstallationScanTargets(installation)...)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	err = tx.QueryRow(
+		ctx,
+		`INSERT INTO ao_github_installations (
+			org_id, github_installation_id, github_account_id,
+			account_login, account_type, status, repository_selection,
+			permissions, events, installed_by_user_id, sync_status,
+			access_scope, scope_user_id
+		) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, 'pending',
+			COALESCE(NULLIF($10, ''), 'installation'),
+			CASE WHEN $10 = 'user' THEN NULLIF($11, '')::uuid END)
+		RETURNING `+githubInstallationColumns,
+		orgID,
+		installation.GitHubInstallationID,
+		installation.GitHubAccountID,
+		installation.AccountLogin,
+		installation.AccountType,
+		installation.RepositorySelection,
+		permissions,
+		installation.Events,
+		userID,
+		scope,
+		installation.ScopeUserID,
+	).Scan(githubInstallationScanTargets(installation)...)
+	if err == nil {
+		return nil
+	}
+	if isUniqueViolation(err) {
+		// The insert violated a unique constraint. Under the multi-org schema a
+		// (org_id, github_installation_id) pair is unique, so a violation here
+		// means another organization already holds this installation under the
+		// legacy global-unique constraint. Consult the non-RLS routes table on a
+		// fresh pool connection (this transaction is now aborted) to identify the
+		// owner and return a specific, actionable error.
+		if owner, ok := s.installationOwnedByAnotherOrg(
+			ctx,
+			installation.GitHubInstallationID,
+			orgID,
+		); ok {
+			return &InstallationOwnedByAnotherOrgError{
+				GitHubInstallationID: installation.GitHubInstallationID,
+				AccountLogin:         installation.AccountLogin,
+				OwnerOrgID:           owner,
+			}
+		}
+		return ErrConflict
+	}
+	return err
+}
+
+// installationOwnedByAnotherOrg reports whether a different organization already
+// routes the installation. It reads ao_github_installation_routes, which is not
+// row-level-security scoped, on a pool connection so it works even when the
+// caller's transaction has been aborted by a failed insert.
+func (s *Store) installationOwnedByAnotherOrg(
+	ctx context.Context,
+	githubInstallationID int64,
+	excludeOrgID string,
+) (string, bool) {
+	var ownerOrgID string
+	if err := s.pool.QueryRow(
+		ctx,
+		`SELECT org_id
+		FROM ao_github_installation_routes
+		WHERE github_installation_id = $1 AND org_id <> $2
+		ORDER BY created_at
+		LIMIT 1`,
+		githubInstallationID,
+		excludeOrgID,
+	).Scan(&ownerOrgID); err != nil {
+		return "", false
+	}
+	return ownerOrgID, true
 }
 
 func isUniqueViolation(err error) bool {
