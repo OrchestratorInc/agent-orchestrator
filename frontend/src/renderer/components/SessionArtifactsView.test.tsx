@@ -8,8 +8,9 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { cloudAccessMock, deleteArtifactMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
+const { cloudAccessMock, deleteArtifactMock, deleteCloudArtifactMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
 	cloudAccessMock: vi.fn(),
+	deleteCloudArtifactMock: vi.fn(),
 	sendSessionMessageMock: vi.fn(),
 	deleteArtifactMock: vi.fn(),
 	openPreviewMock: vi.fn(),
@@ -26,7 +27,12 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	}),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { sendSessionMessage: sendSessionMessageMock }, ready: true, baseUrl: "https://cp.test", userId: "u-1" }),
+	useCloudCp: () => ({
+		client: { sendSessionMessage: sendSessionMessageMock, deleteSessionArtifact: deleteCloudArtifactMock },
+		ready: true,
+		baseUrl: "https://cp.test",
+		userId: "u-1",
+	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, feedbackRequestKey, path, rawUrl, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; path: string; rawUrl?: string; sendMessage?: (message: string) => Promise<void> }) => (
@@ -211,12 +217,27 @@ describe("SessionArtifactsView for a cloud session", () => {
 		save.mockRestore();
 	});
 
-	it("offers no local folder or delete actions", async () => {
+	it("offers no local folder actions", async () => {
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		expect(screen.queryAllByRole("button", { name: /^Open in / })).toHaveLength(0);
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+		expect(screen.queryByRole("menuitem", { name: /^Show in / })).toBeNull();
+	});
+
+	it("deletes a cloud file from cloud storage and the sandbox after confirming", async () => {
+		deleteCloudArtifactMock.mockReset().mockResolvedValue(undefined);
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Delete artifact" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog).toHaveTextContent("from the session's cloud storage and from its sandbox");
+		expect(deleteCloudArtifactMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
+
+		await vi.waitFor(() => expect(deleteCloudArtifactMock).toHaveBeenCalledWith("org-1", "cloud-1", "docs/notes.md"));
+		expect(deleteArtifactMock).not.toHaveBeenCalled();
 	});
 });
 
@@ -439,11 +460,11 @@ describe("SessionArtifactsView", () => {
 		expect(await within(dialog).findByText("artifact file not found")).toBeInTheDocument();
 	});
 
-	it("does not offer delete for a cloud session", async () => {
+	it("offers copy, download and delete for a cloud session", async () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as Markdown", "Download"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as Markdown", "Download", "Delete artifact"]);
 	});
 
 	it("opens a requested artifact and passes its feedback request through", () => {

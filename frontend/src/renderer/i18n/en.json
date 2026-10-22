@@ -1991,6 +1991,7 @@
 	"artifacts.delete": "Delete artifact",
 	"artifacts.deleteTitle": "Delete artifact?",
 	"artifacts.deleteDescription": "This permanently deletes {{name}} from this session's artifacts folder.",
+	"artifacts.deleteCloudDescription": "This permanently deletes {{name}} from the session's cloud storage and from its sandbox.",
 	"artifacts.fullscreen": "Full screen",
 	"artifacts.exitFullscreen": "Exit full screen",
 	"artifacts.history": "Version history",

@@ -1768,6 +1768,7 @@
 	"artifacts.delete": "Eliminar artefacto",
 	"artifacts.deleteTitle": "¿Eliminar artefacto?",
 	"artifacts.deleteDescription": "Esto elimina {{name}} de forma permanente de la carpeta de artefactos de esta sesión.",
+	"artifacts.deleteCloudDescription": "Esto elimina {{name}} de forma permanente del almacenamiento en la nube de la sesión y de su entorno aislado.",
 	"artifacts.fullscreen": "Pantalla completa",
 	"artifacts.exitFullscreen": "Salir de pantalla completa",
 	"artifacts.history": "Historial de versiones",

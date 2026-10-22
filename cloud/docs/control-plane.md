@@ -202,6 +202,20 @@ and no S3 client is built.
   upload not committed within 24 hours and every replaced or deleted version
   one hour after its commit. A version the sweeper has claimed can no longer be
   committed.
+- **User delete.** `DELETE /sessions/{id}/artifacts?path=...` deletes one file
+  for a member of the session's organization. In one transaction it removes
+  the row, queues its object version for collection now, updates the
+  session's `output_type`, appends an `artifact.changed` event, and sends
+  `ao_worker_work` with the payload `artifacts:{sessionId}`. The handler then
+  deletes the stored version at once; the sweeper deletes it if that fails.
+  Each replica remembers the change for ten minutes and wakes the worker's
+  `GET /worker/work/wait`, which answers `artifactsChanged: true`. The worker
+  then lists the committed files and removes each file it synced that is no
+  longer committed, unless the file changed since it was synced; a changed
+  file stays and is synced as a new one. The worker saves its synced files
+  next to the artifact directory, so a worker that starts on a kept disk
+  removes the files deleted while no worker ran before the agent starts, and
+  a new sandbox never restores a deleted file.
 - **Reads.** `GET /sessions/{id}/artifacts` reads PostgreSQL only and never
   wakes the sandbox; the session list carries only `artifactCount` and
   `artifactsUpdatedAt`. An orchestrator's `GET /worker/children` (`ao list`)

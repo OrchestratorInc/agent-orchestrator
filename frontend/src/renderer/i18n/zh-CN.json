@@ -1723,6 +1723,7 @@
 	"artifacts.delete": "删除产物",
 	"artifacts.deleteTitle": "删除产物？",
 	"artifacts.deleteDescription": "这会从此会话的产物文件夹中永久删除 {{name}}。",
+	"artifacts.deleteCloudDescription": "这会从会话的云存储及其沙盒中永久删除 {{name}}。",
 	"artifacts.fullscreen": "全屏",
 	"artifacts.exitFullscreen": "退出全屏",
 	"artifacts.history": "版本历史",

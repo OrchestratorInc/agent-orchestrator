@@ -1768,6 +1768,7 @@
 	"artifacts.delete": "Excluir artefato",
 	"artifacts.deleteTitle": "Excluir artefato?",
 	"artifacts.deleteDescription": "Isso exclui {{name}} permanentemente da pasta de artefatos desta sessão.",
+	"artifacts.deleteCloudDescription": "Isso exclui {{name}} permanentemente do armazenamento em nuvem da sessão e do seu sandbox.",
 	"artifacts.fullscreen": "Tela cheia",
 	"artifacts.exitFullscreen": "Sair da tela cheia",
 	"artifacts.history": "Histórico de versões",

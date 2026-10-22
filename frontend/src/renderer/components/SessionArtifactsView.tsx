@@ -11,7 +11,7 @@ import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { CLOUD_TEXT_ARTIFACT, CloudArtifactAccessError, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
-import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { formatTimeTerse } from "../lib/format-time";
@@ -108,12 +108,17 @@ function ArtifactMenu({ artifact, downloadUrl, hostId, session }: {
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
-	// The deleted file leaves the session's artifact list on the next read.
+	const { client: cloudClient } = useCloudCp(Boolean(session.cloud));
+	// The deleted file leaves the session's artifact list on the next read. A
+	// cloud file is deleted from cloud storage and from the session's sandbox.
 	const remove = useMutation({
-		mutationFn: () => deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
+		mutationFn: () =>
+			session.cloud
+				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path)
+				: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
 		onSuccess: async () => {
 			setConfirmingDelete(false);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
 		},
 	});
 	const markdown = /\.(md|markdown)$/i.test(artifact.path);
@@ -190,28 +195,23 @@ function ArtifactMenu({ artifact, downloadUrl, hostId, session }: {
 							{t("artifacts.download")}
 						</DropdownMenuItem>
 					) : null}
-					{/* Cloud sessions keep their artifacts behind the cloud control plane. */}
-					{session.cloud ? null : (
-						<>
-							<DropdownMenuSeparator />
-							<DropdownMenuItem
-								className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-								onSelect={() => {
-									remove.reset();
-									setConfirmingDelete(true);
-								}}
-							>
-								<Trash2 aria-hidden="true" />
-								{t("artifacts.delete")}
-							</DropdownMenuItem>
-						</>
-					)}
+					<DropdownMenuSeparator />
+					<DropdownMenuItem
+						className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+						onSelect={() => {
+							remove.reset();
+							setConfirmingDelete(true);
+						}}
+					>
+						<Trash2 aria-hidden="true" />
+						{t("artifacts.delete")}
+					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}
-				description={t("artifacts.deleteDescription", { name: artifact.name })}
+				description={t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}
 				destructive
 				error={remove.error?.message ?? null}
 				onConfirm={() => remove.mutate()}
