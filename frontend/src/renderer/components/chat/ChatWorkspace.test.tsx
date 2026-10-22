@@ -1803,8 +1803,12 @@ describe("ChatWorkspace timeline", () => {
 		if (!template) throw new Error("fixture has no message");
 		snapshot.items = [{ ...template, id: `link-${origin}`, origin, role, text: "ao://sessions/project/session", streaming: false }];
 		const onSessionLinkOpen = vi.fn();
-		render(<ChatWorkspace snapshot={snapshot} onSessionLinkOpen={onSessionLinkOpen} />);
-		await userEvent.setup().click(screen.getByRole("link"));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+		render(<QueryClientProvider client={queryClient}><ChatWorkspace snapshot={snapshot} onSessionLinkOpen={onSessionLinkOpen} /></QueryClientProvider>);
+		const user = userEvent.setup();
+		await user.hover(screen.getByRole("link"));
+		await waitFor(() => expect(document.querySelector('[data-slot="hover-card-content"]')).toBeVisible());
+		await user.click(screen.getByRole("link"));
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
