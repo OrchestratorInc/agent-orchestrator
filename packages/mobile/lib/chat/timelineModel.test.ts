@@ -223,3 +223,24 @@ describe("partitionTurnItems", () => {
 		expect(partitionTurnItems([message("u", 1, "user", "go")], undefined)).toBeUndefined();
 	});
 });
+
+describe("streamingCursorMessageId", () => {
+	const message = (id: string, sequence: number, streaming: boolean, role: "user" | "assistant" = "assistant"): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text: id, streaming, createdAt: "" });
+	const command = (id: string, sequence: number): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "running", summary: id, createdAt: "" });
+
+	it("puts the cursor only on the newest streaming reply", () => {
+		// ACP providers settle a turn's text blocks only when the turn ends, so
+		// earlier blocks still arrive marked streaming.
+		const items = [message("u", 1, false, "user"), message("a", 2, true), command("ls", 3), message("b", 4, true)];
+		expect(timelineModel.streamingCursorMessageId(items)).toBe("b");
+	});
+
+	it("shows no cursor while work runs after the last reply", () => {
+		expect(timelineModel.streamingCursorMessageId([message("a", 1, true), command("ls", 2)])).toBeUndefined();
+	});
+
+	it("shows no cursor once the reply has settled", () => {
+		expect(timelineModel.streamingCursorMessageId([message("a", 1, false)])).toBeUndefined();
+		expect(timelineModel.streamingCursorMessageId([])).toBeUndefined();
+	});
+});

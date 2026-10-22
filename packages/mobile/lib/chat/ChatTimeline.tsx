@@ -66,6 +66,7 @@ import {
 	partitionTurnItems,
 	readableConversationItems,
 	startupPlacement,
+	streamingCursorMessageId,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
@@ -264,9 +265,10 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const items = turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items;
+	const cursorMessageId = streamingCursorMessageId(items);
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -304,6 +306,7 @@ const TimelineItem = memo(function TimelineItem({
 	onDecide,
 	onResolveInput,
 	answeredBelow,
+	showCursor = false,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -314,6 +317,7 @@ const TimelineItem = memo(function TimelineItem({
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	answeredBelow?: number;
+	showCursor?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -338,7 +342,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={item.streaming ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
 				{!item.streaming && item.text ? <View style={styles.responseActions}>
 					<Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable>
 				</View> : null}
