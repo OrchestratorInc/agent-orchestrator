@@ -64,6 +64,36 @@ func V2NPMBinDir() (string, error) {
 	return filepath.Join(prefix, "bin"), nil
 }
 
+// V2InstallerHome is the HOME the official OpenCode 2 installer runs with. The
+// installer always writes $HOME/.opencode/bin/opencode, which is where OpenCode
+// 1's installer puts its own executable, so AO gives it a private home instead.
+func V2InstallerHome() (string, error) {
+	home, err := V2DataHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "installer"), nil
+}
+
+// V2InstallerBinDir is where the official installer places executables for
+// V2InstallerHome.
+func V2InstallerBinDir() (string, error) {
+	home, err := V2InstallerHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".opencode", "bin"), nil
+}
+
+// v2HomebrewBinaries are the opt links of the opencode-v2 formula. AO unlinks
+// the formula after installing it, so its executable never takes over
+// <prefix>/bin/opencode, and resolves it through the opt link instead.
+var v2HomebrewBinaries = []string{
+	"/opt/homebrew/opt/opencode-v2/bin/opencode",
+	"/usr/local/opt/opencode-v2/bin/opencode",
+	"/home/linuxbrew/.linuxbrew/opt/opencode-v2/bin/opencode",
+}
+
 var v2DataMigrationLock = make(chan struct{}, 1)
 
 // PrepareV2DataHome returns the isolated OpenCode 2 data home after copying a

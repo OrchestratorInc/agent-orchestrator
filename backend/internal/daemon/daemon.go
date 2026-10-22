@@ -620,6 +620,10 @@ func Run(buildVersion string) error {
 	if prefix, err := opencode.V2NPMPrefix(); err == nil {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
+	privateInstallerHomes := map[systeminstall.Target]string{}
+	if home, err := opencode.V2InstallerHome(); err == nil {
+		privateInstallerHomes[systeminstall.TargetOpencodeV2] = home
+	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
 		JobStore:                  store,
 		Verifier:                  systeminstall.NewVerifier(agents, hostCommands),
@@ -631,6 +635,7 @@ func Run(buildVersion string) error {
 		ManagedRoot:               managedHarnessRoot(cfg),
 		Releases:                  store,
 		PrivateNPMPrefixes:        privateNPMPrefixes,
+		PrivateInstallerHomes:     privateInstallerHomes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()

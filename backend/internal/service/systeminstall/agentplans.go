@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -293,10 +294,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	}
 	for index := range plans {
 		plans[index].DocsURL = agentDocumentationURLs[target]
-		if target != TargetOpencodeV2 || plans[index].Method != "npm" {
-			plans[index].Notice = installNotice(target)
-		}
 		plans[index] = s.planForOperation(plans[index], operation)
+		if target == TargetOpencodeV2 {
+			plans[index] = s.isolateOpenCodeV2(plans[index])
+		}
 	}
 	return plans
 }
@@ -629,6 +630,66 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 	}
 	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
 	return plan
+}
+
+// openCodeV2HomebrewKeg is the opencode-v2 formula's keg name, and
+// openCodeV1HomebrewKeg the formula it declares conflicts_with.
+const (
+	openCodeV2HomebrewKeg = "opencode-v2"
+	openCodeV1HomebrewKeg = "opencode"
+)
+
+// isolateOpenCodeV2 keeps every OpenCode 2 method from replacing OpenCode 1's
+// `opencode` executable. Both majors ship an executable of that name, and each
+// vendor recipe writes it where OpenCode 1's own recipe does. npm already
+// installs into a private prefix (planNPM). The official installer always
+// writes $HOME/.opencode/bin, so it runs with a private HOME and leaves shell
+// profiles alone. Homebrew links opencode-v2 into <prefix>/bin, so the keg is
+// unlinked afterwards and resolved through its opt link; an OpenCode 1 formula
+// that is linked is unlinked first, because opencode-v2 refuses to install
+// beside it, and linked again whatever the outcome.
+func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
+	if plan.Unsupported {
+		return plan
+	}
+	switch plan.Method {
+	case "official-installer":
+		if plan.Script == nil {
+			return plan
+		}
+		home := strings.TrimSpace(s.privateInstallerHomes[TargetOpencodeV2])
+		if home == "" {
+			plan.Unsupported = true
+			plan.Script = nil
+			plan.Reason = "OpenCode 2's private installer home could not be resolved."
+			return plan
+		}
+		plan.Script = withInstallerEnv(plan.Script, "HOME="+home)
+		if !slices.Contains(plan.Script.Args, "--no-modify-path") {
+			plan.Script.Args = append(slices.Clone(plan.Script.Args), "--no-modify-path")
+		}
+	case "homebrew":
+		if len(plan.Command) == 0 {
+			return plan
+		}
+		var restore [][]string
+		if s.homebrewKegLinked(openCodeV1HomebrewKeg) {
+			plan.Prepare = append(slices.Clone(plan.Prepare), []string{"brew", "unlink", openCodeV1HomebrewKeg})
+			restore = [][]string{{"brew", "link", openCodeV1HomebrewKeg}}
+		}
+		plan.Cleanup = append([][]string{{"brew", "unlink", openCodeV2HomebrewKeg}}, restore...)
+	}
+	return plan
+}
+
+// homebrewKegLinked reports whether Homebrew has keg linked into its prefix.
+// Homebrew records each linked keg as <prefix>/var/homebrew/linked/<keg>.
+func (s requestPlanner) homebrewKegLinked(keg string) bool {
+	if s.capabilities == nil || s.capabilities.Homebrew.Prefix == "" {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(s.capabilities.Homebrew.Prefix, "var", "homebrew", "linked", keg))
+	return err == nil
 }
 
 // withInstallerEnv returns a copy of script whose environment sets entries,

@@ -1960,7 +1960,6 @@
 	"startup.installTmux": "tmux 설치",
 	"startup.installingCommand": "설치 중 — {{command}}",
 	"startup.installingEllipsis": "설치 중…",
-	"startup.installOpencodeV2ReplacementWarning": "OpenCode 2를 기본 opencode 명령으로 설치하면 기본 OpenCode 1 설치가 대체됩니다.",
 	"startup.quit": "종료",
 	"startup.recommendedInstallGh": "권장: gh 설치",
 	"startup.retryPrefix": "다시 시도: {{label}}",
