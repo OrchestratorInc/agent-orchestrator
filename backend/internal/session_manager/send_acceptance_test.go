@@ -29,14 +29,14 @@ func (s *promptBoundaryStore) GetSession(ctx context.Context, id domain.SessionI
 	}
 	if !s.flipped && time.Since(s.started) >= s.flipAfter {
 		s.flipped = true
-		rec := s.fakeStore.sessions[id]
+		rec := s.sessions[id]
 		if s.flipActive {
 			rec.Activity.State = domain.ActivityActive
 		} else {
 			rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointPrompt
 			rec.Metadata.ConversationCheckpointGeneration = "launch-1"
 		}
-		s.fakeStore.sessions[id] = rec
+		s.sessions[id] = rec
 	}
 	return s.fakeStore.GetSession(ctx, id)
 }

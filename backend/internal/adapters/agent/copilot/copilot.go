@@ -282,43 +282,6 @@ func copilotManagedNativeBinary(launcher string) string {
 	return filepath.Join(current, rel)
 }
 
-// vsCodeCopilotLauncherScript sits beside the `copilot` launcher VS Code's
-// Copilot Chat extension puts on its terminals' PATH.
-const vsCodeCopilotLauncherScript = "copilotCLIShim.js"
-
-// isVSCodeCopilotLauncher reports whether path is VS Code's launcher, which only
-// forwards to a `copilot` elsewhere on PATH and, with none, stops at "Install
-// GitHub Copilot CLI? [y/N]". It never shows that the CLI is installed.
-func isVSCodeCopilotLauncher(path string) bool {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	_, err := os.Stat(filepath.Join(filepath.Dir(path), vsCodeCopilotLauncherScript))
-	return err == nil
-}
-
-// lookCopilotOnPath is exec.LookPath that passes over VS Code's launcher and
-// keeps searching the rest of PATH for the CLI itself.
-func lookCopilotOnPath(name string) string {
-	path, err := exec.LookPath(name)
-	if err != nil || path == "" {
-		return ""
-	}
-	if !isVSCodeCopilotLauncher(path) {
-		return path
-	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if dir == "" {
-			continue
-		}
-		candidate, err := exec.LookPath(filepath.Join(dir, name))
-		if err == nil && candidate != "" && !isVSCodeCopilotLauncher(candidate) {
-			return candidate
-		}
-	}
-	return ""
-}
-
 func copilotNativeBinaryForLoader(path string) string {
 	if path == "" || runtime.GOOS == "windows" {
 		return ""

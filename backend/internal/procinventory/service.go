@@ -13,7 +13,9 @@ import (
 type Signal int
 
 const (
+	// SigTerm is the graceful stop signal delivered to an orphaned group first.
 	SigTerm Signal = iota + 1
+	// SigKill is the last-resort signal when the graceful stop does not land.
 	SigKill
 )
 

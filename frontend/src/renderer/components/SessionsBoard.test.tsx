@@ -106,6 +106,7 @@ vi.mock("../lib/bridge", () => ({
 		},
 		notifications: {
 			show: (...args: unknown[]) => notificationShowMock(...args),
+			mode: async () => false,
 		},
 	},
 }));

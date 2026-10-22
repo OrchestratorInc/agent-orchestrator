@@ -28,7 +28,8 @@ export const processInventoryQueryOptions = {
 	staleTime: 10_000,
 	refetchInterval: (query: Query<ProcessInventory | null>) => {
 		if (query.state.data?.disabled) return false;
-		return (query.state.data?.totals.orphansCount ?? 0) > 0 ? 5_000 : 15_000;
+		// data is null on fetch failure — the whole totals chain must stay optional.
+		return (query.state.data?.totals?.orphansCount ?? 0) > 0 ? 5_000 : 15_000;
 	},
 };
 

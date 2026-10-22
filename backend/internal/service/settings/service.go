@@ -175,8 +175,8 @@ var scmProxySchemes = []string{"http", "https", "socks5", "socks5h"}
 // ErrInvalidScmProxyURL marks a proxy URL the SCM transport cannot dial.
 var ErrInvalidScmProxyURL = errors.New("invalid scm proxy url")
 
-func (s *Service) cacheScmProxyURL(url string) {
-	s.scmProxyURL.Store(&url)
+func (s *Service) cacheScmProxyURL(rawURL string) {
+	s.scmProxyURL.Store(&rawURL)
 }
 
 // ScmProxyURL reports the user's explicit SCM proxy, or "" when unset. It

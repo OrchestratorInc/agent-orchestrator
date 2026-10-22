@@ -641,7 +641,7 @@ func (s *Service) rolePinnedDiscoveryRequest(ctx context.Context, request ports.
 	if s.providerEntries != nil {
 		entries = s.providerEntries(ctx)
 	}
-	for key, value := range agentcreds.ProviderLaunchEnv(pin, string(project.ID), entries) {
+	for key, value := range agentcreds.ProviderLaunchEnv(pin, project.ID, entries) {
 		env[key] = value
 	}
 	if len(env) > 0 {

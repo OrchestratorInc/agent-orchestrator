@@ -366,7 +366,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: source ownership changed before browser capability rotation", id)
 	}
 	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, mergeEnv(project.Config.Env, baseAgentConfig.Env))
-	m.applyRoleProviderPin(ctx, targetLaunchEnv, string(project.ID), rec.Kind, project.Config)
+	m.applyRoleProviderPin(ctx, targetLaunchEnv, project.ID, rec.Kind, project.Config)
 	m.augmentAgentRuntimeEnv(targetAgent, targetLaunchEnv)
 	releaseCodexAdmission, admissionErr := m.acquireCodexControllerAdmission(ctx, cfg.TargetHarness)
 	if admissionErr != nil {
@@ -405,7 +405,7 @@ func (m *Manager) executeChatAgentSwitch(
 			if prepareErr != nil {
 				return nil, prepareErr
 			}
-			m.applyRoleProviderPin(launchCtx, launchEnv, string(project.ID), rec.Kind, project.Config)
+			m.applyRoleProviderPin(launchCtx, launchEnv, project.ID, rec.Kind, project.Config)
 			credentialRecord = prepared
 			m.augmentAgentRuntimeEnv(targetAgent, launchEnv)
 			return launchEnv, nil

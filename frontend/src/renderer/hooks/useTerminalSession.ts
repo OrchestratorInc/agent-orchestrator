@@ -1066,6 +1066,9 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	const syncVisibleSize = useCallback((cols: number, rows: number) => {
 		const r = runtime.current;
 		if (
+			// A cloud pane targets its sandbox worker, not the local daemon mux, so
+			// there is no local grid publication to promote.
+			sessionRef.current?.cloud ||
 			optionsRef.current.isVisible === false ||
 			r.detached ||
 			!r.mux ||

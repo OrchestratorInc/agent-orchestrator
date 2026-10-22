@@ -70,6 +70,25 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 			if err := os.WriteFile(promptFile, []byte("Keep code-word papaya"), 0600); err != nil {
 				t.Fatal(err)
 			}
+			if string(harness.Harness) == "claude-code" {
+				// The claude-code adapter only offers --resume when a persisted
+				// transcript exists under Claude's project-dir encoding; seed one.
+				var encoded strings.Builder
+				for _, r := range workspace {
+					if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+						encoded.WriteRune(r)
+					} else {
+						encoded.WriteByte('-')
+					}
+				}
+				transcriptDir := filepath.Join(home, ".claude", "projects", encoded.String())
+				if err := os.MkdirAll(transcriptDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(transcriptDir, nativeID+".jsonl"), []byte("{}\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			cfg := ports.RestoreConfig{SystemPromptFile: promptFile, Session: ports.SessionRef{ID: "ao-fixture", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeID}}, DataDir: t.TempDir(), Config: ports.AgentConfig{Model: "provider/preserved-model"}, SystemPrompt: "Keep the original conversation and code-word papaya", Permissions: ports.PermissionModeDefault}
 			argv, canResume, err := harness.Agent.GetRestoreCommand(context.Background(), cfg)
 			if err != nil || !canResume {

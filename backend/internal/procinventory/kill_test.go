@@ -2,6 +2,7 @@ package procinventory
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -169,7 +170,7 @@ func TestKill_ConcurrentCallRejected(t *testing.T) {
 	svc.killMu <- struct{}{} // hold the single-flight slot
 	defer func() { <-svc.killMu }()
 
-	if _, err := svc.Kill(context.Background(), nil); err != ErrKillInProgress {
+	if _, err := svc.Kill(context.Background(), nil); !errors.Is(err, ErrKillInProgress) {
 		t.Fatalf("err = %v, want ErrKillInProgress", err)
 	}
 }

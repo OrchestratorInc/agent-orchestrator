@@ -257,10 +257,10 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 		hello string
 		code  string
 	}{
-		{"wrong token", `{"type":"hello","version":2,"token":"wrong-token"}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
-		{"missing token", `{"type":"hello","version":2}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
-		{"other protocol", `{"type":"hello","version":3,"token":"expected-token"}`, "BROWSER_RUNTIME_PROTOCOL_MISMATCH"},
-		{"not a hello", `{"type":"result","requestId":"r1"}`, "BROWSER_RUNTIME_BAD_HELLO"},
+		{"wrong token", `{"type":"hello","version":3,"token":"wrong-token"}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
+		{"missing token", `{"type":"hello","version":3}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
+		{"other protocol", `{"type":"hello","version":4,"token":"expected-token"}`, "BROWSER_RUNTIME_PROTOCOL_MISMATCH"},
+		{"not a hello", `{"type":"result","requestId":"r1","version":3}`, "BROWSER_RUNTIME_BAD_HELLO"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			invalid, err := net.Dial("tcp", ln.Addr().String())

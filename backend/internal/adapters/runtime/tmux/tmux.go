@@ -1781,7 +1781,7 @@ func (e commandError) Unwrap() error { return e.err }
 var resolveVersion = func(ctx context.Context, binary string) (string, error) {
 	cmdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(cmdCtx, binary, "-V").Output()
+	out, err := aoprocess.CommandContext(cmdCtx, binary, "-V").Output()
 	return strings.TrimSpace(string(out)), err
 }
 

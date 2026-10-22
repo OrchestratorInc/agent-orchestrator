@@ -52,7 +52,7 @@ func migrationFileNameVersion(filename string) (int64, error) {
 
 // splitMigrationSQL partitions a migration file body on the "-- +goose Up" /
 // "-- +goose Down" markers. A file without markers is entirely Up.
-func splitMigrationSQL(body string) (up string, down string) {
+func splitMigrationSQL(body string) (up, down string) {
 	var upLines, downLines []string
 	section := 0 // 0 = before any marker, 1 = Up, 2 = Down
 	sawMarker := false
@@ -78,8 +78,8 @@ func splitMigrationSQL(body string) (up string, down string) {
 	return strings.Join(upLines, "\n"), strings.Join(downLines, "\n")
 }
 
-func loadMigrations(fsys fs.FS, dir string) ([]migrationFile, error) {
-	entries, err := fs.ReadDir(fsys, dir)
+func loadMigrations(fsys fs.FS) ([]migrationFile, error) {
+	entries, err := fs.ReadDir(fsys, migrationsDir)
 	if err != nil {
 		return nil, fmt.Errorf("read migration directory: %w", err)
 	}
@@ -92,7 +92,7 @@ func loadMigrations(fsys fs.FS, dir string) ([]migrationFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		body, err := fs.ReadFile(fsys, path.Join(dir, entry.Name()))
+		body, err := fs.ReadFile(fsys, path.Join(migrationsDir, entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
@@ -115,7 +115,7 @@ func appliedMigrations(db *sql.DB) (map[int64]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read migration ledger: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	applied := make(map[int64]bool)
 	for rows.Next() {
 		var version int64
@@ -157,7 +157,7 @@ func applyMigration(db *sql.DB, m migrationFile, up bool) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := run(tx); err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func migrationManagesOwnTransaction(body string) bool {
 // ascending order. There is no out-of-order guard: a fork-range migration
 // (9000+) may legitimately be missing while later upstream files applied.
 func migrateUpTo(db *sql.DB, fsys fs.FS, to int64) error {
-	migrations, err := loadMigrations(fsys, migrationsDir)
+	migrations, err := loadMigrations(fsys)
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func migrateUpTo(db *sql.DB, fsys fs.FS, to int64) error {
 // migrateDownTo reverts every applied migration with version > to, in
 // descending order.
 func migrateDownTo(db *sql.DB, fsys fs.FS, to int64) error {
-	migrations, err := loadMigrations(fsys, migrationsDir)
+	migrations, err := loadMigrations(fsys)
 	if err != nil {
 		return err
 	}

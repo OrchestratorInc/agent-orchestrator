@@ -1900,7 +1900,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByLabelText("Worker agent"));
 		expect(screen.getByRole("option", { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: /Codex/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("option", { name: "Manage agent connections…" })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "Manage harness connections…" })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: "Manage agents…" })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		await user.click(await screen.findByRole("button", { name: "Create" }));

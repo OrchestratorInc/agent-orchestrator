@@ -6,6 +6,7 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { fileMediaKind } from "../lib/file-media";
+import { rasterImageMediaType } from "../lib/image-files";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
@@ -169,6 +170,7 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		: await readArtifactTextResponse(response);
 	// Only a complete text file can be edited: the save sends it back whole.
 	const editable = !binary && !truncated;
+	const contentType = response.headers.get("content-type");
 	return {
 		additions: 0,
 		binary,
@@ -180,7 +182,11 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		diffTruncated: false,
 		editable,
 		fileFingerprint: editable ? await artifactFingerprint(bytes) : "",
-		imageMediaType: media === "image" ? response.headers.get("content-type") ?? "image" : undefined,
+		// Artifact servers often serve a generic content type; a raster path
+		// knows its media type better than "application/octet-stream".
+		imageMediaType: media === "image"
+			? (contentType?.startsWith("image/") ? contentType : undefined) ?? rasterImageMediaType(path) ?? "image"
+			: undefined,
 		mediaVersion: media ? response.headers.get("etag") ?? response.headers.get("last-modified") ?? undefined : undefined,
 		path,
 		sessionId,

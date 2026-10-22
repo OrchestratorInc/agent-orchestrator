@@ -1249,7 +1249,7 @@ describe("TaskComposer", () => {
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		const { unmount } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		// Only connected agents, with "Manage agent connections…" (Agents settings' Cloud view).
+		// Only connected agents, with "Manage harness connections…" (Agents settings' Cloud view).
 		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "cloud");
 		unmount();
 

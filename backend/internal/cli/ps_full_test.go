@@ -29,7 +29,7 @@ func TestWriteProcessInventory_SortsSessionsDesc(t *testing.T) {
 	iHuge := strings.Index(text, "huge")
 	iMid := strings.Index(text, "mid")
 	iSmall := strings.Index(text, "small")
-	if !(0 <= iHuge && iHuge < iMid && iMid < iSmall) {
+	if iHuge < 0 || iHuge >= iMid || iMid >= iSmall {
 		t.Fatalf("row order wrong (huge=%d mid=%d small=%d):\n%s", iHuge, iMid, iSmall, text)
 	}
 }

@@ -571,7 +571,15 @@ export function TaskComposer({
 		|| "";
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
-	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
+	// A seeded catalog default is not a provider default: the spawn must carry
+	// it explicitly (standalone included), or the gateway downgrades to the
+	// agent's own runtime default.
+	const seededDefaultEffort = effortModel?.effortsSeeded ? effortModel?.defaultEffort || "" : "";
+	const aoDefaultEffort = requiresTuiFallback
+		? undefined
+		: seededDefaultEffort && effortOptions.includes(seededDefaultEffort)
+			? seededDefaultEffort
+			: fallbackEffort(effortOptions, implicitEffort);
 	const effectiveEffort = effort && effort !== "default"
 		? effort
 		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");

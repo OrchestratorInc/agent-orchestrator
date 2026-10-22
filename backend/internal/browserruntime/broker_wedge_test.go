@@ -53,6 +53,15 @@ func newTunedWedgeHarness(t *testing.T, tune func(*Broker)) *wedgeHarness {
 	if err := enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion}); err != nil {
 		t.Fatal(err)
 	}
+	// A current-version hello is answered with hello-ok before any other frame;
+	// the tests below only care about the frames that follow it.
+	var helloReply wireMessage
+	if err := json.NewDecoder(conn).Decode(&helloReply); err != nil {
+		t.Fatal(err)
+	}
+	if helloReply.Type != "hello-ok" {
+		t.Fatalf("first daemon frame = %#v, want hello-ok", helloReply)
+	}
 	waitConnected(t, broker)
 	return &wedgeHarness{
 		broker: broker,
@@ -227,6 +236,15 @@ func TestBrokerNewConnectionFailsStalePending(t *testing.T) {
 	replacementEnc := json.NewEncoder(replacement)
 	if err := replacementEnc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion}); err != nil {
 		t.Fatal(err)
+	}
+	// The replacement speaks the current protocol, so it gets the same hello-ok
+	// first frame; eat it before reading the commands that follow.
+	var replacementHello wireMessage
+	if err := json.NewDecoder(replacement).Decode(&replacementHello); err != nil {
+		t.Fatal(err)
+	}
+	if replacementHello.Type != "hello-ok" {
+		t.Fatalf("replacement first frame = %#v, want hello-ok", replacementHello)
 	}
 	waitConnected(t, h.broker)
 

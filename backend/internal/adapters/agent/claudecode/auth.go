@@ -552,6 +552,9 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 // can shorten it.
 var providerProbeTimeout = 12 * time.Second
 
+// ProviderModels probes one claude-code installation's model catalog: it asks
+// the CLI for its models and returns them in AO's order, bounded by
+// providerProbeTimeout so a wedged CLI degrades to the caller's fallback.
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, providerProbeTimeout)
 	defer cancel()

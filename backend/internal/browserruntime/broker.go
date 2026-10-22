@@ -25,9 +25,12 @@ import (
 
 const (
 	// ProtocolVersion identifies the daemon-to-Electron browser bridge contract.
-	// v3 adds broker-issued ping frames answered by pong; helloRejection accepts
-	// exactly this version and answers every hello explicitly (#6466).
+	// v3 adds broker-issued ping frames answered by pong; v2 peers (desktop
+	// builds older than the heartbeat) are still accepted and simply not probed.
 	ProtocolVersion = 3
+	// minSupportedProtocolVersion is the oldest hello the broker accepts, so a
+	// freshly built daemon keeps working against a not-yet-upgraded desktop app.
+	minSupportedProtocolVersion = 2
 	// RuntimeTokenStdinEnv tells an app-spawned daemon to read its token once
 	// from the inherited private stdin pipe instead of an environment variable.
 	RuntimeTokenStdinEnv = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
@@ -297,20 +300,41 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	// Answer every hello explicitly, so the runtime knows whether it was accepted
-	// instead of guessing from how long the socket stays open (#6466). Older
-	// runtimes ignore both frames.
-	if rejection := helloRejection(scanner.Bytes(), b.token); rejection != nil {
-		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: rejection})
+	var hello wireMessage
+	// Reply matrix (#6466, constrained by the legacy-peer contract): only a
+	// current-version runtime understands hello-rejected/hello-ok frames, so
+	// those get explicit answers; a hello below the supported floor and a
+	// legacy v2 peer predate both frames, and silence is all they understand —
+	// open/close for the former, a quiet accept for the latter.
+	_ = json.Unmarshal(scanner.Bytes(), &hello)
+	switch {
+	case hello.Version < minSupportedProtocolVersion:
+		_ = conn.Close()
+		return
+	case hello.Version > ProtocolVersion:
+		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: &CommandError{
+			Code:    "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
+			Message: fmt.Sprintf("daemon speaks browser runtime protocol %d, runtime sent %d", ProtocolVersion, hello.Version),
+		}})
+		_ = conn.Close()
+		return
+	case hello.Type != "hello":
+		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: &CommandError{Code: "BROWSER_RUNTIME_BAD_HELLO", Message: "first frame was not a hello"}})
+		_ = conn.Close()
+		return
+	case !validRuntimeToken(b.token, hello.Token):
+		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: &CommandError{Code: "BROWSER_RUNTIME_TOKEN_REJECTED", Message: "browser runtime token does not match the one this daemon was started with"}})
 		_ = conn.Close()
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	// Nothing else can write to conn until it is published below, so hello-ok is
 	// always the first frame the runtime reads.
-	if err := writeHelloReply(conn, wireMessage{Type: "hello-ok"}); err != nil {
-		_ = conn.Close()
-		return
+	if hello.Version >= ProtocolVersion {
+		if err := writeHelloReply(conn, wireMessage{Type: "hello-ok"}); err != nil {
+			_ = conn.Close()
+			return
+		}
 	}
 
 	b.mu.Lock()
@@ -326,12 +350,14 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	failPending(pending, ErrUnavailable)
 	b.log.Info("browser runtime connected")
 
-	// helloRejection enforces an exact protocol match, so every accepted
-	// runtime speaks ProtocolVersion and gets liveness probes.
-	b.mu.Lock()
-	b.pongAt = time.Now()
-	b.mu.Unlock()
-	go b.runLiveness(ctx, conn)
+	// Only protocol v3+ runtimes speak the liveness contract; a legacy v2 peer
+	// never sees a ping frame and is never failed as stalled.
+	if hello.Version >= ProtocolVersion {
+		b.mu.Lock()
+		b.pongAt = time.Now()
+		b.mu.Unlock()
+		go b.runLiveness(ctx, conn)
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -453,27 +479,6 @@ func (b *Broker) write(ctx context.Context, conn net.Conn, msg wireMessage) erro
 		return context.DeadlineExceeded
 	}
 	return err
-}
-
-// helloRejection reports why a runtime's first frame is not an acceptable hello,
-// or nil if it is.
-func helloRejection(frame []byte, token string) *CommandError {
-	var hello wireMessage
-	switch {
-	case json.Unmarshal(frame, &hello) != nil || hello.Type != "hello":
-		return &CommandError{Code: "BROWSER_RUNTIME_BAD_HELLO", Message: "first frame was not a hello"}
-	case hello.Version != ProtocolVersion:
-		return &CommandError{
-			Code:    "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
-			Message: fmt.Sprintf("daemon speaks browser runtime protocol %d, runtime sent %d", ProtocolVersion, hello.Version),
-		}
-	case !validRuntimeToken(token, hello.Token):
-		return &CommandError{
-			Code:    "BROWSER_RUNTIME_TOKEN_REJECTED",
-			Message: "browser runtime token does not match the one this daemon was started with",
-		}
-	}
-	return nil
 }
 
 func writeHelloReply(conn net.Conn, msg wireMessage) error {

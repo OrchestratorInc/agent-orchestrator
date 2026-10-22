@@ -282,7 +282,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				notifications: {
 					show: async () => undefined,
-					mode: async () => false,
+					// Loud mode: the smoke specs assert the full unread count, not
+					// just the human-feedback subset quiet mode signals.
+					mode: async () => true,
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,
@@ -1158,7 +1160,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				notifications: {
 					show: async () => undefined,
-					mode: async () => false,
+					// Loud mode: the smoke specs assert the full unread count, not
+					// just the human-feedback subset quiet mode signals.
+					mode: async () => true,
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,

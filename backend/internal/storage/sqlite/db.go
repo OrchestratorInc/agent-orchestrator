@@ -207,7 +207,7 @@ func expectedMigrationVersion() (int64, error) {
 }
 
 func computeExpectedMigrationVersion() error {
-	migrations, err := loadMigrations(migrationsFS, migrationsDir)
+	migrations, err := loadMigrations(migrationsFS)
 	if err != nil {
 		return fmt.Errorf("collect migrations: %w", err)
 	}

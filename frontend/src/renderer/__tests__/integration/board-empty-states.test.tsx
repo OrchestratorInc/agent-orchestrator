@@ -72,6 +72,8 @@ vi.mock("../../lib/bridge", () => ({
 			onShortcut: () => () => undefined,
 		},
 		clipboard: { writeText: clipboardWriteMock },
+		// The shell mounts NotificationCenter, which reads the quiet/loud switch.
+		notifications: { mode: async () => false },
 		// CreateProjectFlow reads the cloud session (Local | Cloud gating);
 		// signed-out keeps these tests on the local-only flow.
 		cloud: {

@@ -187,7 +187,7 @@ func TestGetRestoreCommandResumesWhenWorkspacePathHasUnderscores(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok — transcript exists under Claude's encoding", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", `{"permissions":{"defaultMode":"bypassPermissions"}}`, "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -210,7 +210,7 @@ func TestGetRestoreCommandReadsAgentSessionID_TranscriptPresent(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", `{"permissions":{"defaultMode":"bypassPermissions"}}`, "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -272,7 +272,7 @@ func TestGetRestoreCommandFallsBackToDerivedUUID_TranscriptPresent(t *testing.T)
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", claudeSessionUUID("sess-r")}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", `{"permissions":{"defaultMode":"bypassPermissions"}}`, "--resume", claudeSessionUUID("sess-r")}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}

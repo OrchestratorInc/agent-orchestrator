@@ -3,6 +3,24 @@ export function isRasterImagePath(path: string): boolean {
 	return /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
 }
 
+const RASTER_IMAGE_MEDIA_TYPES: Record<string, string> = {
+	apng: "image/apng",
+	avif: "image/avif",
+	bmp: "image/bmp",
+	gif: "image/gif",
+	ico: "image/x-icon",
+	jpeg: "image/jpeg",
+	jpg: "image/jpeg",
+	png: "image/png",
+	webp: "image/webp",
+};
+
+/** The extension-derived media type for a raster image path, e.g. shot.png → image/png. */
+export function rasterImageMediaType(path: string): string | undefined {
+	const match = /\.([a-z0-9]+)$/i.exec(path);
+	return match ? RASTER_IMAGE_MEDIA_TYPES[match[1].toLowerCase()] : undefined;
+}
+
 /** SVG is text, so it keeps its code view and gains a rendered one. */
 export function isSvgPath(path: string): boolean {
 	return /\.svg$/i.test(path);

@@ -26,6 +26,7 @@ type KillTarget struct {
 	RootLstart string
 }
 
+// KillResult is the per-target outcome of one kill call.
 type KillResult struct {
 	SessionID string
 	RootPID   int
@@ -33,6 +34,7 @@ type KillResult struct {
 	Detail    string
 }
 
+// KillReport collects the per-target outcomes of one kill call.
 type KillReport struct {
 	Results []KillResult
 }

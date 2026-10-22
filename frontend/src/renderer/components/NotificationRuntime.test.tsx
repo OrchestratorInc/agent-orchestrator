@@ -52,6 +52,8 @@ vi.mock("../lib/notifications", async (importOriginal) => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		notifications: {
+			// Loud mode: the badge counts every unread row (see notification-signals).
+			mode: async () => true,
 			setBadge,
 			show: vi.fn(),
 			devBounce: vi.fn(),

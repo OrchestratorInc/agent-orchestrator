@@ -277,14 +277,14 @@ func composeDarwinHostStats(total int64, swap swapUsage, vm vmStat, freeDisk int
 	cached := vm.FileBacked * pageSize
 	wired := vm.Wired * pageSize
 	compressed := vm.Compressor * pageSize
-	used := max64(0, total-free-cached)
+	used := clampNonNegative(total - free - cached)
 	return HostStats{
 		TotalBytes:          total,
 		UsedBytes:           used,
 		FreeBytes:           free,
 		CachedBytes:         cached,
 		WiredBytes:          wired,
-		AppBytes:            max64(0, used-wired-compressed),
+		AppBytes:            clampNonNegative(used - wired - compressed),
 		CompressedBytes:     compressed,
 		SwapTotalBytes:      swap.Total,
 		SwapUsedBytes:       swap.Used,
@@ -300,19 +300,21 @@ func composeDarwinHostStats(total int64, swap swapUsage, vm vmStat, freeDisk int
 func composeLinuxHostStats(m memInfo) HostStats {
 	return HostStats{
 		TotalBytes:     m.Total,
-		UsedBytes:      max64(0, m.Total-m.Available),
+		UsedBytes:      clampNonNegative(m.Total - m.Available),
 		FreeBytes:      m.Free,
 		CachedBytes:    m.Cached + m.SReclaimable,
 		SwapTotalBytes: m.SwapTotal,
-		SwapUsedBytes:  max64(0, m.SwapTotal-m.SwapFree),
+		SwapUsedBytes:  clampNonNegative(m.SwapTotal - m.SwapFree),
 		SwapFreeBytes:  m.SwapFree,
 		SwapMaxBytes:   m.SwapTotal,
 	}
 }
 
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
+// clampNonNegative floors a memory figure at zero: several OS counters can go
+// negative under sampling races (total < free during a rebalance).
+func clampNonNegative(v int64) int64 {
+	if v > 0 {
+		return v
 	}
-	return b
+	return 0
 }

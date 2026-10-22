@@ -45,7 +45,7 @@ func migratedDatabaseSnapshot(t *testing.T, version int64) []byte {
 
 func buildMigrationSnapshots(t *testing.T, version int64, fsys fs.FS) []byte {
 	t.Helper()
-	all, err := loadMigrations(fsys, migrationsDir)
+	all, err := loadMigrations(fsys)
 	if err != nil {
 		t.Fatalf("collect migration checkpoints through %d: %v", version, err)
 	}

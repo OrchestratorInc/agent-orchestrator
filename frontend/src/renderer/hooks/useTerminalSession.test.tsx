@@ -508,7 +508,10 @@ describe("useTerminalSession", () => {
 		view.rerender({ daemonReady: true, isVisible: true });
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
 
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 132, 47],
+		]);
 		expect(muxes[0].forcedResizes).toEqual([["handle-1", 132, 47]]);
 	});
 
@@ -528,7 +531,10 @@ describe("useTerminalSession", () => {
 		view.rerender({ daemonReady: true, isVisible: true });
 		act(() => view.result.current.syncVisibleSize(120, 40));
 
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 120, 40],
+		]);
 		expect(muxes[0].forcedResizes).toEqual([["handle-1", 120, 40]]);
 	});
 

@@ -60,7 +60,7 @@ func scmProxyFunc(src scmProxySource, logger *slog.Logger) func(*http.Request) (
 // The proxy decision is deferred to dial time (scmProxyFunc), so the client and
 // the providers constructed from it can stay singletons for the daemon's life.
 func newSCMHTTPClient(src scmProxySource, logger *slog.Logger) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:errcheck // DefaultTransport is always a *http.Transport; the assertion cannot fail
 	transport.Proxy = scmProxyFunc(src, logger)
 	return &http.Client{Transport: transport, Timeout: scmHTTPTimeout}
 }
