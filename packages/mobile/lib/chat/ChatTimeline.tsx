@@ -1,11 +1,12 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	ActivityIndicator,
 	FlatList,
 	Image,
+	Keyboard,
 	Platform,
 	Pressable,
 	StyleSheet,
@@ -14,6 +15,7 @@ import {
 	TextInput,
 	View,
 } from "react-native";
+import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { authHeaders, httpBase } from "../config";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
@@ -46,10 +48,13 @@ import {
 } from "./elicitationModel";
 import { previewFilePath } from "../api";
 import { ImageViewer } from "../ImageViewer";
-import { attachmentName, attachmentTileSize, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
+import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
+import { InlineMessageEditor, messageEditDraft, type MessageEditDraft } from "./InlineMessageEditor";
+import { MessageContextMenu } from "./MessageContextMenu";
 import type {
 	ConversationActivity,
 	ConversationItem,
+	ConversationMessage,
 	ConversationSnapshot,
 	ConversationTurn,
 	FileChange,
@@ -61,6 +66,7 @@ import {
 	activityStartsExpanded,
 	canRollbackTurn,
 	conversationTimelineRenderPlan,
+	editableHumanTurns,
 	countActivityNodes,
 	partitionTurnItems,
 	readableConversationItems,
@@ -92,6 +98,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	onDecide,
 	onResolveInput,
 	onRollback,
+	onEditMessage,
+	onEditingChange,
 	jumpToSequence,
 	onJumpHandled,
 	answeredBelow,
@@ -105,6 +113,10 @@ export const ChatTimeline = memo(function ChatTimeline({
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
+	/** Branches before an earlier human prompt and resends it edited. */
+	onEditMessage?(turnId: string, text: string, clientMessageId: string): Promise<void>;
+	/** Whether a prompt is open in its inline editor, so the screen can make room. */
+	onEditingChange?(editing: boolean): void;
 	jumpToSequence?: number;
 	onJumpHandled?(): void;
 	/**
@@ -137,6 +149,35 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
+	const edits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
+	// The open edit lives here, above the virtualized list, so its draft survives
+	// the row scrolling out and back.
+	const [editDraft, setEditDraft] = useState<MessageEditDraft>();
+	const startEdit = useCallback((message: ConversationMessage) => {
+		if (!message.turnId) return;
+		const { body, attachments } = editableMessageText(message.text);
+		followsTail.current = false;
+		setEditDraft(messageEditDraft({
+			turnId: message.turnId,
+			initialText: body,
+			attachments,
+		}));
+	}, []);
+	const cancelEdit = useCallback(() => setEditDraft(undefined), []);
+	const submitEdit = useCallback(async (turnId: string, text: string, clientMessageId: string) => {
+		if (!onEditMessage) return;
+		await onEditMessage(turnId, text, clientMessageId);
+		setEditDraft((current) => current?.turnId === turnId ? undefined : current);
+	}, [onEditMessage]);
+	const editing = editDraft !== undefined;
+	useEffect(() => {
+		onEditingChange?.(editing);
+	}, [editing, onEditingChange]);
+	// Back closes the edit first, as Escape does on the desktop, rather than
+	// leaving the conversation with the draft. A JS back listener never hears
+	// predictive back on Android, so this guards the screen's removal instead.
+	usePreventRemove(editing, cancelEdit);
+	const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);
 	const jumpViewPosition = inverted ? 0.82 : 0.18;
 	const scrollToLatest = (animated: boolean) => {
 		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
@@ -156,6 +197,26 @@ export const ChatTimeline = memo(function ChatTimeline({
 		}
 		onJumpHandled?.();
 	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
+
+	// The keyboard shrinks the list, so bring the prompt being edited back into view.
+	const editingTurnId = editDraft?.turnId;
+	const revealEdit = useCallback(() => {
+		if (!editingTurnId) return;
+		const index = groups.findIndex((group) => group.turnId === editingTurnId);
+		if (index < 0) return;
+		// A row is the whole turn, so pin its top (the prompt) to the top of the
+		// viewport; on an inverted list that is the row's far end.
+		requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: inverted ? 1 : 0, viewOffset: inverted ? -space.md : space.md }));
+	}, [editingTurnId, groups, inverted]);
+	useEffect(() => {
+		if (!editingTurnId) return;
+		revealEdit();
+		const subscription = Keyboard.addListener("keyboardDidShow", revealEdit);
+		return () => subscription.remove();
+		// Only when an edit opens or the keyboard settles: following every refresh
+		// would pull the list back while the person scrolls to read.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [editingTurnId]);
 
 	if (plan.kind === "empty" && startup?.visible) {
 		// No brief in the timeline (a promptless start): the checklist stands alone.
@@ -198,7 +259,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			<FlatList<ConversationGroup>
 				ref={listRef}
 				data={groups}
-				extraData={openWorked}
+				extraData={rowState}
 				inverted={plan.inverted}
 				keyExtractor={(group) => group.key}
 				style={styles.list}
@@ -238,6 +299,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 					onDecide={onDecide}
 					onResolveInput={onResolveInput}
 					onRollback={onRollback}
+					editableTurns={edits?.editable}
+					onEditMessage={onEditMessage ? startEdit : undefined}
+					editDraft={editDraft}
+					onCancelEdit={cancelEdit}
+					onSubmitEdit={submitEdit}
+					onEditFocus={revealEdit}
 					answeredBelow={answeredBelow}
 					workedOpen={openWorked.has(group.key)}
 					onToggleWorked={toggleWorked}
@@ -249,7 +316,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked, startup }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -257,6 +324,12 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
+	editableTurns?: ReadonlySet<string>;
+	onEditMessage?(message: ConversationMessage): void;
+	editDraft?: MessageEditDraft;
+	onCancelEdit(): void;
+	onSubmitEdit(turnId: string, text: string, clientMessageId: string): Promise<void>;
+	onEditFocus(): void;
 	answeredBelow?: number;
 	workedOpen: boolean;
 	onToggleWorked(key: string): void;
@@ -270,9 +343,13 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items;
 	const cursorMessageId = streamingCursorMessageId(items);
+	// Only the prompt being edited gets an element, so every other row keeps its memo.
+	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
+		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
+		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -287,6 +364,12 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
+	// The prompt's editor grows as it opens and as lines are typed. Android's
+	// inverted list misplaces rows whose layout transition runs under that growth,
+	// so the turn being edited lays out without the fold motion.
+	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
+	const WorkBody = editing ? View : FoldBody;
+	const BelowFold = editing ? View : FoldLayout;
 	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	// Running: the prompt, a live Working row, then the work as it streams in.
@@ -295,8 +378,8 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	return <View>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
-		<FoldLayout>{renderRows(partition.notices)}{renderRows(partition.final)}{summary}</FoldLayout>
+		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
+		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{summary}</BelowFold>
 	</View>;
 }
 
@@ -309,6 +392,8 @@ const TimelineItem = memo(function TimelineItem({
 	inputPending,
 	onDecide,
 	onResolveInput,
+	onEdit,
+	editor,
 	answeredBelow,
 	showCursor = false,
 }: {
@@ -320,6 +405,10 @@ const TimelineItem = memo(function TimelineItem({
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
+	/** Present only on a human prompt the daemon can branch before and resend edited. */
+	onEdit?(message: ConversationMessage): void;
+	/** Shown in place of the bubble while this prompt is being edited. */
+	editor?: ReactNode;
 	answeredBelow?: number;
 	showCursor?: boolean;
 }) {
@@ -327,16 +416,24 @@ const TimelineItem = memo(function TimelineItem({
 	const styles = useThemedStyles(makeStyles);
 	if (item.kind === "message") {
 		if (item.role === "user" && item.origin === "human") {
+			if (editor) return <View style={styles.userRow}>{editor}</View>;
 			const delivery = deliveryCopy(item.delivery);
 			const { body, attachments } = stagedAttachmentParts(item.text);
+			// Long-press opens Edit and Copy, so the text is not selectable: a
+			// selection would take the same gesture.
 			return (
 				<View style={styles.userRow}>
-					<View style={[styles.userBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
-						<SentResponseQuotes content={item.content} />
-						{body ? <Text selectable style={styles.userText}>{body}</Text> : null}
-						{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
-						{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
-					</View>
+					<MessageContextMenu style={styles.userMenu} canEdit={Boolean(onEdit)} onAction={(action) => {
+						if (action === "edit") onEdit?.(item);
+						else { void Clipboard.setStringAsync(editableMessageText(item.text).body.trim()); haptics.success(); }
+					}}>
+						<View style={[styles.userBubble, styles.menuBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
+							<SentResponseQuotes content={item.content} />
+							{body ? <Text style={styles.userText}>{body}</Text> : null}
+							{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
+							{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
+						</View>
+					</MessageContextMenu>
 				</View>
 			);
 		}
@@ -1107,6 +1204,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	older: { alignSelf: "center", flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, paddingVertical: space.sm, marginBottom: space.md },
 	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize },
 	userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
+	userMenu: { maxWidth: "88%" },
+	menuBubble: { maxWidth: "100%" },
 	userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: 20, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
 	quotedBubble: { width: "88%" },
 	userText: { fontFamily: "Geist_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },

@@ -15,7 +15,8 @@ describe("chat turn summary styling", () => {
 
 	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
 		expect(source).toContain("partitionTurnItems(items, group.turn)");
-		expect(source).toContain("extraData={openWorked}");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);");
+		expect(source).toContain("extraData={rowState}");
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
 
@@ -53,5 +54,21 @@ describe("elicitation typography", () => {
 		expect(source).toContain('fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" }');
 		expect(source).toContain("inputRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.xl, gap: space.md }");
 		expect(source).toContain('inputActions: { minHeight: 36, flexDirection: "row"');
+	});
+});
+
+describe("sent human message actions", () => {
+	const human = source.slice(source.indexOf('if (item.role === "user" && item.origin === "human") {'), source.indexOf('if (item.role === "user") {'));
+
+	it("offers Edit and Copy from a long-press menu instead of an always-visible pen", () => {
+		expect(human).toContain("<MessageContextMenu");
+		expect(human).toContain("canEdit={Boolean(onEdit)}");
+		expect(human).toContain("Clipboard.setStringAsync(editableMessageText(item.text).body.trim()); haptics.success();");
+		expect(human).not.toContain('name="edit-2"');
+	});
+
+	it("keeps the bubble text unselectable so the long-press opens the menu", () => {
+		expect(human).toContain("<Text style={styles.userText}>{body}</Text>");
+		expect(human).not.toContain("<Text selectable");
 	});
 });

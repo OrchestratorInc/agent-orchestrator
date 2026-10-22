@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, groupConversationByTurn, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -242,5 +242,53 @@ describe("streamingCursorMessageId", () => {
 	it("shows no cursor once the reply has settled", () => {
 		expect(timelineModel.streamingCursorMessageId([message("a", 1, false)])).toBeUndefined();
 		expect(timelineModel.streamingCursorMessageId([])).toBeUndefined();
+	});
+});
+
+describe("editable human prompts", () => {
+	function editable(): ConversationSnapshot {
+		const value = snapshot();
+		value.capabilities = ["fork"];
+		value.nativeForkAvailableAfterSequence = 1;
+		value.items = value.items.map((item) => item.kind === "message" && item.role === "user" ? { ...item, editAvailable: true } : item);
+		return value;
+	}
+
+	it("offers the first prompt and natively forkable later prompts once their turns settle", () => {
+		const { editable: turns, reconstructed } = editableHumanTurns(editable());
+		expect([...turns]).toEqual(["t1", "t2"]);
+		expect(reconstructed.size).toBe(0);
+	});
+
+	it("offers nothing while the agent is working or not ready", () => {
+		for (const state of ["busy", "connecting", "recovering", "hibernated", "stopped"] as const) {
+			const value = editable();
+			value.controller.state = state;
+			expect(editableHumanTurns(value).editable.size).toBe(0);
+		}
+	});
+
+	it("skips prompts the daemon cannot edit and turns that never settled", () => {
+		const value = editable();
+		value.items = value.items.map((item) => item.id === "u1" ? { ...item, editAvailable: false } : item);
+		value.turns[1] = { ...value.turns[1], state: "running" };
+		expect(editableHumanTurns(value).editable.size).toBe(0);
+	});
+
+	it("needs a fork or replay to edit a later prompt", () => {
+		const value = editable();
+		value.capabilities = [];
+		expect([...editableHumanTurns(value).editable]).toEqual(["t1"]);
+		value.capabilities = ["prompt_replay", "embedded_context"];
+		const replay = editableHumanTurns(value);
+		expect([...replay.editable]).toEqual(["t1", "t2"]);
+		expect([...replay.reconstructed]).toEqual(["t2"]);
+	});
+
+	it("does not treat the oldest loaded prompt as the first while older history is unloaded", () => {
+		const value = editable();
+		value.capabilities = [];
+		value.hasMoreBefore = true;
+		expect(editableHumanTurns(value).editable.size).toBe(0);
 	});
 });

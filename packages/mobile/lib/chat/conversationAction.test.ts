@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conversationActionError, conversationActionUnsupported, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
+import { conversationActionError, conversationActionUnsupported, editRefusedDefinitively, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 
 describe("mobile conversation action errors", () => {
 	it("keeps reviewer startup errors retryable", () => {
@@ -34,5 +34,15 @@ describe("mobile conversation action errors", () => {
 		await expect(ignoreStaleApproval(async () => { throw stale; })).resolves.toBeUndefined();
 		const refusal = Object.assign(new Error("not offered"), { status: 400, code: "CHAT_DECISION_NOT_OFFERED" });
 		await expect(ignoreStaleApproval(async () => { throw refusal; })).rejects.toBe(refusal);
+	});
+
+	it("tells an uncertain edit apart from a refused one", () => {
+		expect(conversationActionError(Object.assign(new Error("conflict"), { code: "CHAT_EDIT_BUSY" })))
+			.toContain("Stop the current turn");
+		expect(conversationActionError(Object.assign(new Error("conflict"), { code: "CHAT_EDIT_UNCERTAIN" })))
+			.toContain("will not be sent twice");
+		expect(editRefusedDefinitively("CHAT_EDIT_REJECTED")).toBe(true);
+		expect(editRefusedDefinitively("CHAT_EDIT_UNCERTAIN")).toBe(false);
+		expect(editRefusedDefinitively(undefined)).toBe(false);
 	});
 });

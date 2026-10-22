@@ -3,6 +3,7 @@ import { machineIdentity, type ServerConfig } from "../config";
 import {
 	cancelQueuedConversationTurn,
 	compactConversation,
+	editConversationMessage,
 	getConversationConfigOptions,
 	getConversationModels,
 	getConversationPage,
@@ -69,6 +70,7 @@ export type ConversationAction =
 	| "input"
 	| "compact"
 	| "rollback"
+	| "edit"
 	| "settings"
 	| "config"
 	| "mcp"
@@ -106,6 +108,8 @@ export type MobileConversation = {
 	resolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	compact(): Promise<void>;
 	rollback(turnId: string): Promise<number>;
+	/** Retry an uncertain edit with the same `clientMessageId`; the daemon will not branch it twice. */
+	editMessage(turnId: string, text: string, clientMessageId: string): Promise<void>;
 	chooseSettings(settings: TurnSettings): Promise<void>;
 	setConfigOption(optionId: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
 	reloadMcp(): Promise<void>;
@@ -291,8 +295,9 @@ export function useMobileConversation(
 				const message = conversationActionError(cause);
 				setActionError(message);
 				setActionErrors((old) => ({ ...old, [kind]: message }));
-				setActionCodes((old) => ({ ...old, [kind]: conversationErrorCode(cause) }));
-				throw new Error(message);
+				const code = conversationErrorCode(cause);
+				setActionCodes((old) => ({ ...old, [kind]: code }));
+				throw Object.assign(new Error(message), { code });
 			} finally {
 				setPendingActions((old) => old.filter((candidate) => candidate !== kind));
 			}
@@ -430,6 +435,11 @@ export function useMobileConversation(
 		(turnId: string) => runAction("rollback", () => requireConfig(cfg, (c) => rollbackConversation(c, sessionId, turnId)), true),
 		[cfg, runAction, sessionId],
 	);
+	const editMessage = useCallback(
+		(turnId: string, text: string, clientMessageId: string) =>
+			runAction("edit", () => requireConfig(cfg, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true),
+		[cfg, runAction, sessionId],
+	);
 	const chooseSettings = useCallback(
 		(settings: TurnSettings) => runAction("settings", () => requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
 		[cfg, runAction, sessionId],
@@ -489,6 +499,7 @@ export function useMobileConversation(
 		resolveInput: resolveInputAction,
 		compact,
 		rollback,
+		editMessage,
 		chooseSettings,
 		setConfigOption,
 		reloadMcp,
@@ -501,7 +512,7 @@ async function requireConfig<T>(cfg: ServerConfig | null, action: (cfg: ServerCo
 	return action(cfg);
 }
 
-function clientMessageId(): string {
+export function clientMessageId(): string {
 	return `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
