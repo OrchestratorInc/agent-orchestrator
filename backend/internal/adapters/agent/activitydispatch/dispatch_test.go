@@ -80,6 +80,7 @@ func TestSignalCoverageForHarness(t *testing.T) {
 		{domain.HarnessContinue, SignalCoveragePartial},
 		{domain.HarnessAider, SignalCoveragePartial},
 		{domain.HarnessCommandCode, SignalCoveragePartial},
+		{domain.HarnessNeovate, SignalCoveragePartial},
 		{domain.HarnessMemcode, SignalCoveragePartial},
 		{domain.HarnessCrush, SignalCoverageNone},
 	}

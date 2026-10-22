@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,7 +24,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "neovate":
 		return true
 	default:
 		return false
@@ -53,6 +54,16 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 		}
 		models = append(models, parsed...)
 	}
+	if agentID == "neovate" {
+		// Neovate also runs its built-in providers from key env vars alone.
+		// The default comes from configuration or a keyed provider only.
+		models = append(models, neovateEnvModels(env)...)
+		if len(models) > 0 && !slices.ContainsFunc(models, func(m ports.AgentModelInfo) bool { return m.IsDefault }) {
+			models[0].IsDefault = true
+		}
+		models = append(models, neovateAllModels()...)
+		found = true
+	}
 	if !found {
 		return base, fmt.Errorf("%s model configuration was not found", agentID)
 	}
@@ -78,6 +89,8 @@ func configModelParser(agentID string) configParser {
 		return parseVibeModels
 	case "cline":
 		return parseClineModels
+	case "neovate":
+		return parseNeovateModels
 	case "autohand":
 		return parseAutoHandModels
 	default:
@@ -130,6 +143,13 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	case "cline":
 		if home != "" {
 			paths = append(paths, filepath.Join(home, ".cline", "data", "settings", "providers.json"))
+		}
+	case "neovate":
+		if home != "" {
+			paths = append(paths, filepath.Join(home, ".neovate", "config.json"))
+		}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".neovate", "config.local.json"), filepath.Join(workingDir, ".neovate", "config.json"))
 		}
 	case "autohand":
 		if home != "" {

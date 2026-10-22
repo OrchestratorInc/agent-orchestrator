@@ -141,7 +141,7 @@ func (m *Manager) preflightAccountTarget(
 		}
 		return m.chat.PreflightChat(ctx, rec.Harness, config.Permissions)
 	}
-	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
 }
 
 // markAccountSwitch tells the conversation that a move which stopped the turn

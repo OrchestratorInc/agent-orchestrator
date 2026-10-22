@@ -16173,6 +16173,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - memcode
           - fake
           type: string
@@ -16873,6 +16874,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - memcode
           - cloudflared
           type: string
@@ -20219,6 +20221,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - memcode
           type: string
         issueId:

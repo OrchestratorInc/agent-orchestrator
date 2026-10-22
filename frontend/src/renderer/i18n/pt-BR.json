@@ -2558,6 +2558,7 @@
 	"settings.harness.signedInWithAccount": "Conectado com uma conta",
 	"settings.harness.usingToken": "Usando um token",
 	"settings.harness.configured": "Configured",
+	"settings.harness.connected": "Connected",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",
 	"settings.harness.login": "Login",

@@ -2583,6 +2583,7 @@
 	"settings.harness.signedInWithAccount": "已使用账户登录",
 	"settings.harness.usingToken": "正在使用令牌",
 	"settings.harness.configured": "Configured",
+	"settings.harness.connected": "Connected",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",
 	"settings.harness.login": "Login",

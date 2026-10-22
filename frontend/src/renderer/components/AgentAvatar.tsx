@@ -47,6 +47,8 @@ import kimiLightLogo from "../assets/agents/kimi-light.svg";
 import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
+import neovateDarkLogo from "../assets/agents/neovate-dark.svg";
+import neovateLightLogo from "../assets/agents/neovate-light.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
@@ -90,6 +92,7 @@ const LOGOS: AgentLogoSources = {
 	devin: { light: devinLightLogo, dark: devinDarkLogo },
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
+	neovate: { light: neovateLightLogo, dark: neovateDarkLogo },
 	memcode: memcodeLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },

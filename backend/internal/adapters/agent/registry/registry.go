@@ -35,6 +35,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/neovate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
@@ -89,6 +90,7 @@ func Constructors() []adapters.Adapter {
 		commandcode.New(),
 		unrealagent.New(),
 		mimocode.New(),
+		neovate.New(),
 		memcode.New(),
 		deepseekharness.New(),
 	}

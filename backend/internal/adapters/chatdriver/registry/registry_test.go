@@ -48,6 +48,8 @@ func TestShippedChatDrivers(t *testing.T) {
 	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
+		// Released Neovate ACP has no exact load/replay implementation.
+		domain.HarnessNeovate,
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {
