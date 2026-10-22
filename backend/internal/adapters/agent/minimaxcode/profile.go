@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -181,6 +182,16 @@ func sourceProfile(env map[string]string) (string, error) {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			return filepath.Abs(value)
 		}
+	}
+	// The default profile lives under Node's os.homedir(), which follows the
+	// launch environment's HOME (USERPROFILE on Windows), so a project-level
+	// HOME selects the profile the native CLI and model discovery read.
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	if home := strings.TrimSpace(env[homeKey]); home != "" {
+		return filepath.Abs(filepath.Join(home, ".minimax"))
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -460,3 +460,23 @@ func TestSnapshotKeepsResourceDirectoriesNamedDotLock(t *testing.T) {
 		t.Fatalf("plugin directory named tools.lock was dropped: %v", err)
 	}
 }
+
+// A launch-environment HOME selects ~/.minimax the way the native CLI does, so
+// the private snapshot matches what model discovery reported.
+func TestSourceProfileFollowsLaunchHome(t *testing.T) {
+	home := t.TempDir()
+	key := "HOME"
+	if runtime.GOOS == "windows" {
+		key = "USERPROFILE"
+	}
+	t.Setenv("MINIMAX_DATA_DIR", "")
+	t.Setenv("MAVIS_DATA_DIR", "")
+	got, err := sourceProfile(map[string]string{key: home})
+	if err != nil || got != filepath.Join(home, ".minimax") {
+		t.Fatalf("sourceProfile = %q, %v; want %q", got, err, filepath.Join(home, ".minimax"))
+	}
+	explicit := filepath.Join(t.TempDir(), "profile")
+	if got, err := sourceProfile(map[string]string{key: home, "MINIMAX_DATA_DIR": explicit}); err != nil || got != explicit {
+		t.Fatalf("explicit profile = %q, %v; want %q", got, err, explicit)
+	}
+}
