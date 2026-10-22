@@ -96,21 +96,37 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it("rejects hostile browser REST and preflights before injecting upstream credentials", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		for (const origin of ["http://ao-preview-attacker.localhost:3001", "http://localhost", "null", "http://evil.example"]) {
+			for (const method of ["POST", "OPTIONS"]) {
+				const response = await fetch(`${proxy.base}/api/v1/shell-terminals`, { method, headers: { Origin: origin, "content-type": "text/plain" } });
+				expect(response.status).toBe(403);
+			}
+		}
+		const noOrigin = await fetch(`${proxy.base}/api/v1/shell-terminals`, { method: "POST", headers: { "sec-fetch-site": "cross-site" } });
+		expect(noOrigin.status).toBe(403);
+		expect(seen).toHaveLength(0);
+		const trusted = await fetch(`${proxy.base}/api/v1/shell-terminals`, { method: "POST", headers: { Origin: "app://renderer", "sec-fetch-site": "cross-site" } });
+		expect(trusted.status).toBe(200);
+		expect(seen).toHaveLength(1);
+		expect(seen[0].auth).toBe("Bearer pw");
+		expect(seen[0].origin).toBeUndefined();
+	});
+
 	it("refuses hostile mux upgrades without opening an upstream socket", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		const upgrades = vi.fn();
 		upstream!.on("upgrade", (req, socket) => { upgrades(req.url); socket.destroy(); });
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
 		const target = new URL(proxy.base);
-		const staticPreview = new URL(proxy.previewUrl("ao-1", `http://ao-preview.mfxs2mi.localhost:${port}/index.html`));
-		for (const [destination, origin] of [[target, "http://ao-preview-attacker.localhost:3001"], [target, "null"], [staticPreview, staticPreview.origin]] as const) {
+		const staticPreview = new URL(proxy.previewUrl("ao-1", "http://localhost:3001/api/v1/sessions/ao-1/preview/files/index.html"));
+		for (const [host, origin] of [[target.host, "http://ao-preview-attacker.localhost:3001"], [target.host, "null"], [staticPreview.host, staticPreview.origin]]) {
 			await new Promise<void>((resolve, reject) => {
-				const onConnect = () => {
-					socket.write(`GET ${target.pathname}/mux HTTP/1.1\r\nHost: ${destination.host}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
-				};
-				const socket = destination.protocol === "https:"
-					? tlsConnect({ host: "127.0.0.1", port: Number(destination.port), ...trustPreview(destination) }, onConnect)
-					: netConnect(Number(destination.port), "127.0.0.1", onConnect);
+				const socket = netConnect(Number(target.port), "127.0.0.1", () => {
+					socket.write(`GET ${target.pathname}/mux HTTP/1.1\r\nHost: ${host}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+				});
 				socket.setTimeout(2000, () => { socket.destroy(); reject(new Error("upgrade did not close")); });
 				socket.on("error", reject);
 				socket.on("close", () => resolve());
@@ -118,6 +134,23 @@ describe("startRemoteProxy", () => {
 		}
 		expect(upgrades).not.toHaveBeenCalled();
 		expect(seen).toHaveLength(0);
+	});
+
+	it("removes only the host's final API sandbox on isolated preview origins", async () => {
+		const sandbox = "sandbox allow-scripts allow-forms";
+		const appPolicy = "default-src 'self'; sandbox allow-scripts";
+		const { port } = await startUpstream(() => ({ status: 200, body: "<main>preview</main>", headers: {
+			"content-type": "text/html", "content-security-policy": `${appPolicy}, ${sandbox}`, "x-ao-preview-api-sandbox": "1",
+		} }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const headers = await new Promise<IncomingMessage["headers"]>((resolve, reject) => {
+			previewRequest(preview, { path: "/", method: "GET" }, (res) => { res.resume(); resolve(res.headers); }).on("error", reject).end();
+		});
+		expect(headers["content-security-policy"]).toBe(appPolicy);
+		expect(headers["x-ao-preview-api-sandbox"]).toBeUndefined();
+		const legacy = await fetch(`${proxy.base}/api/v1/sessions/ao-1/preview/files/index.html`);
+		expect(legacy.headers.get("content-security-policy")).toBe(`${appPolicy}, ${sandbox}`);
 	});
 
 	it("serves authenticated artifact files and sibling assets without replacing an app preview", async () => {
@@ -456,7 +489,8 @@ describe("startRemoteProxy", () => {
 			method: "OPTIONS",
 			headers: { Origin: "http://evil.example" },
 		});
-		expect(foreign.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+		expect(foreign.status).toBe(403);
+		expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
 	});
 
 	it("serves a verified host with the token stripped", async () => {
