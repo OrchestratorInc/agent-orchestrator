@@ -23,18 +23,14 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 export const INSTRUCTION_CHANNELS = Object.freeze(["flag", "protocol", "config", "rule-file", "none"]);
 
-const DEFAULTS = Object.freeze({
-  "claude-code": { tui: { channel: "flag" }, chat: { channel: "protocol" } },
-  codex: { tui: { channel: "flag" }, chat: { channel: "protocol" } },
-});
-
 // Contract shape: `instructions: { channel, artifact }` for both surfaces, or
-// `instructions: { tui: {...}, chat: {...} }` per surface.
+// `instructions: { tui: {...}, chat: {...} }` per surface. Every harness
+// declares its own; an undeclared channel is reported as a contract gap.
 export function instructionSpec(agent, contract, surface) {
   const declared = contract?.instructions;
   if (declared?.[surface]) return declared[surface];
   if (typeof declared?.channel === "string") return declared;
-  return DEFAULTS[agent]?.[surface] ?? null;
+  return null;
 }
 
 export function expandArtifact(template, { dataDir = "", workspacePath = "", sessionId = "" }) {
@@ -116,7 +112,7 @@ export async function checkInstructionDelivery({ spec, token, dataDir, workspace
     return { status: "FAIL", reason: `AO did not write the ${spec.channel} artifact (${error.code ?? error.message})`, evidence };
   }
   if (!text.includes(token)) {
-    return { status: "FAIL", reason: `the ${spec.channel} artifact exists but does not carry the current standing instructions (stale after restore, or written from the wrong prompt)`, evidence };
+    return { status: "FAIL", reason: `the ${spec.channel} artifact exists but does not carry the current standing instructions (stale, or written from the wrong prompt)`, evidence };
   }
   if (workspacePath) {
     const inside = relative(resolve(workspacePath), path);

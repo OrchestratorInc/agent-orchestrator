@@ -1,6 +1,6 @@
 ---
 name: ao-agent-harness
-description: Use when given a link, repo or name of a coding-agent CLI to integrate into AO as a harness (TUI, Chat, installer, models, auth/login), when completing or reviewing a harness integration PR, or when auditing an integrated harness (Codex, Claude Code or any other) with step-by-step screenshots and a system-prompt check.
+description: Use when given a link, repo or name of a coding-agent CLI to integrate into AO as a harness (TUI, Chat, installer, models, auth/login), when completing or reviewing a harness integration PR, or when auditing any integrated harness with step-by-step screenshots and a system-prompt check.
 ---
 
 # AO harness: integrate and audit
@@ -11,6 +11,11 @@ the TUI and Chat adapters, installer, model list, auth detection, login button
 and Connected state. It then verifies everything in the real app, with a
 screenshot for every step, pass or fail.
 
+It works the same for every harness. Nothing in it is specific to one agent:
+everything harness-specific lives in that harness's **contract**, one JSON
+entry you write in step 2. Codex and Claude Code are already integrated, so
+use them as worked examples to copy from, not as the target.
+
 Work through the steps in order. Each one says what to do, which tool runs it,
 and when it is done.
 
@@ -18,7 +23,7 @@ and when it is done.
 | --- | --- | --- | --- |
 | 0 | **Intake:** already integrated? PR already open? | `scripts/harness_intake.mjs --link URL` | Decision printed: new, continue PR, complete existing, or update checkout |
 | 1 | **Compatibility:** what the CLI supports and how much AO can use | [integration-path §1](references/integration-path.md#1-map-the-upstream-contract) | Compatibility table filled from the CLI's real `--help`/behaviour |
-| 2 | **Build** in AO (order below) | `scripts/harness_touchpoints.mjs --harness ID --like SIMILAR` | Every required touchpoint `ok` for the surfaces you support |
+| 2 | **Build** in AO (order below) and **write its contract** | `scripts/harness_touchpoints.mjs --harness ID --like SIMILAR` | Every required touchpoint `ok`; contract entry added |
 | 3 | **Local test:** standalone agent, New Task, TUI and Chat | `scripts/run_local.sh audit ID` | Live audit gates pass |
 | 4 | **UI audit** with screenshots | `scripts/ui_audit.mjs` | Every checkpoint has a PASS/FAIL screenshot |
 | 5 | **V1: system prompt** (worker vs orchestrator) | `--suites roles` (included in `audit`) | Both sessions name their own role |
@@ -86,10 +91,36 @@ Then add branding (logo and licence), docs, and the reviewer if it is
 supported. Read [lessons from earlier harness PRs](references/lessons-from-harness-prs.md)
 before writing the adapter. The same mistakes failed 16 PRs.
 
+### Write the harness contract
+
+Copy the entry in [`assets/contract-template.json`](assets/contract-template.json)
+into [`assets/local-contracts.json`](assets/local-contracts.json) under the new
+agent ID, then fill it from the CLI's real behaviour (the `codex` and
+`claude-code` entries there are filled-in examples):
+
+| Field | What to put |
+| --- | --- |
+| `binary`, `versionArgs` | The CLI's command and its version flag |
+| `integration` | The login-status command and the text it prints when logged in |
+| `session` | A one-shot, non-interactive run with `{prompt}`, used to prove the CLI works outside AO |
+| `models` | The model-list command, if the CLI has one |
+| `surfaces` | `["tui"]`, `["chat"]` or both: what AO integrates |
+| `adapters` | AO's directory names for its TUI adapter and Chat driver |
+| `instructions` | How AO passes the system prompt, per surface: `flag`, `protocol`, `config` or `rule-file` |
+| `restoredReady` | A regex matching only the empty input box after a restore |
+| `supports` | Only to override the defaults below, e.g. `"chat_steer": "no"` |
+| `hooks` | Only if AO writes the hooks into a file: its path and the text it must contain |
+
+Every capability is **required** of a harness that has its surface (spawn,
+instructions, messaging, kill and restore…) or **optional** (MCP status,
+skills, steer, compaction, the TUI ↔ Chat switch). For an optional one, a
+clean refusal is reported as `UNSUPPORTED`, not as a failure. Field details:
+[local-cli-contract](references/local-cli-contract.md).
+
 ## Step 3: Local test (API audit)
 
 ```bash
-scripts/run_local.sh doctor        # Node, AO checkout freshness, CLIs, logins
+scripts/run_local.sh doctor <id>   # Node, AO checkout freshness, the CLI and its login
 scripts/run_local.sh audit <id>    # live audit with your system's existing logins
 ```
 
@@ -104,9 +135,8 @@ then drives the harness through the API:
 - the TUI ↔ Chat switch
 - the system-prompt checks
 
-A new harness needs its own entry in a local CLI contract. Start from
-[`assets/local-contract.codex-claude.json`](assets/local-contract.codex-claude.json)
-and the [contract reference](references/local-cli-contract.md).
+Without an ID it audits every harness in the contract file, which is how you
+check that a shared change did not break the others.
 
 ## Step 4: UI audit with screenshots
 
@@ -150,8 +180,8 @@ the top of `scripts/ui_audit.mjs`; update them there when the UI changes.
 "Are you a worker or an orchestrator?". Each must answer with its own role,
 from AO's system prompt alone. A wrong answer means the role prompt never
 reached the agent. The `instruction_channel*` gates then show where it was
-lost: argv flag, Chat protocol, config file, or the last-resort rule file (see
-[local-cli-contract](references/local-cli-contract.md)).
+lost: argv flag, Chat protocol, config file, or the last-resort rule file, as
+declared in the contract (see [local-cli-contract](references/local-cli-contract.md)).
 
 ## Step 6: Fix, then hand off
 

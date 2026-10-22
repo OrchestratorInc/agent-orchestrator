@@ -16,7 +16,7 @@ import {
   observedFromEvidence,
 } from "./audit_capabilities.mjs";
 import { SUITES } from "./audit_suites.mjs";
-import { markdownReport, parseArgs } from "./audit_ao.mjs";
+import { loadLocalContracts, markdownReport, parseArgs } from "./audit_ao.mjs";
 
 // The skill normally lives in the AO checkout; a copy elsewhere points at one
 // with AO_REPO. Without a checkout the path check is skipped, not failed.
@@ -24,6 +24,7 @@ const repoRoot = process.env.AO_REPO || resolve(dirname(fileURLToPath(import.met
 const hasCheckout = existsSync(join(repoRoot, "backend/internal/domain/harness.go"));
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILL_PREFIX = ".agents/skills/ao-agent-harness/";
+const contracts = await loadLocalContracts(join(skillRoot, "assets", "local-contracts.json"));
 
 test("every suite gate maps to a catalog capability", () => {
   for (const name of Object.values(SUITES).flat()) {
@@ -31,11 +32,11 @@ test("every suite gate maps to a catalog capability", () => {
   }
 });
 
-test("catalog inspect paths exist in this checkout for codex and claude-code", { skip: hasCheckout ? false : `no AO checkout at ${repoRoot}; set AO_REPO` }, async () => {
+test("catalog inspect paths exist in this checkout for every harness in the contract file", { skip: hasCheckout ? false : `no AO checkout at ${repoRoot}; set AO_REPO` }, async () => {
   const missing = [];
   for (const capability of CAPABILITIES) {
-    for (const agent of ["codex", "claude-code"]) {
-      for (const path of inspectPaths(capability, agent)) {
+    for (const [agent, contract] of Object.entries(contracts)) {
+      for (const path of inspectPaths(capability, agent, contract)) {
         // The skill's own files resolve from this skill, wherever it is copied.
         const target = path.startsWith(SKILL_PREFIX) ? join(skillRoot, path.slice(SKILL_PREFIX.length)) : join(repoRoot, path);
         try { await access(target); } catch { missing.push(`${capability.id}/${agent}: ${path}`); }
@@ -58,6 +59,7 @@ test("diagnoseGate explains a failed API gate with expected, observed, causes an
     },
   }, {
     agent: "codex",
+    contract: contracts.codex,
     sessionId: "s1",
     daemonLogs: "info boot\nlevel=ERROR session=s1 interrupt failed: broken pipe\nlevel=ERROR other noise",
   });
@@ -69,16 +71,26 @@ test("diagnoseGate explains a failed API gate with expected, observed, causes an
     "POST /api/v1/sessions/s1/conversation/interrupt → HTTP 409 CHAT_NOT_RUNNING: no running turn",
   ]);
   assert.ok(diagnosis.likelyCauses.length > 0);
-  assert.ok(diagnosis.inspect.includes("backend/internal/adapters/chatdriver/codexappserver/conversation.go"));
+  assert.ok(diagnosis.inspect.includes("backend/internal/adapters/chatdriver/codexappserver/"));
   assert.deepEqual(diagnosis.daemonLogExcerpt, ["level=ERROR session=s1 interrupt failed: broken pipe"]);
   const line = diagnosisLine("codex", { name: "chat_interrupt", status: "FAIL" }, diagnosis);
   assert.match(line, /codex: chat_interrupt FAIL — \[Chat interrupt of an active tool command\] — expected .* — observed .* — likely .* — inspect /);
 });
 
-test("diagnoseGate expands harness directories and skips passing gates", () => {
+test("diagnoseGate expands harness directories from the contract, or guesses them from the id", () => {
   assert.equal(diagnoseGate({ name: "tui_spawn", status: "PASS" }, { agent: "codex" }), undefined);
-  const claude = diagnoseGate({ name: "tui_hooks_installed", status: "FAIL", reason: "missing" }, { agent: "claude-code" });
-  assert.ok(claude.inspect.includes("backend/internal/adapters/agent/claudecode/hooks.go"));
+  const claude = diagnoseGate({ name: "chat_steer", status: "FAIL", reason: "missing" }, { agent: "claude-code", contract: contracts["claude-code"] });
+  assert.ok(claude.inspect.includes("backend/internal/adapters/chatdriver/claudeacp/"));
+  const guessed = diagnoseGate({ name: "tui_hooks_installed", status: "FAIL", reason: "missing" }, { agent: "my-agent" });
+  assert.ok(guessed.inspect.includes("backend/internal/adapters/agent/myagent/"));
+});
+
+test("support comes from the catalog and the harness contract, never from a per-harness table", () => {
+  const steer = { name: "chat_steer", status: "UNSUPPORTED", reason: "not advertised" };
+  assert.equal(diagnoseGate(steer, { agent: "any-new-agent" }).declaredSupport, "conditional");
+  assert.equal(diagnoseGate(steer, { agent: "codex", contract: contracts.codex }).declaredSupport, "yes");
+  assert.equal(diagnoseGate({ name: "chat_spawn", status: "FAIL", reason: "x" }, { agent: "tui-only", contract: { surfaces: ["tui"] } }).declaredSupport, "no");
+  assert.equal(diagnoseGate({ name: "tui_spawn", status: "FAIL", reason: "x" }, { agent: "any-new-agent" }).declaredSupport, "yes");
 });
 
 test("observedFromEvidence summarises command outcomes and network errors", () => {
@@ -112,7 +124,7 @@ test("capabilityMatrix rolls gates up per capability and never reports missing g
 });
 
 test("markdownReport prints the capability matrix and a diagnosis for each issue", () => {
-  const diagnosis = diagnoseGate({ name: "chat_restore", status: "FAIL", reason: "restore switched to a different provider conversation id" }, { agent: "codex" });
+  const diagnosis = diagnoseGate({ name: "chat_restore", status: "FAIL", reason: "restore switched to a different provider conversation id" }, { agent: "codex", contract: contracts.codex });
   const markdown = markdownReport({
     summary: { status: "FAIL", total: 1, pass: 0, fail: 1, blocked: 0, notRun: 0 },
     startedAt: "s", finishedAt: "f", disposableRoot: "/tmp/a", daemon: { keptRunning: false },
@@ -124,7 +136,7 @@ test("markdownReport prints the capability matrix and a diagnosis for each issue
   assert.match(markdown, /### Chat\n/);
   assert.match(markdown, /## Failure diagnosis/);
   assert.match(markdown, /- Expected: restore reconnects the same provider conversation id/);
-  assert.match(markdown, /- Inspect: `backend\/internal\/adapters\/chatdriver\/codexappserver\/driver.go`/);
+  assert.match(markdown, /- Inspect: `backend\/internal\/adapters\/chatdriver\/codexappserver\/`/);
 });
 
 test("parseArgs selects capability suites", () => {

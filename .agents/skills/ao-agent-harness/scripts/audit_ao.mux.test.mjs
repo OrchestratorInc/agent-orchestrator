@@ -69,7 +69,6 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   let witnessIdleSampled = false;
   const messages = [];
   const timers = [];
-  let projectConfig = { agentRules: "original audit rules", defaultBranch: "main" };
   let continued = false;
   const target = "opaque:terminal/fixture";
   const cleanupScenario = scenario.startsWith("lifecycle-cleanup");
@@ -89,19 +88,6 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
       res.end(JSON.stringify({ content: readFileSync(path, "utf8") }));
       return;
     }
-    if (scenario.startsWith("lifecycle") && req.url === "/api/v1/projects/project") {
-      res.end(JSON.stringify({ project: { id: "project", config: projectConfig } })); return;
-    }
-    if (scenario.startsWith("lifecycle") && req.url === "/api/v1/projects/project/config") {
-      let raw = "";
-      req.on("data", part => { raw += part; });
-      req.on("end", () => {
-        assert.equal(killed, true, "standing instructions must refresh only after confirmed kill");
-        if (scenario !== "lifecycle-drops-refreshed-instructions") projectConfig = JSON.parse(raw).config;
-        res.end(JSON.stringify({ project: { id: "project", config: JSON.parse(raw).config } }));
-      });
-      return;
-    }
     if (req.url.endsWith("/kill")) { killRequests++; lifecycleHooks.onKill?.(); }
     if (scenario.startsWith("lifecycle") && req.url !== "/api/v1/sessions/fixture") {
       let body;
@@ -110,10 +96,10 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
       else if (req.url.endsWith("/models")) body = { models: [] };
       else if (req.url === "/api/v1/sessions") body = { session: { id: "fixture", mode: "tui", harness: "fixture", activity: { state: "active" } } };
       else if (req.url.endsWith("/workspace")) body = { workspacePath: lifecycleHooks.workspacePath || "/tmp/fixture-workspace" };
-      else if (req.url.includes("/workspace/file")) body = { content: scenario === "lifecycle-retains-old-instructions" ? JSON.stringify({
+      else if (req.url.includes("/workspace/file")) body = { content: scenario === "lifecycle-restore-history" ? JSON.stringify({
         cwd: "/tmp/fixture-workspace", initialPromptToken: "initial", initialPromptExecutions: 1,
         rulesMarker: "initial-hidden", agentsMarker: "project-agents", secondMessageToken: "second",
-        ...(continued ? { historyToken: "history", restoreRulesMarker: "old-history-instruction" } : {}),
+        ...(continued ? { historyToken: "history" } : {}),
       }) : "{}" };
       else if (req.url.endsWith("/send")) {
         let raw = "";
@@ -123,15 +109,15 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
           if (JSON.parse(raw).message.startsWith("For cancellation testing")) {
             startWitness();
             cancellationStarted = true; res.end("{}");
-          } else if (scenario === "lifecycle-retains-old-instructions") {
+          } else if (scenario === "lifecycle-restore-history") {
             if (JSON.parse(raw).message.startsWith("Update the existing")) continued = true;
             res.end("{}");
           } else { res.writeHead(422); res.end("{}"); }
         });
         return;
       }
-      else if (["lifecycle-ready-blocked", "lifecycle-drops-refreshed-instructions", "lifecycle-retains-old-instructions"].includes(scenario) && req.url.endsWith("/kill")) { killed = true; body = { ok: true }; }
-      else if (["lifecycle-ready-blocked", "lifecycle-drops-refreshed-instructions", "lifecycle-retains-old-instructions"].includes(scenario) && req.url.endsWith("/restore")) {
+      else if (["lifecycle-ready-blocked", "lifecycle-restore-history"].includes(scenario) && req.url.endsWith("/kill")) { killed = true; body = { ok: true }; }
+      else if (["lifecycle-ready-blocked", "lifecycle-restore-history"].includes(scenario) && req.url.endsWith("/restore")) {
         killed = false; restored = true; cancellationStarted = false;
         body = { restoreMode: "native", session: { id: "fixture", isTerminated: false } };
       }
@@ -196,7 +182,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
               data: Buffer.from((scenario.endsWith("-stale-cue") ? ready : "") + (scenario.endsWith("-already-empty") ? ready : draft + (scenario.endsWith("-foreign-draft") ? "> unrelated user draft\n────────\n  [model] | native session\n" : ""))).toString("base64") });
             continue;
           }
-          if (scenario.startsWith("ready-") || ["lifecycle-ready-blocked", "lifecycle-retains-old-instructions"].includes(scenario)) {
+          if (scenario.startsWith("ready-") || ["lifecycle-ready-blocked", "lifecycle-restore-history"].includes(scenario)) {
             send(socket, { ch: "terminal", id: target, type: "opened" });
             if (scenario === "ready-error") { send(socket, { ch: "terminal", id: target, type: "error", error: "restore attach failed" }); continue; }
             const output = text => ({ ch: "terminal", id: target, type: "data", data: Buffer.from(text).toString("base64") });
@@ -265,7 +251,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
         }
         return spec;
       },
-      get cleanupInputs() { return cleanupInputs; }, get killRequests() { return killRequests; }, get projectConfig() { return projectConfig; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
+      get cleanupInputs() { return cleanupInputs; }, get killRequests() { return killRequests; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
   } finally {
     stopWitness();
     for (const timer of timers) clearTimeout(timer);
@@ -454,7 +440,7 @@ test("missing restored native cue blocks the lifecycle before any continuation s
     });
     const gate = name => result.gates.find(item => item.name === name);
     assert.equal(gate("post_restore_terminal_ready")?.status, "BLOCKED", JSON.stringify(result));
-    for (const name of ["post_restore_message", "history_file_continuity", "system_prompt_restore"]) assert.equal(gate(name)?.status, "NOT_RUN");
+    for (const name of ["post_restore_message", "history_file_continuity"]) assert.equal(gate(name)?.status, "NOT_RUN");
     assert.equal(fixture.messages.some(message => message.startsWith("Update the existing")), false);
     assert.equal(gate("authentication").status, "BLOCKED");
   });
@@ -565,31 +551,15 @@ test("missing native contracts skip cancellation and restored input without inve
     assert.equal(gate("cancellation")?.status, "NOT_RUN");
     assert.equal(fixture.messages.some(message => message.startsWith("For cancellation testing")), false);
     assert.equal(gate("post_restore_terminal_ready")?.status, "NOT_RUN");
-    for (const name of ["post_restore_message", "history_file_continuity", "system_prompt_restore"]) assert.equal(gate(name)?.status, "NOT_RUN");
+    for (const name of ["post_restore_message", "history_file_continuity"]) assert.equal(gate(name)?.status, "NOT_RUN");
     assert.equal(fixture.messages.some(message => message.startsWith("Update the existing")), false);
     assert.equal(fixture.upgrades, 0);
   });
 });
 
 
-test("dropped project config update fails instruction refresh before restore", async () => {
-  await withMuxFixture("lifecycle-drops-refreshed-instructions", async fixture => {
-    const result = await auditAgent({
-      baseURL: fixture.baseURL, agent: "fixture", projectId: "project", timeoutMs: 300,
-      diagnosticAfterNativeProof: true,
-      localResult: { agent: "fixture", gates: ["local_binary", "local_version", "local_integration", "local_session_spawn"].map(name => ({ name, status: "PASS" })) },
-    });
-    const gate = name => result.gates.find(item => item.name === name);
-    assert.equal(gate("system_prompt_restore")?.status, "FAIL");
-    assert.match(gate("system_prompt_restore")?.reason || "", /fresh.*instruction|instruction.*refresh/);
-    assert.equal(gate("native_restore")?.status, "NOT_RUN");
-    assert.equal(fixture.messages.some(message => message.startsWith("Update the existing")), false);
-  });
-});
-
-
-test("restored provider history cannot substitute for newly configured standing instructions", async () => {
-  await withMuxFixture("lifecycle-retains-old-instructions", async fixture => {
+test("restored session recalls native history and keeps earlier proof fields", async () => {
+  await withMuxFixture("lifecycle-restore-history", async fixture => {
     const result = await auditAgent({
       baseURL: fixture.baseURL, agent: "fixture", projectId: "project", timeoutMs: 300,
       diagnosticAfterNativeProof: true, restoredReadySpec: nativeReadySpec,
@@ -597,12 +567,10 @@ test("restored provider history cannot substitute for newly configured standing 
       localResult: { agent: "fixture", gates: ["local_binary", "local_version", "local_integration", "local_session_spawn"].map(name => ({ name, status: "PASS" })) },
     });
     const gate = name => result.gates.find(item => item.name === name);
-    assert.match(fixture.projectConfig.agentRules, /"restoreRulesMarker" with the value "HIDDEN_RESTORE_/);
     assert.equal(gate("post_restore_terminal_ready")?.status, "PASS");
     assert.equal(fixture.messages.some(message => message.startsWith("Update the existing")), true);
     assert.equal(gate("history_file_continuity")?.status, "PASS", JSON.stringify(gate("history_file_continuity")));
-    assert.equal(gate("system_prompt_restore")?.status, "FAIL");
-    assert.equal(gate("post_restore_message")?.status, "FAIL");
+    assert.equal(gate("post_restore_message")?.status, "PASS", JSON.stringify(gate("post_restore_message")));
   });
 });
 

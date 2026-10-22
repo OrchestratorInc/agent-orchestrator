@@ -1,5 +1,5 @@
-// Keeps the bundled Codex/Claude starter contract loadable and its restored
-// ready cues honest. Frames come from AO's own adapter tests
+// Keeps the bundled harness contracts and the template loadable, and the
+// restored ready cues of the reference harnesses honest. Frames come from AO's own adapter tests
 // (claudecode_test.go, codex/terminal_activity_test.go).
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
@@ -8,8 +8,9 @@ import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 
 import { loadLocalContracts } from "./audit_ao.mjs";
+import { INSTRUCTION_CHANNELS } from "./audit_instructions.mjs";
 
-const contractPath = join(dirname(fileURLToPath(import.meta.url)), "..", "assets", "local-contract.codex-claude.json");
+const contractPath = join(dirname(fileURLToPath(import.meta.url)), "..", "assets", "local-contracts.json");
 const rule = `\x1b[38;5;244m${"─".repeat(48)}\x1b[39m`;
 
 const FRAMES = {
@@ -26,14 +27,17 @@ const FRAMES = {
   ],
 };
 
-test("bundled contract loads and declares every field the live audit needs", async () => {
-  const agents = await loadLocalContracts(contractPath);
-  for (const id of ["codex", "claude-code"]) {
-    const contract = agents[id];
+test("every bundled contract and the template declare the fields the live audit needs", async () => {
+  const agents = { ...await loadLocalContracts(contractPath), ...await loadLocalContracts(join(dirname(contractPath), "contract-template.json")) };
+  for (const [id, contract] of Object.entries(agents)) {
     assert.ok(contract.binary && contract.versionArgs && contract.session?.args?.includes("{prompt}"), id);
     assert.equal(contract.interrupt, undefined, `${id} is stopped the AO way, by archiving the session`);
     assert.ok(contract.restoredReady.patterns.every((pattern) => pattern.length <= 4096), id);
-    assert.equal(contract.instructions.tui.channel, "flag");
+    assert.ok(Array.isArray(contract.surfaces) && contract.surfaces.length, `${id} lists its surfaces`);
+    assert.ok(contract.adapters?.tui || contract.adapters?.chat, `${id} names its AO adapter directories`);
+    for (const surface of contract.surfaces) {
+      assert.ok(INSTRUCTION_CHANNELS.includes(contract.instructions?.[surface]?.channel), `${id} declares its ${surface} instruction channel`);
+    }
   }
   assert.deepEqual(agents.codex.models.args, ["debug", "models"]);
 });

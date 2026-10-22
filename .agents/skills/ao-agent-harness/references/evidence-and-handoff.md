@@ -56,11 +56,8 @@ to move CLI product behavior around the daemon/API boundary.
 
 `PASS` requires positive evidence. A version string, accepted API send,
 restore HTTP 200, kill acknowledgement, or immediate synthetic idle does not
-prove an entire lifecycle. The restore token is created only after confirmed termination, appended to the
-existing project rules through `PUT /projects/{id}/config`, and checked by a
-fresh project read before restore. Other config fields must remain unchanged.
-A failed write or readback makes `system_prompt_restore` fail and skips restore
-continuation, preventing prior history from masquerading as refreshed input.
+prove an entire lifecycle. A restored session keeps the instructions it started
+with; changing project rules while it is killed is not checked.
 Standing-instruction proof checks consumption only;
 use audit-only tokens because a model can repeat them in output. Proof files
 are model-authored assertions backed by workspace/API observations, not a

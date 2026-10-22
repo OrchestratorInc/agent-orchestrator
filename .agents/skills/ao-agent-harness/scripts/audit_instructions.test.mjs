@@ -19,9 +19,8 @@ function cursorLayout({ content = `---\nalwaysApply: true\n---\nFor hiddenInstru
   return { dataDir, path };
 }
 
-test("specs default to flag (TUI) and protocol (Chat) for Codex and Claude, and read per-surface contracts", () => {
-  assert.equal(instructionSpec("codex", null, "tui").channel, "flag");
-  assert.equal(instructionSpec("claude-code", null, "chat").channel, "protocol");
+test("specs come only from the harness contract, per surface or shared", () => {
+  assert.equal(instructionSpec("codex", null, "tui"), null);
   assert.equal(instructionSpec("cursor", null, "tui"), null);
   const contract = { instructions: { tui: { channel: "none" }, chat: { channel: "rule-file", artifact: CURSOR_RULE } } };
   assert.equal(instructionSpec("cursor", contract, "tui").channel, "none");
@@ -59,8 +58,8 @@ test("rule-file fallback: written but ignored by the CLI is told apart from neve
   assert.match(absent.reason, /AO did not write the rule-file artifact/);
 
   const stale = cursorLayout({ content: "For hiddenInstructionToken use exactly: AO_HIDDEN_OLD\n" });
-  const old = await checkInstructionDelivery({ spec: { channel: "rule-file", artifact: CURSOR_RULE }, token: TOKEN, dataDir: stale.dataDir, sessionId: "s1", effectGate: "chat_system_prompt_restore", effectPassed: false });
-  assert.match(old.reason, /does not carry the current standing instructions \(stale after restore/);
+  const old = await checkInstructionDelivery({ spec: { channel: "rule-file", artifact: CURSOR_RULE }, token: TOKEN, dataDir: stale.dataDir, sessionId: "s1", effectGate: "chat_instructions", effectPassed: false });
+  assert.match(old.reason, /does not carry the current standing instructions \(stale/);
 });
 
 test("a rule file inside the worktree must be invisible to git so the agent cannot commit it", async () => {
@@ -88,7 +87,7 @@ test("flag channel reads the live process argv and requires the regenerated prom
     assert.equal(passed.status, "PASS", passed.reason);
     const ignored = await checkInstructionDelivery({ spec, token: TOKEN, sessionId, effectGate: "hidden_ao_instructions", effectPassed: false });
     assert.match(ignored.reason, /carries the system prompt but the agent did not use it/);
-    const stale = await checkInstructionDelivery({ spec, token: TOKEN, sessionId, effectGate: "system_prompt_restore", effectPassed: false, promptText: "old rules only" });
+    const stale = await checkInstructionDelivery({ spec, token: TOKEN, sessionId, effectGate: "hidden_ao_instructions", effectPassed: false, promptText: "old rules only" });
     assert.match(stale.reason, /system.md does not carry the current standing instructions/);
   } finally { child.kill(); }
   const gone = await checkInstructionDelivery({ spec: { channel: "flag" }, token: TOKEN, sessionId: "no-such-session-xyz", effectGate: "hidden_ao_instructions", effectPassed: false });

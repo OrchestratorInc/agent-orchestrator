@@ -39,6 +39,24 @@ runner.
 
 ## Fields
 
+Start a new harness from [`assets/contract-template.json`](../assets/contract-template.json)
+and add it to [`assets/local-contracts.json`](../assets/local-contracts.json),
+next to the existing harnesses. Fields that let the audit stay generic:
+
+- `surfaces`: `["tui"]`, `["chat"]` or both. Capabilities for a missing surface
+  are expected to be refused (`UNSUPPORTED`), not to fail.
+- `adapters`: `{ "tui": "<dir>", "chat": "<dir>" }`, AO's directory names under
+  `backend/internal/adapters/agent/` and `.../chatdriver/`. Failure diagnoses
+  point there. If omitted, the agent ID without dashes is used (`my-agent` →
+  `myagent`, `myagentacp`).
+- `supports`: overrides for single capabilities (`"chat_steer": "no"`,
+  `"interface_switch": "yes"`). Without it, every capability for an
+  integrated surface is required, except the optional ones (MCP status,
+  skills, steer, compaction, the TUI ↔ Chat switch).
+- `hooks`: `{ "file": "<path in the worktree>", "contains": [...] }` when AO
+  writes the harness's hooks into a file. Without it, the native session ID
+  that only the SessionStart hook stores proves the hooks fired.
+
 - `binary` is an executable name resolved through `PATH`, or an absolute path.
 - `versionArgs` must return exit code zero and non-empty output.
 - `integration.args` runs the provider's safe local doctor/status/API probe.
@@ -96,8 +114,8 @@ fix:
   a wall of `BLOCKED` rows.
 - `instructions` says how AO's standing instructions (the system prompt)
   reach the CLI. Give one `{ channel, artifact }` for both surfaces, or one per
-  surface under `tui` and `chat`. Codex and Claude Code default to `flag` (TUI)
-  and `protocol` (Chat). Choose the first channel the native CLI supports:
+  surface under `tui` and `chat`. There is no default: an undeclared channel is
+  reported as a contract gap. Choose the first channel the native CLI supports:
 
   | Channel | Delivery | Where it applies |
   | --- | --- | --- |
@@ -143,8 +161,8 @@ same:
 3. It requires three things: the session terminated, the command's own process
    is gone, and the command's delayed file never appears.
 
-That archive is also the Kill before the restore checks. The bundled Codex and
-Claude contract uses this path. Chat is checked separately through its own
+That archive is also the Kill before the restore checks. Every bundled contract
+uses this path. Chat is checked separately through its own
 **Stop turn** (`chat_interrupt`).
 
 The keystroke interrupt below is optional. It applies only to a harness whose

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "agents": {
+    "my-agent": {
+      "binary": "my-agent",
+      "versionArgs": ["--version"],
+      "integration": {
+        "args": ["auth", "status"],
+        "expect": "Logged in"
+      },
+      "session": {
+        "args": ["run", "--yes", "{prompt}"],
+        "proofFile": "LOCAL_AUDIT_PROOF.json"
+      },
+      "models": {
+        "args": ["models", "--json"],
+        "format": "json"
+      },
+      "surfaces": ["tui", "chat"],
+      "adapters": { "tui": "myagent", "chat": "myagentacp" },
+      "instructions": {
+        "tui": { "channel": "flag" },
+        "chat": { "channel": "protocol" }
+      },
+      "restoredReady": {
+        "patterns": ["<regex that matches only the empty input box after a restore>"]
+      },
+      "supports": {
+        "chat_steer": "no"
+      },
+      "hooks": {
+        "file": ".my-agent/hooks.json",
+        "contains": ["hooks my-agent"]
+      }
+    }
+  }
+}

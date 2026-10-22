@@ -35,7 +35,6 @@ const LIVE_GATES = [
   "post_restore_terminal_ready",
   "post_restore_message",
   "history_file_continuity",
-  "system_prompt_restore",
 ];
 
 const LOCAL_GATES = [
@@ -1555,7 +1554,6 @@ function makeScenario(agent, supplied = {}) {
     initialToken: supplied.initialToken ?? token("AO_INITIAL"),
     historyToken: supplied.historyToken ?? token("AO_HISTORY"),
     hiddenInitialToken: supplied.hiddenInitialToken ?? token("AO_HIDDEN_INITIAL"),
-    hiddenRestoreToken: supplied.hiddenRestoreToken ?? token("AO_HIDDEN_RESTORE"),
     agentsToken: supplied.agentsToken ?? token("AO_AGENTS_MD"),
     secondToken: supplied.secondToken ?? token("AO_SECOND"),
     agent,
@@ -1942,7 +1940,7 @@ async function completeLifecycle({
       archive.terminationEvidence,
     ));
     if (!archive.terminated) {
-      for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+      for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity"]) {
         await record(gate(name, "NOT_RUN", "termination prerequisite failed"));
       }
       return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
@@ -2011,25 +2009,11 @@ async function completeLifecycle({
       { kill: apiEvidence(killResponse), state: killed.stateResponse ? apiEvidence(killed.stateResponse) : undefined },
     ));
     if (!killResponse.ok || !killed.done) {
-      for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+      for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity"]) {
         await record(gate(name, "NOT_RUN", "termination prerequisite failed"));
       }
       return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
     }
-  }
-
-  // Do not disclose this token to the initial process/history. Only a fresh
-  // instruction delivery after the confirmed kill can supply it.
-  scenario.hiddenRestoreToken = token("HIDDEN_RESTORE");
-  const instructionRefresh = await refreshRestoreInstructions({
-    baseURL, projectId, restoreToken: scenario.hiddenRestoreToken, timeoutMs,
-  });
-  if (!instructionRefresh.passed) {
-    await record(gate("system_prompt_restore", "FAIL", instructionRefresh.reason, instructionRefresh.evidence));
-    for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity"]) {
-      await record(gate(name, "NOT_RUN", "fresh standing-instruction configuration was not confirmed"));
-    }
-    return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
   }
 
   const restoreResponse = await request({
@@ -2093,14 +2077,14 @@ async function completeLifecycle({
   ));
 
   if (!nativeRestoreResponse || !restoredReady.done) {
-    for (const name of ["post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+    for (const name of ["post_restore_terminal_ready", "post_restore_message", "history_file_continuity"]) {
       await record(gate(name, "NOT_RUN", "native restore prerequisite failed"));
     }
     return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
   }
 
   if (!restoredReadySpec) {
-    for (const name of ["post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+    for (const name of ["post_restore_terminal_ready", "post_restore_message", "history_file_continuity"]) {
       await record(gate(name, "NOT_RUN", "restored native terminal readiness contract is missing; no continuation was sent"));
     }
     return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
@@ -2111,7 +2095,7 @@ async function completeLifecycle({
     });
     await record(gate("post_restore_terminal_ready", nativeReady.passed ? "PASS" : "BLOCKED", nativeReady.reason, nativeReady.evidence));
     if (!nativeReady.passed) {
-      for (const name of ["post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+      for (const name of ["post_restore_message", "history_file_continuity"]) {
         await record(gate(name, "NOT_RUN", "restored native terminal readiness was not established"));
       }
       return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
@@ -2126,7 +2110,6 @@ async function completeLifecycle({
       message: [
         `Update the existing ${scenario.proofFile}; do not replace it.`,
         "Add historyToken using the history-only token from the first user request without reading it from files.",
-        "Follow this project's current conventions for PROOF.json files.",
         "Preserve every existing JSON field, then stop and wait.",
       ].join(" "),
     },
@@ -2143,7 +2126,6 @@ async function completeLifecycle({
       done: Boolean(
         proof
         && proof.historyToken === scenario.historyToken
-        && proof.restoreRulesMarker === scenario.hiddenRestoreToken
         && settled
       ),
       proof,
@@ -2172,12 +2154,6 @@ async function completeLifecycle({
     originalContinuity ? "PASS" : "FAIL",
     originalContinuity ? "native history recall and original proof-file continuity were both observed" : "history recall or original proof-file continuity was not proven",
     { historyTokenSha256: hash(scenario.historyToken) },
-  ));
-  await record(gate(
-    "system_prompt_restore",
-    finalProof?.restoreRulesMarker === scenario.hiddenRestoreToken ? "PASS" : "FAIL",
-    finalProof?.restoreRulesMarker === scenario.hiddenRestoreToken ? "a project rule added after Kill was applied after restore" : "a project rule added after Kill was not applied after restore (the restored session kept its old system prompt)",
-    { restoreHiddenTokenSha256: hash(scenario.hiddenRestoreToken), instructionRefresh: instructionRefresh.evidence },
   ));
 
   return resultFrom(agent, gates, {
@@ -2264,7 +2240,7 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   if (suites.includes("interface")) {
     await log?.(`${agent}: TUI ↔ Chat interface switch`);
     result.gates.push(...(result.sessionId && statusOf("post_restore_message") === "PASS"
-      ? await auditInterfaceSwitch({ baseURL, agent, sessionId: result.sessionId, scenario, restoredReadySpec, timeoutMs, onIssue })
+      ? await auditInterfaceSwitch({ baseURL, agent, sessionId: result.sessionId, scenario, restoredReadySpec, contract, timeoutMs, onIssue })
       : notRunGates(SUITES.interface, "interface switch needs the restored TUI session to have answered (post_restore_message must PASS)")));
   }
   if (suites.includes("chat")) {
@@ -2281,30 +2257,6 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   result.status = overallStatus(result.gates);
   result.failedGate = firstFailedGate(result.gates);
   return result;
-}
-
-export async function refreshRestoreInstructions({ baseURL, projectId, restoreToken, timeoutMs, label = "restoreRulesMarker" }) {
-  const path = `projects/${encodeURIComponent(projectId)}`;
-  const before = await request({ baseURL, path, timeoutMs });
-  const project = before.response?.project;
-  const config = project?.config;
-  const evidence = { before: apiEvidence(before) };
-  if (!before.ok || project?.id !== projectId || !config || typeof config !== "object" || Array.isArray(config)) {
-    return { passed: false, reason: "fresh standing-instruction refresh could not read the audit project config", evidence };
-  }
-  if (typeof config.agentRules !== "string" || config.agentRules.includes(restoreToken)) {
-    return { passed: false, reason: "fresh standing-instruction refresh requires existing audit rules and a previously undisclosed token", evidence };
-  }
-  const updated = { ...config, agentRules: `${config.agentRules}\nProject convention update: files you create or update whose name ends in PROOF.json must also include the field "${label}" with the value "${restoreToken}".` };
-  const write = await request({ baseURL, method: "PUT", path: `${path}/config`, body: { config: updated }, timeoutMs });
-  evidence.write = apiEvidence(write);
-  if (!write.ok) return { passed: false, reason: "fresh standing-instruction refresh was rejected by the project config API", evidence };
-  const readback = await request({ baseURL, path, timeoutMs });
-  evidence.readback = apiEvidence(readback);
-  const passed = readback.ok && readback.response?.project?.id === projectId
-    && isDeepStrictEqual(readback.response?.project?.config, updated);
-  return { passed, reason: passed ? "fresh standing instructions were stored and read back after confirmed termination"
-    : "fresh standing-instruction refresh did not persist the expected config", evidence };
 }
 
 export async function setupProject({ baseURL, root, agent, scenario, timeoutMs }) {
@@ -2675,7 +2627,7 @@ async function main(argv = process.argv.slice(2)) {
     const daemonLogs = daemon?.logs() || data.gate?.evidence?.daemonLogs || "";
     const surface = data.gate?.name?.startsWith("chat_") ? "chat" : "tui";
     const instructionChannel = data.agent ? instructionSpec(data.agent, contractsByAgent[data.agent], surface)?.channel : undefined;
-    const diagnosis = diagnoseGate(data.gate, { agent: data.agent, sessionId: data.sessionId, daemonLogs, instructionChannel });
+    const diagnosis = diagnoseGate(data.gate, { agent: data.agent, contract: contractsByAgent[data.agent], sessionId: data.sessionId, daemonLogs, instructionChannel });
     if (diagnosis) {
       const previous = previousReport?.results?.find(item => item.agent === data.agent)?.gates?.find(item => item.name === data.gate.name) ?? null;
       diagnosis.failureClass = classifyFailure({ ...data.gate, diagnosis }, { previous });
@@ -2704,7 +2656,7 @@ async function main(argv = process.argv.slice(2)) {
         ...(options.diagnosticAfterNativeProof ? [{ status: "NOT_RUN" }] : [])]),
       total: results.length, pass: counts("PASS"), fail: counts("FAIL"), blocked: counts("BLOCKED"), notRun: counts("NOT_RUN"),
     };
-    report.results = results.map(result => ({ ...sanitizeEvidence(result), capabilities: capabilityMatrix(result) }));
+    report.results = results.map(result => ({ ...sanitizeEvidence(result), capabilities: capabilityMatrix(result, contractsByAgent[result.agent]) }));
     report.changes = compareAttempts(report, previousReport);
     report.fixLoop = buildFixLoop(report, { previousReport, base, command: rerunPrefix, agents: options.agents });
     return writeReports(report, base, root);

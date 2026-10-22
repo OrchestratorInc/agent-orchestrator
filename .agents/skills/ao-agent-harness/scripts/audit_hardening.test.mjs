@@ -44,7 +44,7 @@ test("host preflight fails fast on a socket path that cannot fit and reports mis
 test("scratch project has origin/HEAD so spawn cannot fail with DEFAULT_BRANCH_UNRESOLVED (Pool)", async () => {
   const root = mkdtempSync(join(tmpdir(), "ao-origin-"));
   const result = await withFetch((url, options, body) => json(201, { project: { id: body.projectId } }), (baseURL) => setupProject({
-    baseURL, root, agent: "example", timeoutMs: 10_000, scenario: { agentsToken: "a", hiddenInitialToken: "h", hiddenRestoreToken: "r" },
+    baseURL, root, agent: "example", timeoutMs: 10_000, scenario: { agentsToken: "a", hiddenInitialToken: "h" },
   }));
   assert.equal(result.ok, true);
   const head = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { cwd: result.projectPath, encoding: "utf8" }).trim();

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Local launcher for the AO harness audit. Picks Node 24+, finds the AO
-# checkout, uses the bundled Codex/Claude contract and gives every attempt a
-# fresh report basename outside any Git checkout.
+# checkout, reads the harness contracts (assets/local-contracts.json: one entry
+# per integrated harness) and gives every attempt a fresh report basename
+# outside any Git checkout. With no agent named, every harness in the contract
+# file is audited.
 #
-#   scripts/run_local.sh doctor                   # show Node, AO checkout freshness, CLIs and logins
+#   scripts/run_local.sh doctor [agent...]        # show Node, AO checkout freshness, each harness CLI and login
 #   scripts/run_local.sh fixtures                 # offline fixture tests, no provider calls
 #   scripts/run_local.sh check [agent...]         # build AO + safe probes, no provider turns (--no-live)
 #   scripts/run_local.sh audit [agent...]         # full live audit (makes provider calls)
@@ -21,8 +23,7 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Optional per-copy settings (e.g. AO_REPO=/path/to/fresh/checkout).
 [[ -f "$SKILL_DIR/local.env" ]] && source "$SKILL_DIR/local.env"
 REPORTS="${AO_AUDIT_REPORTS:-$HOME/Desktop/agents/ao-audit-reports}"
-CONTRACT="${AO_AUDIT_CONTRACT:-$SKILL_DIR/assets/local-contract.codex-claude.json}"
-DEFAULT_AGENTS=(codex claude-code)
+CONTRACT="${AO_AUDIT_CONTRACT:-$SKILL_DIR/assets/local-contracts.json}"
 
 die() { echo "error: $*" >&2; exit 2; }
 
@@ -68,9 +69,14 @@ latest_report() {
   ls -t "$REPORTS"/*.json 2>/dev/null | grep -v -e '\.next-actions\.json$' | head -1 || true
 }
 
+contract_agents() {
+  "$NODE_BIN" -e 'console.log(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).agents).join(" "))' "$CONTRACT"
+}
+
 agent_flags() {
   local agent
-  (( $# )) || set -- "${DEFAULT_AGENTS[@]}"
+  # shellcheck disable=SC2046
+  (( $# )) || set -- $(contract_agents)
   for agent in "$@"; do printf -- '--agent %s ' "$agent"; done
 }
 
@@ -83,15 +89,30 @@ case "$mode" in
     echo "Contract: $CONTRACT"
     echo "Reports: $REPORTS"
     REPO="$(find_repo)"
-    for tool in git sqlite3 codex claude; do
+    for tool in git sqlite3; do
       printf '  %-8s %s\n' "$tool" "$(command -v "$tool" >/dev/null && { "$tool" --version 2>&1 | head -1; } || echo MISSING)"
     done
     # GOTOOLCHAIN=local: report what is installed without downloading the
     # toolchain the checkout asks for (the AO build itself may download it).
     printf '  %-8s %s (checkout needs %s)\n' go "$(command -v go >/dev/null && (cd "$HOME" && GOTOOLCHAIN=local go version 2>&1 | head -1) || echo MISSING)" \
       "$(grep -m1 -E '^(go|toolchain) ' "$REPO/backend/go.mod" 2>/dev/null || echo unknown)"
-    printf '  codex login:  %s\n' "$(codex login status 2>&1 | head -1 | sed -E 's/[[:alnum:]._%+-]+@[[:alnum:].-]+/[email]/g')"
-    printf '  claude login: %s\n' "$(claude auth status 2>&1 | grep -o '"loggedIn": *[a-z]*' || echo unknown)"
+    # Each harness: its binary, version and login check, all from its contract.
+    # shellcheck disable=SC2046
+    (( $# )) || set -- $(contract_agents)
+    "$NODE_BIN" -e '
+      const { spawnSync } = require("child_process");
+      const agents = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).agents;
+      // CLIs print status to stdout or stderr; read both, null when the binary is missing.
+      const run = (bin, args) => { const out = spawnSync(bin, args, { encoding: "utf8", timeout: 15000 }); return out.error ? null : `${out.stdout}${out.stderr}`; };
+      for (const id of process.argv.slice(2)) {
+        const contract = agents[id];
+        if (!contract) { console.log(`  ${id}: not in the contract file (copy assets/contract-template.json)`); continue; }
+        const version = run(contract.binary, contract.versionArgs ?? ["--version"]);
+        const login = contract.integration ? run(contract.binary, contract.integration.args) : null;
+        const loggedIn = login === null ? "unknown" : login.includes(contract.integration.expect) ? "logged in" : "NOT logged in";
+        console.log(`  ${id}: ${version === null ? `MISSING (${contract.binary})` : version.trim().split("\n")[0]} · ${contract.integration ? loggedIn : "no login check declared"}`);
+      }
+    ' "$CONTRACT" "$@"
     ;;
   fixtures)
     REPO="$(find_repo)"

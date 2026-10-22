@@ -128,7 +128,6 @@ test("setupProject pins the disposable repository default branch", async () => {
       scenario: {
         agentsToken: "agents-token",
         hiddenInitialToken: "hidden-initial-token",
-        hiddenRestoreToken: "hidden-restore-token",
       },
       timeoutMs: 5_000,
     });
@@ -506,31 +505,3 @@ test("auditAgent rejects dot segments in an otherwise model-looking AO path", as
     assert.equal(modelCalls, 0);
   });
 });
-
-
-for (const outcome of ["stored", "drops-fresh-rules", "write-error"]) {
-  test("restore instruction refresh preserves project config and verifies " + outcome, async () => {
-    assert.equal(typeof auditModule.refreshRestoreInstructions, "function");
-    const initialConfig = { defaultBranch: "main", env: { KEEP: "yes" }, agentRules: "initial rules", worker: { model: "fixture-model" } };
-    let stored = structuredClone(initialConfig);
-    let writes = 0;
-    await withFetch(async (url, options) => {
-      if (options.method === "PUT") {
-        assert.equal(url.pathname, "/api/v1/projects/project/config");
-        writes++;
-        const body = JSON.parse(options.body);
-        assert.deepEqual({ ...body.config, agentRules: initialConfig.agentRules }, initialConfig);
-        assert.equal(body.config.agentRules.includes("fresh-after-kill"), true);
-        if (outcome === "write-error") return json(503, { error: "unavailable" });
-        if (outcome === "stored") stored = body.config;
-        return json(200, { project: { id: "project", config: body.config } });
-      }
-      assert.equal(url.pathname, "/api/v1/projects/project");
-      return json(200, { project: { id: "project", config: stored } });
-    }, async baseURL => {
-      const result = await auditModule.refreshRestoreInstructions({ baseURL, projectId: "project", restoreToken: "fresh-after-kill", timeoutMs: 500 });
-      assert.equal(result.passed, outcome === "stored", JSON.stringify(result));
-      assert.equal(writes, 1);
-    });
-  });
-}

@@ -1,8 +1,8 @@
 # Capability suites, matrix and failure diagnosis
 
-After the TUI lifecycle, the runner drives every AO capability that Codex and
-Claude Code declare and that can be proven through the loopback API without
-human input. Each run's report gets a **capability matrix** per agent. Each
+After the TUI lifecycle, the runner drives every AO capability that can be
+proven through the loopback API without human input, for whichever harness it
+is given. Each run's report gets a **capability matrix** per agent. Each
 failed or blocked gate also gets a **diagnosis** that tells you where to start
 fixing it. The catalog lives in
 [`scripts/audit_capabilities.mjs`](../scripts/audit_capabilities.mjs), and the
@@ -17,7 +17,7 @@ are recorded as `NOT_RUN` with the prerequisite that stopped them.
 
 | Suite | Session | Gates | What proves it |
 | --- | --- | --- | --- |
-| `extras` | The lifecycle's TUI session; no provider turn | `ao_models_refresh`, `model_efforts`, `tui_system_prompt_file`, `instruction_channel`, `instruction_channel_restore`, `ao_skill_pointer`, `tui_hooks_installed`, `tui_usage_recorded` | Catalog refresh returns models with valid `efforts`/`defaultEffort`. `<data>/prompts/<id>/system.md` carries the project agentRules token. `<data>/skills/using-ao/SKILL.md` exists and `system.md` points at it. Claude's worktree `.claude/settings.local.json` wires `ao hooks claude-code`; for Codex (hooks are launch `-c` flags), the hook-delivered native id is persisted. `GET /usage/sessions/{id}` reports tokens. |
+| `extras` | The lifecycle's TUI session; no provider turn | `ao_models_refresh`, `model_efforts`, `tui_system_prompt_file`, `instruction_channel`, `ao_skill_pointer`, `tui_hooks_installed`, `tui_usage_recorded` | Catalog refresh returns models with valid `efforts`/`defaultEffort`. `<data>/prompts/<id>/system.md` carries the project agentRules token. `<data>/skills/using-ao/SKILL.md` exists and `system.md` points at it. Claude's worktree `.claude/settings.local.json` wires `ao hooks claude-code`; for Codex (hooks are launch `-c` flags), the hook-delivered native id is persisted. `GET /usage/sessions/{id}` reports tokens. |
 | `interface` | The restored TUI session, after `post_restore_message` passes | `iface_status`, `iface_tui_to_chat`, `iface_chat_continuation`, `iface_chat_to_tui`, `iface_tui_continuation` | `GET /sessions/{id}/interface-transition` offers Chat. A `drain` transition reaches `phase: completed` with `session.mode: chat`. The first Chat turn recalls the TUI history-only token. Switching back reaches `mode: tui`. After the native ready cue, the TUI keeps the Chat edits and answers. |
 | `roles` | A standalone worker and a project orchestrator | `role_worker`, `role_orchestrator` | Each session answers "Are you a worker or an orchestrator?" with its own role, written to `AO_ROLE.txt`, from AO's system prompt alone (V1 system prompt check). |
 | `chat` | A new `mode: chat` session in the same project | see below | Conversation snapshot, proof file in the Chat worktree, sqlite `sessions.provider_conversation_id`, and the cancellation process witness. |
@@ -33,7 +33,7 @@ Chat gates, in order:
 7. `chat_steer` proves a steer lands in the running turn. Without the `steer` capability, AO must refuse the steer.
 8. `chat_interrupt` and `chat_post_interrupt_continuation` use the same PID and kernel-start witness as TUI cancellation. They prove the turn ended `interrupted`/`cancelled`, no late side effect appeared, and the next turn works.
 9. `chat_approval_reject` and `chat_approval_approve` run with `accept-edits`. They prove a pending approval appears, the offered reject/allow decision is delivered, the side effect matches the decision, and nothing ran before the decision. Approval mode returns to bypass afterwards.
-10. `chat_kill`, `chat_restore` and `chat_restore_continuation` prove the same `provider_conversation_id` before and after restore, and that the restored Chat recalls the history-only token. `chat_system_prompt_restore` writes new standing instructions after Kill and requires the restored conversation to use them, not the old prompt replayed from history.
+10. `chat_kill`, `chat_restore` and `chat_restore_continuation` prove the same `provider_conversation_id` before and after restore, and that the restored Chat recalls the history-only token.
 11. `chat_compact` proves `compactedAt` appears and the conversation still answers.
 
 ## Statuses
@@ -50,7 +50,7 @@ Capabilities the runner deliberately does not drive appear in the matrix as
 `MANUAL`, each with its reason and where to verify it:
 
 - in-page install
-- login and Codex accounts
+- login and multiple accounts
 - reviewer
 - attachments and images
 - rollback, fork and edit
@@ -76,7 +76,7 @@ codex: chat_interrupt FAIL — [Chat interrupt of an active tool command] — ex
 | `expected` | What the gate requires |
 | `observed` | The gate reason plus each API call (`METHOD path → HTTP status CODE: message`) and command outcome found in its evidence |
 | `likelyCauses` | Known failure modes for this gate, most likely first |
-| `inspect` | AO source files to open first, expanded for the harness (`claudecode`/`claudeacp`, `codex`/`codexappserver`) |
+| `inspect` | AO source files to open first, expanded for the harness from its contract's `adapters` (or guessed from the agent ID) |
 | `daemonLogExcerpt` | Up to 25 daemon log lines that look like errors and name the session or agent, or else the most recent error lines |
 
 `report.md` repeats this under **Failure diagnosis**, and shows the capability
@@ -87,9 +87,11 @@ matrix first in each agent's section.
 When an adapter, driver or route moves, update its `inspect` paths.
 `audit_capabilities.test.mjs` fails when a path no longer exists, and
 `audit_suites.test.mjs` drives each suite against a fake daemon. When AO adds
-a capability for Codex or Claude, take these steps:
+a capability, take these steps:
 
-1. Add a catalog row with its gates.
+1. Add a catalog row with its gates and whether every harness owes it
+   (`required`) or it depends on the CLI (`optional`). Never key support on a
+   harness ID; a harness that differs says so in its contract's `supports`.
 2. Add the gate hints (expected and causes).
 3. Add the suite step that collects positive evidence.
 4. Add a fixture for its failure path.

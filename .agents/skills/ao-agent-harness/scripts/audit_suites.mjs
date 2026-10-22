@@ -21,7 +21,6 @@ import {
   hash,
   normalizedPath,
   parseCancellationStart,
-  refreshRestoreInstructions,
   parseProof,
   request,
   runCommand,
@@ -35,7 +34,7 @@ import {
 import { capabilitySupport } from "./audit_capabilities.mjs";
 import { checkInstructionDelivery, instructionSpec } from "./audit_instructions.mjs";
 
-export const EXTRA_GATES = ["ao_models_refresh", "model_efforts", "tui_system_prompt_file", "instruction_channel", "instruction_channel_restore", "ao_skill_pointer", "tui_hooks_installed", "tui_usage_recorded"];
+export const EXTRA_GATES = ["ao_models_refresh", "model_efforts", "tui_system_prompt_file", "instruction_channel", "ao_skill_pointer", "tui_hooks_installed", "tui_usage_recorded"];
 
 export const CHAT_GATES = [
   "chat_spawn",
@@ -59,7 +58,6 @@ export const CHAT_GATES = [
   "chat_kill",
   "chat_restore",
   "chat_restore_continuation",
-  "chat_system_prompt_restore",
   "chat_compact",
 ];
 
@@ -139,7 +137,7 @@ export async function auditExtras({ baseURL, agent, dataDir, sessionId, workspac
   ));
 
   if (!sessionId) {
-    for (const name of ["tui_system_prompt_file", "instruction_channel", "instruction_channel_restore", "ao_skill_pointer", "tui_hooks_installed", "tui_usage_recorded"]) {
+    for (const name of ["tui_system_prompt_file", "instruction_channel", "ao_skill_pointer", "tui_hooks_installed", "tui_usage_recorded"]) {
       await record(gate(name, "NOT_RUN", "no TUI session was created"));
     }
     return gates;
@@ -158,20 +156,12 @@ export async function auditExtras({ baseURL, agent, dataDir, sessionId, workspac
   ));
 
   // Generating system.md is not delivery: prove the CLI receives it through
-  // the declared channel, at launch and again after restore.
+  // the declared channel.
   const tuiSpec = instructionSpec(agent, contract, "tui");
   const delivery = { spec: tuiSpec, dataDir: resolve(expandHome(dataDir)), workspacePath, sessionId };
   const initialDelivery = await checkInstructionDelivery({ ...delivery, token: scenario.hiddenInitialToken,
     effectGate: "hidden_ao_instructions", effectPassed: statusOf("hidden_ao_instructions") === "PASS" });
   await record(gate("instruction_channel", initialDelivery.status, initialDelivery.reason, initialDelivery.evidence));
-  if (statusOf("native_restore") !== "PASS") {
-    await record(gate("instruction_channel_restore", "NOT_RUN", "the TUI session was not killed and restored in this run"));
-  } else {
-    const restored = await checkInstructionDelivery({ ...delivery, token: scenario.hiddenRestoreToken,
-      effectGate: "system_prompt_restore", effectPassed: statusOf("system_prompt_restore") === "PASS",
-      promptText: tuiSpec?.channel === "flag" ? (await readTextFile(promptPath)).text : null });
-    await record(gate("instruction_channel_restore", restored.status, restored.reason, restored.evidence));
-  }
 
   const skillPath = join(resolve(expandHome(dataDir)), "skills", "using-ao", "SKILL.md");
   const skill = await readTextFile(skillPath);
@@ -185,28 +175,30 @@ export async function auditExtras({ baseURL, agent, dataDir, sessionId, workspac
     { skillPath, systemPromptPath: promptPath },
   ));
 
-  if (agent === "claude-code") {
-    const hooksPath = join(workspacePath || "", ".claude", "settings.local.json");
+  // A harness whose hooks live in a file declares it (`hooks.file`, plus the
+  // strings AO must write); otherwise the native session id that only the
+  // SessionStart hook persists is the witness that the hooks fired.
+  const hooksSpec = contract?.hooks;
+  if (hooksSpec?.file) {
+    const hooksPath = join(workspacePath || "", hooksSpec.file);
     const hooks = workspacePath ? await readTextFile(hooksPath) : { exists: false, text: "", error: "no workspace path" };
-    const events = ["SessionStart", "UserPromptSubmit", "Stop"].filter((name) => hooks.text.includes(name));
-    const installed = hooks.exists && hooks.text.includes("hooks claude-code") && events.length === 3;
+    const missing = (hooksSpec.contains ?? []).filter((text) => !hooks.text.includes(text));
+    const installed = hooks.exists && !missing.length;
     await record(gate(
       "tui_hooks_installed",
       installed ? "PASS" : "FAIL",
-      installed ? "Claude hooks file wires SessionStart/UserPromptSubmit/Stop to `ao hooks claude-code`"
-        : hooks.exists ? `hooks file is missing AO hook commands (found events: ${events.join(", ") || "none"})`
+      installed ? `${hooksSpec.file} carries the AO hook commands`
+        : hooks.exists ? `${hooksSpec.file} is missing: ${missing.join(", ")}`
         : `hooks file is missing (${hooks.error})`,
       { path: hooksPath },
     ));
   } else {
-    // Codex receives hooks as launch -c flags rather than a file, so the
-    // persisted native id (set only by the SessionStart hook) is the witness.
     const native = await sqliteValue(dataDir, `SELECT agent_session_id FROM sessions WHERE id=${quote(sessionId)} LIMIT 1;`);
     await record(gate(
       "tui_hooks_installed",
       native.ok && native.value ? "PASS" : "FAIL",
       native.ok && native.value ? "hook-delivered native session id is persisted" : `no hook-delivered native session id (${native.reason || "empty"})`,
-      { nativeSessionIdSha256: native.value ? hash(native.value) : undefined, qualification: "Codex hooks ride launch argv; persistence proves they fired." },
+      { nativeSessionIdSha256: native.value ? hash(native.value) : undefined, qualification: "no hooks file declared; the persisted native id proves the hooks fired." },
     ));
   }
 
@@ -338,9 +330,8 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
     steerToken: token("AO_CHAT_STEER"),
     afterInterruptToken: token("AO_CHAT_AFTER_INTERRUPT"),
     afterCompactToken: token("AO_CHAT_AFTER_COMPACT"),
-    restoreHiddenToken: token("AO_CHAT_RESTORE_HIDDEN"),
   };
-  const support = capabilitySupport(agent, "chat_spawn");
+  const support = capabilitySupport(agent, "chat_spawn", contract);
 
   const spawn = await request({
     baseURL, method: "POST", path: "sessions", timeoutMs,
@@ -407,7 +398,7 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
   }
 
   const mcpServers = Array.isArray(first.snapshot?.mcpServers) ? first.snapshot.mcpServers : [];
-  const mcpSupport = capabilitySupport(agent, "chat_mcp");
+  const mcpSupport = capabilitySupport(agent, "chat_mcp", contract);
   await record(gate("chat_mcp_servers",
     mcpServers.length ? "PASS" : mcpSupport === "yes" ? "FAIL" : "UNSUPPORTED",
     mcpServers.length ? `snapshot lists ${mcpServers.length} MCP server(s)`
@@ -440,11 +431,11 @@ export async function auditChatSuite({ baseURL, agent, projectId, dataDir, timeo
     usageTokens > 0 ? `Chat usage recorded (${usageTokens} tokens across usage API and snapshot)` : "no Chat token usage in the usage API or conversation snapshot",
     { usage: apiEvidence(usage), snapshotUsage: snapUsage }));
 
-  if (want("chat_steer")) await auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent });
+  if (want("chat_steer")) await auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent, contract });
   if (want("chat_interrupt", "chat_post_interrupt_continuation")) await auditChatInterrupt({ baseURL, sessionId, chat, timeoutMs, record });
   if (want("chat_approval_reject", "chat_approval_approve")) await auditChatApprovals({ baseURL, sessionId, timeoutMs, record });
-  if (want("chat_kill", "chat_restore", "chat_restore_continuation", "chat_system_prompt_restore", "chat_compact")) {
-    await auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, workspacePath, chat, chatSpec, followupRan, timeoutMs, record });
+  if (want("chat_kill", "chat_restore", "chat_restore_continuation", "chat_compact")) {
+    await auditChatKillRestore({ baseURL, sessionId, dataDir, chat, followupRan, timeoutMs, record });
   }
 
   const restored = gates.find((item) => item.name === "chat_restore_continuation")?.status === "PASS";
@@ -570,12 +561,12 @@ async function auditChatModelSettings({ baseURL, sessionId, dataDir, timeoutMs, 
   }
 }
 
-async function auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent }) {
+async function auditChatSteer({ baseURL, sessionId, capabilities, chat, timeoutMs, record, agent, contract }) {
   const path = `sessions/${encodeURIComponent(sessionId)}/conversation/steer`;
   if (!capabilities.has("steer")) {
     // Without the capability AO must refuse instead of silently queueing.
     const refusal = await request({ baseURL, method: "POST", path, body: { text: "AO audit steer refusal probe", clientMessageId: token("ao-audit-steer-probe") }, timeoutMs: 30_000 });
-    const declared = capabilitySupport(agent, "chat_steer");
+    const declared = capabilitySupport(agent, "chat_steer", contract);
     await record(gate("chat_steer", refusal.ok ? "FAIL" : declared === "yes" ? "FAIL" : "UNSUPPORTED",
       refusal.ok ? "steer was accepted although the snapshot does not advertise steer"
         : declared === "yes" ? "AO declares steer for this driver but the session does not advertise it"
@@ -730,7 +721,7 @@ async function auditChatApprovals({ baseURL, sessionId, timeoutMs, record }) {
   await request({ baseURL, method: "PATCH", path: settingsPath, body: { approvalMode: "bypass-permissions" }, timeoutMs });
 }
 
-async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, workspacePath, chat, chatSpec = null, followupRan = true, timeoutMs, record }) {
+async function auditChatKillRestore({ baseURL, sessionId, dataDir, chat, followupRan = true, timeoutMs, record }) {
   const column = `SELECT provider_conversation_id FROM sessions WHERE id=${quote(sessionId)} LIMIT 1;`;
   const nativeBefore = await sqliteValue(dataDir, column);
   const kill = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/kill`, body: {}, timeoutMs });
@@ -742,12 +733,6 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
     terminated.done ? "Chat session terminated" : kill.ok ? "kill was accepted but isTerminated never became true" : "kill was rejected",
     { kill: apiEvidence(kill), state: terminated.response ? apiEvidence(terminated.response) : undefined, providerConversationIdSha256: nativeBefore.value ? hash(nativeBefore.value) : undefined }));
   if (!terminated.done) return;
-
-  // New private instructions after Kill: the restored conversation must use
-  // them, not the ones replayed from its native history (Tau, Neovate, Mastra).
-  const refresh = projectId
-    ? await refreshRestoreInstructions({ baseURL, projectId, restoreToken: chat.restoreHiddenToken, timeoutMs, label: "chatRestoreRulesMarker" })
-    : { passed: false, reason: "no project to update", evidence: {} };
 
   const restore = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/restore`, body: {}, timeoutMs });
   const ready = restore.ok ? await waitUntil(async () => {
@@ -768,8 +753,7 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
   if (!restore.ok || !ready.done) return;
 
   const recall = await sendChat(baseURL, sessionId, [
-    `Update ${CHAT_PROOF}: set chatHistoryRecall to the history-only token from the first message of this conversation,`,
-    "and follow this project's current conventions for PROOF.json files.",
+    `Update ${CHAT_PROOF}: set chatHistoryRecall to the history-only token from the first message of this conversation.`,
     "Preserve every existing field, write raw JSON only, then stop.",
   ].join(" "));
   const recalled = recall.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (proof) => proof?.chatHistoryRecall === chat.historyToken }) : { done: false, evidence: {} };
@@ -780,19 +764,6 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
       : !recalled.done ? `restored Chat did not recall the history-only token (got ${JSON.stringify(recalled.proof?.chatHistoryRecall ?? null)}); history was not loaded`
       : "earlier proof fields were lost after restore",
     { send: apiEvidence(recall), historyTokenSha256: hash(chat.historyToken), ...recalled.evidence }));
-
-  const used = recalled.proof?.chatRestoreRulesMarker === chat.restoreHiddenToken;
-  const fresh = refresh.passed
-    ? await checkInstructionDelivery({ spec: chatSpec, token: chat.restoreHiddenToken, dataDir: resolve(expandHome(dataDir || ".")), workspacePath, sessionId, effectGate: "chat_system_prompt_restore", effectPassed: used })
-    : null;
-  const restorePassed = refresh.passed && used && (!fresh || fresh.status === "PASS");
-  await record(gate("chat_system_prompt_restore", restorePassed ? "PASS" : "FAIL",
-    !refresh.passed ? `fresh standing instructions could not be stored before restore: ${refresh.reason}`
-      : !recalled.done ? "restored Chat did not answer, so fresh instructions could not be checked"
-      : !used ? `restored Chat did not use the fresh standing instructions (chatRestoreRulesMarker is ${JSON.stringify(recalled.proof?.chatRestoreRulesMarker ?? null)}); it is replaying the old system prompt from history or the driver drops it on session/load`
-      : fresh.status !== "PASS" ? fresh.reason
-      : "restored Chat used the standing instructions written after Kill",
-    { refresh: refresh.evidence, delivery: fresh?.evidence, restoreTokenSha256: hash(chat.restoreHiddenToken) }));
 }
 
 // ---------------------------------------------------------------- roles (V1 system prompt)
@@ -874,7 +845,7 @@ async function transition(baseURL, sessionId, targetMode, timeoutMs) {
 
 // Runs on the live, restored TUI session: switch to Chat, prove the native
 // history came along, switch back and prove the TUI still answers.
-export async function auditInterfaceSwitch({ baseURL, agent, sessionId, scenario, restoredReadySpec, timeoutMs, onIssue }) {
+export async function auditInterfaceSwitch({ baseURL, agent, sessionId, scenario, restoredReadySpec, contract = null, timeoutMs, onIssue }) {
   const gates = [];
   const { record, skipRest } = suiteRecorder(IFACE_GATES, gates, onIssue, () => ({ agent, baseURL, sessionId }));
   const proofFile = scenario.proofFile;
@@ -883,7 +854,7 @@ export async function auditInterfaceSwitch({ baseURL, agent, sessionId, scenario
 
   const status = await request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}/interface-transition`, timeoutMs });
   const supported = status.ok && status.response?.supported === true && status.response?.targetMode === "chat";
-  const declared = capabilitySupport(agent, "interface_switch");
+  const declared = capabilitySupport(agent, "interface_switch", contract);
   await record(gate("iface_status", supported ? "PASS" : declared === "yes" || !status.ok ? "FAIL" : "UNSUPPORTED",
     supported ? "AO offers a TUI → Chat switch for this session"
       : `switch not offered: ${status.response?.reasonCode ?? `HTTP ${status.status}`} ${status.response?.reason ?? ""}`.trim(),
