@@ -2948,6 +2948,13 @@ export interface components {
                 text: string;
                 /** Format: uuid */
                 turnId?: string;
+                /**
+                 * Format: uuid
+                 * @description The user who sent the message. Absent when an orchestrator, automation, or the agent's own terminal sent it.
+                 */
+                authorUserId?: string;
+                /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
+                authorName?: string;
             };
             /** Format: date-time */
             createdAt: string;
