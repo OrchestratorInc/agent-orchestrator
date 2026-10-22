@@ -2,6 +2,7 @@ import createClient from "openapi-fetch";
 import type { components, paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
+import { noteCodexAccountsAvailable } from "../hooks/codex-accounts-pause";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
 
@@ -41,6 +42,7 @@ export function setApiBaseUrl(nextBaseUrl: string | null): void {
 	const normalized = (nextBaseUrl ?? explicitApiBaseUrl ?? null)?.replace(/\/+$/, "") ?? null;
 	if (normalized === runtimeApiBaseUrl) return;
 	runtimeApiBaseUrl = normalized;
+	if (normalized) noteCodexAccountsAvailable();
 	baseUrlListeners.forEach((listener) => listener());
 }
 

@@ -1,8 +1,11 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { codexAccountsPollPaused, noteCodexAccountsAvailable, noteCodexAccountsUnavailable } from "./codex-accounts-pause";
 import { codexAccountsQueryKey, mergeCodexAccounts, writeCodexAccounts } from "./codex-accounts-state";
+
+export { codexAccountsPollPaused, noteCodexAccountsAvailable } from "./codex-accounts-pause";
 
 export { codexAccountsQueryKey } from "./codex-accounts-state";
 
@@ -14,28 +17,22 @@ export type CodexActiveLogin = components["schemas"]["CodexActiveLoginResponse"]
 export type CodexAccountSwitch = components["schemas"]["CodexAccountSwitchResponse"];
 
 const CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE = "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE";
-const CODEX_UNAVAILABLE_BACKOFF_MS = [30_000, 120_000, 600_000];
-let codexAccountsPausedUntil = 0;
-let codexBackoffStep = 0;
 
-export function codexAccountsPollPaused(now = Date.now()): boolean {
-	return now < codexAccountsPausedUntil;
+function readApiErrorCode(error: unknown): string | undefined {
+	try {
+		return apiErrorCode(error);
+	} catch {
+		return undefined;
+	}
 }
 
-export function noteCodexAccountsAvailable(): void {
-	codexAccountsPausedUntil = 0;
-	codexBackoffStep = 0;
-}
-
-function noteCodexAccountsUnavailable(now = Date.now()): void {
-	const delay = CODEX_UNAVAILABLE_BACKOFF_MS[Math.min(codexBackoffStep, CODEX_UNAVAILABLE_BACKOFF_MS.length - 1)];
-	codexBackoffStep += 1;
-	codexAccountsPausedUntil = now + delay;
+function codexAccountManagementUnavailable(error: unknown): boolean {
+	return readApiErrorCode(error) === CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE;
 }
 
 function throwCodexRequest(error: unknown): never {
 	const err = new Error(apiErrorMessage(error)) as Error & { code?: string };
-	const code = apiErrorCode(error);
+	const code = readApiErrorCode(error);
 	if (code) err.code = code;
 	throw err;
 }
@@ -137,7 +134,7 @@ export const codexAccountsQueryOptions = {
 		const incoming = await fetchCodexAccounts();
 		return mergeCodexAccounts(client.getQueryData<CodexAccountsResponse>(codexAccountsQueryKey), incoming, "replace");
 	},
-	retry: (failureCount: number, error: unknown) => failureCount < 1 && apiErrorCode(error) !== CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE,
+	retry: (failureCount: number, error: unknown) => failureCount < 1 && !codexAccountManagementUnavailable(error),
 	staleTime: Number.POSITIVE_INFINITY,
 };
 export function useCodexAccountsQuery(enabled = true) { return useQuery({ ...codexAccountsQueryOptions, enabled }); }
@@ -151,15 +148,12 @@ export function useEnsureCodexAccounts(): void {
 			const cached = queryClient.getQueryData(codexAccountsQueryKey);
 			const ready = cached ? Promise.resolve() : queryClient.fetchQuery(codexAccountsQueryOptions).then(() => undefined).catch(() => undefined);
 			void ready.then(() => ensureCodexAccounts()).then((next) => { if (active) writeCodexAccounts(queryClient, next, "replace"); }).catch((error: unknown) => {
-				if (apiErrorCode(error) === CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE) noteCodexAccountsUnavailable();
+				if (codexAccountManagementUnavailable(error)) noteCodexAccountsUnavailable();
 			});
 		};
-		const stopBaseUrl = subscribeApiBaseUrl(() => {
-			if (getApiBaseUrl()) noteCodexAccountsAvailable();
-		});
 		const onFocus = () => ensure();
 		const onVisibility = () => { if (document.visibilityState === "visible") ensure(); };
 		window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onVisibility);
-		return () => { active = false; stopBaseUrl(); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
+		return () => { active = false; window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
 	}, [queryClient]);
 }

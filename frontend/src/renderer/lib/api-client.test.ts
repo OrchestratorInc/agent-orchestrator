@@ -10,6 +10,7 @@ import {
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
 } from "./api-client";
+import { codexAccountsPollPaused, noteCodexAccountsUnavailable } from "../hooks/codex-accounts-pause";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
 
@@ -25,6 +26,13 @@ const captureMock = vi.mocked(captureRendererEvent);
 const sentryCaptureMock = vi.mocked(captureApiErrorToSentry);
 
 describe("apiClient runtime base URL", () => {
+	it("clears the Codex ensure pause when the daemon base URL changes", () => {
+		noteCodexAccountsUnavailable();
+		expect(codexAccountsPollPaused()).toBe(true);
+		setApiBaseUrl("http://127.0.0.1:3999");
+		expect(codexAccountsPollPaused()).toBe(false);
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 		setApiBaseUrl("http://127.0.0.1:3001");

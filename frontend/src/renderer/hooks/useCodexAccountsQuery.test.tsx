@@ -8,8 +8,6 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: () => "request failed",
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
-	getApiBaseUrl: () => "http://127.0.0.1:1",
-	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 import { codexAccountsQueryKey, noteCodexAccountsAvailable, useCodexAccountsQuery, useEnsureCodexAccounts, type CodexAccountsResponse } from "./useCodexAccountsQuery";
