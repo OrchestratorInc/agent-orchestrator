@@ -387,17 +387,16 @@ function NotificationsContent() {
 		haptics.warning();
 		// Drop anything in flight so a page that lands now cannot bring rows back.
 		loadGeneration.current += 1;
-		const targetHostIds = new Set(targets.map(({ feed }) => feed.hostId));
-		updateFeeds((previous) => Object.fromEntries(Object.entries(previous).map(([hostId, feed]) => [hostId, targetHostIds.has(hostId) ? {
-			...feed,
-			items: [],
-			nextCursor: undefined,
-			unreadCount: 0,
-		} : feed])));
+		// Each emptied feed is kept by identity, so a failed clear can put the old
+		// rows back without overwriting anything a reload has written since. The
+		// recovery reload below may fail too, and it keeps whatever feed it finds.
+		const cleared = new Map(targets.map(({ feed }) => [feed.hostId, { ...feed, items: [], nextCursor: undefined, unreadCount: 0 }]));
+		updateFeeds((previous) => Object.fromEntries(Object.entries(previous).map(([hostId, feed]) => [hostId, cleared.get(hostId) ?? feed])));
 		const results = await Promise.allSettled(targets.map(async ({ feed, source }) => {
 			try {
 				await clearAllNotifications(source);
 			} catch (cause) {
+				updateFeeds((previous) => previous[feed.hostId] === cleared.get(feed.hostId) ? { ...previous, [feed.hostId]: feed } : previous);
 				throw new Error(userFacingError(cause, `Couldn't clear notifications on ${feed.hostName}.`));
 			}
 			void refreshHost(feed.hostId);

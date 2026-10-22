@@ -184,6 +184,30 @@ describe("NotificationsScreen", () => {
 		expect(fixtures.refreshHost).toHaveBeenCalledWith("mac");
 	});
 
+	it("restores a machine's rows when its clear fails and the recovery reload fails too", async () => {
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		const titles = () => renderer!.root.findAll((node) => String(node.type) === "Text" && ["First update", "Second update", "Third update"].includes(String(node.props.children))).map((node) => String(node.props.children));
+		expect(titles()).toEqual(["First update", "Second update", "Third update"]);
+
+		fixtures.clearAllNotifications.mockImplementation(async (config: unknown) => {
+			if (config === fixtures.configs.dev) throw new Error("connection lost");
+		});
+		const base = fixtures.getNotifications.getMockImplementation()!;
+		fixtures.getNotifications.mockImplementation(async () => { throw new Error("connection lost"); });
+		try {
+			const header = renderer!.root.findByType("ScreenHeader" as never);
+			act(() => { header.props.right.props.onPress(); });
+			const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
+			await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
+		} finally {
+			fixtures.getNotifications.mockImplementation(base);
+		}
+
+		// Dev's delete failed, so its history is still there; Mac's succeeded.
+		expect(titles()).toEqual(["First update", "Second update"]);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && String(node.props.children) === "Couldn't clear notifications on Dev.")).toHaveLength(1);
+	});
+
 	it("leaves an offline machine's rows alone and says so", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		fixtures.offline.add("mac");
