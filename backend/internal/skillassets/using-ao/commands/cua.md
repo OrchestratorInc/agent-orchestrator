@@ -38,11 +38,11 @@ to see the screen. Other tools print JSON, with screenshots as
 
 In a chat session with computer use on, the same tools are also in your tool
 list from AO's `ao` tool server: `list_windows`, `launch_app`,
-`get_window_state`, `zoom`, `click`, `type_text`, `set_value`, `press_key`,
-`hotkey`, `scroll`, `drag`, `invoke_menu`, and `run_steps`. Call them with
-the same arguments as `ao cua call`; each result is the same text, with the
-screenshot attached as an image instead of a file path. Everything below
-applies to both.
+`get_window_state`, `click`, `type_text`, `press_key`, and `run_steps`. Run
+`hotkey`, `scroll`, `set_value`, and `drag` as `run_steps` steps; its
+description lists their arguments. Call the tools with the same arguments as
+`ao cua call`; each result is the same text, with the screenshot attached as
+an image instead of a file path. Everything below applies to both.
 
 ## Workflow
 

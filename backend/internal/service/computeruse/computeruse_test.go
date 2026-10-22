@@ -825,3 +825,28 @@ func TestAgentToolsReadSchemasFromTheDriver(t *testing.T) {
 		t.Fatalf("second AgentTools() re-described: err=%v, %d calls", err, len(described))
 	}
 }
+
+// Actions reached only as run_steps steps have their arguments listed in
+// run_steps' description, since its schema types a step's args as any object.
+func TestAgentToolsSummarizeStepOnlyArguments(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		switch args[1] {
+		case "run_steps":
+			return []byte("name: run_steps\n\ndescription:\nRun action tools in one call.\n\ninput_schema:\n" + `{"type":"object","properties":{"steps":{"type":"array"}},"required":["steps"]}`), nil, nil
+		case "hotkey":
+			return []byte("name: hotkey\n\ndescription:\nPress a key combination.\n\ninput_schema:\n" + `{"type":"object","properties":{"keys":{"type":"array"},"pid":{"type":"integer"},"element_token":{"type":"string"},"session":{"type":"string"}},"required":["keys"]}`), nil, nil
+		}
+		return nil, []byte("no such tool"), errors.New("exit status 1")
+	}
+	tools, err := newTestService(t, driver, "darwin").AgentTools(context.Background())
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("tools = %+v, err = %v", tools, err)
+	}
+	if want := "Run action tools in one call.\n\nThese actions are run_steps steps only"; !strings.HasPrefix(tools[0].Description, want) {
+		t.Fatalf("description = %q", tools[0].Description)
+	}
+	if !strings.HasSuffix(tools[0].Description, "\n- hotkey: keys*, element_token, pid") {
+		t.Fatalf("description = %q, want hotkey's args without session", tools[0].Description)
+	}
+}

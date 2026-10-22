@@ -3,6 +3,7 @@ package computeruse
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -15,14 +16,18 @@ type AgentTool struct {
 
 // agentToolNames are the driver tools an agent gets as MCP tools: enough to
 // find a window, read it, and act on it. Every tool's definition sits in the
-// agent's context, so the list stays short: click covers double and right
-// clicks, list_windows and launch_app cover list_apps, and tools for
-// recording, configuration, the clipboard, whole-screen capture, scripts, and
-// browsers are left to `ao cua`, or turned off.
+// agent's context on every request, so the list stays short: click covers
+// double and right clicks, run_steps runs the stepToolNames, and tools for
+// zooming, menus, recording, configuration, the clipboard, whole-screen
+// capture, scripts, and browsers are left to `ao cua`, or turned off.
 var agentToolNames = []string{
-	"list_windows", "launch_app", "get_window_state", "zoom", "click", "type_text",
-	"set_value", "press_key", "hotkey", "scroll", "drag", "invoke_menu", "run_steps",
+	"list_windows", "launch_app", "get_window_state", "click", "type_text", "press_key", "run_steps",
 }
+
+// stepToolNames are actions an agent reaches only as run_steps steps. Their
+// arguments are summarized in run_steps' description, since its schema types
+// a step's args as any object.
+var stepToolNames = []string{"hotkey", "scroll", "set_value", "drag"}
 
 // hiddenArguments are inputs AO sets itself (session, screenshot files),
 // refuses (desktop scope), or the driver ignores (capture_mode).
@@ -54,9 +59,13 @@ func (s *Service) AgentTools(ctx context.Context) ([]AgentTool, error) {
 	tools := make([]AgentTool, 0, len(agentToolNames))
 	for _, name := range agentToolNames {
 		tool, ok := s.describeAgentTool(ctx, binary, name)
-		if ok {
-			tools = append(tools, tool)
+		if !ok {
+			continue
 		}
+		if name == "run_steps" {
+			tool.Description += s.stepArguments(ctx, binary)
+		}
+		tools = append(tools, tool)
 	}
 	if len(tools) == 0 {
 		return tools, nil
@@ -88,6 +97,44 @@ func (s *Service) describeAgentTool(ctx context.Context, binary, name string) (A
 	}
 	_, description, _ := strings.Cut(head, "\ndescription:\n")
 	return AgentTool{Name: name, Description: cleanText(description), InputSchema: withoutHiddenArguments(schema)}, true
+}
+
+// stepArguments lists the arguments of the step-only tools, required ones
+// first and marked with *, for run_steps' description.
+func (s *Service) stepArguments(ctx context.Context, binary string) string {
+	lines := []string{}
+	for _, name := range stepToolNames {
+		tool, ok := s.describeAgentTool(ctx, binary, name)
+		if !ok {
+			continue
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]any)
+		required := map[string]bool{}
+		requiredNames := []string{}
+		for _, raw := range asSlice(tool.InputSchema["required"]) {
+			if text, _ := raw.(string); text != "" {
+				required[text] = true
+				requiredNames = append(requiredNames, text+"*")
+			}
+		}
+		optional := []string{}
+		for property := range properties {
+			if !required[property] {
+				optional = append(optional, property)
+			}
+		}
+		sort.Strings(optional)
+		lines = append(lines, "- "+name+": "+strings.Join(append(requiredNames, optional...), ", "))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nThese actions are run_steps steps only, not separate tools; their args (* required; element_token, or pid and window_id, name the target as in click):\n" + strings.Join(lines, "\n")
+}
+
+func asSlice(value any) []any {
+	items, _ := value.([]any)
+	return items
 }
 
 func withoutHiddenArguments(schema map[string]any) map[string]any {
