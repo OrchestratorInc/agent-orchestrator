@@ -557,6 +557,10 @@ function isWorkerUnavailable(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
 }
 
+function isTransportTimeout(error: unknown): boolean {
+	return error instanceof CloudCpError && error.code === "TRANSPORT_TIMEOUT";
+}
+
 export function CloudSessionChatSurface({
 	session,
 	headerActions,
@@ -680,8 +684,11 @@ export function CloudSessionChatSurface({
 		// The session list can still call a worker connected for a few seconds
 		// after it left (a pause), or after a quick pause and resume it never saw.
 		// Keep asking only while it does; once it reports the worker gone, the
-		// query waits for the next connection instead.
-		retry: (_failures, error) => isWorkerUnavailable(error) && liveRef.current.connected && !liveRef.current.terminated,
+		// query waits for the next connection instead. A worker's first catalog
+		// read can outlast one request (it prepares the agent's tools first), so
+		// a timed-out request is asked again a few times before it shows.
+		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
+			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3)),
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
 			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
@@ -843,7 +850,8 @@ export function CloudSessionChatSurface({
 		: workerConnected ? undefined : wakeError;
 	const modelsError = deletedError
 		? deletedError.message
-		: modelsQuery.error instanceof Error && !isWorkerUnavailable(modelsQuery.error)
+		// An error kept from an earlier worker is not this one's.
+		: workerConnected && modelsQuery.error instanceof Error && !isWorkerUnavailable(modelsQuery.error)
 			? `Model choices unavailable: ${modelsQuery.error.message}`
 			: undefined;
 	const workerModels = modelsQuery.data?.models ?? [];
