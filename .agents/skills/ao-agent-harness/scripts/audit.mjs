@@ -361,14 +361,15 @@ async function checkFirstProof(run_, prefix, proof, workspacePath, tokens, evide
 
 // ------------------------------------------------------------------ tui
 
-// Watches the restored terminal through AO's mux until the contract's ready
-// pattern matches: AO's "ready" status alone can come before the CLI shows
-// its input box, and input sent earlier is lost.
+// Reads a session's terminal through AO's mux until every pattern matches the
+// screen or the time is up. With no patterns it just captures the screen,
+// which is the evidence for a prompt that never ran (an auth error, a dialog).
 async function waitTerminalCue(baseURL, state, patterns, timeoutMs) {
   const target = state?.data?.session;
   const id = target?.terminalHandleId;
-  if (!id) return { ok: false, reason: "the restored session has no terminal", screen: "" };
+  if (!id) return { ok: false, reason: "the session has no terminal", screen: "" };
   const regexes = patterns.map((pattern) => new RegExp(pattern));
+  if (!regexes.length) regexes.push(/(?!)/);
   const url = new URL(baseURL);
   url.protocol = "ws:";
   url.pathname = "/mux";
@@ -392,8 +393,9 @@ async function waitTerminalCue(baseURL, state, patterns, timeoutMs) {
 }
 
 async function auditTui(run_, { ao, baseURL, dataDir, projectId, tokens, timeoutMs }) {
+  const model = run_.contract.model ? { model: run_.contract.model } : {};
   const ids = ["tui_spawn", "tui_prompt", "tui_worktree", "tui_system_prompt", "tui_agents_md", "tui_activity", "tui_native_id", "tui_follow_up", "tui_usage", "tui_stop", "tui_restore", "tui_restore_history"];
-  const spawned = await ao.post("sessions", { projectId, kind: "worker", harness: run_.agent, mode: "tui", approvalMode: "bypass-permissions", displayName: `audit-${run_.agent}`, prompt: firstPrompt(PROOF, tokens) });
+  const spawned = await ao.post("sessions", { projectId, kind: "worker", harness: run_.agent, mode: "tui", approvalMode: "bypass-permissions", displayName: `audit-${run_.agent}`, prompt: firstPrompt(PROOF, tokens), ...model });
   const sessionId = spawned.data?.session?.id;
   if (sessionId) run_.sessions.push(sessionId);
   if (!(await run_.add("tui_spawn", spawned.ok && sessionId && spawned.data.session.mode === "tui" ? "PASS" : "FAIL",
@@ -411,6 +413,11 @@ async function auditTui(run_, { ao, baseURL, dataDir, projectId, tokens, timeout
   }, timeoutMs, 2_000);
   await checkFirstProof(run_, "tui", first.proof, workspacePath, tokens, { session: first.state?.data?.session, proof: first.proof });
   if (!first.proof) {
+    // The screen usually says why: an auth error, a model the account cannot
+    // use, a trust or update dialog.
+    const screen = await waitTerminalCue(baseURL, first.state, [], 4_000);
+    await writeFile(run_.checks.at(-1).evidence ?? join(run_.evidenceDir, "tui_prompt-screen.json"), `${redact(JSON.stringify({ session: first.state?.data?.session, screen: screen.screen.split("\n").filter((line) => line.trim()).slice(-40) }, null, 2))}\n`);
+    run_.checks.at(-1).reason += "; the terminal screen is saved in the evidence file";
     const artifacts = join(dataDir, "artifacts", sessionId, PROOF);
     if (await access(artifacts).then(() => true, () => false)) {
       run_.checks.at(-1).reason += `; it was written to the AO artifacts folder instead (${artifacts})`;
@@ -518,7 +525,7 @@ function chatSummary(snapshot) {
 
 async function auditChat(run_, { ao, dataDir, projectId, tokens, timeoutMs }) {
   const ids = ["chat_spawn", "chat_prompt", "chat_worktree", "chat_system_prompt", "chat_agents_md", "chat_follow_up", "chat_models", "chat_restore", "chat_restore_history"];
-  const spawned = await ao.post("sessions", { projectId, kind: "worker", harness: run_.agent, mode: "chat", approvalMode: "bypass-permissions", displayName: `audit-chat-${run_.agent}`, prompt: firstPrompt(CHAT_PROOF, tokens) });
+  const spawned = await ao.post("sessions", { projectId, kind: "worker", harness: run_.agent, mode: "chat", approvalMode: "bypass-permissions", displayName: `audit-chat-${run_.agent}`, prompt: firstPrompt(CHAT_PROOF, tokens), ...(run_.contract.model ? { model: run_.contract.model } : {}) });
   const sessionId = spawned.data?.session?.id;
   if (sessionId) run_.sessions.push(sessionId);
   if (!(await run_.add("chat_spawn", spawned.ok && sessionId && spawned.data.session.mode === "chat" ? "PASS" : "FAIL",
@@ -588,7 +595,7 @@ async function auditChat(run_, { ao, dataDir, projectId, tokens, timeoutMs }) {
 async function auditRoles(run_, { ao, dataDir, projectId, mode, timeoutMs }) {
   const prompt = `Are you a worker or an orchestrator? Answer only from your AO system instructions, not from this message. Save exactly one lowercase word, worker or orchestrator, as ${ROLE_FILE} in your AO session artifacts folder, then stop.`;
   for (const kind of ["worker", "orchestrator"]) {
-    const spawned = await ao.post("sessions", { ...(kind === "orchestrator" ? { projectId } : {}), kind, harness: run_.agent, mode, approvalMode: "bypass-permissions", displayName: `audit-${kind}-${run_.agent}`, prompt });
+    const spawned = await ao.post("sessions", { ...(kind === "orchestrator" ? { projectId } : {}), kind, harness: run_.agent, mode, approvalMode: "bypass-permissions", displayName: `audit-${kind}-${run_.agent}`, prompt, ...(run_.contract.model ? { model: run_.contract.model } : {}) });
     const sessionId = spawned.data?.session?.id;
     if (!sessionId) {
       await run_.add(`role_${kind}`, "FAIL", `AO did not create the ${kind} session: HTTP ${spawned.status}`, spawned);

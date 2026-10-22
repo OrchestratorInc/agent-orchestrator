@@ -60,6 +60,7 @@ harness's AO ID. Fill it from the CLI's real behaviour:
 | `surfaces` | `["tui"]`, `["chat"]` or both: what AO integrates |
 | `adapters` | AO's folder names for the TUI adapter and Chat driver. They default to the ID without dashes, plus `acp` for Chat |
 | `restoredReady` | `patterns`: regexes that match only the empty input box after a restore (anchored to the bottom of the screen) |
+| `model` | Optional: a model the audit uses for every session, one the logged-in account can run. Leave it out to test AO's own default |
 
 ## 4. Live audit
 
