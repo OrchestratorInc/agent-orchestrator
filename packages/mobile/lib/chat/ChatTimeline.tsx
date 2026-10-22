@@ -49,7 +49,8 @@ import {
 import { previewFilePath } from "../api";
 import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
-import { InlineMessageEditor, messageEditDraft, type MessageEditDraft } from "./InlineMessageEditor";
+import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
+import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
 	ConversationActivity,
@@ -150,29 +151,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const groups = plan.groups;
 	const inverted = plan.inverted;
 	const edits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
-	// The open edit lives here, above the virtualized list, so its draft survives
-	// the row scrolling out and back.
-	const [editDraft, setEditDraft] = useState<MessageEditDraft>();
-	const startEdit = useCallback((message: ConversationMessage) => {
-		if (!message.turnId) return;
-		const { body, attachments } = editableMessageText(message.text);
-		followsTail.current = false;
-		setEditDraft(messageEditDraft({
-			turnId: message.turnId,
-			initialText: body,
-			attachments,
-		}));
-	}, []);
-	const cancelEdit = useCallback(() => setEditDraft(undefined), []);
-	const submitEdit = useCallback(async (turnId: string, text: string, clientMessageId: string) => {
-		if (!onEditMessage) return;
-		await onEditMessage(turnId, text, clientMessageId);
-		setEditDraft((current) => current?.turnId === turnId ? undefined : current);
-	}, [onEditMessage]);
-	const editing = editDraft !== undefined;
-	useEffect(() => {
-		onEditingChange?.(editing);
-	}, [editing, onEditingChange]);
+	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
+	const { editDraft, editing, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than
 	// leaving the conversation with the draft. A JS back listener never hears
 	// predictive back on Android, so this guards the screen's removal instead.
