@@ -569,6 +569,29 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 	});
 
+	// Folding a panel at the end (a finished plan) releases the follow, but the reader
+	// is still at the bottom: a jump would go nowhere, and no scroll down exists that
+	// could retire it, so it must not appear until there is something below.
+	it("offers no jump when a fold at the end releases the follow, until the reader scrolls away", () => {
+		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+
+		const fold = document.createElement("button");
+		fold.setAttribute("aria-expanded", "true");
+		log.firstElementChild!.appendChild(fold);
+		fireEvent.pointerDown(fold);
+		// The panel folds: the content shrinks and the scroll clamps to the new end.
+		stubGeometry(log, { scrollHeight: 3900, clientHeight: 800, scrollTop: 3100 });
+		fireEvent.scroll(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+
+		log.scrollTop = 1000;
+		fireEvent.scroll(log);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
 		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
 		const log = screen.getByRole("log");

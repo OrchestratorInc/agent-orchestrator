@@ -2851,6 +2851,8 @@ export function Timeline({
 		top: 0,
 		height: 40,
 		percent: 0,
+		/** Nothing below the viewport: there is no "latest" left to jump to. */
+		atEnd: true,
 		markers: [] as Array<{
 			top: number;
 			scrollTop: number;
@@ -3615,10 +3617,12 @@ export function Timeline({
 			top: travel * fraction,
 			height,
 			percent: Math.round(fraction * 100),
+			atEnd: maxScroll - node.scrollTop <= 2,
 			markers,
 		};
 		setScrollbar((current) =>
 			current.visible === next.visible &&
+			current.atEnd === next.atEnd &&
 			Math.abs(current.top - next.top) < 0.5 &&
 			Math.abs(current.height - next.height) < 0.5 &&
 			current.percent === next.percent &&
@@ -4252,7 +4256,10 @@ export function Timeline({
 				) : null}
 			</div>
 
-			{!pinned ? (
+			{/* Released is not the same as away: folding a panel at the end releases the
+			    follow but leaves the reader at the bottom, where a jump has nowhere to go
+			    and no scroll could bring the follow back to retire it. */}
+			{!pinned && !scrollbar.atEnd ? (
 				<Button
 					type="button"
 					size="icon-sm"
