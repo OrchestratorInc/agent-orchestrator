@@ -762,7 +762,7 @@ const ROLE_FILE = "AO_ROLE.txt";
 const ROLE_PROMPT = [
   "Are you a worker or an orchestrator?",
   "Answer only from your AO system instructions, not from this message.",
-  `Write exactly one lowercase word, worker or orchestrator, into ${ROLE_FILE} in your current directory, then stop.`,
+  `Write exactly one lowercase word, worker or orchestrator, into ${ROLE_FILE} in your current working directory (run pwd), not in the AO session artifacts folder, then stop.`,
 ].join(" ");
 
 // Spawns one worker and one orchestrator and asks each which it is. A wrong
@@ -770,7 +770,7 @@ const ROLE_PROMPT = [
 // agent. This is the simplest end-to-end check of system prompt injection.
 // The worker is standalone (no project, like "Start a standalone agent");
 // an orchestrator always belongs to a project.
-export async function auditRoles({ baseURL, agent, projectId, mode = "tui", timeoutMs, onIssue, onSession }) {
+export async function auditRoles({ baseURL, agent, projectId, dataDir = "", mode = "tui", timeoutMs, onIssue, onSession }) {
   const gates = [];
   const { record } = suiteRecorder(ROLE_GATES, gates, onIssue, () => ({ agent, baseURL, sessionId: null }));
   for (const kind of ["worker", "orchestrator"]) {
@@ -784,14 +784,22 @@ export async function auditRoles({ baseURL, agent, projectId, mode = "tui", time
       await record(gate(`role_${kind}`, "FAIL", `AO did not create the ${kind === "worker" ? "standalone worker" : "orchestrator"} ${mode} session`, apiEvidence(spawn)));
       continue;
     }
+    // The answer is what matters for V1; AO's artifact guidance may route the
+    // file to <data>/artifacts/<session>/ instead of the worktree.
+    const artifactPath = dataDir ? join(resolve(expandHome(dataDir)), "artifacts", sessionId, ROLE_FILE) : "";
     const answer = await waitUntil(async () => {
       const file = await workspaceFile(baseURL, sessionId, ROLE_FILE, 30_000);
-      const text = file.ok && typeof file.response?.content === "string" ? file.response.content.trim().toLowerCase() : "";
-      return { done: Boolean(text), text, file };
+      let text = file.ok && typeof file.response?.content === "string" ? file.response.content.trim().toLowerCase() : "";
+      let where = "worktree";
+      if (!text && artifactPath) {
+        text = (await readTextFile(artifactPath)).text.trim().toLowerCase();
+        where = "session artifacts folder";
+      }
+      return { done: Boolean(text), text, file, where };
     }, timeoutMs, 2_000);
     const said = answer.text.replace(/[^a-z]/g, "");
     await record(gate(`role_${kind}`, said === kind ? "PASS" : "FAIL",
-      said === kind ? `the ${kind} session answered "${kind}": its system prompt is injected`
+      said === kind ? `the ${kind} session answered "${kind}": its system prompt is injected${answer.where === "worktree" ? "" : ` (answer saved in the ${answer.where})`}`
         : !answer.done ? `the ${kind} session wrote no answer to ${ROLE_FILE} before timeout`
         : `the ${kind} session answered "${answer.text.slice(0, 60)}": the ${kind} system prompt did not reach the agent or does not state its role`,
       { spawn: apiEvidence(spawn), sessionId, mode, answer: answer.text.slice(0, 200), file: answer.file ? apiEvidence(answer.file) : undefined }));

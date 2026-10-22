@@ -2251,7 +2251,7 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
   if (suites.includes("roles")) {
     const mode = Array.isArray(contract?.surfaces) && !contract.surfaces.includes("tui") ? "chat" : "tui";
     await log?.(`${agent}: roles (worker vs orchestrator system prompt, ${mode})`);
-    result.gates.push(...await auditRoles({ baseURL, agent, projectId, mode, timeoutMs, onIssue, onSession }));
+    result.gates.push(...await auditRoles({ baseURL, agent, projectId, dataDir, mode, timeoutMs, onIssue, onSession }));
   }
   result.status = overallStatus(result.gates);
   result.failedGate = firstFailedGate(result.gates);
