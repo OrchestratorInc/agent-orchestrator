@@ -6367,10 +6367,13 @@ components:
       type: object
       additionalProperties: false
       description: Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log.
-      required: [type, viewers, composer]
+      required: [type, viewers, composer, canTakeOver]
       properties:
         type:
           const: session.live
+        canTakeOver:
+          type: boolean
+          description: Whether the person reading this stream may take the composer lease from its holder (composerTakeOver).
         viewers:
           type: array
           description: Everyone with the session open right now, once each, in the order they joined.

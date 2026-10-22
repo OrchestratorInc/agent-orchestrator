@@ -80,16 +80,18 @@ type sessionViewerResponse struct {
 }
 
 type sessionLiveResponse struct {
-	Type     string                  `json:"type"`
-	Viewers  []sessionViewerResponse `json:"viewers"`
-	Composer composerLiveResponse    `json:"composer"`
+	Type        string                  `json:"type"`
+	Viewers     []sessionViewerResponse `json:"viewers"`
+	Composer    composerLiveResponse    `json:"composer"`
+	CanTakeOver bool                    `json:"canTakeOver"`
 }
 
 func toSessionLiveResponse(state domain.SessionLiveState) sessionLiveResponse {
 	response := sessionLiveResponse{
-		Type:     "session.live",
-		Viewers:  make([]sessionViewerResponse, 0, len(state.Viewers)),
-		Composer: toComposerLiveResponse(state.Composer),
+		Type:        "session.live",
+		Viewers:     make([]sessionViewerResponse, 0, len(state.Viewers)),
+		Composer:    toComposerLiveResponse(state.Composer),
+		CanTakeOver: state.CanTakeOver,
 	}
 	for _, viewer := range state.Viewers {
 		response.Viewers = append(response.Viewers, sessionViewerResponse{UserID: viewer.UserID, Name: viewer.Name, Role: viewer.Role})

@@ -379,32 +379,41 @@ func (s *Store) LeaveComposerQueue(ctx context.Context, principal domain.Princip
 // the session's creator and the organization's owners and admins may.
 func (s *Store) TakeOverComposerLease(ctx context.Context, principal domain.Principal, orgID, sessionID string) (domain.ComposerLease, error) {
 	return s.composerOperation(ctx, principal, orgID, sessionID, func(tx pgx.Tx, lease *composerLease) error {
-		var allowed bool
-		if err := tx.QueryRow(ctx,
-			`SELECT session.created_by_user_id = $3::uuid OR EXISTS (
-				SELECT 1 FROM ao_org_memberships membership
-				WHERE membership.org_id = $1 AND membership.user_id = $3::uuid
-				  AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
-			)
-			FROM ao_sessions session
-			WHERE session.org_id = $1 AND session.id = $2`,
-			orgID, sessionID, principal.UserID,
-		).Scan(&allowed); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
+		allowed, err := mayTakeOverComposerTx(ctx, tx, orgID, sessionID, principal.UserID)
+		if err != nil {
 			return err
 		}
 		if !allowed {
 			return ErrForbidden
 		}
 		lease.grant(principal.UserID, ComposerLeaseTTL)
-		_, err := tx.Exec(ctx,
+		_, err = tx.Exec(ctx,
 			`DELETE FROM ao_composer_waitlist WHERE org_id = $1 AND session_id = $2 AND user_id = $3`,
 			orgID, sessionID, principal.UserID,
 		)
 		return err
 	})
+}
+
+// mayTakeOverComposerTx reports whether userID may take the composer lease
+// from its holder: the session's creator and the organization's owners and
+// admins may.
+func mayTakeOverComposerTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, userID string) (bool, error) {
+	var allowed bool
+	err := tx.QueryRow(ctx,
+		`SELECT session.created_by_user_id = $3::uuid OR EXISTS (
+			SELECT 1 FROM ao_org_memberships membership
+			WHERE membership.org_id = $1 AND membership.user_id = $3::uuid
+			  AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
+		)
+		FROM ao_sessions session
+		WHERE session.org_id = $1 AND session.id = $2`,
+		orgID, sessionID, userID,
+	).Scan(&allowed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return allowed, err
 }
 
 // SweepComposerLeases hands on leases whose grant expired, so everyone sees
