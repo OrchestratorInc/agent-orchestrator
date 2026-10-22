@@ -66,7 +66,7 @@ func (s *Service) rememberSnapshot(session any, state map[string]any) {
 
 // rememberReads records the snapshots in a call's result: a get_window_state
 // result, or run_steps' observation.
-func (s *Service) rememberReads(session any, result any) {
+func (s *Service) rememberReads(session, result any) {
 	state, _ := result.(map[string]any)
 	s.rememberSnapshot(session, state)
 	observation, _ := state["observation"].(map[string]any)
