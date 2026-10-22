@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +94,27 @@ var v2HomebrewBinaries = []string{
 	"/opt/homebrew/opt/opencode-v2/bin/opencode",
 	"/usr/local/opt/opencode-v2/bin/opencode",
 	"/home/linuxbrew/.linuxbrew/opt/opencode-v2/bin/opencode",
+}
+
+// v2HomebrewCandidates adds the opt link under a custom Homebrew prefix, taken
+// from HOMEBREW_PREFIX or the brew on PATH (<prefix>/bin/brew), to the default
+// prefixes in v2HomebrewBinaries.
+func v2HomebrewCandidates() []string {
+	candidates := slices.Clone(v2HomebrewBinaries)
+	add := func(prefix string) {
+		if prefix == "" || !filepath.IsAbs(prefix) {
+			return
+		}
+		candidate := filepath.ToSlash(filepath.Join(prefix, "opt", "opencode-v2", "bin", "opencode"))
+		if !slices.Contains(candidates, candidate) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	add(strings.TrimSpace(os.Getenv("HOMEBREW_PREFIX")))
+	if brew, err := exec.LookPath("brew"); err == nil {
+		add(filepath.Dir(filepath.Dir(brew)))
+	}
+	return candidates
 }
 
 var v2DataMigrationLock = make(chan struct{}, 1)
