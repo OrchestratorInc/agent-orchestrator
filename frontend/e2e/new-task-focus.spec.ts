@@ -171,6 +171,31 @@ test("renderer: New task from the command palette focuses the composer prompt @T
 	await expectPromptTakesTyping(page);
 });
 
+test("renderer: switching project with a draft never flashes the sample requests @T0", async ({ page }) => {
+	await setup(page, { animated: true });
+	await page.goto(`/#/new?project=${projectId}`);
+	const prompt = page.getByRole("combobox", { name: "Message the agent" });
+	await expect(page.getByRole("list", { name: "Sample requests" })).toBeVisible();
+	await prompt.click();
+	await page.keyboard.type("keep this");
+	await expect(page.getByRole("list", { name: "Sample requests" })).toHaveCount(0);
+	// Any frame that draws them counts, so watch the DOM rather than poll.
+	await page.evaluate(() => {
+		const seen = { flashed: false };
+		(window as unknown as { __samples: typeof seen }).__samples = seen;
+		new MutationObserver(() => {
+			if (document.querySelector('ul[aria-label="Sample requests"]')) seen.flashed = true;
+		}).observe(document.body, { childList: true, subtree: true });
+	});
+
+	const projectPicker = page.getByTestId("chat-conversation-panel").getByRole("button", { name: /^Project: / });
+	await projectPicker.click();
+	await page.getByRole("menuitem", { name: "Scratchpad" }).click();
+	await expect(projectPicker).toHaveText("Scratchpad");
+	await expect(prompt).toHaveText("keep this");
+	expect(await page.evaluate(() => (window as unknown as { __samples: { flashed: boolean } }).__samples.flashed)).toBe(false);
+});
+
 test("renderer: opening another session focuses its chat composer @T0", async ({ page }) => {
 	await setup(page);
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
