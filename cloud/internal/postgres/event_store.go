@@ -45,6 +45,16 @@ type chatMessagePayload struct {
 	domain.ChatTurnSettings
 }
 
+// userMessageEventPayload is the chat.user_message event body. The author is
+// recorded only on the event, never on the command payload, so idempotent
+// retries still compare the caller's original input. A message with no human
+// author (an orchestrator or automation) leaves both fields empty.
+type userMessageEventPayload struct {
+	chatMessagePayload
+	AuthorUserID string `json:"authorUserId,omitempty"`
+	AuthorName   string `json:"authorName,omitempty"`
+}
+
 func (s *Store) SendMessage(
 	ctx context.Context,
 	principal domain.Principal,
@@ -111,7 +121,7 @@ func sendMessageTx(
 	if err != nil {
 		return domain.ClientEvent{}, normalizeConstraintError(err)
 	}
-	event, err := appendUserMessage(ctx, tx, orgID, sessionID, idempotencyKey, text, modeCap, deniedCommands, settings)
+	event, err := appendUserMessage(ctx, tx, orgID, sessionID, idempotencyKey, actorUserID, text, modeCap, deniedCommands, settings)
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -400,12 +410,13 @@ func appendUserMessage(
 	orgID string,
 	sessionID string,
 	clientMessageID string,
+	authorUserID string,
 	text string,
 	modeCap string,
 	deniedCommands []string,
 	settings domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
-	event, err := appendUserMessageEvent(ctx, tx, orgID, sessionID, text, settings)
+	event, err := appendUserMessageEvent(ctx, tx, orgID, sessionID, authorUserID, text, settings)
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -585,6 +596,7 @@ func appendUserMessageEvent(
 	tx pgx.Tx,
 	orgID string,
 	sessionID string,
+	authorUserID string,
 	text string,
 	selected ...domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
@@ -624,7 +636,20 @@ func appendUserMessageEvent(
 	if len(selected) > 0 {
 		settings = selected[0]
 	}
-	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: settings})
+	body := userMessageEventPayload{
+		chatMessagePayload: chatMessagePayload{Text: text, ChatTurnSettings: settings},
+		AuthorUserID:       authorUserID,
+	}
+	if authorUserID != "" {
+		// A snapshot of the sender's name, so a share guest sees who wrote each
+		// prompt without being able to read the organization's user records.
+		if err := tx.QueryRow(
+			ctx, `SELECT display_name FROM ao_users WHERE id = $1`, authorUserID,
+		).Scan(&body.AuthorName); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return domain.ClientEvent{}, err
+		}
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}

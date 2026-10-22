@@ -6228,6 +6228,13 @@ components:
             turnId:
               type: string
               format: uuid
+            authorUserId:
+              type: string
+              format: uuid
+              description: The user who sent the message. Absent when an orchestrator, automation, or the agent's own terminal sent it.
+            authorName:
+              type: string
+              description: The sender's display name when the message was sent. Never an email address, so a share guest can see it.
         createdAt:
           type: string
           format: date-time
