@@ -10,6 +10,9 @@ import { TurnSettingsBar } from "./TurnSettingsBar";
  */
 export type LaunchSettings = {
 	harness: string;
+	/** Where the agent's model list is read, for the picker the session's bar uses. */
+	projectId: string;
+	hostId?: string;
 	models: ChatModel[];
 	settings: TurnSettings;
 	configOptions?: ChatConfigOption[];
@@ -53,10 +56,11 @@ export function launchSettingsFor(queryClient: QueryClient, sessionId: string, h
 }
 
 const ignoreChange = () => undefined;
+const ignorePending = () => undefined;
 
 // The new chat page's settings bar, held still while the task starts. The
 // session's own bar replaces it, in the same place, once its agent is ready.
-export function LaunchSettingsBar({ harness, models, settings, configOptions, showApprovalMode }: LaunchSettings) {
+export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode }: LaunchSettings) {
 	const providerMode = Boolean(configOptions?.length);
 	return (
 		<div className="contents [&_button:disabled]:cursor-default [&_button:disabled]:opacity-100">
@@ -68,6 +72,7 @@ export function LaunchSettingsBar({ harness, models, settings, configOptions, sh
 				configOptions={configOptions}
 				onChangeConfigOption={providerMode ? ignoreChange : undefined}
 				showApprovalMode={showApprovalMode}
+				agentSwitch={{ projectId, hostId, disabled: true, onPendingChange: ignorePending }}
 				disabled
 			/>
 		</div>

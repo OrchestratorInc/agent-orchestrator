@@ -61,8 +61,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// A fallback start keeps its request id until it is answered, so a retry after a
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
-	// The model menu stays open when switching agent swaps the bar's picker.
-	const [modelMenuOpen, setModelMenuOpen] = useState(false);
 	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
 	// "@" files and attachments go through the prepared worktree's session, which
@@ -107,6 +105,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.isCloudProject) : undefined;
 		return {
 			harness,
+			projectId: task.catalogProjectId,
+			hostId,
 			models: providerOptions ? [] : task.chatModels,
 			settings,
 			configOptions: providerOptions,
@@ -344,9 +344,17 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							configOptions={providerOptions}
 							onChangeConfigOption={providerOptions ? chooseProviderOption : undefined}
 							showApprovalMode={barSettings.showApprovalMode}
-							agentMenu={task.agentMenu}
-							agentIcon
-							modelMenu={{ open: modelMenuOpen, onOpenChange: setModelMenuOpen }}
+							// The session's own picker, so the bar is the one the chat keeps. With no
+							// session to switch yet, picking another agent changes it at once.
+							agentSwitch={{
+								projectId: task.catalogProjectId,
+								hostId,
+								agents: task.agentChoices,
+								disabled: task.agent.disabled,
+								onPendingChange: (next) => {
+									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
+								},
+							}}
 							autoSelectEffortOnOpen
 						/>
 					</>
