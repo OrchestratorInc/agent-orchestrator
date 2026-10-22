@@ -12,6 +12,9 @@ export const SURFACES = Object.freeze(["tui", "install", "auth", "models", "bran
 
 const escapeRe = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** An object key for the ID, quoted ("mimo-code":) or bare (hermes:). */
+const objectKey = id => `(?:"${escapeRe(id)}"|\\b${escapeRe(id)}\\b(?!-))\\s*:`;
+
 /** Default Go package name: the harness ID without separators (mimo-code -> mimocode). */
 export function defaultPackage(id) {
   return id.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -91,7 +94,7 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "generated-schema", surface: "tui", required: true, file: "frontend/src/api/schema.ts",
     check: (ctx, text) => ({ ok: text.includes(`"${ctx.id}"`), detail: "regenerate with npm run api" }) },
   { id: "product-ui-label", surface: "tui", required: true, file: "packages/product-ui/src/agents.ts",
-    check: (ctx, text) => ({ ok: new RegExp(`"${escapeRe(ctx.id)}"\\s*:\\s*"`).test(text) && new RegExp(`^\\s*"${escapeRe(ctx.id)}",\\s*$`, "m").test(text) }),
+    check: (ctx, text) => ({ ok: new RegExp(`${objectKey(ctx.id)}\\s*"`).test(text) && new RegExp(`^\\s*"${escapeRe(ctx.id)}",\\s*$`, "m").test(text) }),
     like: ref => new RegExp(`"${escapeRe(ref.id)}"`) },
   { id: "activity-dispatch", surface: "tui", required: false, file: "backend/internal/adapters/agent/activitydispatch/dispatch.go",
     check: (ctx, text) => ({ ok: new RegExp(`"${escapeRe(ctx.id)}"\\s*:`).test(text) }),
@@ -135,8 +138,10 @@ export const TOUCHPOINTS = Object.freeze([
       return name ? { ok: new RegExp(`case[^:]*\\b${name}\\b`).test(text), detail: `case ${name}` } : { ok: false, detail: "no install Target constant" };
     } },
   { id: "auth-plan", surface: "auth", required: true, file: "backend/internal/service/agentauth/plans.go",
-    check: (ctx, text) => ({ ok: new RegExp(`plan\\(\\s*"${escapeRe(ctx.id)}"`).test(text) }),
-    like: ref => new RegExp(`plan\\(\\s*"${escapeRe(ref.id)}"`) },
+    // plan(), documentationPlan(), loginMenuPlan(), terminalInputPlan(), or a
+    // dedicated <name>LoginPlan() selected by a case on the ID.
+    check: (ctx, text) => ({ ok: new RegExp(`[pP]lan\\(\\s*"${escapeRe(ctx.id)}"|case\\s+[^:]*"${escapeRe(ctx.id)}"`).test(text) }),
+    like: ref => new RegExp(`[pP]lan\\(\\s*"${escapeRe(ref.id)}"|case\\s+[^:]*"${escapeRe(ref.id)}"`) },
   { id: "model-catalog", surface: "models", required: true, file: "backend/internal/adapters/agent/modelcatalog/catalog.go",
     check: (ctx, text) => ({ ok: text.includes(`"${ctx.id}"`) }),
     like: ref => new RegExp(`"${escapeRe(ref.id)}"`) },
@@ -149,13 +154,20 @@ export const TOUCHPOINTS = Object.freeze([
       return { ok: Boolean(gate && gate[1].includes(ctx.id)), detail: gate ? `only if the harness has native effort: allowlist is "${gate[1].trim()}"` : "effort allowlist not found" };
     } },
   { id: "avatar-asset", surface: "branding", required: true, file: "frontend/src/renderer/assets/agents/{id}.svg|png",
-    check: async (ctx) => ({ ok: await exists(ctx.repo, `frontend/src/renderer/assets/agents/${ctx.id}.svg`) || await exists(ctx.repo, `frontend/src/renderer/assets/agents/${ctx.id}.png`) }) },
-  { id: "avatar-license", surface: "branding", required: true, file: "frontend/src/renderer/assets/agents/LICENSE-{id}.txt",
+    // Plain logo, or light/dark theme variants (codewhale-dark.svg).
+    check: async (ctx) => {
+      for (const name of [`${ctx.id}.svg`, `${ctx.id}.png`, `${ctx.id}-dark.svg`, `${ctx.id}-light.svg`, `${ctx.id}-dark.png`, `${ctx.id}-light.png`]) {
+        if (await exists(ctx.repo, `frontend/src/renderer/assets/agents/${name}`)) return { ok: true, detail: name };
+      }
+      return { ok: false };
+    } },
+  // Main also accepts a source comment beside the import instead of a file.
+  { id: "avatar-license", surface: "branding", required: false, file: "frontend/src/renderer/assets/agents/LICENSE-{id}.txt",
     check: async (ctx) => ({ ok: await exists(ctx.repo, `frontend/src/renderer/assets/agents/LICENSE-${ctx.id}.txt`) }) },
   { id: "avatar-map", surface: "branding", required: true, file: "frontend/src/renderer/components/AgentAvatar.tsx",
-    check: (ctx, text) => ({ ok: new RegExp(`"${escapeRe(ctx.id)}"\\s*:`).test(text) }),
-    like: ref => new RegExp(`"${escapeRe(ref.id)}"\\s*:|agents/${escapeRe(ref.id)}\\.`) },
-  { id: "harness-doc", surface: "docs", required: true, file: "docs/harnesses/{id}.md",
+    check: (ctx, text) => ({ ok: new RegExp(objectKey(ctx.id)).test(text) }),
+    like: ref => new RegExp(`${objectKey(ref.id)}|agents/${escapeRe(ref.id)}\\.`) },
+  { id: "harness-doc", surface: "docs", required: false, file: "docs/harnesses/{id}.md",
     check: async (ctx) => ({ ok: await exists(ctx.repo, `docs/harnesses/${ctx.id}.md`) }) },
   { id: "docs-index", surface: "docs", required: false, file: "docs/README.md",
     check: (ctx, text) => ({ ok: text.includes(`harnesses/${ctx.id}.md`) }),
@@ -164,7 +176,13 @@ export const TOUCHPOINTS = Object.freeze([
     check: (ctx, text) => ({ ok: text.toLowerCase().includes(ctx.id) }),
     like: ref => new RegExp(escapeRe(ref.id), "i") },
   { id: "chat-registry", surface: "chat", required: true, file: "backend/internal/adapters/chatdriver/registry/registry.go",
-    check: (ctx, text) => ({ ok: new RegExp(`\\w+\\.New\\(\\s*${escapeRe(ctx.pkg)}\\.New\\(`).test(text) }),
+    // Inline `driver.New(pkg.New(...))`, or the current two-line form:
+    // `codexPlugin := codex.New()` then `add(codexappserver.New(codexPlugin, ...))`.
+    check: (ctx, text) => {
+      if (new RegExp(`\\w+\\.New\\(\\s*${escapeRe(ctx.pkg)}\\.New\\(`).test(text)) return { ok: true };
+      const plugin = text.match(new RegExp(`(\\w+)\\s*:=\\s*${escapeRe(ctx.pkg)}\\.New\\(`))?.[1];
+      return { ok: Boolean(plugin && new RegExp(`\\w+\\.New\\(\\s*${plugin}\\b`).test(text)) };
+    },
     like: ref => new RegExp(`\\w+\\.New\\(\\s*${escapeRe(ref.pkg)}\\.New\\(|adapters/agent/${escapeRe(ref.pkg)}"`) },
   { id: "reviewer-harness", surface: "reviewer", required: true, file: "backend/internal/domain/reviewerharness.go",
     check: (ctx, text) => constantInList(text, "ReviewerHarness", "AllReviewerHarnesses", ctx.id),

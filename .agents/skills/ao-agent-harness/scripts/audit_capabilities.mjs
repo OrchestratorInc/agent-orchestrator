@@ -334,9 +334,9 @@ export const CAPABILITIES = Object.freeze([
     inspect: ["backend/internal/session_manager/manager.go"],
   },
   {
-    id: "agent_switch", title: "Cross-harness switch-agent", surface: "tui+chat", support: { "claude-code": "manual", codex: "manual" }, gates: [],
-    manual: "Needs two authorized harnesses in one run; exercise `POST /sessions/{id}/switch-agent` separately.",
-    inspect: ["backend/internal/session_manager/agent_switching.go"],
+    id: "agent_switch", title: "Cross-harness provider switch", surface: "tui+chat", support: { "claude-code": "manual", codex: "manual" }, gates: [],
+    manual: "Needs two authorized harnesses in one run; exercise `POST /sessions/{id}/provider-switch` separately (the target starts a fresh native thread seeded with a handoff note).",
+    inspect: ["backend/internal/session_manager/provider_switch_tui.go", "backend/internal/httpd/controllers/conversations.go"],
   },
   {
     id: "subagents", title: "Subagent activity", surface: "tui+chat", support: { "claude-code": "manual", codex: "manual" }, gates: [],
