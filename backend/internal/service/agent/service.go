@@ -367,12 +367,42 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 			}
 			return cached.Catalog, nil
 		}
+		return s.firstModelCatalog(ctx, agentID, projectID)
 	}
-	mode := modelLoadCached
-	if refresh {
-		mode = modelLoadRefresh
+	return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRefresh)
+}
+
+// modelCatalogFirstLoadWait bounds how long a read with no persisted catalog
+// waits for its first discovery. Fast adapters answer within it; a slower one
+// returns its capability fallback at once while discovery finishes.
+var modelCatalogFirstLoadWait = 500 * time.Millisecond
+
+// firstModelCatalog serves a scope that has never been discovered without
+// blocking the picker. Discovery runs on the service context, so it completes
+// and persists even after the request returns; the placeholder reports itself
+// refreshing, so open views re-read and pick up the discovered catalog.
+func (s *Service) firstModelCatalog(ctx context.Context, agentID, scope string) (ports.AgentModelCatalog, error) {
+	type result struct {
+		catalog ports.AgentModelCatalog
+		err     error
 	}
-	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
+	done := make(chan result, 1)
+	go func() {
+		catalog, err := s.coalesceModelLoad(s.ctx, agentID, scope, modelLoadCached)
+		done <- result{catalog: catalog, err: err}
+	}()
+	timer := time.NewTimer(modelCatalogFirstLoadWait)
+	defer timer.Stop()
+	select {
+	case first := <-done:
+		return first.catalog, first.err
+	case <-ctx.Done():
+		return ports.AgentModelCatalog{}, ctx.Err()
+	case <-timer.C:
+	}
+	placeholder := s.discoverer.Manual(agentID)
+	placeholder.RefreshState = "refreshing"
+	return placeholder, nil
 }
 
 // catalogInputCheckTTL is how long a matching input check stands for a cached

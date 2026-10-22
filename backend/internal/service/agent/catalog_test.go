@@ -1570,6 +1570,59 @@ func TestModelsLeaderCancellationDoesNotCancelCoalescedLoad(t *testing.T) {
 	}
 }
 
+// A picker opened for an agent that has never been discovered must not wait on
+// a slow CLI: it gets the capability fallback at once, marked refreshing, and
+// the discovered catalog is persisted in the background for the next read.
+func TestFirstModelsReadDoesNotWaitForSlowDiscovery(t *testing.T) {
+	previousWait := modelCatalogFirstLoadWait
+	modelCatalogFirstLoadWait = 20 * time.Millisecond
+	t.Cleanup(func() { modelCatalogFirstLoadWait = previousWait })
+	cache := &fakeModelCache{}
+	discoverer := successfulModelDiscoverer()
+	discoverer.delay = 300 * time.Millisecond
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("opencode", "OpenCode", nil)}, cache, discoverer)
+
+	start := time.Now()
+	first, err := svc.Models(context.Background(), "opencode", "proj-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed >= discoverer.delay {
+		t.Fatalf("first read took %s, want it not to wait for discovery", elapsed)
+	}
+	if first.RefreshState != "refreshing" || first.Source != "manual" {
+		t.Fatalf("first read = %#v, want the refreshing fallback", first)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "opencode", ""); ok {
+			got, err := svc.Models(context.Background(), "opencode", "proj-1", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+				t.Fatalf("read after discovery = %#v, want the discovered catalog", got)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("background discovery never persisted the catalog")
+}
+
+func TestFirstModelsReadReturnsFastDiscoveryDirectly(t *testing.T) {
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, &fakeModelCache{}, successfulModelDiscoverer())
+
+	got, err := svc.Models(context.Background(), "codex", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+		t.Fatalf("first read = %#v, want the discovered catalog without a placeholder", got)
+	}
+}
+
 func TestModelsDiscoversWithoutProjectContext(t *testing.T) {
 	discoverer := &fakeModelDiscoverer{catalog: ports.AgentModelCatalog{
 		SelectionMode: ports.ModelSelectionCatalog,
