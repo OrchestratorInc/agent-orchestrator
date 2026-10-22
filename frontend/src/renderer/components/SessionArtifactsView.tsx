@@ -2,18 +2,22 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal } from "lucide-react";
+import { ChevronLeft, FolderOpen, Maximize2, Minimize2, SquareTerminal } from "lucide-react";
+import { isAgentActivityWorking } from "@aoagents/product-ui";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { formatTimeTerse } from "../lib/format-time";
+import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
+import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
+import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
 import { Button } from "./ui/button";
@@ -246,21 +250,38 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	const [previewPath, setPreviewPath] = useState<string | null>(null);
+	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
+	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const openArtifactPreview = useOpenArtifactPreview(session.id, hostId);
 	const uiKey = sessionUiKey(session.id, hostId);
 
-	useEffect(() => setSelectedPath(null), [uiKey]);
+	useEffect(() => { setSelectedPath(null); setPreviewPath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
 	const exitFullscreen = useMemo(() => () => setFullscreen(false), []);
 	useEffect(() => {
-		if (request) setSelectedPath(request.path);
+		if (request) {
+			setPreviewPath(null);
+			setSelectedPath(request.path);
+		}
 	}, [request]);
 
 	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
+	const preview = artifacts.find((artifact) => artifact.path === previewPath);
+	const artifactRow = (artifact: SessionArtifact): ArtifactRow => ({
+		...artifact,
+		sessionId: session.id,
+		sessionTitle: session.title ?? "",
+		generating: isAgentActivityWorking(session.activity),
+	});
+	const openInSession = (artifact: Pick<SessionArtifact, "kind" | "previewUrl" | "path">) => {
+		if (artifact.kind === "html" && artifact.previewUrl) openArtifactPreview(artifact.previewUrl);
+		else setSelectedPath(artifact.path);
+	};
 	// Versions are read back as text, so a binary file such as an image gets no
 	// History. This shares the viewer's cached read of the file.
 	const selectedFile = useQuery({
@@ -326,7 +347,7 @@ export function SessionArtifactsView({
 	}
 
 	return (
-		<div className="flex h-full min-h-0 flex-col" role="tabpanel">
+		<div className="@container/session-artifacts flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
 			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
@@ -335,29 +356,39 @@ export function SessionArtifactsView({
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul className="board-scrollbar flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-3 pt-1">
+				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">
 					{artifacts.map((artifact) => {
-						const html = artifact.kind === "html" && Boolean(artifact.previewUrl);
-						const Icon = html ? Globe : FileText;
+						const row = artifactRow(artifact);
+						const id = artifactKey(row);
 						return (
-							<li key={artifact.path}>
-								<button
-									className="flex w-full min-w-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) px-2.5 py-1.5 text-left text-sm outline-none transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
-									onClick={() => (html ? openArtifactPreview(artifact.previewUrl!) : setSelectedPath(artifact.path))}
-									title={artifact.path}
-									type="button"
-								>
-									<Icon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-									<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-									{Date.parse(artifact.updatedAt) ? (
-										<span className="shrink-0 text-caption text-passive">{formatTimeTerse(artifact.updatedAt)}</span>
-									) : null}
-								</button>
-							</li>
+							<ArtifactGalleryCard
+								key={artifact.path}
+								row={row}
+								context={session.title ?? ""}
+								onPreview={() => setPreviewPath(artifact.path)}
+								actions={<ArtifactActionsMenu
+									artifact={artifact}
+									hostId={hostId}
+									session={session}
+									iconOnly
+									pinned={pinnedArtifactIds.includes(id)}
+									onTogglePin={!hostId && !session.cloud ? () => togglePinnedArtifact(id) : undefined}
+									onOpenInSession={() => openInSession(artifact)}
+									className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
+								/>}
+							/>
 						);
 					})}
 				</ul>
 			)}
+			<ArtifactPreviewModal
+				artifact={preview ? artifactRow(preview) : null}
+				projectName={session.workspaceName ?? ""}
+				hostId={hostId}
+				cloud={session.cloud}
+				onOpenInSession={openInSession}
+				onClose={() => setPreviewPath(null)}
+			/>
 		</div>
 	);
 }

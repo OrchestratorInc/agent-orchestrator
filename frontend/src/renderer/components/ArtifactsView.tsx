@@ -19,8 +19,8 @@ import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifact
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
-import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 import { Button } from "./ui/button";
 import {
@@ -317,31 +317,11 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 	}
 
 	return (
-		<li className="group relative min-w-0 rounded-md bg-card">
-			<button
-				type="button"
-				className="block w-full overflow-hidden rounded-md text-left transition-none hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-				onClick={open}
-				title={`${row.sessionTitle} · ${row.path}`}
-			>
-				<span className="relative block aspect-[16/9] overflow-hidden border-b border-border bg-[var(--solid-muted,var(--muted))]">
-					<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} />
-				</span>
-				<span className="block space-y-1 px-3 py-2.5">
-					<span className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
-						{row.generating ? (
-							<Loader2 aria-label={t("artifacts.generating")} className="size-icon-sm shrink-0 animate-spin text-status-working motion-reduce:animate-none" />
-						) : <KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-						<span className="truncate">{row.name}</span>
-					</span>
-					<span className="flex min-w-0 items-center gap-1.5 text-caption leading-4 text-muted-foreground">
-						<span className="truncate">{showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}</span>
-						<span aria-hidden="true">·</span>
-						<time dateTime={row.updatedAt} className="shrink-0 tabular-nums">{formatTimeCompact(row.updatedAt)}</time>
-					</span>
-				</span>
-			</button>
-			<div className="absolute right-2 top-2 flex items-center gap-1">
+		<ArtifactGalleryCard
+			row={row}
+			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
+			onPreview={open}
+			actions={
 				<ArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId }}
@@ -351,8 +331,8 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
 				/>
-			</div>
-		</li>
+			}
+		/>
 	);
 }
 
