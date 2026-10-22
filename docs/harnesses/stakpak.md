@@ -65,7 +65,9 @@ stakpak [--system-prompt-file <file>] [--model <model>] --session <id>
   them in the conversation and inserts them again on every resume, so a restore
   passes them only when they changed.
 - `--model` takes Stakpak's names, for example `anthropic/claude-sonnet-4-5` or
-  `<custom-provider>/<model>`. The model field is free text.
+  `<custom-provider>/<model>`. The model picker offers the active profile's
+  `model` from `~/.stakpak/config.toml` and accepts any other name, since
+  Stakpak lists no models of its own.
 - Reasoning effort and per-launch tool restrictions have no Stakpak flag and
   are rejected.
 
