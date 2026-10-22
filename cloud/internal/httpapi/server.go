@@ -220,15 +220,19 @@ type Server struct {
 	terminalStreams         *terminalStreams
 	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
-	notificationWake        func()
-	analytics               analytics.Sink
-	sandboxWake             func()
-	projectSnapshots        ProjectSnapshotter
-	billingOptions          *BillingOptions
-	billingStore            billingStore
-	offerCache              planOfferCache
-	presenceLimiter         presenceLimiter
-	notificationWaiters     *notificationWaiters
+	// sessionEventWaiters wakes a session's event streams on ao_session_event;
+	// sessionEventNotify is set once that listener runs.
+	sessionEventWaiters *workWaiters
+	sessionEventNotify  atomic.Bool
+	notificationWake    func()
+	analytics           analytics.Sink
+	sandboxWake         func()
+	projectSnapshots    ProjectSnapshotter
+	billingOptions      *BillingOptions
+	billingStore        billingStore
+	offerCache          planOfferCache
+	presenceLimiter     presenceLimiter
+	notificationWaiters *notificationWaiters
 	// workerBinariesBySHA serves the content-addressed worker/helper binaries
 	// so a worker with a stale baked copy can heal itself to this exact build.
 	workerBinariesBySHA map[string][]byte
@@ -414,6 +418,7 @@ func New(options Options) *Server {
 		terminalStreams:           newTerminalStreams(),
 		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
+		sessionEventWaiters:       newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
 		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
