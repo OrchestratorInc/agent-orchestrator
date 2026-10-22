@@ -73,13 +73,23 @@ it("retries an uncertain edit under the same delivery id but mints a new one aft
 	expect(onEdit.mock.calls.map(([, , id]) => id)).toEqual(["id-1", "id-1", "id-2"]);
 });
 
-it("holds Send while the agent is working and leaves on Cancel", () => {
+it("explains a blocked Send on tap instead of sending, and leaves on Cancel", async () => {
 	const value = draft();
 	value.text = "Changed";
-	const onCancel = open(value, vi.fn(async () => {}), { blocked: true });
-	expect(button("Send edited message").props.disabled).toBe(true);
+	const onEdit = vi.fn(async () => {});
+	const onCancel = open(value, onEdit, { blocked: true });
 	// No hint text above the field: the editor is just the field and its controls.
 	expect(renderer!.root.findAllByType("Text" as never)).toHaveLength(0);
+	// Send reads as unavailable but still answers a tap with the reason.
+	expect(button("Send edited message").props.accessibilityState.disabled).toBe(true);
+	expect(button("Send edited message").props.disabled).toBe(false);
+	await send();
+	expect(onEdit).not.toHaveBeenCalled();
+	const alert = () => renderer!.root.findAll((node) => node.props.accessibilityRole === "alert" && (node.type as unknown) === "Text");
+	expect(alert()[0]?.props.children).toBe("Stop the current turn to edit.");
+	// The reason clears once the agent is idle again.
+	act(() => renderer!.update(<InlineMessageEditor draft={value} blocked={false} onCancel={onCancel} onEdit={onEdit} />));
+	expect(alert()).toHaveLength(0);
 	act(() => button("Cancel edit").props.onPress());
 	expect(onCancel).toHaveBeenCalledTimes(1);
 });

@@ -72,3 +72,11 @@ describe("sent human message actions", () => {
 		expect(human).not.toContain("<Text selectable");
 	});
 });
+
+describe("message edit list identity", () => {
+	it("keeps the editable sets' identity while their contents are unchanged", () => {
+		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);");
+	});
+});
+

@@ -41,8 +41,20 @@ describe("mobile conversation action errors", () => {
 			.toContain("Stop the current turn");
 		expect(conversationActionError(Object.assign(new Error("conflict"), { code: "CHAT_EDIT_UNCERTAIN" })))
 			.toContain("will not be sent twice");
+		expect(conversationActionError(Object.assign(new Error("conflict"), { code: "CHAT_EDIT_IDEMPOTENCY_CONFLICT" })))
+			.toBe("That send was tied to a different edit. Send again to retry.");
+		expect(editRefusedDefinitively("CHAT_EDIT_IDEMPOTENCY_CONFLICT")).toBe(true);
 		expect(editRefusedDefinitively("CHAT_EDIT_REJECTED")).toBe(true);
 		expect(editRefusedDefinitively("CHAT_EDIT_UNCERTAIN")).toBe(false);
 		expect(editRefusedDefinitively(undefined)).toBe(false);
+	});
+});
+
+describe("message edit failures", () => {
+	it("stay in the inline editor instead of also raising the screen banner", async () => {
+		const { readFileSync } = await import("node:fs");
+		const source = readFileSync(new URL("./useConversation.ts", import.meta.url), "utf8");
+		expect(source).toContain("if (banner) setActionError(message);");
+		expect(source).toContain('runAction("edit", () => requireConfig(cfg, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false)');
 	});
 });

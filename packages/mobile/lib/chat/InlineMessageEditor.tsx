@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { haptics } from "../haptics";
 import { Feather } from "../icons";
@@ -30,6 +30,8 @@ export type MessageEditDraft = {
 	deliveryId: string;
 };
 
+const BLOCKED_COPY = "Stop the current turn to edit.";
+
 export function messageEditDraft(input: Omit<MessageEditDraft, "text" | "deliveryId">): MessageEditDraft {
 	return { ...input, text: input.initialText, deliveryId: clientMessageId() };
 }
@@ -60,8 +62,19 @@ export function InlineMessageEditor({
 	const [error, setError] = useState<string>();
 	const unchanged = text.trimEnd() === draft.initialText.trimEnd();
 	const sendDisabled = sending || blocked || !text.trim() || unchanged;
+	// While the agent works, Send stays tappable so it can say why it will not send.
+	const sendInert = sending || !text.trim() || unchanged;
+
+	useEffect(() => {
+		if (!blocked) setError((current) => current === BLOCKED_COPY ? undefined : current);
+	}, [blocked]);
 
 	const send = async () => {
+		if (blocked && !sendInert) {
+			haptics.error();
+			setError(BLOCKED_COPY);
+			return;
+		}
 		if (sendDisabled) return;
 		haptics.tap();
 		setSending(true);
@@ -110,7 +123,7 @@ export function InlineMessageEditor({
 				accessibilityRole="button"
 				accessibilityLabel="Send edited message"
 				accessibilityState={{ disabled: sendDisabled, busy: sending }}
-				disabled={sendDisabled}
+				disabled={sendInert}
 				onPress={() => void send()}
 				style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, sendDisabled && !sending && { opacity: 0.35 }]}
 			>{sending ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>

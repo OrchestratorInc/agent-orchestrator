@@ -281,7 +281,9 @@ export function useMobileConversation(
 	}, [cfg, unavailable, scheduleRefresh]);
 
 	const runAction = useCallback(
-		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false): Promise<T> => {
+		// `banner: false` keeps a failure out of the screen banner when the control
+		// that acted already shows it in place (the inline message editor).
+		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false, banner = true): Promise<T> => {
 			setPendingActions((old) => old.includes(kind) ? old : [...old, kind]);
 			setActionError(undefined);
 			setActionErrors((old) => ({ ...old, [kind]: undefined }));
@@ -293,7 +295,7 @@ export function useMobileConversation(
 				return result;
 			} catch (cause) {
 				const message = conversationActionError(cause);
-				setActionError(message);
+				if (banner) setActionError(message);
 				setActionErrors((old) => ({ ...old, [kind]: message }));
 				const code = conversationErrorCode(cause);
 				setActionCodes((old) => ({ ...old, [kind]: code }));
@@ -437,7 +439,7 @@ export function useMobileConversation(
 	);
 	const editMessage = useCallback(
 		(turnId: string, text: string, clientMessageId: string) =>
-			runAction("edit", () => requireConfig(cfg, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true),
+			runAction("edit", () => requireConfig(cfg, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false),
 		[cfg, runAction, sessionId],
 	);
 	const chooseSettings = useCallback(

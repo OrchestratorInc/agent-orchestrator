@@ -66,6 +66,7 @@ export function conversationActionError(error: unknown): string {
 		case "CHAT_EDIT_UNSUPPORTED": return "This agent cannot branch an earlier message.";
 		case "CHAT_EDIT_TURN_INVALID": return "That message can no longer be edited. Refresh the conversation.";
 		case "CHAT_EDIT_REJECTED": return "Your machine did not accept the edit. Nothing was sent.";
+		case "CHAT_EDIT_IDEMPOTENCY_CONFLICT": return "That send was tied to a different edit. Send again to retry.";
 		case "CHAT_EDIT_UNCERTAIN": return "Your machine may already have the edit. Send again to check safely; it will not be sent twice.";
 		default: return userFacingError(error);
 	}

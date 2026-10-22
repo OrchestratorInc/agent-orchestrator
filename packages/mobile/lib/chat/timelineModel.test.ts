@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -283,6 +283,16 @@ describe("editable human prompts", () => {
 		const replay = editableHumanTurns(value);
 		expect([...replay.editable]).toEqual(["t1", "t2"]);
 		expect([...replay.reconstructed]).toEqual(["t2"]);
+	});
+
+	it("treats a refresh with the same editable turns as unchanged", () => {
+		const first = editableHumanTurns(editable());
+		expect(sameEditableTurns(first, editableHumanTurns(editable()))).toBe(true);
+		const busy = editable();
+		busy.controller.state = "busy";
+		expect(sameEditableTurns(first, editableHumanTurns(busy))).toBe(false);
+		expect(sameEditableTurns(undefined, undefined)).toBe(true);
+		expect(sameEditableTurns(first, undefined)).toBe(false);
 	});
 
 	it("does not treat the oldest loaded prompt as the first while older history is unloaded", () => {

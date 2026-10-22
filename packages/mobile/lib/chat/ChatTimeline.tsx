@@ -68,6 +68,7 @@ import {
 	canRollbackTurn,
 	conversationTimelineRenderPlan,
 	editableHumanTurns,
+	sameEditableTurns,
 	countActivityNodes,
 	partitionTurnItems,
 	readableConversationItems,
@@ -150,7 +151,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
-	const edits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
+	// Recomputed per snapshot but kept by identity while its contents are the
+	// same, so `extraData` changes (and every row re-renders) only when they do.
+	const nextEdits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
+	const editsRef = useRef(nextEdits);
+	if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;
+	const edits = editsRef.current;
 	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
 	const { editDraft, editing, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than

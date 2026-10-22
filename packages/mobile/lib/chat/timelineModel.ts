@@ -257,6 +257,16 @@ export function editableHumanTurns(snapshot: ConversationSnapshot): { editable: 
 	return { editable, reconstructed };
 }
 
+/** Whether two editable-turn results name the same turns, so a caller can keep the older identity. */
+export function sameEditableTurns(
+	a: ReturnType<typeof editableHumanTurns> | undefined,
+	b: ReturnType<typeof editableHumanTurns> | undefined,
+): boolean {
+	if (!a || !b) return a === b;
+	const same = (x: ReadonlySet<string>, y: ReadonlySet<string>) => x.size === y.size && [...x].every((id) => y.has(id));
+	return same(a.editable, b.editable) && same(a.reconstructed, b.reconstructed);
+}
+
 export function canRollbackTurn(snapshot: ConversationSnapshot, turn: ConversationTurn): boolean {
 	return snapshot.controller.state !== "hibernated" && snapshot.capabilities?.includes("rollback") === true &&
 		!snapshot.turns.some((candidate) => candidate.state === "running" || candidate.state === "queued") &&
