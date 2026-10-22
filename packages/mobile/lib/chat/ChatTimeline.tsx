@@ -158,7 +158,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;
 	const edits = editsRef.current;
 	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
-	const { editDraft, editing, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
+	const { editDraft, editing, detached, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than
 	// leaving the conversation with the draft. A JS back listener never hears
 	// predictive back on Android, so this guards the screen's removal instead.
@@ -297,6 +297,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 					startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 				/>}
 			/>
+			{/* An unresolved edit whose prompt left the conversation keeps its Retry and
+			    Abandon controls here, apart from the list, as the desktop does. */}
+			{detached && editDraft ? <View style={styles.detachedEditor}>
+				<InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked onCancel={cancelEdit} onEdit={submitEdit} />
+			</View> : null}
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
 		</View>
 	);
@@ -314,7 +319,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	onEditMessage?(message: ConversationMessage): void;
 	editDraft?: MessageEditDraft;
 	onCancelEdit(): void;
-	onSubmitEdit(turnId: string, text: string, clientMessageId: string): Promise<void>;
+	onSubmitEdit(payload: string, body: string): Promise<void>;
 	onEditFocus(): void;
 	answeredBelow?: number;
 	workedOpen: boolean;
@@ -1184,6 +1189,7 @@ function elapsed(start?: string, end?: string): string | undefined { if (!start 
 function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
 const makeStyles = (t: Theme) => StyleSheet.create({
 	timelineWrap: { flex: 1, position: "relative", backgroundColor: t.bgBase },
+	detachedEditor: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.xs, backgroundColor: t.bgBase },
 	emptySurface: { flex: 1, justifyContent: "center" },
 	list: { flex: 1, backgroundColor: t.bgBase },
 	content: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xxxl },

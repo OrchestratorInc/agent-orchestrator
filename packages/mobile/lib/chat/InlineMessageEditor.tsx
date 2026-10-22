@@ -8,7 +8,6 @@ import { textSelectionColors } from "../textSelection";
 import { space, type } from "../tokens";
 import { ComposerGlass } from "./composer-glass";
 import { COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
-import { editRefusedDefinitively } from "./conversationErrors";
 import { withEditedBody } from "./messageAttachments";
 import { clientMessageId } from "./useConversation";
 
@@ -28,6 +27,12 @@ export type MessageEditDraft = {
 	 * result instead of branching twice; a definitive refusal replaces it.
 	 */
 	deliveryId: string;
+	/**
+	 * A send whose delivery is unresolved: the exact payload (and the body shown
+	 * for it) that Retry must resend under the same delivery id. While set, the
+	 * text is locked and the edit outlives its prompt.
+	 */
+	pending?: { body: string; payload: string };
 };
 
 const BLOCKED_COPY = "Stop the current turn to edit.";
@@ -52,7 +57,8 @@ export function InlineMessageEditor({
 	/** The agent is no longer idle, so the daemon would refuse to branch. */
 	blocked: boolean;
 	onCancel(): void;
-	onEdit(turnId: string, text: string, clientMessageId: string): Promise<void>;
+	/** Sends the wire `payload`; `body` is what stays on screen if delivery is uncertain. */
+	onEdit(payload: string, body: string): Promise<void>;
 	onFocus?(): void;
 }) {
 	const t = useTheme();
@@ -60,17 +66,22 @@ export function InlineMessageEditor({
 	const [text, setText] = useState(draft.text);
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string>();
-	const unchanged = text.trimEnd() === draft.initialText.trimEnd();
-	const sendDisabled = sending || blocked || !text.trim() || unchanged;
+	const pending = draft.pending;
+	// Retrying an unresolved delivery replays it under the same id, which the
+	// daemon answers whether or not the agent has started other work since.
+	const isBlocked = blocked && !pending;
+	const unchanged = !pending && text.trimEnd() === draft.initialText.trimEnd();
+	const shown = pending ? pending.body : text;
+	const sendDisabled = sending || isBlocked || !shown.trim() || unchanged;
 	// While the agent works, Send stays tappable so it can say why it will not send.
-	const sendInert = sending || !text.trim() || unchanged;
+	const sendInert = sending || !shown.trim() || unchanged;
 
 	useEffect(() => {
 		if (!blocked) setError((current) => current === BLOCKED_COPY ? undefined : current);
 	}, [blocked]);
 
 	const send = async () => {
-		if (blocked && !sendInert) {
+		if (isBlocked && !sendInert) {
 			haptics.error();
 			setError(BLOCKED_COPY);
 			return;
@@ -80,12 +91,10 @@ export function InlineMessageEditor({
 		setSending(true);
 		setError(undefined);
 		try {
-			await onEdit(draft.turnId, withEditedBody(text, draft.attachments), draft.deliveryId);
+			await (pending ? onEdit(pending.payload, pending.body) : onEdit(withEditedBody(text, draft.attachments), text));
 			haptics.success();
 		} catch (cause) {
 			haptics.error();
-			const code = typeof cause === "object" && cause !== null && "code" in cause ? String(cause.code ?? "") || undefined : undefined;
-			if (editRefusedDefinitively(code)) draft.deliveryId = clientMessageId();
 			setError(cause instanceof Error ? cause.message : "Couldn't send the edited message.");
 			setSending(false);
 		}
@@ -99,10 +108,10 @@ export function InlineMessageEditor({
 		<View style={styles.composerRow}>
 			<TextInput
 				accessibilityLabel="Edit message"
-				value={text}
+				value={shown}
 				onChangeText={(value) => { draft.text = value; setText(value); }}
 				onFocus={onFocus}
-				editable={!sending}
+				editable={!sending && !pending}
 				multiline
 				autoFocus
 				scrollEnabled
@@ -113,7 +122,7 @@ export function InlineMessageEditor({
 			/>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel="Cancel edit"
+				accessibilityLabel={pending ? "Abandon edit recovery" : "Cancel edit"}
 				accessibilityState={{ disabled: sending }}
 				disabled={sending}
 				onPress={() => { haptics.tap(); onCancel(); }}
@@ -121,7 +130,7 @@ export function InlineMessageEditor({
 			><Feather name="x" size={15} color={t.textPrimary} /></Pressable>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel="Send edited message"
+				accessibilityLabel={pending ? "Retry edit safely" : "Send edited message"}
 				accessibilityState={{ disabled: sendDisabled, busy: sending }}
 				disabled={sendInert}
 				onPress={() => void send()}

@@ -38,7 +38,7 @@ afterEach(() => {
 function draft(attachments: string[] = []): MessageEditDraft {
 	return messageEditDraft({ turnId: "t1", initialText: "Fix the bug", attachments });
 }
-function open(value: MessageEditDraft, onEdit: (turnId: string, text: string, id: string) => Promise<void>, { onCancel = vi.fn(), blocked = false } = {}) {
+function open(value: MessageEditDraft, onEdit: (payload: string, body: string) => Promise<void>, { onCancel = vi.fn(), blocked = false } = {}) {
 	act(() => { renderer = create(<InlineMessageEditor draft={value} blocked={blocked} onCancel={onCancel} onEdit={onEdit} />); });
 	return onCancel;
 }
@@ -56,21 +56,21 @@ it("waits for a changed body, then sends it with the original attachments", asyn
 	expect(value.text).toBe("Fix the other bug");
 	expect(button("Send edited message").props.disabled).toBe(false);
 	await send();
-	expect(onEdit).toHaveBeenCalledExactlyOnceWith("t1", withAttachmentReferences("Fix the other bug", [".ao/attachments/image-a.png"]), "id-1");
+	expect(onEdit).toHaveBeenCalledExactlyOnceWith(withAttachmentReferences("Fix the other bug", [".ao/attachments/image-a.png"]), "Fix the other bug");
 });
 
-it("retries an uncertain edit under the same delivery id but mints a new one after a refusal", async () => {
-	const onEdit = vi.fn<(turnId: string, text: string, id: string) => Promise<void>>()
-		.mockRejectedValueOnce(Object.assign(new Error("Your machine may already have the edit."), { code: "CHAT_EDIT_UNCERTAIN" }))
-		.mockRejectedValueOnce(Object.assign(new Error("Stop the current turn."), { code: "CHAT_EDIT_BUSY" }))
-		.mockResolvedValueOnce(undefined);
-	open(draft(), onEdit);
-	act(() => input().props.onChangeText("Edited"));
-	await send();
-	expect(renderer!.root.findByProps({ accessibilityRole: "alert" }).props.children).toBe("Your machine may already have the edit.");
-	await send();
-	await send();
-	expect(onEdit.mock.calls.map(([, , id]) => id)).toEqual(["id-1", "id-1", "id-2"]);
+it("locks an unresolved delivery to its exact payload and offers Retry and Abandon, even while blocked", async () => {
+	const value = draft([".ao/attachments/image-a.png"]);
+	const payload = withAttachmentReferences("Sent once", [".ao/attachments/image-a.png"]);
+	value.pending = { body: "Sent once", payload };
+	const onEdit = vi.fn(async () => {});
+	const onCancel = open(value, onEdit, { blocked: true });
+	expect(input().props.value).toBe("Sent once");
+	expect(input().props.editable).toBe(false);
+	await act(async () => { button("Retry edit safely").props.onPress(); });
+	expect(onEdit).toHaveBeenCalledExactlyOnceWith(payload, "Sent once");
+	act(() => button("Abandon edit recovery").props.onPress());
+	expect(onCancel).toHaveBeenCalledTimes(1);
 });
 
 it("explains a blocked Send on tap instead of sending, and leaves on Cancel", async () => {

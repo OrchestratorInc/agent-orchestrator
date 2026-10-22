@@ -31,7 +31,7 @@ import {
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
-import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
+import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
@@ -159,9 +159,7 @@ export function useMobileConversation(
 				: await getConversationPage(cfg, sessionId);
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
-				const next = old[0]?.conversationId && old[0].conversationId !== live.conversationId
-					? [live]
-					: [live, ...old.slice(1)];
+				const next = withLivePage(old, live);
 				conversationPageCache.set(cacheKey, next);
 				return next;
 			});
@@ -192,7 +190,7 @@ export function useMobileConversation(
 			const older = options?.reviewId
 				? await getReviewerConversationPage(cfg, options.reviewId, snapshot.oldestSequence)
 				: await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
-			if (mounted.current) setPages((old) => [...old, older]);
+			if (mounted.current) setPages((old) => olderPageFits(old, older) ? [...old, older] : old);
 		} catch (cause) {
 			if (mounted.current) setActionError(conversationActionError(cause));
 		} finally {
