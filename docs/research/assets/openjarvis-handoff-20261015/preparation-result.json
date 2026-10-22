@@ -1,0 +1,165 @@
+{
+  "status": "blocked",
+  "updatedAt": "2026-10-15T06:29:42.779686+00:00",
+  "harness": "openjarvis",
+  "pr": 6537,
+  "remoteHead": "77574094445328af21209f6d32bde40a6cb03143",
+  "sourceHead": "17368d3564d6741cfa050afd1aacd55ca3a2206a",
+  "baseMain": "54b28374912cb2771f17b8cc32a9482e6d607bce",
+  "skillHead": "5af6c2306250c7b2ada2563af5247e2d2c7eddf0",
+  "changedFiles": [
+    "backend/internal/adapters/agent/openjarvis/openjarvis.go",
+    "backend/internal/adapters/agent/openjarvis/openjarvis_test.go",
+    "backend/internal/ports/agent.go",
+    "backend/internal/service/session/service.go",
+    "backend/internal/service/session/service_test.go",
+    "backend/internal/storage/sqlite/migrate_burned_versions_test.go",
+    "frontend/src/renderer/components/AgentAvatar.tsx",
+    "frontend/src/renderer/components/AgentAvatar.test.tsx"
+  ],
+  "changeScope": "Typed native restore/input/policy refusals through ports/service; existing tests extended but NOT_RUN. Three merge conflicts resolved preserving main0198/OpenJarvis0204 and both main themed avatars/official OpenJarvis PNG. Automatic main changes listed separately.",
+  "completed": [
+    "Read-only latest skill/PR source/body/comments/review/checks snapshot; skill untouched",
+    "Preserved existing reviewed fixes; verified in-memory history/no native ID boundary",
+    "Surgical typed refusal source change committed locally a2a35f14, main reconciliation17368d35",
+    "Exact-head CI daemon artifact used without local builds/dependency installs",
+    "Two bounded actual Linux registered AO/native attempts: ordinary/followup effects, independent private/native instructions, executing Ctrl+C, fresh Kill/no late/control isolation, restore and Chat refusals",
+    "Retained project-instruction non-effect and post-cancel uncertain-send failure; no automatic input retry",
+    "All18 mandatory screenshot checkpoints planned before driving and final unexecuted rows explicit",
+    "Review report, hashes, source/base/runtime separation, drafts and exact cleanup persisted"
+  ],
+  "remaining": [
+    "Actual real Electron journeys/screenshots BLOCKED by absent genuine dependencies and disk preserving512MiB; all applicable UI checkpoints NOT_RUN",
+    "Changed/merged-source CI NOT_RUN; existing24success checks qualify remote77574094 only",
+    "Independent project AGENTS consumption FAIL/NOT_QUALIFIED; restore instructions N/A because history in memory",
+    "Post-cancel usable continuation NOT_QUALIFIED: subsequent send written but native echo unconfirmed; first failure preserved and not retried",
+    "Fresh install/login, missing-config negatives, reconnect, other OS/provider coverage NOT_RUN",
+    "Future final publisher must review local source/evidence/drafts; preparation performed no push or other remote writes; skill6509 always read-only"
+  ],
+  "evidencePaths": [
+    "reports/review-report.md",
+    "reports/screenshot-checkpoints.md",
+    "reports/screenshot-checkpoints-planned.md",
+    "reports/github-snapshot.json",
+    "reports/github-final-status.json",
+    "reports/provenance.json",
+    "reports/runtime-assessment.json",
+    "reports/main-reconciliation.json",
+    "reports/local-review.patch",
+    "reports/merge-resolution.patch",
+    "reports/runtime-to-edited-source-files.txt",
+    "reports/run-runtime-001.py",
+    "reports/run-runtime-002.py",
+    "reports/draft-pr-body.md",
+    "reports/draft-pr-comment.md",
+    "reports/change-counts.json",
+    "reports/cleanup.json",
+    "reports/final-session-identities.json",
+    "reports/credential-scan.json",
+    "reports/hashes.json",
+    "attempt-runtime-001/result.json",
+    "attempt-runtime-001/failure.private.txt",
+    "attempt-runtime-001/setup-model-probes.json",
+    "attempt-runtime-002/result.json",
+    "runtime-ci/SOURCE_COMMIT",
+    "runtime-ci/BUILD_INFO",
+    "runtime-ci/SHA256SUMS",
+    "skill-reference/HEAD"
+  ],
+  "ci": {
+    "existingHead": "77574094445328af21209f6d32bde40a6cb03143",
+    "listedChecks": 24,
+    "successful": 24,
+    "remoteMergeable": "CONFLICTING",
+    "localChangedMergedSource": "NOT_RUN"
+  },
+  "runtime": {
+    "source": "77574094445328af21209f6d32bde40a6cb03143",
+    "sha256": "35b412ab9855f4cf076a734c1d251bfa3a28993e585fc1e9103fe192ea26cbc4",
+    "classification": "limited API/native probe, not strict runner or UI PASS",
+    "ordinaryFileEffects": true,
+    "independentPrivateAndNativeEffects": true,
+    "independentProjectEffect": false,
+    "cancel": {
+      "PID": 1185793,
+      "kernelStart": "109115643",
+      "reaped": true,
+      "noLate": true
+    },
+    "kill": {
+      "PID": 1186049,
+      "kernelStart": "109127706",
+      "reaped": true,
+      "noLate": true,
+      "terminated": true
+    },
+    "controlSurvived": true,
+    "restore": "N/A unsupported; refusal HTTP500, no replacement",
+    "chat": "N/A unsupported; refusal HTTP409"
+  },
+  "cleanup": {
+    "utc": "2026-10-15T06:27:48.708162+00:00",
+    "sessions": [
+      {
+        "attempt": "attempt-runtime-001",
+        "AOID": "openjarvis-recovery-1015-1",
+        "nativeIdentityPresent": false,
+        "nativeIDDigest": null,
+        "terminated": true
+      },
+      {
+        "attempt": "attempt-runtime-001",
+        "AOID": "openjarvis-recovery-1015-2",
+        "nativeIdentityPresent": false,
+        "nativeIDDigest": null,
+        "terminated": true
+      },
+      {
+        "attempt": "attempt-runtime-002",
+        "AOID": "openjarvis-kill-1015-1",
+        "nativeIdentityPresent": false,
+        "nativeIDDigest": null,
+        "terminated": true
+      },
+      {
+        "attempt": "attempt-runtime-002",
+        "AOID": "openjarvis-kill-1015-2",
+        "nativeIdentityPresent": false,
+        "nativeIDDigest": null,
+        "terminated": true
+      }
+    ],
+    "allOwnedSessionsTerminated": true,
+    "ownedDaemonsStopped": true,
+    "ownedRuntimeProcessesRemaining": [],
+    "portsClosed": {
+      "18437": true,
+      "18438": true
+    },
+    "protected": {
+      "429811": {
+        "alive": true,
+        "exe": "/home/azureuser/.ao/host/releases/20261007213911-334091/resources/daemon/ao"
+      },
+      "625660": {
+        "alive": true,
+        "exe": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/minimax-ao/ao"
+      }
+    },
+    "productionService": "active",
+    "diskFreeBytes": 611274752,
+    "mountsTouched": false,
+    "filesRemoved": [],
+    "evidenceProfilesAndBinariesPreserved": true
+  },
+  "publication": {
+    "localCommits": [
+      "a2a35f14",
+      "17368d35"
+    ],
+    "pushed": false,
+    "remoteWrites": false,
+    "skill6509Writes": false,
+    "finalPublisherDeferred": true
+  }
+}

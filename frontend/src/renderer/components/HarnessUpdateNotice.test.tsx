@@ -496,7 +496,7 @@ describe("startup harness update notice", () => {
 		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
 	});
 
-	it("keeps the stack when an installer refresh fails after it rendered", async () => {
+	it("keeps the stack and offers details when an installer refresh fails", async () => {
 		const { client } = mountNotice();
 		await screen.findByRole("article", { name: "Claude Code" });
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
@@ -506,7 +506,9 @@ describe("startup harness update notice", () => {
 		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
 		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
 		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "View details" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {

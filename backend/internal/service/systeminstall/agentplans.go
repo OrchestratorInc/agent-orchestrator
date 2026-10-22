@@ -50,6 +50,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetOpenJarvis:  "https://open-jarvis.github.io/OpenJarvis/user-guide/code-assistant/",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -268,6 +269,14 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetOpenJarvis:
+		// The adapter is qualified against 1.0.4. The extras bring the cloud
+		// provider SDKs; the base package only includes the OpenAI client.
+		plan := s.planUV(target, "OpenJarvis[inference-cloud,inference-google]==1.0.4")
+		if !plan.Unsupported {
+			plan.Package = "openjarvis"
+		}
+		plans = []Plan{plan}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}

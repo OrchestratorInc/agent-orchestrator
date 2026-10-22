@@ -1375,6 +1375,24 @@ func TestParseAiderModelsGroupsByLiteLLMProvider(t *testing.T) {
 	}
 }
 
+func TestParseOpenJarvisModelsKeepsCloudRows(t *testing.T) {
+	output := []byte(`┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ Engine ┃ Model                     ┃ Params ┃
+┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ cloud  │ gemini-3-flash-preview    │      - │
+│ cloud  │ gemini-3-flash-preview    │      - │
+│ cloud  │ gemini-3.1-flash-lite-pr… │      - │
+│ cloud  │ MiniMax-M2.7              │      - │
+│ cloud  │ MiniMax-M2.5-highspeed    │      - │
+│ nim    │ nvidia/nemotron-nano      │      - │
+│ ollama │ qwen3:8b                  │     8B │
+└────────┴───────────────────────────┴────────┘`)
+	models, err := parseOpenJarvisModels(output)
+	if err != nil || len(models) != 1 || models[0].ID != "gemini-3-flash-preview" || models[0].Label != "gemini-3-flash-preview" {
+		t.Fatalf("models = %+v, %v", models, err)
+	}
+}
+
 func TestMemcodeCatalogFingerprintInvalidatesFormerEmptyCatalog(t *testing.T) {
 	got := CatalogFingerprint(context.Background(), "memcode", "", "", nil)
 	if got == BinaryVersion(context.Background(), "") {

@@ -16175,6 +16175,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - openjarvis
           - fake
           type: string
         approvalMode:
@@ -16876,6 +16877,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - openjarvis
           - cloudflared
           type: string
         updatedAt:
@@ -20223,6 +20225,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - openjarvis
           type: string
         issueId:
           type: string
