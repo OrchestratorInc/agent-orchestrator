@@ -9,7 +9,7 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorMessage: (e: unknown) => e instanceof Error ? e.message : "Request failed",
 	getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
-vi.mock("../../lib/bridge", () => ({ aoBridge: { sideChats: { capture } } }));
+vi.mock("../../lib/bridge", () => ({ aoBridge: { sideChats: { capture, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } } }));
 
 const drafts = new Map<string, string>();
 const creations = new Map<string, string>();
@@ -69,6 +69,29 @@ it("reserves the source before a delayed create and preserves newer draft edits"
 	expect(creations.size).toBe(1);
 	expect(requests).toHaveLength(1);
 	expect(JSON.parse(drafts.get("source")!).text).toBe("new draft while waiting");
+	expect(JSON.parse(drafts.get("source")!).attachments).toEqual([]);
+});
+
+it("delivers a nested command as the frozen question without creating another destination", async () => {
+	const hook = await setup();
+	await act(async () => { await hook.result.current.send("source", "/side /side explain files"); });
+	expect(creations.size).toBe(1);
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({ text: "/side explain files" });
+});
+
+it("does not create or dispatch after the source session changes during capture", async () => {
+	const hook = renderHook(({ session }) => useIndependentSideChats(session, [], [], async () => [], true), { initialProps: { session: "session" } });
+	await waitFor(() => expect(hook.result.current.activeId).toBe("source"));
+	let release!: () => void;
+	capture.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+	let sending!: Promise<void>;
+	act(() => { sending = hook.result.current.send("source", "/side question"); });
+	await waitFor(() => expect(release).toBeDefined());
+	hook.rerender({ session: "another-session" });
+	await act(async () => { release(); await sending; });
+	expect(creations.size).toBe(0);
+	expect(requests).toEqual([]);
 });
 
 it.each(["creation", "send"])("reuses a frozen destination and files after a lost %s reply and remount", async (lost) => {
