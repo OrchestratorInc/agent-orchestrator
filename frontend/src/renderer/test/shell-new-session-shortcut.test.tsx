@@ -12,7 +12,7 @@ const shellMocks = vi.hoisted(() => {
 	const state = {
 		newSessionListener: undefined as (() => void) | undefined,
 		keyboardShortcutsListener: undefined as (() => void) | undefined,
-		quitShortcutConfirmListener: undefined as ((windowMs: number) => void) | undefined,
+		quitConfirmListener: undefined as (() => void) | undefined,
 		newShellTerminalListener: undefined as (() => void) | undefined,
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
@@ -63,10 +63,11 @@ const shellMocks = vi.hoisted(() => {
 			state.keyboardShortcutsListener = listener;
 			return vi.fn();
 		}),
-		onQuitShortcutConfirm: vi.fn((listener: (windowMs: number) => void) => {
-			state.quitShortcutConfirmListener = listener;
+		onQuitConfirmRequest: vi.fn((listener: () => void) => {
+			state.quitConfirmListener = listener;
 			return vi.fn();
 		}),
+		resolveQuitConfirm: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
@@ -153,7 +154,8 @@ vi.mock("../lib/bridge", () => ({
 			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
-			onQuitShortcutConfirm: shellMocks.onQuitShortcutConfirm,
+			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
+			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -420,7 +422,8 @@ beforeEach(() => {
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
 	shellMocks.state.keyboardShortcutsListener = undefined;
-	shellMocks.state.quitShortcutConfirmListener = undefined;
+	shellMocks.state.quitConfirmListener = undefined;
+	shellMocks.resolveQuitConfirm.mockClear();
 	shellMocks.state.openSettingsListener = undefined;
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
@@ -1005,22 +1008,20 @@ describe("shell keyboard-shortcuts help subscription", () => {
 	});
 });
 
-describe("shell quit-shortcut confirmation subscription", () => {
-	it("asks for a second ⌘Q in a top-center toast that lasts as long as the confirm window", async () => {
+describe("shell quit confirm subscription", () => {
+	it("opens the Quit AO? dialog on request and reports the answer to the main process", async () => {
 		await renderShell();
 
-		const listener = shellMocks.state.quitShortcutConfirmListener;
-		if (!listener) throw new Error("quit-shortcut listener was not registered");
-		act(() => listener(2_500));
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener());
+		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledExactlyOnceWith(true);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
 
-		expect(useUiStore.getState().globalToasts).toContainEqual(
-			expect.objectContaining({
-				title: "Press ⌘Q again to quit",
-				placement: "top-center",
-				durationMs: 2_500,
-				dedupeKey: "quit-shortcut-confirm",
-			}),
-		);
+		act(() => listener());
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
 	});
 });
 

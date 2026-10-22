@@ -19,6 +19,7 @@ import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
+import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
@@ -1227,18 +1228,13 @@ function ShellLayout() {
 	// ⌘/ toggles: a second press closes the sheet.
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
 
-	// macOS: the first ⌘Q only warns; a second press within `windowMs` quits.
-	useEffect(
-		() =>
-			aoBridge.app.onQuitShortcutConfirm((windowMs) =>
-				useUiStore.getState().showGlobalToast(t("shortcut.quitConfirm"), undefined, {
-					placement: "top-center",
-					durationMs: windowMs,
-					dedupeKey: "quit-shortcut-confirm",
-				}),
-			),
-		[t],
-	);
+	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
+	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
+	useEffect(() => aoBridge.app.onQuitConfirmRequest(() => setIsQuitConfirmOpen(true)), []);
+	const resolveQuitConfirm = useCallback((confirmed: boolean) => {
+		setIsQuitConfirmOpen(false);
+		aoBridge.app.resolveQuitConfirm(confirmed);
+	}, []);
 
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
@@ -1380,6 +1376,7 @@ function ShellLayout() {
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
+				<QuitConfirmDialog open={isQuitConfirmOpen} onResolve={resolveQuitConfirm} />
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
 					onOpenChange={setIsKeyboardShortcutsOpen}
