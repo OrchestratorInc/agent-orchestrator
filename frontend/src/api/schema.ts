@@ -7003,6 +7003,8 @@ export interface components {
              * @description Time the local hook process observed the event, before delivery to the daemon.
              */
             observedAt?: string;
+            /** @description Process id of the provider process that fired the hook (Claude's CLAUDE_PID). */
+            processId?: number;
             /** @description Native main-turn identity reported by the hook, when supported. */
             providerTurnId?: string;
             /** @description Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot. */

@@ -20,4 +20,26 @@ ea4a5ee123c8f3ef15b38979d25d659648dcbfa2 taken fix(cloud): start a cloud task in
 e152ec1a3221c30ee81d4e1beda509589efdeca0 pending fix(models): show cached catalogs while refreshing in background (#6898) — конфликт с role-тредингом дельты, решение: axisrow/agent-orchestrator#105
 30723c0be55edde1a012a4cd3d25039c43002e26 skipped feat(mobile): add a session Files screen with a diff viewer and line feedback (#6922)
 3a0c3b21e2489a74b614f2a4408da1922c31f008 taken fix(kanban): show Interrupted on a card after the agent is stopped (#6999) — закрыт вручную, union Store/fakeStore (073b3657fd)
-0c11049ce0bc1613428e67cc28bfc6fb09c68acd pending fix(cloud): feedback round: live Setup/Cleanup logs, PR opener, error idle, auto-mode dialog, and bugs (#6901) — пришёл в апстриме 2026-10-21 после старта синка; пограничный «fix» (polish-раунд), конфликты 11 файлов (8 i18n, TerminalPane, daemon.go, claudecode.go) — классификация владельца
+0c11049ce0bc1613428e67cc28bfc6fb09c68acd taken fix(cloud): feedback round: live Setup/Cleanup logs, PR opener, error idle, auto-mode dialog, and bugs (#6901)
+474962e31bea34b96588e8d91ea7a46d82557f8c skipped feat(desktop): ship cloudflared in the macOS app (#7002)
+79c31cea8b5b2065014bf5eb977925d865f0158b skipped feat(telemetry): identify on AO Cloud sign-in, identity on every event, in-app opt-out (#6425)
+1550d440b82ac9cfb3e671b060709457cdffbaea skipped feat(files): branch reviews with full file browsing and direct actions (#6793)
+55430517b03ce5f4f08f589e3fbf4aff865a8168 taken fix(models): keep project model lists in step with Settings (#7001)
+9db690843dec90ed448e4f072d1d187a26baa4c7 taken fix(mobile): connect on the first scan after allowing Local Network access (#6988)
+a812099898f23295cfffaa2e1d3b76987aa5d49e taken fix(ui): keep controls and selected text visible with transparency (#7009)
+7c83bd68c1e60c85b6a90e3ffa1340c859e4a3ff skipped feat: switch agents mid-session in chat and terminal (#6588)
+25b85118b344e29261211bd2c9009b9479bf54cf skipped fix(chat): model picker left — зависит от скипнутого feat #6588
+e6c226d49de95963b04cc88e22fa58a173833d53 skipped feat(ui): move the chat's switch to terminal into the session tab menu (#7028)
+0645a9465ff5ac42b496df39d664c3cd39e1b92c skipped fix(chat): Remember switch — зависит от скипнутого feat #6588 (AgentSwitchPicker отсутствует)
+77f92388f2cde66389e3389d40dbe76bee037d79 skipped fix(chat): saved model loader — зависит от скипнутого feat #6588 (AgentSwitchPicker отсутствует)
+43563a9606b6a7644eef2daf684655022afa1cef skipped fix(chat): zero context 0% — зависит от скипнутого feat #6588 (ContextMeter перестроен им)
+41af0c63151bc25a7e7d0287e024c23c976c6f4b skipped fix(chat): name new agent model — зависит от скипнутого feat #6588 (AgentSwitchPicker отсутствует)
+6de2ae1c4bb375e1dee48c5f5431028cd7a9ac57 taken fix(mobile): use the new desktop mascot in the app (#7035)
+71dab5de401ce6bf1f231b2dba24505ecdf4e19c skipped fix(mobile): file comment composer — зависит от скипнутого feat(files) #6922
+8aa06320b5e52b376c3a561e53c28da5e07a52b9 taken fix(mobile): match reviewer chat to sessions and keep chat composers keyboard-aware (#6989)
+fc6cb762a0b1ecaea9a13e98e63ac5109b8d2258 skipped feat(mobile): show agent html_render pages in chat, with tap-to-expand and pinch zoom (#6982)
+f691e1d2448c82718b72b30a8078006a6b10b452 skipped feat(mobile): swipe to merge a pull request from the review screen (#6986)
+c9c17ec4c1ba68cb494b2ecfff2a3e6ab2fe544a taken fix(projects): let large repositories finish cloning (#7039)
+1d48f99b93c7cc36c7b681afb6d0de210fd0a98a taken fix(harness): keep harness update failures short in the notice (#7006)
+503033ae0de7842b69fabbe6533d1e5be790bad3 taken fix(agents): follow the default account in readiness and list the CLI login with the others (#7007)
+ea889e3795d03025b2bc06805fc96379eefa19f0 taken fix(harness): install the copilot launcher, not its platform binary (#7005)
