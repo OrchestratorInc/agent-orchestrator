@@ -167,7 +167,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
@@ -459,6 +458,8 @@ export type FakeAgentController = {
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
 	setTerminalHandle: (id: string, handleId: string) => void;
+	/** Moves a session to another agent, as a provider switch does. */
+	setProvider: (id: string, provider: string) => void;
 	setPreview: (id: string, previewUrl: string, previewRevision?: number) => void;
 	setBrowserError: (message: string | null) => void;
 	reconnectEventsWithReplayBacklog: (count: number) => void;
@@ -857,6 +858,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					touch(s);
 					pushWorkspaces();
 				},
+				setProvider: (id, provider) => {
+					const s = findSession(id);
+					if (!s) return;
+					s.provider = provider;
+					touch(s);
+					pushWorkspaces();
+				},
 				setPreview: (id, previewUrl, previewRevision) => {
 					const s = findSession(id);
 					if (!s) return;
@@ -1046,7 +1054,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,

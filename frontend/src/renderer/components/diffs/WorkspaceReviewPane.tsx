@@ -738,7 +738,7 @@ export function WorkspaceReviewPane({
 															<Checkbox
 																aria-label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}
 																checked={isViewed}
-																className="size-4 border border-muted-foreground/70 bg-transparent data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-background"
+																className="size-4 border border-muted-foreground/70 bg-transparent data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-on-foreground"
 																onCheckedChange={(checked) => markViewed(file, checked === true)}
 															/>
 														</span>

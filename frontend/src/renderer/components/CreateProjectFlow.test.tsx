@@ -442,6 +442,21 @@ describe("CreateProjectFlow remote host", () => {
 		expect(useUiStore.getState().globalToast?.body).not.toContain("secret");
 	});
 
+	it("explains a clone that ran past its time limit", async () => {
+		const user = userEvent.setup();
+		hostMocks.aPost.mockResolvedValueOnce({
+			error: { code: "GIT_CLONE_TIMED_OUT", message: "Cloning this repository took too long and was stopped." },
+		});
+		renderChooseFlow({ hostId: "host-a", hostLabel: "Host A", connected: true });
+
+		await openSource(user, "Clone a repo");
+		fireEvent.click(await screen.findByText("Continue clone"));
+
+		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toBe(
+			"Cloning took too long and was stopped. Check your network connection and try again.",
+		));
+	});
+
 	it("uses the shared source picker, host folder picker, and agent sheet without dismissing between steps", async () => {
 		const user = userEvent.setup();
 		const onDismiss = vi.fn();

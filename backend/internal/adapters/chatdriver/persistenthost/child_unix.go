@@ -4,6 +4,7 @@ package persistenthost
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"syscall"
 	"time"
@@ -29,4 +30,16 @@ func killProviderProcess(_ context.Context, cmd *exec.Cmd) error {
 		return nil
 	}
 	return aoprocess.TerminateGroup(cmd.Process.Pid, 2*time.Second)
+}
+
+// terminateProviderProcess asks the hosted process group to exit.
+func terminateProviderProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
 }

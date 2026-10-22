@@ -72,6 +72,8 @@ type Config struct {
 	VersionProbe VersionProbe
 	// AfterInterrupt verifies native quiescence before the interrupted turn settles.
 	AfterInterrupt func(context.Context, acpdriver.AgentRequest, string) error
+	// QuickStop: see acpdriver.Config.QuickStop.
+	QuickStop bool
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -169,5 +171,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
+		QuickStop:                    cfg.QuickStop,
 	}
 }

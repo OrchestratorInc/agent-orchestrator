@@ -25,8 +25,8 @@ var plans = []Plan{
 	// MiniMax's TUI /login offers both China and Global accounts; the bare
 	// `mcode login` subcommand defaults to the China region.
 	terminalInputPlan("minimax-code", ActionLogin, "Log in to MiniMax Code", []string{"mcode"}, "/login\r", "Select Open login after MiniMax Code finishes starting", "https://agent.minimax.io/docs/cli/quick-start"),
-	documentationPlan("memcode", ActionSetup, "Set up memcode", "Configure a native endpoint and provider credentials before launching AO", "https://github.com/memcode-ai/memcode"),
-	documentationPlan("aider", ActionSetup, "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
+	documentationPlan("memcode", "Set up memcode", "Configure a native endpoint and provider credentials before launching AO", "https://github.com/memcode-ai/memcode"),
+	documentationPlan("aider", "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
@@ -51,7 +51,7 @@ var plans = []Plan{
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
 	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
-	documentationPlan("unreal-agent", ActionSetup, "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
+	documentationPlan("unreal-agent", "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
 	// own store (~/.dsh/.credentials.yaml) — but the web profile serves the
 	// Models page that writes them, which is the route a failed run names
@@ -61,6 +61,7 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
+	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
@@ -134,8 +135,8 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-func documentationPlan(agentID string, action Action, title, guidance, docs string) Plan {
-	p := plan(agentID, action, title, nil, guidance, docs)
+func documentationPlan(agentID, title, guidance, docs string) Plan {
+	p := plan(agentID, ActionSetup, title, nil, guidance, docs)
 	p.LaunchMode = LaunchDocumentation
 	return p
 }

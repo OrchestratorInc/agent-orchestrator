@@ -305,7 +305,7 @@ describe("empty project session permissions", () => {
 		const picker = screen.getByRole("button", { name: "Approval policy for the next turn" });
 		expect(picker).toBeEnabled();
 		await user.click(picker);
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("auto");
 	});
 });

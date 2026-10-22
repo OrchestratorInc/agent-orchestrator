@@ -57,10 +57,6 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
-import {
-	AGENT_SWITCH_VISIBILITY_IPC_CHANNEL,
-	type AgentSwitchVisibilitySignalBody,
-} from "./shared/agent-switch-observability";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -420,11 +416,6 @@ const api = {
 		capture: (input: RendererTelemetryCaptureInput) => {
 			if (!currentTelemetryPolicy) return Promise.resolve(false);
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
-		},
-		signalAgentSwitchVisibility: (signal: AgentSwitchVisibilitySignalBody) => {
-			if (!currentTelemetryPolicy) return false;
-			ipcRenderer.send(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, { consentGeneration: currentTelemetryPolicy.consentGeneration, signal });
-			return true;
 		},
 	},
 	browser: {
