@@ -218,6 +218,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			supporting.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true));
 		} else if (pr.ci.state === "unknown") {
 			supporting.push(cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true));
+		} else if (pr.ci.state === "none") {
+			supporting.push(cardStatus("ci", "pr.card.checksNone", "passive"));
 		}
 	}
 	if (pr.state === "open") {
@@ -229,6 +231,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "failing") {
 			statusRows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], prChecksUrl(pr)));
+		} else if (pr.ci.state === "none") {
+			statusRows.push(cardStatus("ci", "pr.card.checksNone", "passive"));
 		} else if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			statusRows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending" || pr.ci.state === "unknown") {
@@ -273,6 +277,7 @@ function cardStatus(
 		| "pr.card.mergeUnavailable"
 		| "pr.card.checksPending"
 		| "pr.card.checksLoading"
+		| "pr.card.checksNone"
 		| "pr.card.checksUnavailable"
 		| "pr.card.draft"
 		| "pr.card.readyToMerge"
@@ -292,7 +297,7 @@ function cardStatus(
 export function prCanMerge(pr: SessionPRSummary): boolean {
 	return (
 		pr.state === "open" &&
-		pr.ci.state === "passing" &&
+		(pr.ci.state === "passing" || pr.ci.state === "none") &&
 		pr.mergeability.state === "mergeable" &&
 		reviewAllowsMerge(pr.review.decision) &&
 		!pr.review.hasUnresolvedHumanComments
@@ -318,7 +323,7 @@ function mergeReadinessDetail(pr: SessionPRSummary): string {
 	if (!reviewAllowsMerge(pr.review.decision)) return appI18n.t("pr.merge.reasonReview");
 	if (pr.review.hasUnresolvedHumanComments) return appI18n.t("pr.merge.reasonComments");
 	if (pr.mergeability.state !== "mergeable") return providerBlockedDetail(pr);
-	return appI18n.t("pr.merge.reasonReady");
+	return appI18n.t(pr.ci.state === "none" ? "pr.merge.reasonReadyNoChecks" : "pr.merge.reasonReady");
 }
 
 function providerBlockedDetail(pr: SessionPRSummary): string {
@@ -524,6 +529,8 @@ function ciLabel(state: SessionPRSummary["ci"]["state"]): string {
 			return appI18n.t("pr.ci.failing");
 		case "pending":
 			return appI18n.t("pr.ci.pending");
+		case "none":
+			return appI18n.t("pr.ci.none");
 		case "unknown":
 			return appI18n.t("pr.ci.checking");
 	}
@@ -537,6 +544,7 @@ function ciTone(state: SessionPRSummary["ci"]["state"]): PRDisplayTone {
 			return "error";
 		case "pending":
 			return "neutral";
+		case "none":
 		case "unknown":
 			return "passive";
 	}
