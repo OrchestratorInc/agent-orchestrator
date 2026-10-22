@@ -123,6 +123,35 @@ it("blocks navigation after revalidation rejects the annotation", async () => {
  expect(screen.getByText("captured();")).toBeInTheDocument();
 });
 
+it("opens a uniquely moved source without rewriting its captured reference", async () => {
+	const moved = { state: "moved", path: ref.path, line: 3, endLine: 3, newLineOffset: 2 };
+	request.mockResolvedValue({ data: moved });
+	const open = vi.fn();
+	setup(open);
+	fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+	await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Source moved"));
+	fireEvent.click(screen.getByRole("button", { name: /^Open file:/ }));
+	await waitFor(() => expect(open).toHaveBeenCalledWith(ref, moved));
+	expect(ref.line).toBe(1);
+	expect(ref.lines[0].newNo).toBe(1);
+});
+
+it("can retry a failed check without navigating or replacing captured code", async () => {
+ request.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+ const open=vi.fn();setup(open);
+ fireEvent.click(screen.getByRole("button",{name:"1 annotation"}));
+ await waitFor(()=>expect(screen.getByRole("status")).toHaveTextContent("Source check failed"));
+ request.mockResolvedValue({data:{state:"unchanged",path:ref.path,line:1,endLine:1}});
+ fireEvent.click(screen.getByRole("button",{name:"Retry source check"}));
+ await screen.findByRole("button",{name:/^Open file:/});
+ expect(open).not.toHaveBeenCalled();expect(ref.lines[0].text).toBe("captured();");
+});
+it("does not offer retry for an invalid saved capture", async () => {
+ request.mockResolvedValue({error:{code:"CHAT_FILE_REFERENCE_INVALID"}});setup(vi.fn());
+ fireEvent.click(screen.getByRole("button",{name:"1 annotation"}));
+ await waitFor(()=>expect(screen.getByRole("status")).toHaveTextContent("Remove it and add the selection again"));
+ expect(screen.queryByRole("button",{name:"Retry source check"})).not.toBeInTheDocument();
+});
 
 it("opens a changed source after revalidation without replacing captured code", async () => {
  request.mockResolvedValue({data:{state:"changed"}});
@@ -145,4 +174,19 @@ it("does not open a file deleted between preview and click", async () => {
  await waitFor(()=>expect(screen.getByRole("status")).toHaveTextContent("Source unavailable"));
  expect(open).not.toHaveBeenCalled();
  expect(screen.queryByRole("button",{name:/^Open file:/})).not.toBeInTheDocument();
+});
+
+
+it.each([undefined, "ambiguous"])("opens a verified renamed but changed file (%s) without rewriting capture", async (reason) => {
+ const resolution={state:"changed",path:"src/renamed.ts",reason};
+ request.mockResolvedValue({data:resolution});
+ const open=vi.fn();setup(open);
+ fireEvent.click(screen.getByRole("button",{name:"1 annotation"}));
+ const card=await screen.findByRole("button",{name:/^Open file: src\/a.ts/});
+ fireEvent.click(card);
+ await waitFor(()=>expect(open).toHaveBeenCalledWith(ref,resolution));
+ expect(request).toHaveBeenCalledTimes(2);
+ expect(ref.path).toBe("src/a.ts");
+ expect(ref.lines[0].text).toBe("captured();");
+ expect(resolution).not.toHaveProperty("line");
 });

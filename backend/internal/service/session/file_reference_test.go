@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,7 +22,7 @@ func TestResolveCapturedFileRows(t *testing.T) {
 		{name: "same", content: "before\n  captured();\nafter", want: "unchanged"},
 		{name: "unrelated edit", content: "different\n  captured();\nafter", want: "unchanged"},
 		{name: "line endings", content: "before\r\n  captured();\r\nafter", want: "unchanged"},
-		{name: "moved", content: "inserted\nbefore\n  captured();\nafter", want: "changed"},
+		{name: "moved", content: "inserted\nbefore\n  captured();\nafter", want: "moved"},
 		{name: "modified", content: "before\n  changed();", want: "changed"},
 		{name: "indentation", content: "before\ncaptured();", want: "changed"},
 		{name: "deleted", want: "unavailable", missing: true},
@@ -124,5 +126,125 @@ func TestCapturedBlankRowsMatchCRLFSource(t *testing.T) {
 	})
 	if result.State != "unchanged" {
 		t.Fatalf("blank CRLF rows were not unchanged: %+v", result)
+	}
+}
+
+func TestFileReferenceRelocationIsExactUniqueAndImmutable(t *testing.T) {
+	n := 2
+	ref := ports.ChatFileReference{Path: "src/a.ts", Side: "file", Line: 2, EndLine: 2, Lines: []ports.ChatFileReferenceLine{{Kind: "context", OldNo: &n, NewNo: &n, Text: "  selected();"}}}
+	for _, tc := range []struct {
+		name, content, state, reason string
+		offset                       int
+	}{
+		{"moved", "insert\nbefore\n  selected();\nafter", "moved", "", 1},
+		{"ambiguous", "  selected();\nbefore\n  selected();", "changed", "ambiguous", 0},
+		{"changed indent", "before\nselected();", "changed", "", 0},
+		{"deleted selection", "before\nafter", "changed", "", 0},
+		{"recorded wins", "  selected();\n  selected();", "unchanged", "", 0},
+		{"CRLF", "insert\r\nbefore\r\n  selected();", "moved", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := resolveCapturedFileRows(ref, func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
+				return WorkspaceFileRevision{Exists: true, Content: tc.content}, nil
+			})
+			if result.State != tc.state || result.Reason != tc.reason || result.NewLineOffset != tc.offset {
+				t.Fatalf("got %+v want %+v", result, tc)
+			}
+			if *ref.Lines[0].NewNo != 2 {
+				t.Fatal("rewrote captured metadata")
+			}
+		})
+	}
+	ref.Truncated = true
+	result := resolveCapturedFileRows(ref, func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
+		t.Fatal("read a truncated selection")
+		return WorkspaceFileRevision{}, nil
+	})
+	if result.State != "unavailable" || result.Reason != "truncated" {
+		t.Fatalf("truncated: %+v", result)
+	}
+}
+
+func TestFileReferenceFollowsOnlyGitReportedRename(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "mv", "README.md", "RENAMED.md")
+	svc := workspaceReviewService(t, repo)
+	ref := ports.ChatFileReference{ID: "rename", SessionID: "ao-1", Path: "README.md", Source: ports.ChatFileReferenceSource{Kind: "workspace"}, Scope: "combined", Side: "file", Line: 1, EndLine: 1, Lines: []ports.ChatFileReferenceLine{{Kind: "context", OldNo: intPointer(1), NewNo: intPointer(1), Text: "hello"}}}
+	result, err := svc.ResolveFileReference(context.Background(), "ao-1", ref)
+	if err != nil || result.State != "moved" || result.Path != "RENAMED.md" {
+		t.Fatalf("rename %+v %v", result, err)
+	}
+	if ref.Path != "README.md" {
+		t.Fatal("rewrote original path")
+	}
+	if err := os.RemoveAll(repo); err != nil {
+		t.Fatal(err)
+	}
+	result, err = svc.ResolveFileReference(context.Background(), "ao-1", ref)
+	if err != nil || result.State != "unavailable" {
+		t.Fatalf("removed workspace %+v %v", result, err)
+	}
+}
+
+func TestFileReferenceRejectsObsoletePRSnapshotBeforeReadingSource(t *testing.T) {
+	store := newFakeStore()
+	store.prs["ao-1"] = []domain.PullRequest{{Number: 7, URL: "https://github.com/example/repo/pull/7", BaseSHA: "base", HeadSHA: "new-head"}}
+	ref := ports.ChatFileReference{ID: "pr", SessionID: "ao-1", Path: "a.ts", Source: ports.ChatFileReferenceSource{Kind: "pull_request", Number: 7, Snapshot: "base:old-head"}, Side: "file", Line: 1, EndLine: 1, Lines: []ports.ChatFileReferenceLine{{Kind: "context", OldNo: intPointer(1), NewNo: intPointer(1), Text: "captured();"}}}
+	result, err := (&Service{store: store}).ResolveFileReference(context.Background(), "ao-1", ref)
+	if err != nil || result.State != "unavailable" || result.Reason != "snapshot_changed" {
+		t.Fatalf("result %+v %v", result, err)
+	}
+}
+
+func TestFileReferenceFollowsGitRenameWithChangedSelection(t *testing.T) {
+	for _, tt := range []struct{ name, content, reason string }{
+		{name: "modified", content: "header\nmodified();\n"},
+		{name: "ambiguous", content: "selected();\nmodified();\nselected();\n", reason: "ambiguous"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newWorkspaceRepo(t)
+			padding := strings.Repeat("unchanged context padding padding\n", 20)
+			if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("header\nselected();\n"+padding), 0600); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, repo, "add", "README.md")
+			runGit(t, repo, "commit", "-m", "selection fixture")
+			runGit(t, repo, "mv", "README.md", "RENAMED.md")
+			if err := os.WriteFile(filepath.Join(repo, "RENAMED.md"), []byte(tt.content+padding), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc := workspaceReviewService(t, repo)
+			manifest, err := svc.GetWorkspaceManifest(context.Background(), "ao-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			recognized := false
+			for _, file := range manifest.Files {
+				if file.Path == "RENAMED.md" && file.PreviousPath == "README.md" {
+					recognized = true
+				}
+			}
+			if !recognized {
+				t.Fatal("fixture must establish the Git rename identity")
+			}
+			ref := ports.ChatFileReference{ID: "rename-changed", SessionID: "ao-1", Path: "README.md", Source: ports.ChatFileReferenceSource{Kind: "workspace"}, Scope: "combined", Side: "file", EndSide: "file", Line: 2, EndLine: 2, Lines: []ports.ChatFileReferenceLine{{Kind: "context", Side: "file", OldNo: intPointer(2), NewNo: intPointer(2), Text: "selected();"}}}
+			result, err := svc.ResolveFileReference(context.Background(), "ao-1", ref)
+			if err != nil || result.State != "changed" || result.Path != "RENAMED.md" || result.Reason != tt.reason {
+				t.Fatalf("renamed selection: %+v, %v", result, err)
+			}
+			if result.Line != 0 || result.EndLine != 0 || result.OldLineOffset != 0 || result.NewLineOffset != 0 {
+				t.Fatalf("changed selection must not provide a highlight range: %+v", result)
+			}
+			if ref.Path != "README.md" || ref.Line != 2 || ref.EndLine != 2 || ref.Lines[0].Text != "selected();" || *ref.Lines[0].NewNo != 2 {
+				t.Fatal("rewrote captured reference")
+			}
+			if err := os.Remove(filepath.Join(repo, "RENAMED.md")); err != nil {
+				t.Fatal(err)
+			}
+			result, err = svc.ResolveFileReference(context.Background(), "ao-1", ref)
+			if err != nil || result.State != "unavailable" || result.Path != "" {
+				t.Fatalf("deleted rename should not open: %+v, %v", result, err)
+			}
+		})
 	}
 }

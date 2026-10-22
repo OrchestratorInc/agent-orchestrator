@@ -978,7 +978,9 @@ func chatUserMessage(req SendConversationMessageRequest, sessionID string) (port
 	}
 	text := req.Text
 	if text == "" {
-		if len(req.Excerpts) > 0 {
+		if len(req.FileReferences) > 0 {
+			text = fmt.Sprintf("Use the attached %d annotation(s) as context", len(req.FileReferences)+len(req.Excerpts))
+		} else if len(req.Excerpts) > 0 {
 			text = fmt.Sprintf("Use the attached %d chat excerpt(s) as context", len(req.Excerpts))
 		} else {
 			text = fmt.Sprintf("Attached %d item(s) for context", len(content))
