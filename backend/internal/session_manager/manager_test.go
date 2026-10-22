@@ -237,6 +237,11 @@ func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID,
 	rec.Metadata.Branch = branch
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
+	for i, row := range f.worktrees[id] {
+		if row.Branch == expectedBranch {
+			f.worktrees[id][i].Branch = branch
+		}
+	}
 	return true, nil
 }
 

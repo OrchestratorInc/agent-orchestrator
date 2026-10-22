@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // A launched task's background rename applies only while the row still
@@ -46,5 +48,41 @@ func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 				t.Fatalf("branch = %q, want %q", actual.Metadata.Branch, wantBranch)
 			}
 		})
+	}
+}
+
+// The session row and its repository rows move to the new branch together, or
+// not at all.
+func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
+	s := newTestStore(t)
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Metadata.Branch = "ao/mer-1"
+	created, err := s.CreateSession(t.Context(), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repo := range []string{"__root__", "child"} {
+		if err := s.UpsertSessionWorktree(t.Context(), domain.SessionWorktreeRecord{SessionID: created.ID, RepoName: repo, Branch: "ao/mer-1", WorktreePath: "/w/" + repo, State: "active"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/other", "ao/login/root", created.UpdatedAt); err != nil || ok {
+		t.Fatalf("mismatched rename = %v, %v", ok, err)
+	}
+	rows, _ := s.ListSessionWorktrees(t.Context(), created.ID)
+	for _, row := range rows {
+		if row.Branch != "ao/mer-1" {
+			t.Fatalf("rejected rename moved a row: %+v", row)
+		}
+	}
+	if ok, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/mer-1", "ao/login/root", created.UpdatedAt); err != nil || !ok {
+		t.Fatalf("rename = %v, %v", ok, err)
+	}
+	rows, _ = s.ListSessionWorktrees(t.Context(), created.ID)
+	for _, row := range rows {
+		if row.Branch != "ao/login/root" {
+			t.Fatalf("row left on the old branch: %+v", row)
+		}
 	}
 }

@@ -166,13 +166,26 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
-// SetSessionTaskBranch records a background task branch rename.
+// SetSessionTaskBranch records a background task branch rename on the session
+// and its repository rows together.
 func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("record task branch for %s: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.qw.WithTx(tx)
+	rows, err := q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
 		ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
 	})
+	if err == nil && rows > 0 {
+		err = q.RenameSessionWorktreeBranch(ctx, gen.RenameSessionWorktreeBranchParams{SessionID: id, ExpectedBranch: expectedBranch, Branch: branch})
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
 	if err != nil {
 		return false, fmt.Errorf("record task branch for %s: %w", id, err)
 	}

@@ -30,6 +30,7 @@ export const STEP_LABELS: Record<SessionProvisionStep["id"], string> = {
 	worktree: "Create worktree",
 	setup: "Run setup script",
 	agent: "Start the agent",
+	branch: "Name branch",
 };
 
 export const BRANCH_NAMING_LABELS = [
@@ -58,7 +59,11 @@ export function startupAgentName(harness: string | undefined | null): string {
  */
 export function sessionStartupView(session: StartupSession, snapshot: Pick<ConversationSnapshot, "harness" | "turns" | "hasMoreBefore" | "controller"> | undefined): SessionStartupView | undefined {
 	const state = session.provisionState === "provisioning" || session.provisionState === "failed" ? session.provisionState : undefined;
-	const steps = session.provisionSteps ?? [];
+	// The daemon's post-launch branch step is not a checklist row: while it
+	// runs, the task's generated branch name is on the way.
+	const steps = (session.provisionSteps ?? []).filter((step) => step.id !== "branch");
+	const namingAfterLaunch = !session.isTerminated
+		&& Boolean(session.provisionSteps?.some((step) => step.id === "branch" && step.status === "running"));
 	// Mobile pages history in, so the first loaded turn is only the opening one
 	// when nothing older exists.
 	const opening = snapshot && !snapshot.hasMoreBefore ? snapshot.turns[0] : undefined;
@@ -74,8 +79,8 @@ export function sessionStartupView(session: StartupSession, snapshot: Pick<Conve
 		error: session.provisionError,
 		agentName: startupAgentName(snapshot?.harness),
 		// Keep the provisional branch private until the worktree step lands, as the desktop does.
-		branch: worktreeUnfinished ? undefined : session.branch ?? undefined,
-		namingBranch: worktreeUnfinished && state === "provisioning" && !session.isTerminated,
+		branch: worktreeUnfinished || namingAfterLaunch ? undefined : session.branch ?? undefined,
+		namingBranch: (worktreeUnfinished && state === "provisioning" && !session.isTerminated) || namingAfterLaunch,
 		// While a start is in progress or failed, the first turn hosts the
 		// checklist whatever its state, as on the desktop: a provider rejection
 		// fails that turn too, and the failed start's Retry must still render.

@@ -1266,19 +1266,49 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 		if sr.branch == "" {
 			continue
 		}
-		if sr.branch == sourceBranch {
-			consider(sr, len(sourceBranch)+1)
-		}
-		for _, prefix := range sessionBranchPrefixes(sr.branch) {
-			if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
-				consider(sr, len(prefix))
+		for _, owned := range []string{sr.branch, temporaryTaskBranch(sr)} {
+			if owned == "" {
+				continue
 			}
-		}
-		if workspaceHyphenBranch(sr) && strings.HasPrefix(sourceBranch, sr.branch+"-") && len(sourceBranch) > len(sr.branch)+1 {
-			consider(sr, len(sr.branch))
+			alias := sr
+			alias.branch = owned
+			if owned == sourceBranch {
+				consider(sr, len(sourceBranch)+1)
+			}
+			for _, prefix := range sessionBranchPrefixes(owned) {
+				if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
+					consider(sr, len(prefix))
+				}
+			}
+			if workspaceHyphenBranch(alias) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
+				consider(sr, len(owned))
+			}
 		}
 	}
 	return best, bestLen >= 0 && !ambiguous
+}
+
+// temporaryTaskBranch is the branch a worker started on before its generated
+// name was applied after launch. The agent may have made or remembered branches
+// under it, so the session keeps owning that namespace after the rename.
+func temporaryTaskBranch(sr sessionRepo) string {
+	// Only a generated task branch (ao/<slug>/root) was renamed from one.
+	if sr.session.ID == "" || sr.session.Kind == domain.KindOrchestrator ||
+		!strings.HasPrefix(sr.branch, "ao/") || !strings.HasSuffix(sr.branch, "/root") {
+		return ""
+	}
+	namespace := "ao/"
+	if strings.HasPrefix(sr.branch, "ao/dev/") {
+		namespace = "ao/dev/"
+	}
+	branch := namespace + string(sr.session.ID)
+	if !sr.workspace {
+		branch += "/root"
+	}
+	if branch == sr.branch {
+		return ""
+	}
+	return branch
 }
 
 func workspaceHyphenBranch(sr sessionRepo) bool {

@@ -19275,6 +19275,7 @@ components:
           - worktree
           - setup
           - agent
+          - branch
           type: string
         startedAt:
           format: date-time

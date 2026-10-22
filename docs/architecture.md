@@ -361,20 +361,26 @@ waits for it: the worktree is created at `worktrees/<project-id>/<session-id>` o
 the temporary branch `ao/<session-id>/root` and keeps that folder for its whole
 life. After launch, a background step renames only the branch to
 `ao/<slug>/root` (numeric suffix when the namespace is occupied) in every
-repository of the task, records it, then applies the title. Failure, invalid
-output, or a full four-call naming limit uses a local prompt slug; prompts
-without usable ASCII words fall back to the session ID. Generated slugs prefer
-two short words, allow at most three, and are capped at 24 characters. The
-rename is skipped, keeping the temporary branch, when the agent has already left
-it, pushed it, or created refs under its namespace, because AO attributes PRs to
-the session by that namespace. A rename the session row no longer accepts is put
-back in Git. Session IDs remain unchanged. Explicit CLI/API session titles are
-preserved. Explicit branches, promptless sessions, Scratch sessions, and
-existing sessions keep their naming behavior.
-The desktop hides provisional branches until the worktree step completes, and
-keeps a launched task's temporary branch hidden for up to thirty seconds while
-its generated name is on the way. Both show a text shimmer with a randomly
-selected naming label, which stays stable across updates while it is displayed.
+repository of the task and records it on the session and its repository rows
+together, under the lifecycle lock so no row rewrite can put the temporary name
+back. The title is applied first and needs no project gate; the rename's deadline
+starts once the gate is held, so another start's long setup cannot use it up.
+Failure, invalid output, or a full four-call naming limit uses a local prompt
+slug; prompts without usable ASCII words fall back to the session ID, which keeps
+the temporary branch. Generated slugs prefer two short words, allow at most three,
+and are capped at 24 characters. The rename is skipped once the temporary branch
+is pushed, because the agent's next plain `git push` would name another remote
+branch. Branches the agent made or remembers under the temporary namespace stay
+attributed to the session, so its PRs are found after the rename. A rename the
+session row no longer accepts is put back exactly. Session IDs remain unchanged.
+Explicit CLI/API session titles are preserved. Explicit branches, promptless
+sessions, Scratch sessions, and existing sessions keep their naming behavior.
+A `branch` provision step runs from launch until the rename lands or is skipped;
+startup finishes one a restart interrupted. It is not a checklist row: the
+desktop and mobile app hide the provisional branch behind a text shimmer with a
+randomly selected naming label while it, or an unfinished worktree step, runs,
+and its final write tells clients to read the branch again. The label stays
+stable across updates while it is displayed.
 
 ### Session interface handoff
 

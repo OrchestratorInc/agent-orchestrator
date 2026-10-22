@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -126,7 +127,10 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var ws ports.WorkspaceInfo
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
-	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
+	// A saved worktree that no longer exists (removed by hand, or left mid-move
+	// by an older build) is created again rather than reused.
+	_, statErr := os.Stat(in.record.Metadata.WorkspacePath)
+	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != "" && !errors.Is(statErr, os.ErrNotExist)
 	plan := provisionPlan(in, reusePublishedWorkspace)
 	progress := m.startProvisionProgress(ctx, id, plan)
 	if reusePublishedWorkspace {
@@ -258,8 +262,12 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
-	namingHandedOff = true
-	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
+	// Hand naming off once this start has made its last checklist write, whether
+	// or not the remaining steps succeed: the agent is running in the checkout.
+	defer func() {
+		namingHandedOff = true
+		m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
+	}()
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
@@ -348,7 +356,7 @@ func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.Ses
 	}
 	if in.retry && len(in.record.ProvisionSteps) > 0 {
 		for _, step := range in.record.ProvisionSteps {
-			if step.ID != domain.SessionProvisionStepAgent && step.Status != domain.SessionProvisionStepDone {
+			if step.ID != domain.SessionProvisionStepAgent && step.ID != domain.SessionProvisionStepBranch && step.Status != domain.SessionProvisionStepDone {
 				plan = append(plan, step.ID)
 			}
 		}
@@ -535,6 +543,13 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 	var failures []error
 	var retries []domain.SessionRecord
 	for _, rec := range recs {
+		// A branch rename the restart interrupted never finishes: end its step.
+		if slices.ContainsFunc(rec.ProvisionSteps, runningTaskBranchStep) {
+			now := m.clock()
+			if err := m.store.SetSessionProvisionSteps(ctx, rec.ID, withTaskBranchStep(rec.ProvisionSteps, domain.SessionProvisionStepDone, now), now); err != nil {
+				failures = append(failures, fmt.Errorf("session %s: %w", rec.ID, err))
+			}
+		}
 		if rec.IsTerminated || rec.IsTaskPreparation || !rec.ProvisionState.IsProvisioning() {
 			continue
 		}

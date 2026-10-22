@@ -893,6 +893,29 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 }
 
+// A worker renamed after launch keeps owning branches under its temporary
+// name, which the agent may have made or remembered before the rename landed.
+func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, branch, source string
+		workspace            bool
+	}{
+		{"single-repo sibling", "ao/fix-login/root", "ao/p-1/fix", false},
+		{"pushed temporary root", "ao/fix-login/root", "ao/p-1/root", false},
+		{"dev namespace sibling", "ao/dev/fix-login/root", "ao/dev/p-1/fix", false},
+		{"workspace hyphen sibling", "ao/fix-login/root", "ao/p-1-fix", true},
+	} {
+		sr := sessionRepo{session: domain.SessionRecord{ID: "p-1", Kind: domain.KindWorker}, branch: tc.branch, workspace: tc.workspace}
+		if got, ok := matchSession([]sessionRepo{sr}, tc.source); !ok || got.session.ID != "p-1" {
+			t.Errorf("%s: %q not attributed after rename", tc.name, tc.source)
+		}
+	}
+	orchestrator := sessionRepo{session: domain.SessionRecord{ID: "p-1", Kind: domain.KindOrchestrator}, branch: "ao/p-orchestrator"}
+	if _, ok := matchSession([]sessionRepo{orchestrator}, "ao/p-1/fix"); ok {
+		t.Error("an orchestrator claimed a worker namespace")
+	}
+}
+
 func TestMatchSession_PrefersExactBranchOverNamespaceMatch(t *testing.T) {
 	exact := sessionRepo{session: domain.SessionRecord{ID: "exact"}, branch: "ao/p-1"}
 	namespace := sessionRepo{session: domain.SessionRecord{ID: "namespace"}, branch: "ao/p-1/root"}

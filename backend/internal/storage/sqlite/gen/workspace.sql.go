@@ -146,6 +146,23 @@ func (q *Queries) ListWorkspaceRepos(ctx context.Context, projectID domain.Proje
 	return items, nil
 }
 
+const renameSessionWorktreeBranch = `-- name: RenameSessionWorktreeBranch :exec
+UPDATE session_worktrees SET branch = ?1
+WHERE session_id = ?2 AND branch = ?3
+`
+
+type RenameSessionWorktreeBranchParams struct {
+	Branch         string
+	SessionID      domain.SessionID
+	ExpectedBranch string
+}
+
+// A task's background branch rename moves every repository row with it.
+func (q *Queries) RenameSessionWorktreeBranch(ctx context.Context, arg RenameSessionWorktreeBranchParams) error {
+	_, err := q.db.ExecContext(ctx, renameSessionWorktreeBranch, arg.Branch, arg.SessionID, arg.ExpectedBranch)
+	return err
+}
+
 const upsertSessionWorktree = `-- name: UpsertSessionWorktree :exec
 INSERT INTO session_worktrees (session_id, repo_name, branch, base_sha, base_ref, creation_sha, worktree_path, preserved_ref, state)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

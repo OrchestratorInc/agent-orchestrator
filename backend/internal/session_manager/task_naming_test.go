@@ -3,7 +3,9 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -285,17 +287,72 @@ func TestTaskNamingPreservesManualRename(t *testing.T) {
 
 // AO attributes PRs by the session branch namespace, so once the agent has made
 // a sibling branch under the temporary name, naming keeps that name.
-func TestTaskNamingKeepsBranchTheAgentBuiltOn(t *testing.T) {
+// A sibling the agent made under the temporary name stays attributed through
+// that namespace, so the rename still gives the task its semantic branch.
+func TestTaskNamingRenamesBesideAgentBranches(t *testing.T) {
 	m, st, ws, repo := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
 	runManagerGit(t, repo, "branch", "ao/mer-1/fix-tests")
 	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Title: "Fix login", Slug: "fix-login"}), func() {})
 	actual := st.sessions[rec.ID]
-	if actual.Metadata.Branch != root.Branch || actual.DisplayName != "Fix login" {
+	if actual.Metadata.Branch != "ao/fix-login/root" || actual.DisplayName != "Fix login" {
 		t.Fatalf("naming after agent branched = %+v", actual)
 	}
-	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != root.Branch {
-		t.Fatalf("checkout branch = %q", got)
+	if got := strings.TrimSpace(runManagerGit(t, repo, "branch", "--list", "ao/mer-1/fix-tests")); got != "ao/mer-1/fix-tests" {
+		t.Fatalf("agent branch = %q", got)
+	}
+}
+
+// A project gate held past the rename deadline by another start's setup must
+// not drop the rename or the generated title.
+func TestTaskNamingWaitsForGateBeforeDeadline(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	defer func(d time.Duration) { taskBranchRenameTimeout = d }(taskBranchRenameTimeout)
+	taskBranchRenameTimeout = time.Second
+	release := m.acquireWorkspaceGate(rec.ProjectID)
+	go func() { time.Sleep(2 * taskBranchRenameTimeout); release() }()
+	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Title: "Fix login", Slug: "fix-login"}), func() {})
+	if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/fix-login/root" || actual.DisplayName != "Fix login" {
+		t.Fatalf("after a long gate wait = %+v", actual)
+	}
+}
+
+// The post-launch branch step runs until the rename settles; a restart that
+// interrupts it finishes the step so clients never wait on it forever.
+func TestTaskNamingBranchStep(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	held := make(chan struct{})
+	m.nameTaskBranchLater(context.Background(), rec, root, nil, func() generatedTaskName {
+		if got := st.sessions[rec.ID].ProvisionSteps; len(got) != 1 || !runningTaskBranchStep(got[0]) {
+			t.Errorf("steps while naming = %+v", got)
+		}
+		close(held)
+		return generatedTaskName{Slug: "fix-login"}
+	}, func() {})
+	<-held
+	if got := st.sessions[rec.ID].ProvisionSteps; len(got) != 1 || got[0].Status != domain.SessionProvisionStepDone {
+		t.Fatalf("steps after naming = %+v", got)
+	}
+	stale := st.sessions[rec.ID]
+	stale.ProvisionSteps = withTaskBranchStep(stale.ProvisionSteps, domain.SessionProvisionStepRunning, time.Now())
+	st.sessions[rec.ID] = stale
+	if _, err := m.failInterruptedProvisioningRecords(context.Background(), []domain.SessionRecord{stale}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[rec.ID].ProvisionSteps; slices.ContainsFunc(got, runningTaskBranchStep) {
+		t.Fatalf("restart left the branch step running: %+v", got)
+	}
+}
+
+// A generated name equal to the temporary one is not a collision.
+func TestTaskNamingKeepsMatchingTemporaryName(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: taskSlug(string(rec.ID))}), func() {})
+	if got := st.sessions[rec.ID].Metadata.Branch; got != root.Branch {
+		t.Fatalf("branch = %q, want %q", got, root.Branch)
 	}
 }
 
@@ -314,6 +371,29 @@ func TestTaskNamingUndoesRenameTheRowRejects(t *testing.T) {
 	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
 	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != root.Branch || st.sessions[rec.ID].Metadata.Branch != root.Branch {
 		t.Fatalf("git branch = %q, row = %+v", got, st.sessions[rec.ID].Metadata)
+	}
+}
+
+type siblingDuringWriteStore struct {
+	*fakeStore
+	repo string
+	t    *testing.T
+}
+
+func (s siblingDuringWriteStore) SetSessionTaskBranch(_ context.Context, _ domain.SessionID, expected, _ string, _ time.Time) (bool, error) {
+	runManagerGit(s.t, s.repo, "branch", strings.TrimSuffix(expected, "/root")+"/fix")
+	return false, nil
+}
+
+// The undo restores the exact temporary branch even when the agent made a ref
+// under that namespace in the meantime.
+func TestTaskNamingUndoIsExact(t *testing.T) {
+	m, st, ws, repo := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	m.store = siblingDuringWriteStore{st, repo, t}
+	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
+	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != root.Branch || st.sessions[rec.ID].Metadata.Branch != root.Branch {
+		t.Fatalf("git branch = %q, row = %q", got, st.sessions[rec.ID].Metadata.Branch)
 	}
 }
 
@@ -367,5 +447,34 @@ func TestTaskNamingRetryPlanRetainsCheckpointOnce(t *testing.T) {
 	plan := provisionPlan(in, false)
 	if len(plan) != 3 || plan[0] != domain.SessionProvisionStepWorktree || plan[1] != domain.SessionProvisionStepSetup || plan[2] != domain.SessionProvisionStepAgent {
 		t.Fatalf("retry plan = %v", plan)
+	}
+}
+
+// A failed start whose saved worktree no longer exists (removed by hand, or
+// left mid-move by an older build) starts again in a fresh one on retry.
+func TestRetryRecreatesMissingWorktree(t *testing.T) {
+	m, st, _, _ := newGitTaskPreparationManager(t)
+	m.dataDir = t.TempDir()
+	m.chat = &taskNamingLauncher{}
+	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("Fix login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := st.sessions[rec.ID]
+	if failed.Metadata.WorkspacePath == "" {
+		t.Fatalf("start published no worktree: %+v", failed)
+	}
+	failed.ProvisionState, failed.Metadata.ProviderConversationID = domain.SessionProvisionFailed, ""
+	failed.ProvisionSteps = []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepWorktree, Status: domain.SessionProvisionStepDone}, {ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepRunning}}
+	st.sessions[rec.ID] = failed
+	if err := os.RemoveAll(failed.Metadata.WorkspacePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	actual := st.sessions[rec.ID]
+	if _, err := os.Stat(actual.Metadata.WorkspacePath); actual.ProvisionState != domain.SessionProvisionReady || err != nil {
+		t.Fatalf("retry = state %s error %q path %s, worktree: %v", actual.ProvisionState, actual.ProvisionError, actual.Metadata.WorkspacePath, err)
 	}
 }

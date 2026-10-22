@@ -2128,6 +2128,9 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 		if published {
 			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
 		} else {
+			// An older build's naming checkpoint could save this unacknowledged
+			// path; clear it so the seed row can be deleted.
+			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
 			m.cleanupArtifactDir(rec.ID)
 		}

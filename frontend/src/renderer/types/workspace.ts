@@ -89,7 +89,7 @@ export type SessionMode = "chat" | "tui";
 
 /** One stage of an asynchronous Chat start. */
 export type SessionProvisionStep = {
-	id: "fetch" | "worktree" | "setup" | "agent";
+	id: "fetch" | "worktree" | "setup" | "agent" | "branch";
 	status: "pending" | "running" | "done";
 	startedAt?: string;
 	endedAt?: string;

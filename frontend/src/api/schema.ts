@@ -6760,7 +6760,7 @@ export interface components {
             /** Format: date-time */
             endedAt?: null | string;
             /** @enum {string} */
-            id: "fetch" | "worktree" | "setup" | "agent";
+            id: "fetch" | "worktree" | "setup" | "agent" | "branch";
             /** Format: date-time */
             startedAt?: null | string;
             /** @enum {string} */
