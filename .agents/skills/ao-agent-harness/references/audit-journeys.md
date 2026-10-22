@@ -174,9 +174,9 @@ claims: one surface never substitutes for the other.
 journey in the real app and screenshots every checkpoint:
 
 - harness listed
-- install
-- account and models
-- auth
+- Account tab: install and login
+- Health tab, including the auth check
+- Models tab
 - update (skipped in v0)
 - New Task agent and models
 - running TUI and Chat

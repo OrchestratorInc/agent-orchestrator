@@ -128,13 +128,16 @@ scripts/run_local.sh ui <id>            # add --install / --login to click those
 It clicks through the same journey a user takes, and saves a screenshot at
 every checkpoint, success or failure:
 
-1. The Agent Harness page lists the harness.
-2. Install works (it is offered, or the harness is already installed).
-3. Account health and the Models section are shown, and the models list.
-4. Login or Configure is offered, and auth checks out (Connected).
-5. The update action. **Skipped in v0.**
-6. New Task lists the agent and its models.
-7. Spawn a task, and see the running TUI and/or Chat.
+1. **Settings › Harness lists it**, and its detail view opens.
+2. **Account tab: install.** Install is offered, or it is already installed.
+3. **Health tab** shows Authentication, Executable and Last checked.
+4. **Models tab** lists the harness's models (with their on/off switches).
+5. **Account tab: login.** Login or Set up is offered, or it is already
+   Connected.
+6. **Auth check:** Health › Check again says Connected.
+7. **Update** on the Account tab. **Skipped in v0.**
+8. **New Task** lists the agent and its models.
+9. **Spawn a task**, and see the running TUI and/or Chat.
 
 Each checkpoint is `PASS`, `FAIL`, `BLOCKED`, `NEEDS_USER` or `NOT_RUN`, with
 its screenshot and reason, in `ui-report.md`. By default the audit installs and

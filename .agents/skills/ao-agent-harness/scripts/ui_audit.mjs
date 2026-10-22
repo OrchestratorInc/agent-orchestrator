@@ -17,6 +17,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+// Harness page layout (current main): a list of harnesses; each opens a
+// detail view with Account, Models and Health tabs.
 export const SELECTORS = Object.freeze({
   settingsButton: { role: "button", name: "Settings" },
   settingsDialog: '[data-testid="settings-page"]',
@@ -24,16 +26,20 @@ export const SELECTORS = Object.freeze({
   navSection: (name) => ({ role: "button", name }),
   harnessSection: '[data-testid="settings-section"][data-section="harness"]',
   harnessSearch: { label: "Search harnesses" },
-  harnessRow: (id) => `[data-agent="${id}"]`,
+  harnessListItem: (id) => `button[data-agent="${id}"]`,
+  harnessDetail: (id) => `[data-harness-detail] div[data-agent="${id}"]`,
   harnessName: (id) => `#harness-agent-${id}`,
-  rowStatus: "p.text-xs",
-  installButton: { role: "button", name: "Install" },
-  installedChip: { label: "Installed" },
+  tab: (name) => ({ role: "tab", name }),
+  primaryAction: "[data-harness-primary-action]",
   progress: '[role="status"]',
-  loginButton: { role: "button", name: /^(Login|Set up|Refresh login)$/ },
+  loginButton: { role: "button", name: /^(Login|Set up|Refresh login|Retry login)$/ },
+  updateButton: { role: "button", name: /^Update$/ },
   authTerminal: '[data-testid="harness-auth-terminal"]',
-  modelsSection: /models?/i,
-  accountSection: /account|subscription|usage|remaining/i,
+  modelList: '[aria-label="Available models"]',
+  modelRow: '[aria-label="Available models"] li',
+  modelsMessage: /reported no models|to see its models|to load its models|Could not load models/,
+  modelsSummary: /\d+ of \d+ shown in model pickers/,
+  checkAgain: { role: "button", name: "Check again" },
   standaloneStart: { role: "button", name: /Start a standalone agent|New agent/ },
   agentPicker: { label: "Agent" },
   modelPicker: { label: "Model" },
@@ -47,12 +53,12 @@ export const SELECTORS = Object.freeze({
   interfaceSetting: { label: /Default session interface/ },
 });
 
+// Status words the Account and Health tabs show (frontend i18n en.json).
 const STATUS_TEXT = {
-  connected: /^Connected$/i,
-  configured: /^Configured$/i,
-  signedOut: /^(Signed out|Not set up|Not connected)$/i,
-  unknown: /^Unknown$/i,
-  available: /^Available via /i,
+  connected: /\bConnected\b/,
+  unverified: /Credentials not verified|\bConfigured\b/,
+  signedOut: /Signed out|Not set up|Login required|Not connected/,
+  notInstalled: /Not installed|Installation status unknown/,
 };
 
 function loadPlaywright(repo) {
@@ -101,8 +107,13 @@ async function closeSettings(page) {
   }
 }
 
-async function rowStatus(row) {
-  return (await row.locator(SELECTORS.rowStatus).first().textContent().catch(() => "") ?? "").trim();
+async function textOf(locator) {
+  return ((await locator.first().textContent().catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
+}
+
+async function openTab(detail, name) {
+  await locate(detail, SELECTORS.tab(name)).first().click();
+  await detail.page().waitForTimeout(500);
 }
 
 async function setInterface(page, label) {
@@ -127,54 +138,83 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
   if (!page) throw new Error("connected, but the AO window has no page");
   await page.setViewportSize?.({ width: 1440, height: 900 }).catch(() => {});
   const context = { page, out, results: [] };
-  let row;
+  let detail;
   let displayName = label;
 
   await checkpoint(context, "harness-listed", "Agent Harness page lists the harness", async () => {
     const section = await openHarnessSettings(page, harness);
-    row = section.locator(SELECTORS.harnessRow(harness));
-    if (!(await visible(row))) return { status: "FAIL", reason: `no row [data-agent="${harness}"] on the Harness page: not registered, or hidden on this host` };
-    displayName ||= ((await page.locator(SELECTORS.harnessName(harness)).first().textContent().catch(() => "")) ?? "").trim() || harness;
-    return { status: "PASS", reason: `listed as "${displayName}" (${await rowStatus(row) || "no status text"})` };
+    const item = section.locator(SELECTORS.harnessListItem(harness));
+    if (!(await visible(item))) return { status: "FAIL", reason: `no harness "${harness}" on the Harness page: not registered, or hidden on this host` };
+    await item.first().click();
+    detail = page.locator(SELECTORS.harnessDetail(harness));
+    if (!(await visible(detail))) return { status: "FAIL", reason: "listed, but its detail view did not open" };
+    displayName ||= (await textOf(page.locator(SELECTORS.harnessName(harness)))) || harness;
+    return { status: "PASS", reason: `listed as "${displayName}"; detail view opened` };
   });
-  if (!row || !(await visible(row, 500))) return finish(browser, context, { harness, displayName });
+  if (!detail || !(await visible(detail, 500))) return finish(browser, context, { harness, displayName });
 
-  await checkpoint(context, "install", "Install from the Harness page", async () => {
-    const status = await rowStatus(row);
-    const installButton = locate(row, SELECTORS.installButton);
+  await checkpoint(context, "install", "Install from the Account tab", async () => {
+    await openTab(detail, "Account");
+    const text = await textOf(detail);
+    const installButton = detail.locator(SELECTORS.primaryAction).filter({ hasText: /^(Install|Retry install)$/ });
     if (!(await visible(installButton, 1_000))) {
-      return STATUS_TEXT.available.test(status)
-        ? { status: "FAIL", reason: `shows "${status}" but no Install button` }
-        : { status: "PASS", reason: `already installed (${status || "installed"}); the install action was not exercised` };
+      return STATUS_TEXT.notInstalled.test(text)
+        ? { status: "FAIL", reason: "not installed and no Install button (manual-only installer?)" }
+        : { status: "PASS", reason: "already installed; the Install action was not exercised" };
     }
     if (!install) return { status: "NOT_RUN", reason: "Install is offered; pass --install to click it (installs the CLI on this machine)" };
     await installButton.first().click();
-    await row.locator(SELECTORS.progress).first().waitFor({ state: "detached", timeout: 600_000 }).catch(() => {});
-    const after = await rowStatus(row);
-    return /fail|interrupt|error/i.test(after) ? { status: "FAIL", reason: `install ended with "${after}"` } : { status: "PASS", reason: `installed; row now shows "${after}"` };
+    await detail.locator(SELECTORS.progress).first().waitFor({ state: "detached", timeout: 600_000 }).catch(() => {});
+    const after = await textOf(detail);
+    return /Installation failed|Retry install/.test(after) ? { status: "FAIL", reason: "install failed (see diagnostics in the screenshot)" } : { status: "PASS", reason: "installed from the Account tab" };
   });
 
-  await checkpoint(context, "account-models", "Account health and Models section with listed models", async () => {
-    const text = (await row.textContent()) ?? "";
-    const hasModels = SELECTORS.modelsSection.test(text);
-    const hasAccount = SELECTORS.accountSection.test(text);
-    if (!hasModels && !hasAccount) return { status: "FAIL", reason: "this build's Harness row shows no account health or Models section (models only appear in the New Task picker)" };
-    return { status: hasModels && hasAccount ? "PASS" : "FAIL", reason: `account section ${hasAccount ? "shown" : "missing"}; models section ${hasModels ? "shown" : "missing"}` };
+  await checkpoint(context, "health", "Health tab shows status, authentication and executable", async () => {
+    await openTab(detail, "Health");
+    const text = await textOf(detail);
+    const parts = ["Authentication", "Executable", "Last checked"].filter((label) => text.includes(label));
+    return parts.length >= 2 ? { status: "PASS", reason: `health shows ${parts.join(", ")}` } : { status: "FAIL", reason: `health tab is missing ${["Authentication", "Executable", "Last checked"].filter((label) => !parts.includes(label)).join(", ")}` };
   });
 
-  await checkpoint(context, "auth", "Login or configure, then Connected", async () => {
-    const status = await rowStatus(row);
-    if (STATUS_TEXT.connected.test(status)) return { status: "PASS", reason: "Connected" };
-    if (STATUS_TEXT.configured.test(status)) return { status: "BLOCKED", reason: "Configured, not verified: AO found credentials but could not verify them" };
-    const loginButton = locate(row, SELECTORS.loginButton);
-    if (!(await visible(loginButton, 1_000))) return { status: "FAIL", reason: `status "${status || "none"}" and no Login/Set up button` };
-    if (!login) return { status: "NEEDS_USER", reason: `status "${status}"; Login/Set up is offered. Log in (or pass --login to open it), then rerun` };
+  await checkpoint(context, "models", "Models tab lists the harness models", async () => {
+    await openTab(detail, "Models");
+    const rows = detail.locator(SELECTORS.modelRow);
+    if (await visible(rows, 15_000)) {
+      const summary = (await textOf(detail)).match(SELECTORS.modelsSummary)?.[0];
+      return { status: "PASS", reason: `${await rows.count()} model(s) on this page${summary ? `; ${summary}` : ""}` };
+    }
+    const message = (await textOf(detail)).match(SELECTORS.modelsMessage)?.[0];
+    return { status: /to load its models/.test(message ?? "") ? "NEEDS_USER" : "FAIL", reason: message ? `Models tab says: "${message}"` : "Models tab shows no models" };
+  });
+
+  await checkpoint(context, "login", "Login or configure is offered (or already connected)", async () => {
+    await openTab(detail, "Account");
+    const text = await textOf(detail);
+    const loginButton = locate(detail, SELECTORS.loginButton);
+    const offered = await visible(loginButton, 1_000);
+    if (STATUS_TEXT.connected.test(text) && !STATUS_TEXT.signedOut.test(text)) return { status: "PASS", reason: `connected${offered ? "; Refresh login is offered" : ""}` };
+    if (!offered) return { status: "FAIL", reason: "not connected and no Login/Set up button" };
+    if (!login) return { status: "NEEDS_USER", reason: "Login/Set up is offered; log in (or pass --login to open it), then rerun" };
     await loginButton.first().click();
     const opened = await visible(page.locator(SELECTORS.authTerminal), 15_000);
     return { status: "NEEDS_USER", reason: opened ? "login panel opened; finish the login, then rerun" : "clicked Login but no login panel appeared" };
   });
 
-  await checkpoint(context, "update", "Update the harness", async () => ({ status: "NOT_RUN", reason: "skipped in v0" }));
+  await checkpoint(context, "auth-check", "Auth check: Health says Connected", async () => {
+    await openTab(detail, "Health");
+    const again = locate(detail, SELECTORS.checkAgain);
+    if (await visible(again, 1_000)) { await again.first().click(); await page.waitForTimeout(5_000); }
+    const text = await textOf(detail);
+    if (STATUS_TEXT.connected.test(text) && !STATUS_TEXT.unverified.test(text)) return { status: "PASS", reason: "authentication verified: Connected" };
+    if (STATUS_TEXT.unverified.test(text)) return { status: "BLOCKED", reason: "credentials found but not verified" };
+    return { status: "NEEDS_USER", reason: "not authenticated: log in or provide the API key, then rerun" };
+  });
+
+  await checkpoint(context, "update", "Update the harness", async () => {
+    await openTab(detail, "Account");
+    const offered = await visible(locate(detail, SELECTORS.updateButton), 1_000);
+    return { status: "NOT_RUN", reason: `skipped in v0${offered ? " (an update is offered)" : ""}` };
+  });
   await closeSettings(page);
 
   for (const mode of interfaces) {
