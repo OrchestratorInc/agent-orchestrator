@@ -137,6 +137,16 @@ function rendersNothing(item: ConversationItem): boolean {
 }
 
 /**
+ * The one reply that draws the typing cursor: the newest item, while it is
+ * still streaming. ACP providers settle a turn's text blocks only when the turn
+ * ends, so earlier blocks stay marked streaming after a tool call follows them.
+ */
+export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
+	const last = items.at(-1);
+	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
+}
+
+/**
  * Split one turn's items for the Working / Worked presentation, matching desktop.
  * A running turn keeps its work inline under a live "Working" row; once the turn
  * settles the work folds behind "Worked for", leaving the final reply and any

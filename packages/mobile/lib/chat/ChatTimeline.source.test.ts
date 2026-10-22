@@ -27,8 +27,14 @@ describe("chat turn summary styling", () => {
 
 describe("streaming response layout", () => {
 	it("keeps the live cursor inside the response instead of adding a new block", () => {
-		expect(source).toContain('item.streaming ? `${item.text || ""} ▍`');
+		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');
 		expect(source).not.toContain("styles.streamingDot");
+	});
+
+	it("draws the cursor on the turn's newest reply only", () => {
+		expect(source).toContain("streamingCursorMessageId(items)");
+		expect(source).toContain("showCursor={row.items[0].id === cursorMessageId}");
+		expect(source).not.toContain('item.streaming ? `${item.text || ""} ▍`');
 	});
 });
 
