@@ -329,3 +329,46 @@ func TestACPToolDetailCappedPatchDropsSharedLines(t *testing.T) {
 		t.Fatalf("counts = +%v -%v, want +1 -1", file["additions"], file["deletions"])
 	}
 }
+
+func TestACPToolDetailCapsPatchWithLongPath(t *testing.T) {
+	for _, path := range []string{
+		"/" + strings.Repeat("a/", 5000) + "file",
+		"/" + strings.Repeat("🧪é/", 2000) + "file",
+	} {
+		for _, repeat := range []int{1, 5000} {
+			oldText, newText := strings.Repeat("before", repeat), strings.Repeat("after", repeat)
+			tool := &toolState{
+				id: "edit-1", kind: acpsdk.ToolKindEdit, status: acpsdk.ToolCallStatusCompleted,
+				content: []acpsdk.ToolCallContent{acpsdk.ToolDiffContent(path, newText, oldText)},
+			}
+			var detail struct {
+				Files []struct {
+					Path           string `json:"path"`
+					Patch          string `json:"patch"`
+					PatchTruncated bool   `json:"patchTruncated"`
+				} `json:"files"`
+			}
+			if err := json.Unmarshal((&conversation{}).toolEvent("turn-1", tool, true).Detail, &detail); err != nil {
+				t.Fatal(err)
+			}
+			file := detail.Files[0]
+			if file.Path != path || len(file.Patch) > commanddetail.MaxPatchChars || strings.ContainsRune(file.Patch, '\uFFFD') {
+				t.Fatalf("path retained=%v, patch=%d bytes, replacement character=%v", file.Path == path, len(file.Patch), strings.ContainsRune(file.Patch, '\uFFFD'))
+			}
+			if !strings.Contains(file.Patch, "\n-before") || !strings.Contains(file.Patch, "\n+after") {
+				t.Fatal("long path displaced one side of the change")
+			}
+			if file.PatchTruncated != (repeat > 1) {
+				t.Fatalf("patchTruncated=%v; only cutting changed lines should mark the patch", file.PatchTruncated)
+			}
+			if repeat == 1 && !strings.HasSuffix(file.Patch, "\n-"+oldText+"\n+"+newText) {
+				t.Fatal("header abbreviation lost changed text")
+			}
+			for _, header := range strings.SplitN(file.Patch, "\n", 3)[:2] {
+				if !strings.HasSuffix(header, "...") {
+					t.Fatal("abbreviated header has no marker")
+				}
+			}
+		}
+	}
+}

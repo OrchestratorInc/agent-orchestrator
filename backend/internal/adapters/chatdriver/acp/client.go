@@ -936,6 +936,10 @@ func cappedACPPatch(path string, oldText *string, newText string) (string, bool)
 	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[len(oldLines)-1] == newLines[len(newLines)-1] {
 		oldLines, newLines = oldLines[:len(oldLines)-1], newLines[:len(newLines)-1]
 	}
+	// The full path is stored separately; reserve room for both sides of the change.
+	if len(path) > commanddetail.MaxPatchChars/4 {
+		path = commanddetail.Head(path, commanddetail.MaxPatchChars/4-3) + "..."
+	}
 	if patch := acpPatch(path, oldLines, newLines); len(patch) <= commanddetail.MaxPatchChars {
 		return patch, false
 	}
