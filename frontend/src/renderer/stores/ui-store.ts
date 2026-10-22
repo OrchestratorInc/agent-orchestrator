@@ -200,9 +200,9 @@ export type UiState = {
 	// every request so a repeat press (even for the same project) still re-fires;
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
-	// initialPrompt prefills the composer; displayName names the session when
-	// that prompt is sent unchanged.
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number; initialPrompt?: string; displayName?: string } | null;
+	// hiddenPrompt is sent ahead of what the user types and never shown in the
+	// composer; displayName names that session.
+	newTaskRequest: { projectId: string; hostId?: string; nonce: number; hiddenPrompt?: string; displayName?: string } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -284,7 +284,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string, prefill?: { initialPrompt?: string; displayName?: string }) => void;
+	requestNewTask: (projectId: string, hostId?: string, prefill?: { hiddenPrompt?: string; displayName?: string }) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;

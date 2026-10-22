@@ -15,8 +15,8 @@ vi.mock("../../lib/telemetry", async (importOriginal) => ({
 vi.mock("../../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: h.daemonState } }) }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => h.navigate }));
 vi.mock("../NewTaskDialog", () => ({
-	NewTaskDialog: ({ open, projectId, initialPrompt, displayName, onContentChange }: { open: boolean; projectId?: string; initialPrompt?: string; displayName?: string; onContentChange?: (dirty: boolean) => void }) => open
-		? <div role="dialog" data-project={projectId} data-name={displayName}><textarea aria-label="Prompt" defaultValue={initialPrompt} onChange={(event) => onContentChange?.(!!event.target.value.trim())} /></div> : null,
+	NewTaskDialog: ({ open, projectId, hiddenPrompt, displayName, onContentChange }: { open: boolean; projectId?: string; hiddenPrompt?: string; displayName?: string; onContentChange?: (dirty: boolean) => void }) => open
+		? <div role="dialog" data-project={projectId} data-name={displayName} data-hidden-prompt={hiddenPrompt}><textarea aria-label="Prompt" onChange={(event) => onContentChange?.(!!event.target.value.trim())} /></div> : null,
 }));
 function renderReport(active = true) {
 	render(<QueryClientProvider client={new QueryClient()}><ReportProblemContent active={active} /><GlobalNewTaskDialog /></QueryClientProvider>);
@@ -40,7 +40,7 @@ describe("Report a problem", () => {
 		expect(captureRendererEvent).toHaveBeenCalledTimes(2);
 		expect(captureRendererEvent).toHaveBeenLastCalledWith("ao.renderer.support_opened");
 	});
-	it("prepares diagnostics and opens the existing standalone dialog with the prompt and name", async () => {
+	it("prepares diagnostics and opens an empty standalone dialog with hidden instructions and the report name", async () => {
 		const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "Read /home/me/.ao/triage/context.md", dir: "/home/me/.ao/triage" });
 		const launch = vi.spyOn(aoBridge.triage, "launch");
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
@@ -48,7 +48,8 @@ describe("Report a problem", () => {
 		expect(prepare).toHaveBeenCalledWith(); expect(launch).not.toHaveBeenCalled();
 		expect(dialog).toHaveAttribute("data-project", "__standalone__");
 		expect(dialog).toHaveAttribute("data-name", "Report a problem");
-		expect(screen.getByLabelText("Prompt")).toHaveValue("Read /home/me/.ao/triage/context.md");
+		expect(dialog).toHaveAttribute("data-hidden-prompt", "Read /home/me/.ao/triage/context.md");
+		expect(screen.getByLabelText("Prompt")).toHaveValue("");
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "succeeded" });
 	});
@@ -66,7 +67,8 @@ describe("Report a problem", () => {
   expect(prepare).not.toHaveBeenCalled();
   expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "failed" });
  } else {
-  await waitFor(() => expect(screen.getByLabelText("Prompt")).toHaveValue("triage prompt"));
+  await waitFor(() => expect(screen.getByRole("dialog")).toHaveAttribute("data-hidden-prompt", "triage prompt"));
+  expect(screen.getByLabelText("Prompt")).toHaveValue("");
   expect(useUiStore.getState().settingsModal).toBeNull();
  }
  });

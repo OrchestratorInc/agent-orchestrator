@@ -898,7 +898,7 @@ describe("GlobalSettingsForm", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
 		expect(triagePrepare).toHaveBeenCalledWith();
 		expect(useUiStore.getState().newTaskRequest).toEqual(expect.objectContaining({
-			projectId: "__standalone__", initialPrompt: "Read the report context", displayName: "Report a problem",
+			projectId: "__standalone__", hiddenPrompt: "Read the report context", displayName: "Report a problem",
 		}));
 		expect(triageLaunch).not.toHaveBeenCalled();
 	});
