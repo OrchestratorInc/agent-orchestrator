@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
@@ -342,12 +343,13 @@ export function WorkspaceReviewPane({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; each file's header carries its item id.
 	const askInChat = useAskInChat(sessionId, hostId);
+	const captureSource = fileReferenceSource(target.source, target.sha);
 	const codeSelection = useCodeSelection(reviewRef, (selection) => {
 		// Pierre portals the custom header into this host's light DOM; the selected
 		// code is in its shadow root. Search this host to keep the file lookup local.
 		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
-		if (file) askInChat?.(codeReference(file.path, selection, true));
-	}, askInChat !== undefined);
+		return file && captureSource ? askInChat?.({ ...codeReference(file.path, selection, true), ...captureSource, scope, previousPath: file.previousPath, fileFingerprint: file.fileFingerprint, workspaceVersion }) ?? false : false;
+	}, askInChat !== undefined && captureSource !== undefined);
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {

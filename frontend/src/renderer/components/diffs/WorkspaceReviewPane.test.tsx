@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import * as codeSelection from "./useCodeSelection";
+import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type ReactNode } from "react";
@@ -156,6 +158,19 @@ function ReviewWithCollapseControls(props: ComponentProps<typeof WorkspaceReview
 }
 
 describe("WorkspaceReviewPane", () => {
+	it("keeps Add to chat enabled for one selected workspace commit", () => {
+		const accept=vi.fn(()=>true),remove=subscribeChatComposerReferences("sess-1",accept);
+		const hook=vi.spyOn(codeSelection,"useCodeSelection"),sha="a".repeat(40);
+		const data=committedWorkspace([{path:"src/App.tsx",status:"modified",additions:1,deletions:1,size:20,binary:false}]);
+		data.commits[0].sha=sha;
+		const target=reviewTarget(data,{kind:"commits",shas:[sha]});
+		const view=renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false}/>);
+		const args=hook.mock.lastCall!;expect(args[2]).toBe(true);
+		const host=document.createElement("div"),header=document.createElement("div");header.setAttribute("data-review-item-id",`${target.key}:src/App.tsx`);host.append(header);
+		act(()=>{args[1]({host,point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"additions"},rows:[{kind:"add",side:"new",oldNo:null,newNo:1,text:"new code"}]})});
+		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"}}));
+		view.unmount();hook.mockRestore();remove();
+	});
 	beforeEach(() => {
 		window.localStorage.clear();
 		getMock.mockReset();

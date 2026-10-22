@@ -2282,7 +2282,7 @@
 	"files.fileFeedbackTarget": "{{file}} · arquivo inteiro",
 	"files.selectionFeedbackTarget": "{{file}} · texto selecionado",
 	"files.lineFeedbackTarget": "{{file}} · linha {{side}} {{line}}",
-	"files.askInChat": "Perguntar no chat",
+	"files.askInChat": "Adicionar ao chat",
 	"files.feedbackLabel": "Feedback para {{target}}",
 	"files.feedbackPlaceholder": "Descreva o que o agente deve alterar...",
 	"files.feedbackShortcut": "⌘/Ctrl + Enter para enviar",
@@ -3550,5 +3550,13 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
-	"files.previousVersionAt": "Previous version at {{revision}}"
+	"files.previousVersionAt": "Previous version at {{revision}}",
+	"chat.capturedSelectionTruncated": "Captured selection truncated",
+	"chat.draft.annotationLimit": "You can attach up to eight annotations. Remove one before adding another.",
+	"chat.draft.fileReferencesUnsupported": "This chat does not support file annotations. Reconnect to an updated daemon or remove the file annotations.",
+	"chat.draft.fileReferencesSideUnsupported": "File annotations cannot be sent to a side chat yet. Remove them or send this message in the main chat.",
+	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
+	"chat.fileAnnotationShowMore": "Mostrar mais",
+	"chat.fileAnnotationShowLess": "Mostrar menos",
+	"files.addToChatRejected": "A seleção não foi adicionada. Aguarde o envio terminar ou confira o rascunho e tente novamente."
 }

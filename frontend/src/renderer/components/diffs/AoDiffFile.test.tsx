@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import * as codeSelection from "./useCodeSelection";
+import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -53,6 +55,15 @@ function annotation(): FileAnnotationModel {
 }
 
 describe("AoDiffFile", () => {
+	it("captures a single PR commit with its original comparison identity", () => {
+		const accept=vi.fn(()=>true),remove=subscribeChatComposerReferences("sess-1",accept);
+		const hook=vi.spyOn(codeSelection,"useCodeSelection"),sha="a".repeat(40);
+		const view=render(<QueryClientProvider client={new QueryClient()}><AoDiffFile annotation={annotation()} detail={{...detail(),previousPath:"old.ts"}} fallback={null} onActiveSelectionChange={vi.fn()} sessionId="sess-1" split={false} scope="committed" source={{kind:"snapshot",label:"PR",commitShas:[sha],view:{prNumber:42,sourceUrl:"https://example.test/repo/pull/42",expectedTipSha:sha}}}/></QueryClientProvider>);
+		const args=hook.mock.lastCall!;expect(args[2]).toBe(true);
+		args[1]({host:document.createElement("div"),point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"deletions"},rows:[{kind:"del",side:"old",oldNo:1,newNo:null,text:"old code"}]});
+		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,previousPath:"old.ts",side:"old",source:expect.objectContaining({kind:"pull_request",number:42,snapshot:sha})}));
+		view.unmount();hook.mockRestore();remove();
+	});
 	it("starts line feedback using Pierre's hovered-side contract", () => {
 		const model = annotation();
 		render(

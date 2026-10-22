@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { fetchPRFileRevision, fetchWorkspaceFileRevision, type FilesSource, type WorkspaceDiffScope, type WorkspaceFileDetail } from "../../hooks/useSessionWorkspaceFiles";
 import { parseUnifiedDiff, type DiffRow } from "../../lib/diff-parser";
 import { useAskInChat } from "../../lib/chat-context-bus";
+import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useUiStore } from "../../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
@@ -161,7 +162,8 @@ export function AoDiffFile({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer.
 	const askInChat = useAskInChat(sessionId, hostId);
-	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, true)), askInChat !== undefined);
+	const captureSource = fileReferenceSource(source, commitSha);
+	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, true), ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined);
 
 	if (!metadata) return <>{fallback}</>;
 

@@ -288,7 +288,7 @@ export function FileContentPane({
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={path.split("/").pop() ?? path} />
 				<span className="truncate">{path}</span>
 			</div>
-			<ReadOnlyFileView annotation={{ ...annotation, begin: () => {} }} detail={preview} sessionId={sessionId} hostId={hostId} scope={scope} onContentReady={onContentReady} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} onRevealLineConsumed={onInitialLineConsumed} />
+			<ReadOnlyFileView source={source} commitSha={commitSha} annotation={{ ...annotation, begin: () => {} }} detail={preview} sessionId={sessionId} hostId={hostId} scope={scope} onContentReady={onContentReady} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} onRevealLineConsumed={onInitialLineConsumed} />
 			{query.error ? <PanelMessage action={<RetryButton onClick={() => void refetch()} />}>{query.error.message}</PanelMessage> : null}
 		</div>;
 	}
@@ -492,7 +492,7 @@ export function FileContentPane({
 				detailLoadedAt={query.dataUpdatedAt}
 				emptyFallback={
 					!detail.binary && !detail.contentTruncated && !detail.deleted && detail.content ? (
-						<ReadOnlyFileView annotation={annotation} detail={detail} hostId={hostId} scope={scope} sessionId={sessionId} />
+						<ReadOnlyFileView source={source} commitSha={commitSha} annotation={annotation} detail={detail} hostId={hostId} scope={scope} sessionId={sessionId} />
 					) : undefined
 				}
 				filePath={path}
@@ -571,7 +571,7 @@ function CompleteFileView({ annotation, commitSha, detail, editing, markdownEdit
 	if (needsRevision && revision.data) {
 		if (!revision.data.exists) return <PanelMessage>{t("files.error.loadFile")}</PanelMessage>;
 		return (
-			<ReadOnlyFileView
+			<ReadOnlyFileView source={source} commitSha={commitSha}
 				annotation={annotation}
 				detail={{
 					...detail,
@@ -594,7 +594,7 @@ function CompleteFileView({ annotation, commitSha, detail, editing, markdownEdit
 		);
 	}
 	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
-	return <ReadOnlyFileView annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	return <ReadOnlyFileView source={source} commitSha={commitSha} annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }
 
 // An artifact image loads from its raw URL. The load time joins the URL so a

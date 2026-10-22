@@ -2244,7 +2244,7 @@
 	"files.fileFeedbackTarget": "{{file}} · ファイル全体",
 	"files.selectionFeedbackTarget": "{{file}} · 選択したテキスト",
 	"files.lineFeedbackTarget": "{{file}} · {{side}} 側 {{line}} 行",
-	"files.askInChat": "チャットで質問",
+	"files.askInChat": "チャットに追加",
 	"files.feedbackLabel": "{{target}} へのフィードバック",
 	"files.feedbackPlaceholder": "エージェントに変更してほしい内容を記述...",
 	"files.feedbackShortcut": "⌘/Ctrl + Enter で送信",
@@ -3485,5 +3485,13 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
-	"files.previousVersionAt": "Previous version at {{revision}}"
+	"files.previousVersionAt": "Previous version at {{revision}}",
+	"chat.capturedSelectionTruncated": "Captured selection truncated",
+	"chat.draft.annotationLimit": "You can attach up to eight annotations. Remove one before adding another.",
+	"chat.draft.fileReferencesUnsupported": "This chat does not support file annotations. Reconnect to an updated daemon or remove the file annotations.",
+	"chat.draft.fileReferencesSideUnsupported": "File annotations cannot be sent to a side chat yet. Remove them or send this message in the main chat.",
+	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
+	"chat.fileAnnotationShowMore": "もっと見る",
+	"chat.fileAnnotationShowLess": "表示を減らす",
+	"files.addToChatRejected": "選択範囲を追加できませんでした。送信の完了を待つか下書きを確認して、もう一度お試しください。"
 }

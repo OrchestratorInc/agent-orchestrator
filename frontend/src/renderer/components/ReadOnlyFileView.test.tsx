@@ -1,4 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import * as codeSelection from "./diffs/useCodeSelection";
+import { subscribeChatComposerReferences } from "../lib/chat-context-bus";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { REVEALED_LINE_HIGHLIGHT_MS, ReadOnlyFileView } from "./ReadOnlyFileView";
@@ -78,6 +80,17 @@ function baseDetail(overrides: Partial<WorkspaceFileDetail> = {}): WorkspaceFile
 }
 
 describe("ReadOnlyFileView", () => {
+	it("captures a supported immutable commit from the center file view", () => {
+		const accept=vi.fn(()=>true), remove=subscribeChatComposerReferences("sess-1",accept);
+		const hook=vi.spyOn(codeSelection,"useCodeSelection");
+		const sha="a".repeat(40);
+		const view=render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail()} sessionId="sess-1" source={{kind:"snapshot",label:"Commit",commitShas:[sha]}}/>);
+		const args=hook.mock.lastCall!;
+		expect(args[2]).toBe(true);
+		act(()=>{args[1]({host:document.createElement("div"),point:{x:0,y:0},dragging:false,range:{start:1,end:1},rows:[{kind:"context",oldNo:1,newNo:1,text:"captured();"}]})});
+		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"},scope:"committed"}));
+		view.unmount();hook.mockRestore();remove();
+	});
 	it("consumes a requested source line once per request key", async () => {
 		lineScrollIntoView.mockClear();
 		const onRevealLineConsumed = vi.fn();

@@ -547,7 +547,7 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 	}
 	messages := make([]replayMessage, 0, len(rows))
 	for _, message := range rows {
-		if message.Sequence <= floor || message.Sequence > cutoff || message.Streaming || strings.TrimSpace(message.Text) == "" {
+		if message.Sequence <= floor || message.Sequence > cutoff || message.Streaming {
 			continue
 		}
 		switch message.Role {
@@ -555,7 +555,31 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 		default:
 			continue
 		}
-		messages = append(messages, replayMessage{message.Sequence, message.Role, strings.TrimSpace(message.Text)})
+		text := strings.TrimSpace(message.Text)
+		if message.Role == domain.MessageRoleUser && message.DeliveryContentJSON != "" {
+			var durable []ports.ChatContent
+			if err := json.Unmarshal([]byte(message.DeliveryContentJSON), &durable); err != nil {
+				return "", false, fmt.Errorf("decode stored replay content: %w", err)
+			}
+			var captures []ports.ChatContent
+			for _, block := range durable {
+				if block.Internal || block.Type != "file_reference" {
+					continue
+				}
+				if block.FileReference == nil {
+					return "", false, fmt.Errorf("stored replay file reference is missing")
+				}
+				if err := ValidateFileReference(*block.FileReference); err != nil {
+					return "", false, fmt.Errorf("invalid stored replay file reference: %w", err)
+				}
+				captures = append(captures, block)
+			}
+			text = excerptDeliveryMessage(ports.ChatUserMessage{Text: text, Content: captures}).Text
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		messages = append(messages, replayMessage{message.Sequence, message.Role, text})
 	}
 	sort.SliceStable(messages, func(i, j int) bool { return messages[i].Sequence < messages[j].Sequence })
 	selected := make([]replayMessage, 0, len(messages))

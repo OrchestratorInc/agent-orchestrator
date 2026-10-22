@@ -685,12 +685,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
 				excerptsEnabled
-				onSend={async (text, attachments, clientMessageId, excerpts) => {
+				fileReferencesEnabled={Boolean(renderSnapshot.supportsFileReferences)}
+				onSend={async (text, attachments, clientMessageId, excerpts, fileReferences) => {
 					// Only claim /btw and /side where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
 					const btw = sideCreationEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
-					if (btw) {
+     if (btw && fileReferences?.length) {
+      throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
+     }
+     if (btw) {
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
@@ -705,7 +709,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
+						fileReferences,
 						excerpts: excerpts?.map((excerpt) => ({
+							id: excerpt.id, order: excerpt.order,
 							conversationId: excerpt.conversationId,
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
