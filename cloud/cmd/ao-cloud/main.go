@@ -598,6 +598,8 @@ func run(logger *slog.Logger) error {
 		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
 		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
+		notifyListener.Handle("ao_session_event", api.HandleSessionEventNotify)
+		api.EnableSessionEventNotify()
 		// Any path that asks a sandbox to run again (resume, a message to a
 		// paused session, a restore) starts provisioning now, not at the next tick.
 		notifyListener.Handle("ao_sandbox_wake", func(string) { reconciler.Wake() })

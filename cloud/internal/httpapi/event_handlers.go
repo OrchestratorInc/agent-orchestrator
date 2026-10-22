@@ -226,6 +226,10 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	// Subscribe before the first read so an event committed between that read
+	// and the wait below still wakes this stream.
+	wake, pollEvery, unsubscribe := s.subscribeSessionEvents(sessionID)
+	defer unsubscribe()
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -239,6 +243,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	lastRead := time.Now()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -250,9 +255,26 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	lastWrite := time.Now()
+	read := func() bool {
+		events, hasMore, err = s.store.ListClientEvents(
+			r.Context(),
+			principalFrom(r),
+			orgID,
+			sessionID,
+			after,
+			eventPageLimit,
+			types,
+		)
+		lastRead = time.Now()
+		if err != nil {
+			s.logger.Warn("poll event stream", "error", err, "request_id", requestID(r))
+			return false
+		}
+		return true
+	}
 	for {
 		for _, event := range events {
 			if err := writeSSEEvent(w, event); err != nil {
@@ -288,18 +310,26 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-s.drain:
 			return
+		case <-wake:
+			// Fold a burst of wakes into one read per interval; the wake
+			// channel coalesces whatever arrives meanwhile.
+			if wait := sessionEventMinInterval - time.Since(lastRead); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-r.Context().Done():
+					timer.Stop()
+					return
+				case <-s.drain:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			if !read() {
+				return
+			}
 		case now := <-ticker.C:
-			events, hasMore, err = s.store.ListClientEvents(
-				r.Context(),
-				principalFrom(r),
-				orgID,
-				sessionID,
-				after,
-				eventPageLimit,
-				types,
-			)
-			if err != nil {
-				s.logger.Warn("poll event stream", "error", err, "request_id", requestID(r))
+			if !read() {
 				return
 			}
 			if len(events) == 0 && now.Sub(lastWrite) >= eventKeepalive {
