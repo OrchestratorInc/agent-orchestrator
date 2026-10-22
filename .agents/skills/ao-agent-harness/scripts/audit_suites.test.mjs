@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 
-import { CHAT_GATES, IFACE_GATES, auditChatSuite, auditExtras, auditInterfaceSwitch } from "./audit_suites.mjs";
+import { CHAT_GATES, IFACE_GATES, auditChatSuite, auditExtras, auditInterfaceSwitch, auditRoles } from "./audit_suites.mjs";
 
 const scenario = { hiddenInitialToken: "AO_HIDDEN_X", agentsToken: "AO_AGENTS_X", historyToken: "AO_HISTORY_X", proofFile: "AO_AUDIT_PROOF.json" };
 
@@ -265,4 +265,31 @@ test("restored Chat that replays the old system prompt fails chat_system_prompt_
     assert.match(gates.chat_system_prompt_restore.reason, /replaying the old system prompt/);
     assert.match(fake.state.rules, /chatRestoreHiddenToken use exactly: AO_CHAT_RESTORE_HIDDEN_/, "fresh rules were written after Kill");
   } finally { restorePath(); }
+});
+
+test("roles: a worker and an orchestrator must each name their role (V1 system prompt check)", async () => {
+  const spawned = [];
+  const run = (answers) => withFetch((url, options, body) => {
+    const path = url.pathname.replace("/api/v1/", "");
+    if (path === "sessions" && options.method === "POST") {
+      const id = `${body.kind}-1`;
+      spawned.push({ id, kind: body.kind, mode: body.mode, projectId: body.projectId });
+      return json(201, { session: { id, kind: body.kind, mode: body.mode } });
+    }
+    const file = /^sessions\/(\w+)-1\/workspace\/file$/.exec(path);
+    if (file) return answers[file[1]] === undefined ? json(404, {}) : json(200, { content: `${answers[file[1]]}\n` });
+    return json(404, {});
+  }, (baseURL) => auditRoles({ baseURL, agent: "codex", projectId: "p", mode: "tui", timeoutMs: 1_500 }));
+
+  const good = byName(await run({ worker: "worker", orchestrator: "Orchestrator." }));
+  assert.equal(good.role_worker.status, "PASS");
+  assert.equal(good.role_orchestrator.status, "PASS");
+  assert.deepEqual(spawned.map((item) => [item.kind, item.mode, item.projectId]), [["worker", "tui", undefined], ["orchestrator", "tui", "p"]], "worker is standalone; orchestrator is in the project");
+
+  const bad = byName(await run({ worker: "worker", orchestrator: "worker" }));
+  assert.equal(bad.role_orchestrator.status, "FAIL");
+  assert.match(bad.role_orchestrator.reason, /answered "worker": the orchestrator system prompt did not reach the agent/);
+
+  const silent = byName(await run({ worker: undefined, orchestrator: "orchestrator" }));
+  assert.match(silent.role_worker.reason, /wrote no answer/);
 });

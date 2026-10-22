@@ -8,7 +8,7 @@ fixing it. The catalog lives in
 [`scripts/audit_capabilities.mjs`](../scripts/audit_capabilities.mjs), and the
 suites live in [`scripts/audit_suites.mjs`](../scripts/audit_suites.mjs).
 
-Select suites with `--suites extras,chat,interface` (the default is all three).
+Select suites with `--suites extras,chat,interface,roles` (the default is all four).
 Use `--suites none` to run only the TUI lifecycle. The suites run only for an
 agent whose strict preflight allowed the live lifecycle. Otherwise their gates
 are recorded as `NOT_RUN` with the prerequisite that stopped them.
@@ -19,6 +19,7 @@ are recorded as `NOT_RUN` with the prerequisite that stopped them.
 | --- | --- | --- | --- |
 | `extras` | The lifecycle's TUI session; no provider turn | `ao_models_refresh`, `model_efforts`, `tui_system_prompt_file`, `instruction_channel`, `instruction_channel_restore`, `ao_skill_pointer`, `tui_hooks_installed`, `tui_usage_recorded` | Catalog refresh returns models with valid `efforts`/`defaultEffort`. `<data>/prompts/<id>/system.md` carries the project agentRules token. `<data>/skills/using-ao/SKILL.md` exists and `system.md` points at it. Claude's worktree `.claude/settings.local.json` wires `ao hooks claude-code`; for Codex (hooks are launch `-c` flags), the hook-delivered native id is persisted. `GET /usage/sessions/{id}` reports tokens. |
 | `interface` | The restored TUI session, after `post_restore_message` passes | `iface_status`, `iface_tui_to_chat`, `iface_chat_continuation`, `iface_chat_to_tui`, `iface_tui_continuation` | `GET /sessions/{id}/interface-transition` offers Chat. A `drain` transition reaches `phase: completed` with `session.mode: chat`. The first Chat turn recalls the TUI history-only token. Switching back reaches `mode: tui`. After the native ready cue, the TUI keeps the Chat edits and answers. |
+| `roles` | A standalone worker and a project orchestrator | `role_worker`, `role_orchestrator` | Each session answers "Are you a worker or an orchestrator?" with its own role, written to `AO_ROLE.txt`, from AO's system prompt alone (V1 system prompt check). |
 | `chat` | A new `mode: chat` session in the same project | see below | Conversation snapshot, proof file in the Chat worktree, sqlite `sessions.provider_conversation_id`, and the cancellation process witness. |
 
 Chat gates, in order:

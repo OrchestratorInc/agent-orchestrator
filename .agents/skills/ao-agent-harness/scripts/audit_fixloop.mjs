@@ -50,6 +50,7 @@ const TOKEN_GATES = new Set([
 const DELIVERY_GATES = new Set([
   "hidden_ao_instructions", "project_agents_md", "system_prompt_restore", "chat_instructions",
   "instruction_channel", "instruction_channel_restore", "chat_instruction_channel", "chat_system_prompt_restore",
+  "role_worker", "role_orchestrator",
   "history_file_continuity", "chat_restore_continuation", "iface_chat_continuation",
 ]);
 

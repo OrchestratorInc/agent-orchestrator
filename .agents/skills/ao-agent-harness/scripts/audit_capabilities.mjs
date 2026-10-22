@@ -87,6 +87,18 @@ export const CAPABILITIES = Object.freeze([
     ],
   },
   {
+    id: "role_prompts",
+    title: "Worker vs orchestrator system prompt (V1)",
+    surface: "tui+chat",
+    support: { "claude-code": "yes", codex: "yes" },
+    gates: ["role_worker", "role_orchestrator"],
+    inspect: [
+      "backend/internal/session_manager/prompt.go",
+      "backend/internal/session_manager/manager.go",
+      "backend/pkg/agentruntime/command.go",
+    ],
+  },
+  {
     id: "ao_skill",
     title: "AO skill (using-ao) pointer",
     surface: "tui",
@@ -361,6 +373,8 @@ const GATE_HINTS = Object.freeze({
   instruction_channel_restore: { expected: "after Kill and restore the CLI receives the regenerated prompt with the fresh rules", causes: ["restore argv omits the system-prompt flag", "rule/config artifact not rewritten on restore", "system.md not regenerated on restore"] },
   chat_instruction_channel: { expected: "the Chat driver delivers the system prompt through its channel and the agent uses it", causes: ["session parameter not sent at session/new", "plugin/rule file not passed (--plugin-dir) or not auto-applied"] },
   chat_system_prompt_restore: { expected: "instructions changed after Kill are used by the restored Chat conversation", causes: ["native history replays the old system prompt and the driver does not resend the new one on session/load", "artifact not rewritten before restore", "project config write failed"] },
+  role_worker: { expected: "a worker session answers \"worker\" from its AO system prompt", causes: ["system prompt not passed to the CLI (see instruction_channel)", "worker prompt does not state the role", "CLI wrote nothing: session never became ready"] },
+  role_orchestrator: { expected: "an orchestrator session answers \"orchestrator\" from its AO system prompt", causes: ["orchestrator prompt not used for this harness (falls back to the worker prompt)", "system prompt not passed to the CLI", "orchestrator spawn refused for this harness"] },
   ao_skill_pointer: { expected: "<data>/skills/using-ao/SKILL.md exists and system.md points at it", causes: ["skill assets not installed at daemon boot", "aoSkillPointer omitted for this harness"] },
   second_message: { expected: "POST /sessions/{id}/send makes the provider add secondMessageToken", causes: ["send rejected while not idle", "keystrokes delivered but not submitted", "UserPromptSubmit hook not firing"] },
   tui_hooks_installed: { expected: "AO hook commands are installed for the session", causes: ["hook installer skipped the worktree", "hook file written outside the worktree", "launch argv missing hook -c flags"] },
@@ -465,7 +479,7 @@ export function daemonLogExcerpt(logs, { sessionId = null, agent = null, max = 2
   return picked.slice(-max).map((line) => line.slice(0, 600));
 }
 
-const INSTRUCTION_GATES = new Set(["hidden_ao_instructions", "system_prompt_restore", "tui_system_prompt_file", "instruction_channel", "instruction_channel_restore", "chat_instructions", "chat_instruction_channel", "chat_system_prompt_restore"]);
+const INSTRUCTION_GATES = new Set(["hidden_ao_instructions", "system_prompt_restore", "tui_system_prompt_file", "instruction_channel", "instruction_channel_restore", "chat_instructions", "chat_instruction_channel", "chat_system_prompt_restore", "role_worker", "role_orchestrator"]);
 
 export function diagnoseGate(item, { agent = null, sessionId = null, daemonLogs = "", instructionChannel = undefined } = {}) {
   if (!item || item.status === "PASS") return undefined;

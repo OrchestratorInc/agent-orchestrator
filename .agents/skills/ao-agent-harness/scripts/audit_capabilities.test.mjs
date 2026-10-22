@@ -22,6 +22,8 @@ import { markdownReport, parseArgs } from "./audit_ao.mjs";
 // with AO_REPO. Without a checkout the path check is skipped, not failed.
 const repoRoot = process.env.AO_REPO || resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const hasCheckout = existsSync(join(repoRoot, "backend/internal/domain/harness.go"));
+const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SKILL_PREFIX = ".agents/skills/ao-agent-harness/";
 
 test("every suite gate maps to a catalog capability", () => {
   for (const name of Object.values(SUITES).flat()) {
@@ -34,7 +36,9 @@ test("catalog inspect paths exist in this checkout for codex and claude-code", {
   for (const capability of CAPABILITIES) {
     for (const agent of ["codex", "claude-code"]) {
       for (const path of inspectPaths(capability, agent)) {
-        try { await access(join(repoRoot, path)); } catch { missing.push(`${capability.id}/${agent}: ${path}`); }
+        // The skill's own files resolve from this skill, wherever it is copied.
+        const target = path.startsWith(SKILL_PREFIX) ? join(skillRoot, path.slice(SKILL_PREFIX.length)) : join(repoRoot, path);
+        try { await access(target); } catch { missing.push(`${capability.id}/${agent}: ${path}`); }
       }
     }
   }
@@ -124,7 +128,7 @@ test("markdownReport prints the capability matrix and a diagnosis for each issue
 });
 
 test("parseArgs selects capability suites", () => {
-  assert.deepEqual(parseArgs([]).suites, ["extras", "chat", "interface"]);
+  assert.deepEqual(parseArgs([]).suites, ["extras", "chat", "interface", "roles"]);
   assert.deepEqual(parseArgs(["--suites", "chat"]).suites, ["chat"]);
   assert.deepEqual(parseArgs(["--suites", "none"]).suites, []);
   assert.throws(() => parseArgs(["--suites", "chat,bogus"]), /unknown suite: bogus/);

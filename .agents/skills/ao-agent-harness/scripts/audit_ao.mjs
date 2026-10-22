@@ -15,7 +15,7 @@ import { authenticationAction, createEvidenceStore, redactOutput, sanitizeEviden
 import { CAPABILITIES, capabilityMatrix, diagnoseGate } from "./audit_capabilities.mjs";
 import { buildFixLoop, classifyFailure, compareAttempts, shellQuote } from "./audit_fixloop.mjs";
 import { instructionSpec } from "./audit_instructions.mjs";
-import { IFACE_GATES, SUITES, auditChatSuite, auditExtras, auditInterfaceSwitch, notRunGates } from "./audit_suites.mjs";
+import { IFACE_GATES, SUITES, auditChatSuite, auditExtras, auditInterfaceSwitch, auditRoles, notRunGates } from "./audit_suites.mjs";
 export { createEvidenceStore } from "./audit_evidence.mjs";
 
 const LIVE_GATES = [
@@ -2153,6 +2153,11 @@ export async function runCapabilitySuites({ baseURL, agent, result, projectId, d
     result.gates.push(...chat.gates);
     Object.assign(result, { chatSessionId: chat.sessionId, chatWorkspacePath: chat.workspacePath, chatCapabilities: chat.capabilities });
   }
+  if (suites.includes("roles")) {
+    const mode = Array.isArray(contract?.surfaces) && !contract.surfaces.includes("tui") ? "chat" : "tui";
+    await log?.(`${agent}: roles (worker vs orchestrator system prompt, ${mode})`);
+    result.gates.push(...await auditRoles({ baseURL, agent, projectId, mode, timeoutMs, onIssue, onSession }));
+  }
   result.status = overallStatus(result.gates);
   result.failedGate = firstFailedGate(result.gates);
   return result;
@@ -2407,7 +2412,7 @@ Options:
   --timeout-seconds N      per lifecycle wait timeout (default: 180)
   --diagnostic-after-native-proof  collect later lifecycle evidence after native proof; preserve strict failures
   --no-live                run API preflight only; lifecycle gates are NOT_RUN
-  --suites LIST            capability suites after the TUI lifecycle: extras,chat,interface
+  --suites LIST            capability suites after the TUI lifecycle: extras,chat,interface,roles
                            (default: all; "none" runs only the TUI lifecycle)
   --only LIST              rerun only these gates or capability ids (comma list), with their
                            prerequisites; e.g. --only chat_interrupt or --only chat_approvals

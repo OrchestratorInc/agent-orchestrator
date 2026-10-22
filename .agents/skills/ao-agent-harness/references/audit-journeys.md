@@ -170,8 +170,20 @@ manual scope only when explicitly agreed; it cannot satisfy a requested in-page
 install/login journey. Model modes and Agent Harness versus New Task are separate
 claims: one surface never substitutes for the other.
 
-These are contributor-driven verification gates. The runner is API-first and
-does not drive these controls, pause for each checkpoint or capture successes.
+`scripts/ui_audit.mjs` (`run_local.sh ui <id>`) drives the core of this
+journey in the real app and screenshots every checkpoint:
+
+- harness listed
+- install
+- account and models
+- auth
+- update (skipped in v0)
+- New Task agent and models
+- running TUI and Chat
+
+The remaining rows here (kill, archive, restore, reviewer, provider management)
+are still contributor-driven. The API runner does not drive these controls,
+pause for each checkpoint or capture successes.
 Its capture hook handles failed/blocked gates only. Capture success states during
 a separate UI journey before teardown; `--keep-daemon` can retain sessions for
 later inspection but cannot recover missed installation/login/active-turn states.

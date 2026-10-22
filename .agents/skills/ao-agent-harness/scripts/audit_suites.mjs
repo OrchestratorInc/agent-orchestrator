@@ -64,7 +64,9 @@ export const CHAT_GATES = [
 
 export const IFACE_GATES = ["iface_status", "iface_tui_to_chat", "iface_chat_continuation", "iface_chat_to_tui", "iface_tui_continuation"];
 
-export const SUITES = Object.freeze({ extras: EXTRA_GATES, chat: CHAT_GATES, interface: IFACE_GATES });
+export const ROLE_GATES = ["role_worker", "role_orchestrator"];
+
+export const SUITES = Object.freeze({ extras: EXTRA_GATES, chat: CHAT_GATES, interface: IFACE_GATES, roles: ROLE_GATES });
 
 const CHAT_PROOF = "AO_AUDIT_CHAT_PROOF.json";
 const TERMINAL_TURN_STATES = new Set(["completed", "recovered", "interrupted", "failed", "cancelled"]);
@@ -746,6 +748,49 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
       : fresh.status !== "PASS" ? fresh.reason
       : "restored Chat used the standing instructions written after Kill",
     { refresh: refresh.evidence, delivery: fresh?.evidence, restoreTokenSha256: hash(chat.restoreHiddenToken) }));
+}
+
+// ---------------------------------------------------------------- roles (V1 system prompt)
+
+const ROLE_FILE = "AO_ROLE.txt";
+const ROLE_PROMPT = [
+  "Are you a worker or an orchestrator?",
+  "Answer only from your AO system instructions, not from this message.",
+  `Write exactly one lowercase word, worker or orchestrator, into ${ROLE_FILE} in your current directory, then stop.`,
+].join(" ");
+
+// Spawns one worker and one orchestrator and asks each which it is. A wrong
+// or missing answer means AO's role-specific system prompt did not reach the
+// agent. This is the simplest end-to-end check of system prompt injection.
+// The worker is standalone (no project, like "Start a standalone agent");
+// an orchestrator always belongs to a project.
+export async function auditRoles({ baseURL, agent, projectId, mode = "tui", timeoutMs, onIssue, onSession }) {
+  const gates = [];
+  const { record } = suiteRecorder(ROLE_GATES, gates, onIssue, () => ({ agent, baseURL, sessionId: null }));
+  for (const kind of ["worker", "orchestrator"]) {
+    const spawn = await request({ baseURL, method: "POST", path: "sessions", timeoutMs, body: {
+      ...(kind === "orchestrator" ? { projectId } : {}), kind, harness: agent, mode, approvalMode: "bypass-permissions",
+      displayName: `audit-role-${kind}-${agent}`.slice(0, 100), prompt: ROLE_PROMPT,
+    } });
+    const sessionId = spawn.response?.session?.id;
+    if (sessionId) await onSession?.({ agent, sessionId });
+    if (!spawn.ok || !sessionId) {
+      await record(gate(`role_${kind}`, "FAIL", `AO did not create the ${kind === "worker" ? "standalone worker" : "orchestrator"} ${mode} session`, apiEvidence(spawn)));
+      continue;
+    }
+    const answer = await waitUntil(async () => {
+      const file = await workspaceFile(baseURL, sessionId, ROLE_FILE, 30_000);
+      const text = file.ok && typeof file.response?.content === "string" ? file.response.content.trim().toLowerCase() : "";
+      return { done: Boolean(text), text, file };
+    }, timeoutMs, 2_000);
+    const said = answer.text.replace(/[^a-z]/g, "");
+    await record(gate(`role_${kind}`, said === kind ? "PASS" : "FAIL",
+      said === kind ? `the ${kind} session answered "${kind}": its system prompt is injected`
+        : !answer.done ? `the ${kind} session wrote no answer to ${ROLE_FILE} before timeout`
+        : `the ${kind} session answered "${answer.text.slice(0, 60)}": the ${kind} system prompt did not reach the agent or does not state its role`,
+      { spawn: apiEvidence(spawn), sessionId, mode, answer: answer.text.slice(0, 200), file: answer.file ? apiEvidence(answer.file) : undefined }));
+  }
+  return gates;
 }
 
 // ---------------------------------------------------------------- interface switch
