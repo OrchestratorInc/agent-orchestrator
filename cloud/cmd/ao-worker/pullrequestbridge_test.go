@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +59,7 @@ func TestPullRequestBridgeOpensThePullRequestOnTheChosenRepository(t *testing.T)
 			client := &fakePullRequestClient{}
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/pull-request", strings.NewReader(test.body))
-			handlePullRequestBridgeRequest(recorder, request, client, workspace, launch, logger)
+			handlePullRequestBridgeRequest(recorder, request, client, workspace, "", launch, logger)
 			if recorder.Code != test.status {
 				t.Fatalf("status = %d (%s), want %d", recorder.Code, recorder.Body.String(), test.status)
 			}
@@ -123,9 +125,56 @@ func TestPullRequestBridgeRefusesToPushABaseBranch(t *testing.T) {
 		client := &fakePullRequestClient{}
 		recorder := httptest.NewRecorder()
 		handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request", strings.NewReader(body)),
-			client, "/home/dev/work/alice", launch, logger)
+			client, "/home/dev/work/alice", "", launch, logger)
 		if recorder.Code != http.StatusBadRequest || pushed || len(client.raised) != 0 {
 			t.Fatalf("%s: status %d pushed %v raised %d, want a refusal before any push", body, recorder.Code, pushed, len(client.raised))
 		}
+	}
+}
+
+// In a session whose checkouts must be AO's own, the bridge refuses an
+// additional repository whose folder is the Coder template's own clone: it
+// never pushes from a checkout AO did not make. The main repository still
+// opens its pull request.
+func TestPullRequestBridgeRefusesARefusedRepositoryFolder(t *testing.T) {
+	var pushedFrom []string
+	previous := pushBranch
+	pushBranch = func(_ context.Context, _ worker.GitRunner, workspace, _ string, _ worker.CheckoutGrantResponse) error {
+		pushedFrom = append(pushedFrom, workspace)
+		return nil
+	}
+	t.Cleanup(func() { pushBranch = previous })
+	root := t.TempDir()
+	workspace := filepath.Join(root, "alice")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "billing")); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	if _, err := worker.RecordOwnedRepoFolders(dataDir, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	launch := worker.LaunchContext{
+		RepositoryURL: "https://github.com/acme/alice", DefaultBranch: "main",
+		ExtraRepos: []worker.RepoRef{{URL: "https://github.com/acme/billing"}},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, repository := range []string{"billing", "acme/billing"} {
+		client := &fakePullRequestClient{}
+		recorder := httptest.NewRecorder()
+		handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request",
+			strings.NewReader(`{"branch":"ao/1","title":"t","repository":"`+repository+`"}`)), client, workspace, dataDir, launch, logger)
+		if recorder.Code != http.StatusBadRequest || len(pushedFrom) != 0 || len(client.raised) != 0 {
+			t.Fatalf("%s: status %d pushed %v raised %d, want a refusal", repository, recorder.Code, pushedFrom, len(client.raised))
+		}
+	}
+	client := &fakePullRequestClient{}
+	recorder := httptest.NewRecorder()
+	handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request",
+		strings.NewReader(`{"branch":"ao/1","title":"t"}`)), client, workspace, dataDir, launch, logger)
+	if recorder.Code != http.StatusOK || len(pushedFrom) != 1 || pushedFrom[0] != workspace {
+		t.Fatalf("main repository: status %d (%s) pushed %v", recorder.Code, recorder.Body.String(), pushedFrom)
 	}
 }

@@ -293,7 +293,10 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		return
 	}
 	if messageID == "" {
-		if c.history.pendingUserID != "" {
+		if c.historyUserChunkIsMessage {
+			c.history.fallbackID++
+			messageID = fmt.Sprintf("user-%d", c.history.fallbackID)
+		} else if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
 		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" && !c.history.turnHasProvider {
 			// An absent message id cannot describe a reliable boundary. Keep
@@ -520,9 +523,23 @@ func optionalMessageID(id *string) string {
 	return strings.TrimSpace(*id)
 }
 
+const (
+	standingOpen  = "<ao-standing-instructions>"
+	standingClose = "</ao-standing-instructions>"
+)
+
+// StandingInstructionsBlock carries AO's standing instructions as prompt text;
+// history drops it again from a replayed first message.
+func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
+	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
+}
+
 func historicalUserContent(content acpsdk.ContentBlock) string {
 	switch {
 	case content.Text != nil:
+		if _, rest, ok := strings.Cut(content.Text.Text, standingClose); ok && strings.HasPrefix(content.Text.Text, standingOpen) {
+			return strings.TrimLeft(rest, "\n")
+		}
 		return content.Text.Text
 	case content.Image != nil:
 		return "[Image]"

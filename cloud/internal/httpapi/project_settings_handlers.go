@@ -57,6 +57,9 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.validatePatchedProjectRepos(w, r, orgID, projectID, patch.Config) {
 		return
 	}
+	if !s.validatePatchedWorkingFolder(w, r, orgID, projectID, patch.Config) {
+		return
+	}
 	if parameters, patched := patchedCoderParameters(patch.Config); patched && len(parameters) > 0 {
 		// Template parameters belong to the template chosen at project creation
 		// and are checked (best effort) against what that template declares.

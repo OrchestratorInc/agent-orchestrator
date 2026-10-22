@@ -254,6 +254,21 @@ func TestLoadTelemetryDisabledEventsBlankIsInert(t *testing.T) {
 	}
 }
 
+func TestLoadAppVersionOnlyFromEnvironment(t *testing.T) {
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Telemetry.AppVersion != "" {
+		t.Fatalf("AppVersion = %q, want empty without supervisor value", cfg.Telemetry.AppVersion)
+	}
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.11.2")
+	if cfg, _ = Load(); cfg.Telemetry.AppVersion != "0.11.2" {
+		t.Fatalf("AppVersion = %q, want supervisor value", cfg.Telemetry.AppVersion)
+	}
+}
+
 func TestLoadOfferingDefaults(t *testing.T) {
 	// Clear the offering vars so we observe pure defaults: no client identity,
 	// cloud off, local on.

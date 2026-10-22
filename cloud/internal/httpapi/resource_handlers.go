@@ -104,6 +104,18 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// InterfaceMode is the interface the session starts in: "chat" or "tui".
+	// Omitted resolves it from DefaultInterfaceMode, else the terminal; Chat
+	// needs a harness with a Chat controller (domain.ChatHarnesses).
+	InterfaceMode string `json:"interfaceMode,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface ("tui" or
+	// "chat"), the desktop's setting. A create without interfaceMode resolves
+	// the session's interface from it as the local daemon does
+	// (domain.StartInterface): an orchestrator starts in Chat where its
+	// harness can. An orchestrator keeps it for the workers it spawns. A
+	// create with neither (an older desktop) starts in the TUI, an
+	// orchestrator too.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
 type createSessionRepo struct {
@@ -521,11 +533,23 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
+	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
 	if !validSessionInput(request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
+		return
+	}
+	if request.DefaultInterfaceMode != "" && !domain.SessionInterface(request.DefaultInterfaceMode).Valid() {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "defaultInterfaceMode must be tui or chat.")
+		return
+	}
+	// As the local daemon does, Chat for a harness without a Chat controller is
+	// refused with the code the desktop offers to retry in the terminal.
+	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !chatControllerSupported(request.Harness) {
+		writeError(w, r, http.StatusConflict, "SESSION_MODE_UNSUPPORTED", request.Harness+" can't run in Chat in AO Cloud. Start it in the terminal.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -635,7 +659,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var coderOpts *sandbox.CoderSessionOptions
 	var coderOverride *sandbox.CoderDeploymentOverride
 	if request.Provider == sandbox.ProviderCoder {
-		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config)
+		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config, project.RepositoryURL)
 		if placementErr != nil {
 			s.writeCoderPlacementError(w, r, placementErr)
 			return
@@ -692,9 +716,11 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			DisplayName:         request.DisplayName,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
+			Interface:           domain.SessionInterface(request.InterfaceMode),
 			Model:               request.Model,
 			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
+			DefaultInterface:    domain.SessionInterface(request.DefaultInterfaceMode),
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile:     plan.ResourceProfile,
@@ -716,6 +742,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		"session_id", session.ID,
 		"provider", plan.Provider,
 		"harness", request.Harness,
+		"interface", session.Interface,
 	)
 	s.recordSessionCreateRequested(r, orgID, session.ID, plan.Provider, request.SandboxProviderConnectionID,
 		request.ProjectID, request.Kind, request.Harness, projectSnapshot != nil)
@@ -802,8 +829,10 @@ type sessionStartupRetryStore interface {
 }
 
 // retrySessionStartup lets a user retry a session whose sandbox never started
-// (the startup ceiling parked it, or a bootstrap failed) without deleting it:
-// the reconciler re-runs the worker bootstrap against the existing compute.
+// (the startup ceiling parked it, a bootstrap failed, or its workspace build
+// failed) without deleting it: the reconciler re-runs the worker bootstrap
+// against the existing compute, starts a new build of a failed workspace, or
+// creates the compute that could not be created.
 func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -824,6 +853,10 @@ func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeStoreError(w, r, err)
 		return
+	}
+	// The sandbox is re-armed; act on it now rather than at the next tick.
+	if s.sandboxWake != nil {
+		s.sandboxWake()
 	}
 	session, err := s.store.GetSession(r.Context(), principalFrom(r), orgID, sessionID)
 	if err != nil {
@@ -1290,7 +1323,8 @@ func validSessionInput(request createSessionRequest) bool {
 		// with "Session ... is invalid" for any brief over 80 chars).
 		len(request.DisplayName) < 1 || utf8.RuneCountInString(request.DisplayName) > 100 ||
 		len(request.Prompt) > 65536 ||
-		len(request.DeniedCommands) > 128 {
+		len(request.DeniedCommands) > 128 ||
+		(request.InterfaceMode != "" && !domain.SessionInterface(request.InterfaceMode).Valid()) {
 		return false
 	}
 	for _, command := range request.DeniedCommands {
@@ -1338,7 +1372,9 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 	}
 	coderWorkspaceURL := ""
 	if ref := session.BYOCoderWorkspace; ref != nil {
-		coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, ref.NamePrefix, session.ID)
+		if strings.TrimSpace(session.ID) != "" {
+			coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, coder.SessionWorkspaceName(ref.Name, ref.NamePrefix, session.ID))
+		}
 	}
 	return sessionResponse{
 		ID:                 session.ID,

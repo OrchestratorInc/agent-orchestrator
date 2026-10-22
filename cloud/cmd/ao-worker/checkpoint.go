@@ -70,18 +70,27 @@ func newCheckpointer(
 		harness:      bootstrap.Launch.Harness,
 		scratch:      worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL),
 		logger:       logger,
-		siblings:     siblingCheckoutPaths(bootstrap.Launch, workspace),
+		siblings:     siblingCheckoutPaths(bootstrap.Launch, workspace, dataDir),
 		siblingTrees: map[string]*string{},
 	}
 }
 
-// siblingCheckoutPaths lists the additional repositories' checkout paths.
-func siblingCheckoutPaths(launch worker.LaunchContext, workspace string) []string {
+// siblingCheckoutPaths lists the additional repositories' checkout paths
+// (usedExtraCheckouts): a template's own clone AO refused is never
+// checkpointed or restored into.
+func siblingCheckoutPaths(launch worker.LaunchContext, workspace, dataDir string) []string {
 	var paths []string
-	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+	for _, checkout := range usedExtraCheckouts(launch, workspace, dataDir) {
 		paths = append(paths, checkout.Path)
 	}
 	return paths
+}
+
+// usedExtraCheckouts lists the additional repositories' checkouts AO uses
+// (worker.UsedSessionRepoCheckouts): in a session whose checkouts must be
+// AO's own, the Coder template's own clone is left out.
+func usedExtraCheckouts(launch worker.LaunchContext, workspace, dataDir string) []worker.RepoCheckout {
+	return worker.UsedSessionRepoCheckouts(workspace, dataDir, launch.RepositoryURL, launch.ExtraRepos)[1:]
 }
 
 // checkpoint captures the transcript and uncommitted work once. It is invoked by
@@ -323,7 +332,7 @@ func rehydrateSession(
 
 	ref := preservedRefPrefix + bootstrap.SessionID
 	if !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
-		for _, dir := range siblingCheckoutPaths(bootstrap.Launch, workspace) {
+		for _, dir := range siblingCheckoutPaths(bootstrap.Launch, workspace, dataDir) {
 			if info, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !info.IsDir() {
 				continue
 			}

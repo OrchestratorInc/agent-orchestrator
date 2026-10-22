@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -65,6 +66,40 @@ func TestLocalProviderCatalogReadsEachHarnessOwnCache(t *testing.T) {
 			}
 			if before == providerCatalogFingerprint(agentID, env) {
 				t.Fatal("cache change did not invalidate catalog")
+			}
+		})
+	}
+}
+
+func TestPiCatalogFingerprintIgnoresRewritesWithSameContents(t *testing.T) {
+	for _, agentID := range []string{"pi", "kimchi"} {
+		t.Run(agentID, func(t *testing.T) {
+			env := providerTestEnv(t)
+			dir := piCatalogDir(agentID, env)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "models.json")
+			write := func(raw string, at time.Time) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(path, at, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			start := time.Now().Add(-time.Hour)
+			write(`{"providers":{}}`, start)
+			before := providerCatalogFingerprint(agentID, env)
+			// --list-models rewrites the file with the same contents.
+			write(`{"providers":{}}`, start.Add(time.Minute))
+			if got := providerCatalogFingerprint(agentID, env); got != before {
+				t.Fatalf("same contents changed the fingerprint: %q -> %q", before, got)
+			}
+			write(`{"providers":{"added":{}}}`, start.Add(2*time.Minute))
+			if providerCatalogFingerprint(agentID, env) == before {
+				t.Fatal("changed contents did not change the fingerprint")
 			}
 		})
 	}
@@ -206,6 +241,10 @@ func TestSharedCatalogIncludesNativeCacheButCredentialScopeDoesNot(t *testing.T)
 	if !reflect.DeepEqual(task.ConfiguredProviders, []string{"anthropic"}) {
 		t.Fatalf("shared catalog configured providers = %v", task.ConfiguredProviders)
 	}
+	// OpenCode lists what it can run; the cached provider is there to browse.
+	if !reflect.DeepEqual(task.RunnableModels, []string{"anthropic/claude-sonnet"}) {
+		t.Fatalf("shared catalog runnable models = %v, want only what OpenCode listed", task.RunnableModels)
+	}
 	sharedFingerprint := (Discoverer{}).CatalogFingerprint(context.Background(), request)
 	request.CredentialType = "anthropic_api_key"
 	scoped, err := (Discoverer{}).Discover(context.Background(), request)
@@ -251,6 +290,26 @@ func TestPiInstalledCatalogReadsImportOnlyPiAIAndPrimeAgentFork(t *testing.T) {
 		models := piInstalledModels(context.Background(), filepath.Join(root, "pkg/dist/bundle/cli.js"), root, nil)
 		if len(models) != 1 || models[0].ID != "zai/glm-5" {
 			t.Fatalf("%s models = %#v", owner, models)
+		}
+	}
+}
+
+func TestPiModelRecordsCarryTheirThinkingLevels(t *testing.T) {
+	models := parseProviderModelRecords([]byte(`[
+		{"id":"gpt-6.1-sol","reasoning":true,"thinkingLevelMap":{"off":null,"minimal":"low","max":"max"}},
+		{"id":"spark","reasoning":true,"thinkingLevelMap":{"xhigh":"xhigh","low":null}},
+		{"id":"plain","reasoning":false,"thinkingLevelMap":{}},
+		{"id":"cached","reasoning":true}
+	]`), "openai-codex")
+	want := map[string][]string{
+		"openai-codex/gpt-6.1-sol": {"minimal", "low", "medium", "high", "xhigh"},
+		"openai-codex/spark":       {"minimal", "medium", "high", "xhigh"},
+		"openai-codex/plain":       nil,
+		"openai-codex/cached":      nil,
+	}
+	for _, model := range models {
+		if !reflect.DeepEqual(model.Efforts, want[model.ID]) {
+			t.Errorf("%s efforts = %v, want %v", model.ID, model.Efforts, want[model.ID])
 		}
 	}
 }

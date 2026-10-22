@@ -62,38 +62,13 @@ func (w *Workspace) FetchDefaultBranch(ctx context.Context, repoPath string, tar
 	return w.git.FetchDefaultBranch(ctx, repoPath, target)
 }
 
-// NameTaskWorkspace delegates task naming to the Git adapter.
-func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo, branch, name string) (ports.WorkspaceProjectInfo, error) {
+// RenameTaskBranch delegates task branch naming to the Git adapter.
+func (w *Workspace) RenameTaskBranch(ctx context.Context, info ports.WorkspaceProjectInfo, branch string) (ports.WorkspaceProjectInfo, error) {
 	namer, ok := w.git.(ports.WorkspaceTaskNamer)
 	if !ok {
 		return info, errors.New("workspace router: Git adapter does not support task naming")
 	}
-	return namer.NameTaskWorkspace(ctx, info, branch, name)
-}
-
-// RepairTaskWorkspace repairs registrations after interrupted task naming.
-func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
-	namer, ok := w.git.(ports.WorkspaceTaskNamer)
-	if !ok {
-		return info, errors.New("workspace router: Git adapter does not support task naming")
-	}
-	return namer.RepairTaskWorkspace(ctx, info)
-}
-
-// RecoverTaskWorkspace resumes a Git naming journal when the adapter supports it.
-func (w *Workspace) RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (ports.WorkspaceProjectInfo, bool, error) {
-	if recovery, ok := w.git.(ports.WorkspaceTaskNamingRecovery); ok {
-		return recovery.RecoverTaskWorkspace(ctx, projectID, id)
-	}
-	return ports.WorkspaceProjectInfo{}, false, nil
-}
-
-// CompleteTaskWorkspaceNaming acknowledges a saved or destroyed Git workspace.
-func (w *Workspace) CompleteTaskWorkspaceNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
-	if recovery, ok := w.git.(ports.WorkspaceTaskNamingRecovery); ok {
-		return recovery.CompleteTaskWorkspaceNaming(ctx, info)
-	}
-	return nil
+	return namer.RenameTaskBranch(ctx, info, branch)
 }
 
 // Create delegates session workspace creation to the project-appropriate

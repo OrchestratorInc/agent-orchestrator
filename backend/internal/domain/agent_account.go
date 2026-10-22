@@ -62,6 +62,9 @@ type AgentAccountLimitWindow struct {
 // subscription limits. AO never reads the account's token to get it.
 type AgentAccountLimits struct {
 	Windows []AgentAccountLimitWindow `json:"windows"`
+	// AutoResumeResetsAt is present only when native rolling limits identify an
+	// unambiguous future deadline. Nil does not establish available capacity.
+	AutoResumeResetsAt *time.Time `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
 	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
 	// ResetCredits counts Codex usage-limit resets the account can spend.

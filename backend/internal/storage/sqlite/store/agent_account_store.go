@@ -82,12 +82,31 @@ func (s *Store) SetAgentAccountDefault(ctx context.Context, p domain.AgentAccoun
 func (s *Store) BindSessionAgentAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider, accountID string, at time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.BindSessionAgentAccount(ctx, gen.BindSessionAgentAccountParams{
-		SessionID: string(id), Provider: string(p), AccountID: accountID, BoundAt: at.UTC(),
-	}); err != nil {
-		return fmt.Errorf("bind session %s to %s account: %w", id, p, err)
-	}
-	return nil
+	return s.inTx(ctx, fmt.Sprintf("bind session %s to %s account", id, p), func(q *gen.Queries) error {
+		binding := gen.GetSessionAgentAccountParams{SessionID: string(id), Provider: string(p)}
+		previous, previousErr := q.GetSessionAgentAccount(ctx, binding)
+		if previousErr != nil && !errors.Is(previousErr, sql.ErrNoRows) {
+			return previousErr
+		}
+		if err := q.BindSessionAgentAccount(ctx, gen.BindSessionAgentAccountParams{
+			SessionID: string(id), Provider: string(p), AccountID: accountID, BoundAt: at.UTC(),
+		}); err != nil {
+			return err
+		}
+		if errors.Is(previousErr, sql.ErrNoRows) {
+			return nil
+		}
+		current, err := q.GetSessionAgentAccount(ctx, binding)
+		if err != nil {
+			return err
+		}
+		if current == previous {
+			return nil
+		}
+		return q.CancelSessionTurnAutoResume(ctx, gen.CancelSessionTurnAutoResumeParams{
+			SessionID: id, Provider: string(p),
+		})
+	})
 }
 
 // GetSessionAgentAccount returns the account the session uses now for the provider.

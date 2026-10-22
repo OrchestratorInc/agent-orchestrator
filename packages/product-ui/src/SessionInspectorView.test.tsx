@@ -10,6 +10,7 @@ import {
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
+  InspectorSection,
   SessionInspectorShellView,
   SessionInspectorSummaryView,
   type InspectorReviewLabels,
@@ -203,6 +204,24 @@ describe("portable inspector presentations", () => {
     const context = screen.getByTestId("execution-context");
     const pullRequest = screen.getByText("pull request");
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it("places the Setup and Cleanup sections before the activity and lets a section start collapsed", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+        scripts={<InspectorSection defaultOpen={false} surface={false} title="Setup"><div>setup log</div></InspectorSection>}
+      />,
+    );
+
+    const setup = screen.getByRole("button", { name: "Setup" });
+    expect(setup).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("setup log")).toBeNull();
+    expect(Boolean(setup.compareDocumentPosition(screen.getByText("activity")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    fireEvent.click(setup);
+    expect(setup).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("setup log")).toBeInTheDocument();
   });
 
   it("omits the PR/artifacts section entirely when no title is given", () => {

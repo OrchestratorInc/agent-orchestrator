@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
+import { useHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -31,7 +32,8 @@ function mockStack() {
 	const original = vi.mocked(apiClient.GET).getMockImplementation()!;
 	vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 		if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
-		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0" } } as never;
+		if (path === "/api/v1/agents/installers") return { data: { agents: readiness.agents.map(({ id: agentId }) => ({ agentId, methods: [{ id: "official-installer", available: true, updateAvailable: true }] })) } } as never;
+		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer" } } as never;
 		return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 	});
 	vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
@@ -74,6 +76,68 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+		expect(notice).toHaveClass("fixed", "right-4");
+	});
+
+	it("publishes the corner it covers while shown, so session content can keep clear of it", async () => {
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			return this.classList.contains("harness-update-notice") ? new DOMRect(1004, 72, 300, 68) : new DOMRect();
+		});
+		function Probe() {
+			const rect = useHarnessUpdateNoticeRect();
+			return <output aria-label="notice rect">{rect ? `${rect.left},${rect.top},${rect.right},${rect.bottom}` : "none"}</output>;
+		}
+		render(<Probe />);
+		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
+		const { unmount } = mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		await waitFor(() => expect(screen.getByLabelText("notice rect")).toHaveTextContent("1004,72,1304,140"));
+		unmount();
+		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
+	});
+
+	it("keeps the app corner, hides for browser overlap, and returns after the inspector closes", async () => {
+		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
+		let browserRect = new DOMRect();
+		const originalRect = HTMLElement.prototype.getBoundingClientRect;
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this.classList.contains("harness-update-notice")) return new DOMRect(964, 72, 300, 200);
+			if (this.classList.contains("workspace-topbar-container")) return new DOMRect(0, 0, 1280, 60);
+			if (this.classList.contains("browser-panel__viewport")) return browserRect;
+			return originalRect.call(this);
+		});
+		const topbar = document.createElement("div");
+		topbar.className = "workspace-topbar-container";
+		document.body.append(topbar);
+		mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		const browser = document.createElement("div");
+		browser.className = "browser-panel";
+		browser.dataset.browserNativePage = "live";
+		const viewport = document.createElement("div");
+		viewport.className = "browser-panel__viewport";
+		browser.append(viewport);
+		try {
+			for (const [left, top, visible] of [[820, 400, true], [820, 100, false], [600, 400, true], [0, 40, false]] as const) {
+				browserRect = new DOMRect(left, top, 1280 - left, 800 - top);
+				await act(async () => {
+					document.body.append(browser);
+					window.dispatchEvent(new Event("resize"));
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+				});
+				await waitFor(() => {
+					const notice = screen.queryByRole("region", { name: "Agent updates available" });
+					if (!visible) { expect(notice).toBeNull(); return; }
+					expect(notice, `browser left=${left}, top=${top}`).toHaveClass("fixed", "right-4");
+					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+				});
+			}
+			await act(async () => { browser.remove(); });
+			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("fixed", "right-4"));
+		} finally {
+			browser.remove();
+			topbar.remove();
+		}
 	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
@@ -153,7 +217,7 @@ describe("startup harness update notice", () => {
 		// Claude Code is still eligible.
 		expect(screen.getByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => client.setQueryData(installerQueryKey, []));
-		await waitFor(() => expect(screen.getByRole("button", { name: "Update all" })).toBeDisabled());
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -274,7 +338,7 @@ describe("startup harness update notice", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
 		client.setQueryData(["agent-readiness"], readiness);
-		client.setQueryData(updateAdvisoryQueryKey("claude-code"), { status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292" });
+		client.setQueryData(updateAdvisoryQueryKey("claude-code"), { status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer" });
 		mountNotice(true, client);
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
 		expect(screen.queryByRole("region")).toBeNull();
@@ -345,7 +409,7 @@ describe("startup harness update notice", () => {
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("codex"))).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
-		await act(async () => pending.resolve({ data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0" } } as never));
+		await act(async () => pending.resolve({ data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer" } } as never));
 		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))[0]).toBe("Cursor");
 	});
@@ -375,15 +439,75 @@ describe("startup harness update notice", () => {
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 	});
 
-	it("offers login first when both login and update are needed", async () => {
+	it("hides an update while login is required and shows it after login", async () => {
 		const { client } = mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] }));
-		const login = await screen.findByRole("button", { name: "Login" });
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code")] }));
+		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
+	it.each([
+		{ id: "official-installer", available: true, updateAvailable: false },
+		{ id: "official-installer", available: false, updateAvailable: true },
+		{ id: "npm", available: true, updateAvailable: true },
+	])("hides updates that require manual maintenance (%j)", async (method) => {
+		const { client } = mountNotice();
+		await screen.findByRole("region");
+		act(() => client.setQueryData(installerQueryKey, [{
+			agentId: "claude-code", documentationUrl: "https://code.claude.com/docs/en/setup", methods: [method],
+		}]));
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+	});
+
+	it("excludes hidden harnesses from the stack count and Update all", async () => {
+		mockUpdatableStack();
+		const { client } = mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
+		act(() => {
+			client.setQueryData(["agent-readiness"], { agents: [
+				agentReadiness("claude-code", "Claude Code"),
+				agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+				agentReadiness("cursor", "Cursor"),
+			] });
+			client.setQueryData(installerQueryKey, [
+				{ agentId: "claude-code", methods: [{ id: "official-installer", available: true, updateAvailable: true }] },
+				{ agentId: "codex", methods: [{ id: "official-installer", available: true, updateAvailable: true }] },
+				{ agentId: "cursor", methods: [{ id: "official-installer", available: true, updateAvailable: false }] },
+			]);
+		});
+		await waitFor(() => expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Claude Code"]));
+		expect(screen.queryByRole("button", { name: /Show all|Update all/ })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "claude-code" } } })));
+	});
+
+	it.each(["/api/v1/agents/installers", "/api/v1/agents/auth-plans"] as const)("waits for %s before showing update notices", async (endpoint) => {
+		const pending = deferred<never>();
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === endpoint
+			? pending.promise : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		const { client } = mountNotice();
+		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
+		expect(screen.queryByRole("region")).toBeNull();
+		await act(async () => pending.resolve(await (get as (path: string) => Promise<never>)(endpoint)));
+		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
+	it("keeps the stack when an installer refresh fails after it rendered", async () => {
+		const { client } = mountNotice();
+		await screen.findByRole("article", { name: "Claude Code" });
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/installers"
+			? Promise.resolve({ error: { message: "installers unavailable" } } as never)
+			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
+		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
+		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
-		await userEvent.click(login);
-		// The Harness page starts the login once it opens.
-		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true });
+		expect(screen.getByRole("button", { name: "View details" })).toBeEnabled();
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {
@@ -395,7 +519,7 @@ describe("startup harness update notice", () => {
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
-		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293" }));
+		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" }));
 		expect(await screen.findByText("v2.1.293")).toBeInTheDocument();
 	});
 
@@ -581,25 +705,27 @@ describe("harness updates while sessions run", () => {
 	});
 });
 
-describe("noticePlacement", () => {
-	// 1280px window, notice 300px wide starting 72px down and 200px tall.
-	const place = (browser: Parameters<typeof noticePlacement>[0]) => noticePlacement(browser, 72, 200, 1280);
+describe("noticeCoversLiveBrowser", () => {
+	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], top = 72, height = 200, width = 1280) => noticeCoversLiveBrowser(browser, top, height, width);
 
-	it("keeps the default corner without a live browser page", () => {
-		expect(place(null)).toEqual({ right: 16 });
+	it("returns false when no live page overlaps the app corner", () => {
+		expect(covers(null)).toBe(false);
+		expect(covers({ left: 200, top: 60, right: 700, bottom: 800 })).toBe(false);
+		expect(covers({ left: 820, top: 400, right: 1280, bottom: 800 })).toBe(false);
 	});
 
-	it("keeps the default corner when the page is elsewhere", () => {
-		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
-		expect(place({ left: 800, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
+	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
+		expect(covers({ left, top: 100, right: 1280, bottom: 800 })).toBe(true);
 	});
 
-	it("moves beside a docked page it would cover", () => {
-		expect(place({ left: 820, top: 100, right: 1270, bottom: 800 })).toEqual({ right: 1280 - 808 });
+	it("hides when expanding the stack reaches the browser page", () => {
+		const browser = { left: 820, top: 400, right: 1280, bottom: 800 };
+		expect(covers(browser)).toBe(false);
+		expect(covers(browser, 72, 500)).toBe(true);
 	});
 
-	it("steps aside while the page leaves no room beside it", () => {
-		expect(place({ left: 0, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
-		expect(place({ left: 300, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
+	it("keeps the corner above the page but hides overlap in a narrow window", () => {
+		expect(covers(null, 72, 200, 280)).toBe(false);
+		expect(covers({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe(true);
 	});
 });

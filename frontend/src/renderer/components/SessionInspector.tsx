@@ -53,8 +53,10 @@ import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifac
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
+import { ScriptRunPanel } from "./ScriptRunPanel";
+import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
+import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
-import { AwakeControl } from "./AwakeControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
@@ -79,7 +81,7 @@ import {
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
-import { FilesTopbarHostContext } from "./files-topbar-host";
+import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -218,6 +220,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
+	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
@@ -322,7 +325,9 @@ export const SessionInspector = memo(function SessionInspector({
 				filesView={
 					session ? (
 						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
-							<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							<FilesActionsHostContext.Provider value={filesActionsHost}>
+								<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							</FilesActionsHostContext.Provider>
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
@@ -334,6 +339,7 @@ export const SessionInspector = memo(function SessionInspector({
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
+							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
 							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
@@ -484,10 +490,38 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
 	);
 });
+
+/**
+ * The latest Setup and Cleanup runs, collapsed: a terminal session's agent
+ * covers the startup loader once it starts, and Cleanup only runs after the
+ * session is deleted, so this is where both stay reachable.
+ */
+function CloudScriptRunSections({ cloud, sessionId }: { cloud: NonNullable<WorkspaceSession["cloud"]>; sessionId: string }) {
+	const { t } = useTranslation();
+	const runs = useCloudScriptRuns(cloud.orgId, sessionId, { lifecycle: cloud });
+	const setup = latestScriptRun(runs, "setup");
+	const cleanup = latestScriptRun(runs, "cleanup");
+	if (!setup && !cleanup) return null;
+	return (
+		<>
+			{setup ? (
+				<Section defaultOpen={false} surface={false} title={t("scriptRun.setup")}>
+					<ScriptRunPanel run={setup} showTitle={false} />
+				</Section>
+			) : null}
+			{cleanup ? (
+				<Section defaultOpen={false} surface={false} title={t("scriptRun.cleanup")}>
+					<ScriptRunPanel run={cleanup} showTitle={false} />
+				</Section>
+			) : null}
+		</>
+	);
+}
 
 const ReviewsView = memo(function ReviewsView({
 	session,
@@ -835,7 +869,6 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		return (
 			<Section title={t("inspector.sessionControls")}>
 				{terminateAction}
-				{!session.cloud && (!hostId || hostId === "local") ? <AwakeControl sessionId={session.id} /> : null}
 			</Section>
 		);
 	}
@@ -865,7 +898,6 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 					) : null}
 				</>
 			)}
-			{!session.cloud && (!hostId || hostId === "local") ? <AwakeControl sessionId={session.id} /> : null}
 		</Section>
 	);
 }
@@ -914,13 +946,30 @@ function PRSummaryCard({
 				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
 				return;
 			}
-			const { error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
+			return data;
 		},
-		onSuccess: async () => {
+		onSuccess: async (result) => {
+			if (!cloudOrgId && result?.state === "merged") {
+				queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: SessionPRReference[] }>(
+					sessionScmSummaryQueryKey(sessionId, hostId),
+					(current) => current ? {
+						...current,
+						prs: current.prs.map((cached) => cached.url === pr.url ? {
+							...cached,
+							state: result.state,
+							stateChangedAt: result.stateChangedAt,
+							updatedAt: result.stateChangedAt,
+						} : cached),
+					} : current,
+				);
+				await queryClient.invalidateQueries({ queryKey: workspaceKey });
+				return;
+			}
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId, hostId) }),
 				queryClient.invalidateQueries({ queryKey: workspaceKey }),
@@ -949,7 +998,7 @@ function PRSummaryCard({
 				canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-background hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -966,6 +1015,7 @@ function PRSummaryCard({
 			}
 			mergeError={mergeError}
 			openLabel={t("inspector.openPR", { number: pr.number })}
+			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>

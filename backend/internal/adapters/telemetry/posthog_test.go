@@ -352,12 +352,19 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 // operator's GitHub handle, the sink mirrors it into $set and flips this one
 // event to identified so a breakdown by github_actor is possible.
 func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
-	sink := &PostHogSink{}
-	props := sink.properties(ports.TelemetryEvent{
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close(context.Background()) }()
+	event := ports.TelemetryEvent{
 		Name:    "ao.session.spawned",
 		Source:  "session_service",
 		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	})
+	}
+	props := sink.properties(event)
 	if props["github_actor"] != "octocat" {
 		t.Fatalf("properties.github_actor = %#v, want octocat", props["github_actor"])
 	}
@@ -372,14 +379,10 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 		t.Fatalf("$set.github_actor = %#v, want octocat", set["github_actor"])
 	}
 
-	// The handle is stable, so a second spawn keeps the event property but does
-	// not resend the identified person $set: only the first event per process
-	// pays the identified rate.
-	next := sink.properties(ports.TelemetryEvent{
-		Name:    "ao.session.spawned",
-		Source:  "session_service",
-		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	})
+	// A successful send records the identity. The next event carries the
+	// handle but does not repeat its person properties.
+	sink.send(context.Background(), event)
+	next := sink.properties(event)
 	if next["github_actor"] != "octocat" {
 		t.Fatalf("second properties.github_actor = %#v, want octocat", next["github_actor"])
 	}

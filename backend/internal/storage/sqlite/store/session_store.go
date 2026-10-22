@@ -166,16 +166,15 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
-// SetSessionNamedWorkspace publishes naming facts before an agent can launch.
-func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+// SetSessionTaskBranch records a background task branch rename.
+func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
-		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
-		WorkspaceRepoPath: workspaceRepoPath, UpdatedAt: now,
+	rows, err := s.qw.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+		ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
 	})
 	if err != nil {
-		return false, fmt.Errorf("record named workspace for %s: %w", id, err)
+		return false, fmt.Errorf("record task branch for %s: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -884,6 +883,29 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 	return ids, nil
 }
 
+// ListTurnFailureCandidates returns the harness's live terminal sessions that
+// are in a turn and have a native transcript path, reading only the columns
+// the failed-turn observer needs.
+func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
+	rows, err := s.qr.ListTurnFailureCandidates(ctx, harness)
+	if err != nil {
+		return nil, fmt.Errorf("list turn failure candidates: %w", err)
+	}
+	out := make([]domain.TurnFailureCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.TurnFailureCandidate{
+			ID:                   r.ID,
+			Harness:              r.Harness,
+			Activity:             domain.Activity{State: r.ActivityState, LastActivityAt: r.ActivityLastAt},
+			LatestUserPromptAt:   nullTimeToTime(r.LatestUserPromptAt),
+			Revision:             r.Revision,
+			RuntimeLaunchID:      r.RuntimeLaunchID,
+			NativeTranscriptPath: r.NativeTranscriptPath,
+		})
+	}
+	return out, nil
+}
+
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {
 	out := make([]domain.SessionRecord, 0, len(rows))
 	for _, r := range rows {
@@ -1257,8 +1279,8 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// monotonic reading survive into the column. Rows written from a local-zone
 	// clock ("… +0700 +07 m=+995.1") then stop comparing as timestamps against
 	// UTC rows, and activity_last_at is compared directly in SQL — the
-	// agent-switch source-stop predicate is one such comparison, and a mismatched
-	// row silently matches zero rows there. Normalize every writer's value here
+	// activity predicates are one such comparison, and a mismatched row silently
+	// matches zero rows there. Normalize every writer's value here
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a

@@ -744,6 +744,8 @@ def offering(**overrides):
         "paywalled_features": [],
         "idle_pause_threshold": "0",
         "freestyle_idle_pause_threshold": "15m",
+        "coder_readable_names": "true",
+        "coder_worker_working_folder": "true",
     }
     values.update(overrides)
     return values
@@ -800,6 +802,15 @@ class OfferingTests(unittest.TestCase):
             ):
                 validate_offering(**offering(freestyle_idle_pause_threshold=bad))
 
+    def test_coder_rollout_flags_are_true_or_false(self):
+        validate_offering(**offering(coder_readable_names="false", coder_worker_working_folder=" false "))
+        for name in ("coder_readable_names", "coder_worker_working_folder"):
+            for bad in ("", "yes", "1", "True"):
+                with self.subTest(name=name, value=bad), self.assertRaisesRegex(
+                    ValueError, "AO_CLOUD_CODER_.* must be true or false"
+                ):
+                    validate_offering(**offering(**{name: bad}))
+
     def test_checked_in_offering_files_validate(self):
         files = {
             name: offering_file(name) for name in ("staging", "production")
@@ -811,6 +822,11 @@ class OfferingTests(unittest.TestCase):
         self.assertNotIn("nodeops", files["staging"]["AO_CLOUD_SANDBOX_PROVIDERS"])
         self.assertEqual(files["staging"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
         self.assertEqual(files["production"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
+        # The Coder rollout flags run in staging first; production turns them
+        # on one release later, so its rollback target can read what they write.
+        for name in ("AO_CLOUD_CODER_READABLE_NAMES", "AO_CLOUD_CODER_WORKER_WORKING_FOLDER"):
+            self.assertEqual(files["staging"][name], "true")
+            self.assertEqual(files["production"][name], "false")
 
 
 def offering_file(environment):
@@ -836,6 +852,8 @@ def offering_arguments(values):
         "paywalled_features": split("AO_CLOUD_PAYWALLED_FEATURES"),
         "idle_pause_threshold": values["AO_CLOUD_IDLE_PAUSE_THRESHOLD"],
         "freestyle_idle_pause_threshold": values["AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"],
+        "coder_readable_names": values["AO_CLOUD_CODER_READABLE_NAMES"],
+        "coder_worker_working_folder": values["AO_CLOUD_CODER_WORKER_WORKING_FOLDER"],
     }
 
 
@@ -1059,6 +1077,8 @@ class BillingAndOfferingTaskDefinitionTests(unittest.TestCase):
             ("AO_CLOUD_DEFAULT_ORG_BILLING", "free"),
             ("AO_CLOUD_IDLE_PAUSE_THRESHOLD", "30s"),
             ("AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", "15"),
+            ("AO_CLOUD_CODER_READABLE_NAMES", "yes"),
+            ("AO_CLOUD_CODER_WORKER_WORKING_FOLDER", "on"),
         ):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
                 render_coder(

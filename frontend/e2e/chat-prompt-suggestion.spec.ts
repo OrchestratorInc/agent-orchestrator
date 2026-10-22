@@ -91,9 +91,13 @@ test("Tab inserts the suggested next message for editing, and Enter sends the ed
 test("typing dismisses the whole-message suggestion without accepting it @T0", async ({ page }) => {
 	const { composer, sent, suggestion } = await openChat(page);
 	await expect(suggestion).toHaveText(prompt);
-	await composer.fill("My own next message");
+	await composer.pressSequentially("My own next message");
+	await expect(composer).toHaveText("My own next message");
 	await expect(suggestion).toBeHidden();
-	await composer.fill("");
+	// Use editor keyboard commands so Lexical owns both the selection and deletion.
+	// fill("") selects DOM text, then sends Delete, which can race reconciliation.
+	await composer.press("ControlOrMeta+a");
+	await composer.press("Backspace");
 	await expect(suggestion).toBeHidden();
 	await expect(composer).toHaveText("");
 	expect(sent).toEqual([]);

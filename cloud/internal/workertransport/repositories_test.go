@@ -95,3 +95,31 @@ func TestWorkspaceRequestsSelectTheRepositoryCheckout(t *testing.T) {
 		t.Fatalf("a single-repo session listed repositories: %+v", repositories)
 	}
 }
+
+// Freestyle and Coder check the main repository out into a fixed folder
+// ("repository"); the switcher must show the repository's own name.
+func TestMainRepositoryIsLabeledWithItsName(t *testing.T) {
+	root := t.TempDir()
+	mainPath := filepath.Join(root, "repository")
+	supervisor := &Supervisor{
+		Workspace:      mainPath,
+		MainRepository: worker.SessionRepoCheckouts(mainPath, "https://github.com/Acme/Web-App.git", nil)[0],
+		Repositories:   []worker.RepoCheckout{{Name: "api", Path: filepath.Join(root, "api"), FullName: "acme/api"}},
+	}
+	repositories := supervisor.workspaceRepositories()
+	if len(repositories) != 2 {
+		t.Fatalf("repositories = %+v", repositories)
+	}
+	main := repositories[0]
+	if !main.Main || main.Name != "repository" || main.Label != "Web-App" || main.Repository != "acme/web-app" {
+		t.Fatalf("main repository = %+v, want folder repository labeled Web-App (acme/web-app)", main)
+	}
+	if checkout, _, err := supervisor.workspaceFor(nil, map[string]any{"repository": "acme/web-app"}); err != nil || checkout != nil {
+		t.Fatalf("selecting the main repository by owner/name = %v, %v; want the main workspace", checkout, err)
+	}
+	// Without a known URL the folder name stays the label.
+	unknown := (&Supervisor{Workspace: mainPath, Repositories: supervisor.Repositories}).workspaceRepositories()
+	if unknown[0].Label != "" || unknown[0].Name != "repository" {
+		t.Fatalf("main repository without a URL = %+v", unknown[0])
+	}
+}

@@ -1170,6 +1170,61 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 	return items, nil
 }
 
+const listTurnFailureCandidates = `-- name: ListTurnFailureCandidates :many
+SELECT id, harness, activity_state, activity_last_at, latest_user_prompt_at, revision,
+    runtime_launch_id, native_transcript_path
+FROM sessions
+WHERE harness = ?1 AND is_terminated = 0 AND session_mode = 'tui'
+    AND activity_state IN ('active', 'waiting_input', 'blocked')
+    AND native_transcript_path <> ''
+ORDER BY id
+`
+
+type ListTurnFailureCandidatesRow struct {
+	ID                   domain.SessionID
+	Harness              domain.AgentHarness
+	ActivityState        domain.ActivityState
+	ActivityLastAt       time.Time
+	LatestUserPromptAt   sql.NullTime
+	Revision             int64
+	RuntimeLaunchID      string
+	NativeTranscriptPath string
+}
+
+// Terminal sessions of one harness that are in a turn and have a native
+// transcript to check. Only the columns the failed-turn observer reads.
+func (q *Queries) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]ListTurnFailureCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTurnFailureCandidates, harness)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTurnFailureCandidatesRow{}
+	for rows.Next() {
+		var i ListTurnFailureCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Harness,
+			&i.ActivityState,
+			&i.ActivityLastAt,
+			&i.LatestUserPromptAt,
+			&i.Revision,
+			&i.RuntimeLaunchID,
+			&i.NativeTranscriptPath,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVersionRefreshChatCandidates = `-- name: ListVersionRefreshChatCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
@@ -1686,43 +1741,6 @@ func (q *Queries) SetSessionHibernated(ctx context.Context, arg SetSessionHibern
 	return result.RowsAffected()
 }
 
-const setSessionNamedWorkspace = `-- name: SetSessionNamedWorkspace :execrows
-UPDATE sessions SET
-    branch = ?1,
-    workspace_path = ?2,
-    workspace_repo_path = ?3,
-    updated_at = ?4
-WHERE id = ?5 AND runtime_handle_id = '' AND provider_conversation_id = ''
-  AND is_terminated = 0 AND is_task_preparation = 0
-  AND (workspace_path = '' OR workspace_path = ?6 OR workspace_path = ?2)
-`
-
-type SetSessionNamedWorkspaceParams struct {
-	Branch            string
-	WorkspacePath     string
-	WorkspaceRepoPath string
-	UpdatedAt         time.Time
-	ID                domain.SessionID
-	ExpectedPath      string
-}
-
-// Naming and recovery may update an unlaunched Chat or TUI checkout, but cannot
-// replace another path adopted since the caller read the session.
-func (q *Queries) SetSessionNamedWorkspace(ctx context.Context, arg SetSessionNamedWorkspaceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setSessionNamedWorkspace,
-		arg.Branch,
-		arg.WorkspacePath,
-		arg.WorkspaceRepoPath,
-		arg.UpdatedAt,
-		arg.ID,
-		arg.ExpectedPath,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const setSessionPinned = `-- name: SetSessionPinned :execrows
 UPDATE sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?
 `
@@ -1903,6 +1921,35 @@ type SetSessionRuntimeReleasedParams struct {
 // released launch, and only while that launch is still the session's own.
 func (q *Queries) SetSessionRuntimeReleased(ctx context.Context, arg SetSessionRuntimeReleasedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionRuntimeReleased, arg.LaunchID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionTaskBranch = `-- name: SetSessionTaskBranch :execrows
+UPDATE sessions SET
+    branch = ?1,
+    updated_at = ?2
+WHERE id = ?3 AND branch = ?4 AND is_terminated = 0
+`
+
+type SetSessionTaskBranchParams struct {
+	Branch         string
+	UpdatedAt      time.Time
+	ID             domain.SessionID
+	ExpectedBranch string
+}
+
+// Background task naming renames only the branch; the checkout never moves.
+// It applies only while the row still carries the temporary branch it renamed.
+func (q *Queries) SetSessionTaskBranch(ctx context.Context, arg SetSessionTaskBranchParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionTaskBranch,
+		arg.Branch,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.ExpectedBranch,
+	)
 	if err != nil {
 		return 0, err
 	}
