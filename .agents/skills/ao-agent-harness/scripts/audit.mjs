@@ -417,7 +417,11 @@ async function auditTui(run_, { ao, baseURL, dataDir, projectId, tokens, timeout
     // use, a trust or update dialog.
     const screen = await waitTerminalCue(baseURL, first.state, [], 4_000);
     await writeFile(run_.checks.at(-1).evidence ?? join(run_.evidenceDir, "tui_prompt-screen.json"), `${redact(JSON.stringify({ session: first.state?.data?.session, screen: screen.screen.split("\n").filter((line) => line.trim()).slice(-40) }, null, 2))}\n`);
-    run_.checks.at(-1).reason += "; the terminal screen is saved in the evidence file";
+    // Name a provider-side cause the screen shows, so the report files it under the user.
+    const cause = screen.screen.replace(/\s+/g, " ").match(/authentication failed|free limit reached|limit (?:reached|exhausted)|rate limit[a-z ]*|quota[a-z ]*|insufficient (?:credits|balance)|invalid api key|unauthori[sz]ed/i)?.[0];
+    run_.checks.at(-1).reason = cause
+      ? `the CLI shows "${cause}": the provider rejected the request (login, key or quota), not AO`
+      : `${run_.checks.at(-1).reason}; the terminal screen is saved in the evidence file`;
     const artifacts = join(dataDir, "artifacts", sessionId, PROOF);
     if (await access(artifacts).then(() => true, () => false)) {
       run_.checks.at(-1).reason += `; it was written to the AO artifacts folder instead (${artifacts})`;
