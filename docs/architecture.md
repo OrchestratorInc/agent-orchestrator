@@ -375,7 +375,8 @@ is pushed, because the agent's next plain `git push` would name another remote
 branch. Branches the agent made or remembers under the temporary branch stay
 attributed to the session, below any session currently on that name, so its PRs
 are found after the rename. A rename the session row does not accept is put back
-exactly; if that also fails, the row records the branch Git holds. Session IDs
+exactly. When a rename or its undo stops partway, the session and each
+repository row record the branch that checkout holds. Session IDs
 remain unchanged. Explicit CLI/API session titles are preserved. Explicit
 branches, promptless sessions, Scratch sessions, and existing sessions keep their
 naming behavior.

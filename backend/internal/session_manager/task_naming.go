@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -204,35 +205,43 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 	if project != nil {
 		info = *project
 	}
-	renamed, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug, "root"))
-	if renamed.Root.Branch == ws.Branch {
-		return ws.Branch, err
-	}
-	// Git moved the root: every repository, or some after a failed undo.
-	recordErr := m.recordTaskBranch(ctx, rec.ID, ws.Branch, renamed.Root.Branch)
-	if recordErr != nil && err == nil {
+	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug, "root"))
+	if err == nil && held.Root.Branch != ws.Branch {
+		recordErr := m.recordTaskBranch(ctx, rec.ID, ws.Branch, held)
+		if recordErr == nil {
+			return held.Root.Branch, nil
+		}
 		// Keep Git and the row agreeing: put the temporary names back exactly.
-		undoErr := namer.RevertTaskBranch(ctx, renamed, info)
-		if undoErr == nil {
+		var undoErr error
+		if held, undoErr = namer.RevertTaskBranch(ctx, held, info); undoErr == nil {
 			return ws.Branch, recordErr
 		}
-		// Git kept the new name, so the row must name it: try once more.
+		err = errors.Join(recordErr, undoErr)
+	}
+	if !sameTaskBranches(held, info) {
+		// A failed undo left Git, maybe per repository, off the temporary
+		// names: the row must name what Git holds.
 		retryCtx, done := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
 		defer done()
-		if m.recordTaskBranch(retryCtx, rec.ID, ws.Branch, renamed.Root.Branch) == nil {
-			return renamed.Root.Branch, undoErr
-		}
-		return renamed.Root.Branch, errors.Join(recordErr, undoErr)
+		err = errors.Join(err, m.recordTaskBranch(retryCtx, rec.ID, ws.Branch, held))
 	}
-	return renamed.Root.Branch, errors.Join(err, recordErr)
+	return held.Root.Branch, err
 }
 
-func (m *Manager) recordTaskBranch(ctx context.Context, id domain.SessionID, temporary, branch string) error {
-	updated, err := m.store.SetSessionTaskBranch(ctx, id, temporary, branch, m.clock())
+func (m *Manager) recordTaskBranch(ctx context.Context, id domain.SessionID, temporary string, held ports.WorkspaceProjectInfo) error {
+	repos := map[string]string{domain.RootWorkspaceRepoName: held.Root.Branch}
+	for _, repo := range held.Worktrees {
+		repos[repo.RepoName] = repo.Branch
+	}
+	updated, err := m.store.SetSessionTaskBranch(ctx, id, temporary, held.Root.Branch, repos, m.clock())
 	if err == nil && !updated {
 		err = errors.New("session branch changed during naming")
 	}
 	return err
+}
+
+func sameTaskBranches(a, b ports.WorkspaceProjectInfo) bool {
+	return a.Root.Branch == b.Root.Branch && slices.EqualFunc(a.Worktrees, b.Worktrees, func(x, y ports.WorkspaceRepoInfo) bool { return x.Branch == y.Branch })
 }
 
 // setBranchNaming publishes whether a task's generated branch name is on the way.

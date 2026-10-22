@@ -343,7 +343,7 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
-	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error)
+	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error)
 	SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error
 	ClearSessionBranchNaming(ctx context.Context) error
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)

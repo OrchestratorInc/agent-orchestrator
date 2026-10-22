@@ -239,6 +239,47 @@ func TestRenameTaskBranchReportsFailedUndo(t *testing.T) {
 	}
 }
 
+// When the undo stops partway, the result says which branches Git holds.
+func TestRevertTaskBranchReportsFailedUndo(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	original, err := ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := ws.RenameTaskBranch(ctx, original, "ao/fix-login/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := original.Worktrees[len(original.Worktrees)-1].Path
+	actualRun := ws.run
+	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
+		if len(args) > 1 && args[1] == last && strings.Contains(strings.Join(args, " "), "branch -m") {
+			return nil, errors.New("injected undo failure")
+		}
+		return actualRun(ctx, binary, args...)
+	}
+	got, err := ws.RevertTaskBranch(ctx, renamed, original)
+	if err == nil {
+		t.Fatal("undo failure not reported")
+	}
+	if got.Root.Branch != gitOutput(t, git, original.Root.Path, "branch", "--show-current") {
+		t.Fatalf("root = %q disagrees with Git", got.Root.Branch)
+	}
+	for _, wt := range got.Worktrees {
+		if actual := gitOutput(t, git, wt.Path, "branch", "--show-current"); wt.Branch != actual {
+			t.Fatalf("%s = %q, Git holds %q", wt.RepoName, wt.Branch, actual)
+		}
+	}
+}
+
 // RevertTaskBranch restores each repository's own original branch exactly,
 // even with refs under the temporary namespace that a rename would skip.
 func TestRevertTaskBranchIsExact(t *testing.T) {
@@ -260,7 +301,7 @@ func TestRevertTaskBranchIsExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	runGit(t, git, repo, "branch", "ao/proj-1/fix")
-	if err := ws.RevertTaskBranch(ctx, renamed, original); err != nil {
+	if _, err := ws.RevertTaskBranch(ctx, renamed, original); err != nil {
 		t.Fatal(err)
 	}
 	if got := gitOutput(t, git, root.Path, "branch", "--show-current"); got != root.Branch {

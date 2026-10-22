@@ -741,6 +741,7 @@ describe("pending branch presentation", () => {
 		expect(sessionBranchPresentation(launched)).toEqual({ branch: undefined, naming: true });
 		expect(sessionBranchPresentation({ ...launched, branch: "ao/login-redirect/root", branchNaming: false })).toEqual({ branch: "ao/login-redirect/root", naming: false });
 		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
-		expect(sessionBranchPresentation({ ...launched, provisionState: "failed" })).toEqual({ branch: "ao/mer-7/root", naming: false });
+		// A start that failed after launch has its worktree.
+		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
 	});
 });

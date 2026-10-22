@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 type taskNamingLauncher struct {
@@ -410,7 +411,7 @@ func TestTaskNamingKeepsMatchingTemporaryName(t *testing.T) {
 
 type taskBranchMovedStore struct{ *fakeStore }
 
-func (s taskBranchMovedStore) SetSessionTaskBranch(context.Context, domain.SessionID, string, string, time.Time) (bool, error) {
+func (s taskBranchMovedStore) SetSessionTaskBranch(context.Context, domain.SessionID, string, string, map[string]string, time.Time) (bool, error) {
 	return false, nil
 }
 
@@ -428,21 +429,21 @@ func TestTaskNamingUndoesRenameTheRowRejects(t *testing.T) {
 
 type revertFailsWorkspace struct{ *gitworktree.Workspace }
 
-func (revertFailsWorkspace) RevertTaskBranch(context.Context, ports.WorkspaceProjectInfo, ports.WorkspaceProjectInfo) error {
-	return errors.New("ref locked")
+func (revertFailsWorkspace) RevertTaskBranch(_ context.Context, renamed, _ ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	return renamed, errors.New("ref locked")
 }
 
 type flakyTaskBranchStore struct {
-	*fakeStore
+	Store
 	failures int
 }
 
-func (s *flakyTaskBranchStore) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expected, branch string, now time.Time) (bool, error) {
+func (s *flakyTaskBranchStore) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expected, branch string, repos map[string]string, now time.Time) (bool, error) {
 	if s.failures > 0 {
 		s.failures--
 		return false, errors.New("database is locked")
 	}
-	return s.fakeStore.SetSessionTaskBranch(ctx, id, expected, branch, now)
+	return s.Store.SetSessionTaskBranch(ctx, id, expected, branch, repos, now)
 }
 
 // When neither the row write nor the undo lands, the row is written again so it
@@ -450,10 +451,98 @@ func (s *flakyTaskBranchStore) SetSessionTaskBranch(ctx context.Context, id doma
 func TestTaskNamingRecordsRenameItCannotUndo(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
-	m.workspace, m.store = revertFailsWorkspace{ws}, &flakyTaskBranchStore{fakeStore: st, failures: 1}
+	m.workspace, m.store = revertFailsWorkspace{ws}, &flakyTaskBranchStore{Store: st, failures: 1}
 	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
 	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != "ao/fix-login/root" || st.sessions[rec.ID].Metadata.Branch != got {
 		t.Fatalf("git branch = %q, row = %q", got, st.sessions[rec.ID].Metadata.Branch)
+	}
+}
+
+type scriptedTaskNamer struct {
+	renamed, reverted    ports.WorkspaceProjectInfo
+	renameErr, revertErr error
+}
+
+func (n scriptedTaskNamer) RenameTaskBranch(context.Context, ports.WorkspaceProjectInfo, string) (ports.WorkspaceProjectInfo, error) {
+	return n.renamed, n.renameErr
+}
+
+func (n scriptedTaskNamer) RevertTaskBranch(context.Context, ports.WorkspaceProjectInfo, ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	return n.reverted, n.revertErr
+}
+
+// When a rename or its undo stops partway, each repository row records the
+// branch its checkout holds, and the session row the root's.
+func TestTaskNamingRecordsSplitBranches(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		failedWrites       int
+		rootNamed, renamed bool // what the root and the child hold afterwards
+		namer              func(split func(root, child bool) ports.WorkspaceProjectInfo) scriptedTaskNamer
+	}{
+		{"undo stopped after the root", 1, false, true, func(split func(bool, bool) ports.WorkspaceProjectInfo) scriptedTaskNamer {
+			return scriptedTaskNamer{renamed: split(true, true), reverted: split(false, true), revertErr: errors.New("ref locked")}
+		}},
+		{"rename and undo stopped after the root", 0, true, false, func(split func(bool, bool) ports.WorkspaceProjectInfo) scriptedTaskNamer {
+			return scriptedTaskNamer{renamed: split(true, false), renameErr: errors.New("ref locked")}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			m, fake, _ := newChatManager(&recordingLauncher{})
+			st := sqlitetest.MustOpen(t)
+			if err := st.UpsertProject(ctx, fake.projects["mer"]); err != nil {
+				t.Fatal(err)
+			}
+			rec, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker})
+			if err != nil {
+				t.Fatal(err)
+			}
+			temporary := "ao/" + string(rec.ID)
+			split := func(root, child bool) ports.WorkspaceProjectInfo {
+				name := func(named bool) string {
+					if named {
+						return "ao/fix-login/root"
+					}
+					return temporary
+				}
+				return ports.WorkspaceProjectInfo{
+					Root: ports.WorkspaceInfo{ProjectID: "mer", SessionID: rec.ID, Path: "/w/root", Branch: name(root)},
+					Worktrees: []ports.WorkspaceRepoInfo{
+						{RepoName: domain.RootWorkspaceRepoName, Path: "/w/root", Branch: name(root)},
+						{RepoName: "child", Path: "/w/root/child", Branch: name(child)},
+					},
+				}
+			}
+			original := split(false, false)
+			rec.Metadata.Branch, rec.Metadata.WorkspacePath = temporary, original.Root.Path
+			if err := st.UpdateSession(ctx, rec); err != nil {
+				t.Fatal(err)
+			}
+			for _, wt := range original.Worktrees {
+				if err := st.UpsertSessionWorktree(ctx, domain.SessionWorktreeRecord{SessionID: rec.ID, RepoName: wt.RepoName, Branch: wt.Branch, WorktreePath: wt.Path, State: "active"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m.store = &flakyTaskBranchStore{Store: st, failures: tc.failedWrites}
+			if _, err := m.renameTaskBranch(tc.namer(split), rec, original.Root, &original, "fix-login"); err == nil {
+				t.Fatal("partial rename not reported")
+			}
+			want := split(tc.rootNamed, tc.renamed)
+			if got, _, _ := st.GetSession(ctx, rec.ID); got.Metadata.Branch != want.Root.Branch {
+				t.Fatalf("session branch = %q, want %q", got.Metadata.Branch, want.Root.Branch)
+			}
+			rows, err := st.ListSessionWorktrees(ctx, rec.ID)
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("rows = %+v, %v", rows, err)
+			}
+			for _, row := range rows {
+				i := slices.IndexFunc(want.Worktrees, func(wt ports.WorkspaceRepoInfo) bool { return wt.RepoName == row.RepoName })
+				if row.Branch != want.Worktrees[i].Branch {
+					t.Fatalf("%s row = %q, Git holds %q", row.RepoName, row.Branch, want.Worktrees[i].Branch)
+				}
+			}
+		})
 	}
 }
 
@@ -463,7 +552,7 @@ type siblingDuringWriteStore struct {
 	t    *testing.T
 }
 
-func (s siblingDuringWriteStore) SetSessionTaskBranch(_ context.Context, _ domain.SessionID, expected, _ string, _ time.Time) (bool, error) {
+func (s siblingDuringWriteStore) SetSessionTaskBranch(_ context.Context, _ domain.SessionID, expected, _ string, _ map[string]string, _ time.Time) (bool, error) {
 	runManagerGit(s.t, s.repo, "branch", strings.TrimSuffix(expected, "/root")+"/fix")
 	return false, nil
 }

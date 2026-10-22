@@ -33,7 +33,7 @@ func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			updated, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/mer-1/root", "ao/login/root", created.UpdatedAt)
+			updated, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/mer-1/root", "ao/login/root", nil, created.UpdatedAt)
 			if err != nil || updated != want {
 				t.Fatalf("updated=%v, err=%v, want %v", updated, err, want)
 			}
@@ -52,8 +52,8 @@ func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 	}
 }
 
-// The session row and its repository rows move to the new branch together, or
-// not at all.
+// The session row and its repository rows move together, or not at all, and
+// each repository row takes the branch its own checkout holds.
 func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "mer")
@@ -63,12 +63,13 @@ func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, repo := range []string{"__root__", "child"} {
+	for _, repo := range []string{domain.RootWorkspaceRepoName, "child"} {
 		if err := s.UpsertSessionWorktree(t.Context(), domain.SessionWorktreeRecord{SessionID: created.ID, RepoName: repo, Branch: "ao/mer-1", WorktreePath: "/w/" + repo, State: "active"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if ok, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/other", "ao/login/root", created.UpdatedAt); err != nil || ok {
+	held := map[string]string{domain.RootWorkspaceRepoName: "ao/login/root", "child": "ao/mer-1"}
+	if ok, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/other", "ao/login/root", held, created.UpdatedAt); err != nil || ok {
 		t.Fatalf("mismatched rename = %v, %v", ok, err)
 	}
 	rows, _ := s.ListSessionWorktrees(t.Context(), created.ID)
@@ -77,14 +78,25 @@ func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 			t.Fatalf("rejected rename moved a row: %+v", row)
 		}
 	}
-	if ok, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/mer-1", "ao/login/root", created.UpdatedAt); err != nil || !ok {
+	if ok, err := s.SetSessionTaskBranch(t.Context(), created.ID, "ao/mer-1", "ao/login/root", held, created.UpdatedAt); err != nil || !ok {
 		t.Fatalf("rename = %v, %v", ok, err)
 	}
 	rows, _ = s.ListSessionWorktrees(t.Context(), created.ID)
 	for _, row := range rows {
-		if row.Branch != "ao/login/root" {
-			t.Fatalf("row left on the old branch: %+v", row)
+		if row.Branch != held[row.RepoName] {
+			t.Fatalf("row %s = %q, want %q", row.RepoName, row.Branch, held[row.RepoName])
 		}
+	}
+	// A root an undo put back on the temporary branch has nothing to guard.
+	other, err := s.CreateSession(t.Context(), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetSessionTaskBranch(t.Context(), other.ID, "ao/mer-1", "ao/mer-1", nil, other.UpdatedAt); err != nil || !ok {
+		t.Fatalf("same-branch record = %v, %v", ok, err)
+	}
+	if got, _, _ := s.GetSession(t.Context(), other.ID); got.TemporaryBranch != "" {
+		t.Fatalf("temporary branch = %q", got.TemporaryBranch)
 	}
 }
 
@@ -108,7 +120,7 @@ func TestTaskRenameSurvivesStaleRowWrites(t *testing.T) {
 		t.Fatalf("naming flag = %v, %v", stale.BranchNaming, err)
 	}
 	seq, _ := s.LatestSeq(ctx)
-	if ok, err := s.SetSessionTaskBranch(ctx, created.ID, "ao/mer-1/root", "ao/login/root", created.UpdatedAt); err != nil || !ok {
+	if ok, err := s.SetSessionTaskBranch(ctx, created.ID, "ao/mer-1/root", "ao/login/root", nil, created.UpdatedAt); err != nil || !ok {
 		t.Fatalf("rename = %v, %v", ok, err)
 	}
 	if events, err := s.EventsAfter(ctx, seq, 10); err != nil || len(events) != 1 {

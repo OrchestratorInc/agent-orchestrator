@@ -43,7 +43,7 @@ ORDER BY CASE WHEN repo_name = '__root__' THEN 0 ELSE 1 END, repo_name;
 -- name: DeleteSessionWorktrees :exec
 DELETE FROM session_worktrees WHERE session_id = ?;
 
--- name: RenameSessionWorktreeBranch :exec
--- A task's background branch rename moves every repository row with it.
+-- name: SetSessionWorktreeBranch :exec
+-- A task's background branch rename records the branch each repository holds.
 UPDATE session_worktrees SET branch = sqlc.arg(branch)
-WHERE session_id = sqlc.arg(session_id) AND branch = sqlc.arg(expected_branch);
+WHERE session_id = sqlc.arg(session_id) AND repo_name = sqlc.arg(repo_name);

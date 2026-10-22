@@ -1975,7 +1975,8 @@ func (q *Queries) SetSessionRuntimeReleased(ctx context.Context, arg SetSessionR
 const setSessionTaskBranch = `-- name: SetSessionTaskBranch :execrows
 UPDATE sessions SET
     branch = ?1,
-    temporary_branch = ?2,
+    temporary_branch = CASE WHEN ?1 <> ?2
+        THEN ?2 ELSE temporary_branch END,
     branch_naming = FALSE,
     updated_at = ?3
 WHERE id = ?4 AND branch = ?2
@@ -1983,14 +1984,15 @@ WHERE id = ?4 AND branch = ?2
 
 type SetSessionTaskBranchParams struct {
 	Branch         string
-	ExpectedBranch string
+	ExpectedBranch interface{}
 	UpdatedAt      time.Time
 	ID             domain.SessionID
 }
 
 // Background task naming renames only the branch; the checkout never moves.
 // It applies only while the row still carries the temporary branch it renamed,
-// keeps that branch so no later write restores it, and ends branch naming.
+// keeps that branch once replaced so no later write restores it, and ends
+// branch naming.
 func (q *Queries) SetSessionTaskBranch(ctx context.Context, arg SetSessionTaskBranchParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionTaskBranch,
 		arg.Branch,

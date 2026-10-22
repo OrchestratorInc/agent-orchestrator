@@ -466,10 +466,12 @@ WHERE id = sqlc.arg(id)
 -- name: SetSessionTaskBranch :execrows
 -- Background task naming renames only the branch; the checkout never moves.
 -- It applies only while the row still carries the temporary branch it renamed,
--- keeps that branch so no later write restores it, and ends branch naming.
+-- keeps that branch once replaced so no later write restores it, and ends
+-- branch naming.
 UPDATE sessions SET
     branch = sqlc.arg(branch),
-    temporary_branch = sqlc.arg(expected_branch),
+    temporary_branch = CASE WHEN sqlc.arg(branch) <> sqlc.arg(expected_branch)
+        THEN sqlc.arg(expected_branch) ELSE temporary_branch END,
     branch_naming = FALSE,
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND branch = sqlc.arg(expected_branch);

@@ -167,8 +167,9 @@ func (s *Store) SetSessionProvisionedWorkspace(
 }
 
 // SetSessionTaskBranch records a background task branch rename on the session
-// and its repository rows together.
-func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
+// and its repository rows together. repoBranches maps each repository row to
+// the branch its checkout holds, which after a failed undo can differ.
+func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -180,8 +181,11 @@ func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, e
 	rows, err := q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
 		ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
 	})
-	if err == nil && rows > 0 {
-		err = q.RenameSessionWorktreeBranch(ctx, gen.RenameSessionWorktreeBranchParams{SessionID: id, ExpectedBranch: expectedBranch, Branch: branch})
+	for repo, repoBranch := range repoBranches {
+		if err != nil || rows == 0 {
+			break
+		}
+		err = q.SetSessionWorktreeBranch(ctx, gen.SetSessionWorktreeBranchParams{SessionID: id, RepoName: repo, Branch: repoBranch})
 	}
 	if err == nil {
 		err = tx.Commit()

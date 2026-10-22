@@ -72,10 +72,10 @@ func (w *Workspace) RenameTaskBranch(ctx context.Context, info ports.WorkspacePr
 }
 
 // RevertTaskBranch delegates an exact task branch undo to the Git adapter.
-func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original ports.WorkspaceProjectInfo) error {
+func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
 	namer, ok := w.git.(ports.WorkspaceTaskNamer)
 	if !ok {
-		return errors.New("workspace router: Git adapter does not support task naming")
+		return renamed, errors.New("workspace router: Git adapter does not support task naming")
 	}
 	return namer.RevertTaskBranch(ctx, renamed, original)
 }

@@ -235,17 +235,20 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	return true, nil
 }
 
-func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
+func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
 	if !ok || rec.Metadata.Branch != expectedBranch {
 		return false, nil
 	}
-	rec.Metadata.Branch, rec.TemporaryBranch, rec.BranchNaming = branch, expectedBranch, false
+	if branch != expectedBranch {
+		rec.TemporaryBranch = expectedBranch
+	}
+	rec.Metadata.Branch, rec.BranchNaming = branch, false
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	for i, row := range f.worktrees[id] {
-		if row.Branch == expectedBranch {
-			f.worktrees[id][i].Branch = branch
+		if repoBranch, ok := repoBranches[row.RepoName]; ok {
+			f.worktrees[id][i].Branch = repoBranch
 		}
 	}
 	return true, nil
