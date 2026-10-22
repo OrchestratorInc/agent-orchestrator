@@ -51,9 +51,13 @@ export function SessionStartup({
 							key={step.id}
 							data-step={step.id}
 							data-status={status}
-							className="flex min-h-7 items-center gap-1.5 text-xs"
+							className="flex min-h-7 items-center gap-2 text-xs"
 						>
-							<StepIcon status={status} />
+							{/* The same 20px slot and gap as the live row's mark above, so every
+							    mark sits on one centre line and the labels start together. */}
+							<span className="flex size-5 shrink-0 items-center justify-center">
+								<StepIcon status={status} />
+							</span>
 							<span className="sr-only">{t(`chat.startup.status.${status}`)}:</span>
 							<span
 								className={cn(
@@ -83,7 +87,7 @@ export function SessionStartup({
 				})}
 			</ol>
 			{failed ? (
-				<div className="mt-1 flex flex-col items-start gap-2 pl-[18px]">
+				<div className="mt-1 flex flex-col items-start gap-2 pl-7">
 					{error ? <p className="text-xs leading-snug text-muted-foreground">{error}</p> : null}
 					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
 					{onRetry ? (

@@ -741,13 +741,16 @@ function formatDecisionDuration(ms: number): string {
 	return `${(ms / 1_000).toFixed(1)}s`;
 }
 
+/**
+ * A running setup step's mark: the live row's lattice, so setup and work share one
+ * "working" signal. It sits in the step icons' 12px slot and overhangs it by half a
+ * pixel each side, so the step labels stay aligned with the done and pending marks.
+ */
 export function ResponseSpinner() {
 	return (
-		<Loader2
-			aria-hidden="true"
-			data-testid="response-spinner"
-			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
-		/>
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+			<LatticeLoader />
+		</span>
 	);
 }
 
@@ -1220,7 +1223,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	return (
 		<div className="min-w-0">
 			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">
-				<span aria-hidden="true" className="flex shrink-0">
+				<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
 					{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 				</span>
 				<span
