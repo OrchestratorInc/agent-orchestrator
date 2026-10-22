@@ -203,6 +203,11 @@ type Plan struct {
 	managed bool
 	// managedPin is the release a managed reinstall installs again.
 	managedPin string
+	// alsoChanges are other harnesses whose executable the run makes
+	// unavailable for a while (Prepare unlinks it, Cleanup restores it). The
+	// run holds each one's harness gate throughout, so its launches wait and
+	// its own install, reinstall or update is refused meanwhile.
+	alsoChanges []Target
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -300,9 +305,13 @@ const maxOutputBytes = 4000
 // realistic expected duration.
 const defaultInstallTimeout = 15 * time.Minute
 
-// cleanupTimeout bounds a plan's Cleanup steps, which still run after the
-// install itself timed out.
+// cleanupTimeout bounds each of a plan's Cleanup steps, which still run after
+// the install itself timed out.
 const cleanupTimeout = 2 * time.Minute
+
+// otherHarnessHoldWait is how long a run waits for launches of a harness in
+// Plan.alsoChanges to release it before failing.
+const otherHarnessHoldWait = 10 * time.Second
 
 // defaultPersistenceTimeout keeps best-effort worker state writes from
 // consuming the daemon's entire shutdown drain budget behind a blocked DB.
@@ -413,6 +422,9 @@ type Service struct {
 	// override it with a short duration to exercise the timeout path without
 	// a real multi-minute wait.
 	installTimeout time.Duration
+	// cleanupStepLimit bounds each Cleanup step; zero means cleanupTimeout.
+	// Tests shorten it.
+	cleanupStepLimit time.Duration
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
 	persistenceTimeout   time.Duration
 	onSucceeded          func(Target)
@@ -876,6 +888,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 			Error: plan.Reason, Notice: plan.Notice, StartedAt: &now, FinishedAt: &now, UpdatedAt: &now,
 		}, nil
 	}
+	if !requiresHarnessGate && s.harnessChanging(target) {
+		// Another run holds this harness (e.g. OpenCode 2's Homebrew install
+		// has OpenCode 1 unlinked); installing it now would race that run.
+		return Job{}, ErrInstallActive
+	}
 	s.mu.Lock()
 	if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 		s.mu.Unlock()
@@ -1249,6 +1266,12 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 }
 
 func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
+	release, err := s.holdOtherHarnesses(plan.alsoChanges)
+	if err != nil {
+		s.finishAgentJob(job, StatusFailed, "", err.Error(), "")
+		return
+	}
+	defer release()
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
@@ -1300,19 +1323,19 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if ctx.Err() == nil {
 			runErr = runCommand(ctx, plan.Command)
 		}
-		if len(plan.Cleanup) > 0 {
-			// Cleanup undoes what Prepare changed, so it runs even after a
-			// timeout or a failed Command.
-			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-			for _, argv := range plan.Cleanup {
-				if err := runCommand(cleanupCtx, argv); err != nil {
-					_, _ = fmt.Fprintf(out, "\n%s failed (%v).\n", strings.Join(argv, " "), err)
-					if runErr == nil && ctx.Err() == nil {
-						runErr = fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
-					}
+		// Cleanup undoes what Prepare changed, so it runs even after a timeout
+		// or a failed Command. Each step has its own deadline: one that hangs
+		// must not leave the next (restoring another harness) without time.
+		for _, argv := range plan.Cleanup {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), s.cleanupStepTimeout())
+			err := runCommand(cleanupCtx, argv)
+			cancelCleanup()
+			if err != nil {
+				_, _ = fmt.Fprintf(out, "\n%s failed (%v).\n", strings.Join(argv, " "), err)
+				if runErr == nil && ctx.Err() == nil {
+					runErr = fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 				}
 			}
-			cancelCleanup()
 		}
 	}
 	if ctx.Err() == context.DeadlineExceeded {
