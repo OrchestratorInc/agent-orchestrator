@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Ellipsis, FolderOpen, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Copy, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
@@ -37,6 +37,8 @@ export function ArtifactActionsMenu({
 	hostId,
 	session,
 	iconOnly = false,
+	variant = "default",
+	onEdit,
 	pinInMenu = false,
 	pinned = false,
 	onTogglePin,
@@ -49,6 +51,8 @@ export function ArtifactActionsMenu({
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
+	variant?: "default" | "sidebar";
+	onEdit?: () => void;
 	pinInMenu?: boolean;
 	pinned?: boolean;
 	onTogglePin?: () => void;
@@ -64,6 +68,7 @@ export function ArtifactActionsMenu({
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
+	const sidebar = variant === "sidebar";
 	// The deleted file leaves the session's artifact list on the next read.
 	const remove = useMutation({
 		mutationFn: () => deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
@@ -129,6 +134,28 @@ export function ArtifactActionsMenu({
 	);
 	return (
 		<>
+			{sidebar && !session.cloud ? (
+				<>
+					{onEdit && !fileMediaKind(artifact.path) ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button aria-label={`${t("files.editFile")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-foreground", className)} onClick={onEdit} size="icon-sm" type="button" variant="ghost">
+									<Pencil aria-hidden="true" className="size-icon-sm" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
+						</Tooltip>
+					) : null}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button aria-label={`${t("artifacts.delete")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-destructive", className)} onClick={confirmDelete} size="icon-sm" type="button" variant="ghost">
+								<Trash2 aria-hidden="true" className="size-icon-sm" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("artifacts.delete")}</TooltipContent>
+					</Tooltip>
+				</>
+			) : null}
 			{onTogglePin && !pinInMenu ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -164,7 +191,7 @@ export function ArtifactActionsMenu({
 					<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
 				</Tooltip>
 			) : null}
-			<DropdownMenu>
+			{!sidebar || local ? <DropdownMenu>
 				{iconOnly ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -197,21 +224,25 @@ export function ArtifactActionsMenu({
 								<FolderOpen aria-hidden="true" />
 								{t("artifacts.showIn", { name: fileManagerName() })}
 							</DropdownMenuItem>
-							<DropdownMenuItem onSelect={() => reveal("terminal")}>
-								<SquareTerminal aria-hidden="true" />
-								{t("artifacts.showIn", { name: terminalName() })}
-							</DropdownMenuItem>
-							<DropdownMenuSeparator />
+							{!sidebar ? (
+								<>
+									<DropdownMenuItem onSelect={() => reveal("terminal")}>
+										<SquareTerminal aria-hidden="true" />
+										{t("artifacts.showIn", { name: terminalName() })}
+									</DropdownMenuItem>
+									<DropdownMenuSeparator />
+								</>
+							) : null}
 						</>
 					) : null}
-					{!fileMediaKind(artifact.path) ? (
+					{!sidebar && !fileMediaKind(artifact.path) ? (
 						<DropdownMenuItem onSelect={() => void copy()}>
 							<Copy aria-hidden="true" />
 							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
 						</DropdownMenuItem>
 					) : null}
 					{/* Cloud sessions keep their artifacts behind the cloud control plane. */}
-					{session.cloud ? null : (
+					{session.cloud || sidebar ? null : (
 						<>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
@@ -224,7 +255,7 @@ export function ArtifactActionsMenu({
 						</>
 					)}
 				</DropdownMenuContent>
-			</DropdownMenu>
+			</DropdownMenu> : null}
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}

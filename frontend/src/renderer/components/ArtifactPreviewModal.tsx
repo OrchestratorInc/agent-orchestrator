@@ -13,7 +13,6 @@ import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
-import type { WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { FileMediaPreview } from "./FileMediaPreview";
 import { SvgFileView } from "./SvgFileView";
@@ -23,12 +22,9 @@ import { Button } from "./ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-export function ArtifactPreviewModal({ artifact, projectName, hostId, cloud, onOpenInSession, onClose }: {
+export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	artifact: ArtifactRow | null;
 	projectName: string;
-	hostId?: string;
-	cloud?: WorkspaceSession["cloud"];
-	onOpenInSession?: (artifact: ArtifactRow) => void;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
@@ -42,10 +38,6 @@ export function ArtifactPreviewModal({ artifact, projectName, hostId, cloud, onO
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
-		if (onOpenInSession) {
-			onOpenInSession(artifact);
-			return;
-		}
 		requestWorkspaceFileOpen(artifact.sessionId, artifact.path, undefined, "artifact");
 		navigateToSession(artifact.projectId, artifact.sessionId);
 	};
@@ -64,17 +56,16 @@ export function ArtifactPreviewModal({ artifact, projectName, hostId, cloud, onO
 					<header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
 						<div className="min-w-0 flex-1">
 							<DialogTitle className="truncate text-heading-sm outline-none" ref={titleRef} tabIndex={-1}>{artifact.name}</DialogTitle>
-							<DialogDescription className="truncate text-caption">{[projectName, artifact.sessionTitle].filter(Boolean).join(" · ")}</DialogDescription>
+							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
 							<ArtifactActionsMenu
 								artifact={artifact}
-								hostId={hostId}
-								session={{ id: artifact.sessionId, cloud }}
+								session={{ id: artifact.sessionId }}
 								iconOnly
 								pinInMenu
 								pinned={pinned}
-								onTogglePin={!hostId && !cloud ? () => togglePinnedArtifact(id) : undefined}
+								onTogglePin={() => togglePinnedArtifact(id)}
 								onDeleted={onClose}
 								errorClassName="bottom-auto top-full mb-0 mt-2"
 								className="transition-none"
@@ -96,7 +87,7 @@ export function ArtifactPreviewModal({ artifact, projectName, hostId, cloud, onO
 						</Tooltip>
 					</header>
 					<div className="min-h-0 flex-1 overflow-hidden bg-background">
-						<ArtifactPreviewBody artifact={artifact} hostId={hostId} key={`${hostId ?? "local"}:${artifactKey(artifact)}`} />
+						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />
 					</div>
 				</DialogContent>
 			) : null}
@@ -104,7 +95,7 @@ export function ArtifactPreviewModal({ artifact, projectName, hostId, cloud, onO
 	);
 }
 
-function ArtifactPreviewBody({ artifact, hostId }: { artifact: ArtifactRow; hostId?: string }) {
+function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	const { t } = useTranslation();
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const media = fileMediaKind(artifact.path);
@@ -121,7 +112,7 @@ function ArtifactPreviewBody({ artifact, hostId }: { artifact: ArtifactRow; host
 		return <iframe className="h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
 	}
 	if (media) {
-		return <div className="flex h-full min-h-0 flex-col bg-[var(--solid-muted,var(--muted))]"><FileMediaPreview hostId={hostId} kind={media} path={artifact.path} sessionId={artifact.sessionId} source={{ kind: "artifact", rawUrl: artifact.rawUrl, readOnly: true }} version={artifact.updatedAt} /></div>;
+		return <div className="flex h-full min-h-0 flex-col bg-[var(--solid-muted,var(--muted))]"><FileMediaPreview kind={media} path={artifact.path} sessionId={artifact.sessionId} source={{ kind: "artifact", rawUrl: artifact.rawUrl, readOnly: true }} version={artifact.updatedAt} /></div>;
 	}
 	if (!contentUrl) return <PanelMessage>{t("artifactLink.noPreview")}</PanelMessage>;
 	if (query.isPending) return <div role="status"><PanelMessage>{t("files.loading")}</PanelMessage></div>;
@@ -132,7 +123,7 @@ function ArtifactPreviewBody({ artifact, hostId }: { artifact: ArtifactRow; host
 	return (
 		<div className="board-scrollbar h-full min-h-0 select-text overflow-auto overscroll-contain">
 			{markdown ? (
-				<MarkdownFileView artifactOrigin={new URL(artifact.rawUrl ?? contentUrl).origin} content={detail.content} filePath={artifact.path} hostId={hostId} sessionId={artifact.sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+				<MarkdownFileView artifactOrigin={new URL(artifact.rawUrl ?? contentUrl).origin} content={detail.content} filePath={artifact.path} sessionId={artifact.sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 			) : (
 				<>
 					{detail.contentTruncated ? <p className="px-4 py-2 text-caption text-warning">{t("files.contentTruncated")}</p> : null}

@@ -10,14 +10,12 @@ import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { artifactKey, type ArtifactRow } from "../lib/artifacts";
+import type { ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
-import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
-import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
 import { Button } from "./ui/button";
@@ -164,6 +162,7 @@ function ArtifactViewerFrame({
 function ArtifactViewerBody({
 	artifact,
 	feedbackRequestKey,
+	initialEditing,
 	hostId,
 	onFeedbackRequestConsumed,
 	onPreviewVersion,
@@ -174,6 +173,7 @@ function ArtifactViewerBody({
 }: {
 	artifact: SessionArtifact;
 	feedbackRequestKey?: number;
+	initialEditing?: boolean;
 	hostId?: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
 	onPreviewVersion: (version: number | null) => void;
@@ -200,6 +200,7 @@ function ArtifactViewerBody({
 				<div className={cn("h-full", previewing && "hidden")}>
 					<ArtifactFileView
 						artifactName={artifact.name}
+						initialEditing={initialEditing}
 						feedbackRequestKey={feedbackRequestKey}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onFeedbackRequestConsumed}
@@ -250,37 +251,34 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
-	const [previewPath, setPreviewPath] = useState<string | null>(null);
-	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
-	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	const [editingPath, setEditingPath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const openArtifactPreview = useOpenArtifactPreview(session.id, hostId);
 	const uiKey = sessionUiKey(session.id, hostId);
 
-	useEffect(() => { setSelectedPath(null); setPreviewPath(null); }, [uiKey]);
+	useEffect(() => { setSelectedPath(null); setEditingPath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
 	const exitFullscreen = useMemo(() => () => setFullscreen(false), []);
 	useEffect(() => {
 		if (request) {
-			setPreviewPath(null);
+			setEditingPath(null);
 			setSelectedPath(request.path);
 		}
 	}, [request]);
 
 	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
-	const preview = artifacts.find((artifact) => artifact.path === previewPath);
 	const artifactRow = (artifact: SessionArtifact): ArtifactRow => ({
 		...artifact,
 		sessionId: session.id,
 		sessionTitle: session.title ?? "",
 		generating: isAgentActivityWorking(session.activity),
 	});
-	const openInSession = (artifact: Pick<SessionArtifact, "kind" | "previewUrl" | "path">) => {
+	const openArtifact = (artifact: Pick<SessionArtifact, "kind" | "previewUrl" | "path">) => {
 		if (artifact.kind === "html" && artifact.previewUrl) openArtifactPreview(artifact.previewUrl);
-		else setSelectedPath(artifact.path);
+		else { setEditingPath(null); setSelectedPath(artifact.path); }
 	};
 	// Versions are read back as text, so a binary file such as an image gets no
 	// History. This shares the viewer's cached read of the file.
@@ -332,6 +330,7 @@ export function SessionArtifactsView({
 				<div className="min-h-0 flex-1">
 					<ArtifactViewerBody
 						artifact={selected}
+						initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated && !session.cloud}
 						feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onRequestConsumed}
@@ -359,21 +358,19 @@ export function SessionArtifactsView({
 				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">
 					{artifacts.map((artifact) => {
 						const row = artifactRow(artifact);
-						const id = artifactKey(row);
 						return (
 							<ArtifactGalleryCard
 								key={artifact.path}
 								row={row}
 								context={session.title ?? ""}
-								onPreview={() => setPreviewPath(artifact.path)}
+								onPreview={() => openArtifact(artifact)}
 								actions={<ArtifactActionsMenu
 									artifact={artifact}
 									hostId={hostId}
 									session={session}
 									iconOnly
-									pinned={pinnedArtifactIds.includes(id)}
-									onTogglePin={!hostId && !session.cloud ? () => togglePinnedArtifact(id) : undefined}
-									onOpenInSession={() => openInSession(artifact)}
+									variant="sidebar"
+									onEdit={() => { setEditingPath(artifact.path); setSelectedPath(artifact.path); }}
 									className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
 								/>}
 							/>
@@ -381,14 +378,6 @@ export function SessionArtifactsView({
 					})}
 				</ul>
 			)}
-			<ArtifactPreviewModal
-				artifact={preview ? artifactRow(preview) : null}
-				projectName={session.workspaceName ?? ""}
-				hostId={hostId}
-				cloud={session.cloud}
-				onOpenInSession={openInSession}
-				onClose={() => setPreviewPath(null)}
-			/>
 		</div>
 	);
 }
