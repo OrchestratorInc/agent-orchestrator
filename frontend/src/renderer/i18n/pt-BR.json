@@ -3420,5 +3420,12 @@
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
 	"chat.fileAnnotationInvalid": "Não foi possível validar a seleção. Remova-a e adicione-a novamente.",
-	"chat.fileAnnotationCheckFailed": "A verificação da origem falhou. Tente novamente mais tarde."
+	"chat.fileAnnotationCheckFailed": "A verificação da origem falhou. Tente novamente mais tarde.",
+	"chat.fileAnnotationOpen": "Open selected lines",
+	"chat.fileAnnotationOpenFile": "Open file",
+	"chat.fileAnnotationChangedDuringOpen": "The selected lines could not be verified in this view. Reopen the annotation to view the captured selection.",
+	"chat.fileAnnotationMoved": "Source moved.",
+	"chat.fileAnnotationAmbiguous": "Selected code appears in more than one location.",
+	"chat.fileAnnotationTruncated": "Source navigation is unavailable for a truncated selection.",
+	"chat.fileAnnotationRetry": "Retry source check"
 }

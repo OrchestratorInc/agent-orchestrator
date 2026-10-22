@@ -18542,6 +18542,10 @@ components:
           type: integer
         line:
           type: integer
+        newLineOffset:
+          type: integer
+        oldLineOffset:
+          type: integer
         path:
           type: string
         reason:
@@ -18553,6 +18557,7 @@ components:
           - unchanged
           - changed
           - unavailable
+          - moved
           type: string
       required:
       - state

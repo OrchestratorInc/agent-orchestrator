@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { CapturedFileAnnotation } from "./CapturedFileAnnotation";
 
@@ -43,4 +43,34 @@ describe("captured file annotation preview", () => {
 		expect(screen.getByTitle(ref.path)).toHaveClass("border-b");
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
+});
+
+it("keeps expansion, code selection, and drag gestures separate from navigation", async () => {
+ const user = userEvent.setup();
+ const onOpen = vi.fn();
+ render(<CapturedFileAnnotation reference={reference(Array.from({ length: 9 }, (_, i) => `line ${i}`))} onOpen={onOpen} />);
+ const card = screen.getByRole("button", { name: /^Open file:/ });
+ const toggle = screen.getByRole("button", { name: "Show more" });
+ toggle.focus();
+ await user.keyboard("{Enter}");
+ expect(onOpen).not.toHaveBeenCalled();
+ const pre = document.querySelector("pre")!;
+ const selection = vi.spyOn(window, "getSelection").mockReturnValue({
+  isCollapsed: false, rangeCount: 1, getRangeAt: () => ({ intersectsNode: () => true }),
+ } as unknown as Selection);
+ fireEvent.click(pre);
+ expect(onOpen).not.toHaveBeenCalled();
+ selection.mockRestore();
+ fireEvent.pointerDown(pre, { clientX: 1, clientY: 1 });
+ fireEvent.pointerMove(pre, { clientX: 30, clientY: 1 });
+ fireEvent.pointerUp(pre);
+ fireEvent.click(pre);
+ expect(onOpen).not.toHaveBeenCalled();
+ fireEvent.pointerDown(pre, { clientX: 1, clientY: 1 });
+ fireEvent.pointerUp(pre);
+ fireEvent.click(pre);
+ expect(onOpen).toHaveBeenCalledOnce();
+ card.focus();
+ await user.keyboard(" ");
+ expect(onOpen).toHaveBeenCalledTimes(2);
 });

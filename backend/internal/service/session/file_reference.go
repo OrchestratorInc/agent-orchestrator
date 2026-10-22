@@ -14,12 +14,14 @@ import (
 
 // FileReferenceResolution is derived on demand. Captured code is never rewritten.
 type FileReferenceResolution struct {
-	State   string `json:"state" enum:"unchanged,changed,unavailable"`
-	Reason  string `json:"reason,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Line    int    `json:"line,omitempty"`
-	EndLine int    `json:"endLine,omitempty"`
-	Side    string `json:"side,omitempty"`
+	State         string `json:"state" enum:"unchanged,changed,unavailable,moved"`
+	Reason        string `json:"reason,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Line          int    `json:"line,omitempty"`
+	EndLine       int    `json:"endLine,omitempty"`
+	Side          string `json:"side,omitempty"`
+	OldLineOffset int    `json:"oldLineOffset,omitempty"`
+	NewLineOffset int    `json:"newLineOffset,omitempty"`
 }
 
 // ResolveFileReference checks source availability without modifying captured context.
@@ -80,10 +82,46 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 			return s.GetWorkspaceFileRevision(ctx, id, ref.Path, WorkspaceDiffScope(ref.Scope), side, "", "")
 		}
 	}
-	return resolveCapturedFileRows(ref, read), nil
+	result := resolveCapturedFileRows(ref, read)
+	// Follow only the exact previous-path identity reported by Git, never a filename guess.
+	if result.State == "unavailable" && ref.Source.Kind == "workspace" && ref.CommitSHA == "" {
+		manifest, err := s.GetWorkspaceManifest(ctx, id)
+		if err == nil {
+			candidate := ""
+			for _, file := range manifest.Files {
+				if file.PreviousPath == ref.Path {
+					if candidate != "" {
+						candidate = ""
+						break
+					}
+					candidate = file.Path
+				}
+			}
+			if candidate != "" {
+				ref.Path = candidate
+				relocated := resolveCapturedFileRows(ref, read)
+				if relocated.State == "unchanged" || relocated.State == "moved" {
+					relocated.State = "moved"
+					relocated.Reason = "renamed"
+					return relocated, nil
+				}
+				if relocated.State == "changed" {
+					// Git established the new identity even though the selection no
+					// longer has a verified range. Open this path without highlighting.
+					relocated.Path = candidate
+					return relocated, nil
+				}
+			}
+		}
+	}
+	return result, nil
 }
 
+// Each side keeps its own line numbering. A recorded match wins before relocation.
 func resolveCapturedFileRows(ref ports.ChatFileReference, read func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) FileReferenceResolution {
+	if ref.Truncated {
+		return FileReferenceResolution{State: "unavailable", Reason: "truncated"}
+	}
 	// Earlier snapshots did not distinguish a unified context row from a split
 	// old-side context row. Keep their captured preview when that distinction matters.
 	if ref.Side == "old" && ref.EndSide == "" {
@@ -93,7 +131,11 @@ func resolveCapturedFileRows(ref ports.ChatFileReference, read func(WorkspaceFil
 			}
 		}
 	}
-	cache := map[WorkspaceFileBlobSide][]string{}
+	type rowAt struct {
+		number int
+		text   string
+	}
+	groups := map[WorkspaceFileBlobSide][]rowAt{}
 	for _, row := range ref.Lines {
 		side, number := WorkspaceBlobAfter, row.NewNo
 		if row.Side == "old" || (row.Side != "new" && (row.Kind == "del" || (ref.Side == "old" && row.Kind != "add"))) {
@@ -102,18 +144,74 @@ func resolveCapturedFileRows(ref ports.ChatFileReference, read func(WorkspaceFil
 		if number == nil {
 			return FileReferenceResolution{State: "changed"}
 		}
-		lines, ok := cache[side]
-		if !ok {
-			revision, err := read(side)
-			if err != nil || !revision.Exists || revision.Binary || revision.Truncated {
-				return FileReferenceResolution{State: "unavailable"}
-			}
-			lines = strings.Split(strings.ReplaceAll(revision.Content, "\r\n", "\n"), "\n")
-			cache[side] = lines
+		groups[side] = append(groups[side], rowAt{*number, row.Text})
+	}
+	offsets := map[WorkspaceFileBlobSide]int{}
+	for _, side := range []WorkspaceFileBlobSide{WorkspaceBlobBefore, WorkspaceBlobAfter} {
+		rows := groups[side]
+		if len(rows) == 0 {
+			continue
 		}
-		if *number < 1 || *number > len(lines) || lines[*number-1] != row.Text {
+		revision, err := read(side)
+		if err != nil || !revision.Exists || revision.Binary || revision.Truncated {
+			return FileReferenceResolution{State: "unavailable"}
+		}
+		lines := strings.Split(strings.ReplaceAll(revision.Content, "\r\n", "\n"), "\n")
+		matches := func(offset int) bool {
+			for _, row := range rows {
+				n := row.number + offset
+				if n < 1 || n > len(lines) || lines[n-1] != row.text {
+					return false
+				}
+			}
+			return true
+		}
+		if matches(0) {
+			continue
+		}
+		// Anchor at the rarest captured row, avoiding repeated scans of common blank lines.
+		occurrences := map[string][]int{}
+		for _, row := range rows {
+			occurrences[row.text] = nil
+		}
+		for i, line := range lines {
+			if _, ok := occurrences[line]; ok {
+				occurrences[line] = append(occurrences[line], i+1)
+			}
+		}
+		anchor := rows[0]
+		for _, row := range rows {
+			if len(occurrences[row.text]) < len(occurrences[anchor.text]) {
+				anchor = row
+			}
+		}
+		count, offset := 0, 0
+		for _, position := range occurrences[anchor.text] {
+			candidate := position - anchor.number
+			if matches(candidate) {
+				count++
+				offset = candidate
+				if count > 1 {
+					return FileReferenceResolution{State: "changed", Reason: "ambiguous"}
+				}
+			}
+		}
+		if count != 1 {
 			return FileReferenceResolution{State: "changed"}
 		}
+		offsets[side] = offset
 	}
-	return FileReferenceResolution{State: "unchanged", Path: ref.Path, Line: ref.Line, EndLine: ref.EndLine, Side: ref.Side}
+	state := "unchanged"
+	if offsets[WorkspaceBlobBefore] != 0 || offsets[WorkspaceBlobAfter] != 0 {
+		state = "moved"
+	}
+	first, last := ref.Lines[0], ref.Lines[len(ref.Lines)-1]
+	firstSide, lastSide := WorkspaceBlobAfter, WorkspaceBlobAfter
+	if first.Side == "old" || (first.Side != "new" && (first.Kind == "del" || (ref.Side == "old" && first.Kind != "add"))) {
+		firstSide = WorkspaceBlobBefore
+	}
+	if last.Side == "old" || (last.Side != "new" && (last.Kind == "del" || (ref.Side == "old" && last.Kind != "add"))) {
+		lastSide = WorkspaceBlobBefore
+	}
+	return FileReferenceResolution{State: state, Path: ref.Path, Line: ref.Line + offsets[firstSide], EndLine: ref.EndLine + offsets[lastSide], Side: ref.Side, OldLineOffset: offsets[WorkspaceBlobBefore], NewLineOffset: offsets[WorkspaceBlobAfter]}
 }

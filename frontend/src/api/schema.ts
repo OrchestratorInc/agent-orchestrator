@@ -6483,11 +6483,13 @@ export interface components {
         ResolveFileReferenceResponse: {
             endLine?: number;
             line?: number;
+            newLineOffset?: number;
+            oldLineOffset?: number;
             path?: string;
             reason?: string;
             side?: string;
             /** @enum {string} */
-            state: "unchanged" | "changed" | "unavailable";
+            state: "unchanged" | "changed" | "unavailable" | "moved";
         };
         RestoreArtifactVersionRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */

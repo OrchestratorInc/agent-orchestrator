@@ -51,3 +51,18 @@ export function fileReferenceLabel(ref: ChatFileReference): string {
 export function fileReferencePreview(ref: ChatFileReference): string {
 	return ref.lines.map((row) => `${ref.side === "file" ? "" : row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "}${row.text}`).join("\n");
 }
+
+export interface FileAnnotationRange extends Pick<ChatFileReference, "line" | "endLine" | "side" | "lines"> {
+	requestKey: number;
+}
+export interface FileAnnotationResolution {
+	state: "unchanged" | "changed" | "unavailable" | "moved";
+	reason?: string;
+	path?: string;
+	line?: number;
+	endLine?: number;
+	side?: string;
+	oldLineOffset?: number;
+	newLineOffset?: number;
+}
+export type OpenFileAnnotation = (reference: ChatFileReference, resolution: FileAnnotationResolution) => void;
