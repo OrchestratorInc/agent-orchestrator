@@ -537,6 +537,11 @@ func TestReviewListShowsUndeliveredReviewDoneMessage(t *testing.T) {
 			"prNumber":43,
 			"status":"approved",
 			"latestRun":{"id":"run-2","verdict":"approved","workerNotice":"sent","workerNoticeAttempts":1,"workerNoticeError":"earlier failure"}
+		},{
+			"prUrl":"https://github.com/example/repo/pull/44",
+			"prNumber":44,
+			"status":"approved",
+			"latestRun":{"id":"run-3","verdict":"approved","workerNotice":"failed","workerNoticeAttempts":5,"workerNoticeError":"bad \u001b[31merror"}
 		}]
 	}`)
 	writeRunFileFor(t, cfg, srv)
@@ -545,8 +550,14 @@ func TestReviewListShowsUndeliveredReviewDoneMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
 	}
-	if want := "#42: review done message for run run-1 not delivered after 3 attempt(s): guard mer-1: send: no chat controller"; !strings.Contains(out, want) {
+	if want := "#42: review done message for run run-1 not delivered yet after 3 failed attempt(s): guard mer-1: send: no chat controller"; !strings.Contains(out, want) {
 		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if want := "#44: review done message for run run-3 not delivered, gave up after 5 failed attempt(s): bad [31merror"; !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("control characters from the error reached the terminal: %q", out)
 	}
 	if strings.Contains(out, "earlier failure") {
 		t.Fatalf("a delivered message was reported as undelivered: %q", out)

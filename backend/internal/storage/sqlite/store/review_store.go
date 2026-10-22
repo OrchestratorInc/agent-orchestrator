@@ -399,7 +399,7 @@ func (s *Store) ListReviewRunsByBatch(ctx context.Context, id domain.SessionID, 
 // ListPendingReviewRunNotices returns a worker's final review passes that
 // still owe it a "review done" message, oldest first.
 func (s *Store) ListPendingReviewRunNotices(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
-	rows, err := s.qr.ListPendingReviewRunNoticesBySession(ctx, id)
+	rows, err := s.qr.ListPendingReviewRunNoticesBySession(ctx, gen.ListPendingReviewRunNoticesBySessionParams{SessionID: id, MaxAttempts: domain.ReviewWorkerNoticeMaxAttempts})
 	if err != nil {
 		return nil, fmt.Errorf("list pending review notices for session %s: %w", id, err)
 	}
@@ -413,7 +413,7 @@ func (s *Store) ListPendingReviewRunNotices(ctx context.Context, id domain.Sessi
 // ListSessionsWithPendingReviewRunNotices returns every worker that is still
 // owed at least one "review done" message.
 func (s *Store) ListSessionsWithPendingReviewRunNotices(ctx context.Context) ([]domain.SessionID, error) {
-	ids, err := s.qr.ListSessionsWithPendingReviewRunNotices(ctx)
+	ids, err := s.qr.ListSessionsWithPendingReviewRunNotices(ctx, domain.ReviewWorkerNoticeMaxAttempts)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions with pending review notices: %w", err)
 	}
@@ -430,6 +430,16 @@ func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, e
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// reviewWorkerNotice derives the failed state: a pending notice whose sends
+// failed ReviewWorkerNoticeMaxAttempts times has given up.
+func reviewWorkerNotice(stored string, attempts int64) domain.ReviewWorkerNotice {
+	notice := domain.ReviewWorkerNotice(stored)
+	if notice == domain.ReviewWorkerNoticePending && attempts >= domain.ReviewWorkerNoticeMaxAttempts {
+		return domain.ReviewWorkerNoticeFailed
+	}
+	return notice
 }
 
 // RecordReviewRunNoticeFailure records a failed attempt to deliver a pass's
@@ -560,7 +570,7 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		DeliveredAt:      deliveredAt,
 		AutoInjectReview: r.AutoInjectReview,
 		ReviewerModel:    r.ReviewerModel,
-		WorkerNotice:     domain.ReviewWorkerNotice(r.WorkerNotice),
+		WorkerNotice:     reviewWorkerNotice(r.WorkerNotice, r.WorkerNoticeAttempts),
 
 		WorkerNoticeAttempts:    int(r.WorkerNoticeAttempts),
 		WorkerNoticeError:       r.WorkerNoticeError,

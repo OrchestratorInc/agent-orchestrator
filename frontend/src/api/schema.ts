@@ -6473,7 +6473,7 @@ export interface components {
             triggerSource: "manual" | "agent" | "auto";
             verdict: string;
             /** @enum {string} */
-            workerNotice?: "" | "pending" | "sent";
+            workerNotice?: "" | "pending" | "sent" | "failed";
             /** Format: date-time */
             workerNoticeAttemptedAt?: null | string;
             workerNoticeAttempts?: number;

@@ -640,13 +640,21 @@ func (q *Queries) ListLiveReviewerHandles(ctx context.Context) ([]ListLiveReview
 
 const listPendingReviewRunNoticesBySession = `-- name: ListPendingReviewRunNoticesBySession :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
-FROM review_run WHERE session_id = ? AND worker_notice = 'pending' ORDER BY created_at ASC, id ASC
+FROM review_run WHERE session_id = ?1 AND worker_notice = 'pending'
+  AND worker_notice_attempts < ?2
+ORDER BY created_at ASC, id ASC
 `
 
+type ListPendingReviewRunNoticesBySessionParams struct {
+	SessionID   domain.SessionID
+	MaxAttempts int64
+}
+
 // Final passes that still owe the worker a "review done" message, oldest
-// first so notices arrive in the order the passes were requested.
-func (q *Queries) ListPendingReviewRunNoticesBySession(ctx context.Context, sessionID domain.SessionID) ([]ReviewRun, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingReviewRunNoticesBySession, sessionID)
+// first so notices arrive in the order the passes were requested. A notice
+// whose delivery failed max_attempts times has given up and is not listed.
+func (q *Queries) ListPendingReviewRunNoticesBySession(ctx context.Context, arg ListPendingReviewRunNoticesBySessionParams) ([]ReviewRun, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingReviewRunNoticesBySession, arg.SessionID, arg.MaxAttempts)
 	if err != nil {
 		return nil, err
 	}
@@ -973,13 +981,14 @@ const listSessionsWithPendingReviewRunNotices = `-- name: ListSessionsWithPendin
 SELECT DISTINCT review_run.session_id
 FROM review_run
 JOIN sessions ON sessions.id = review_run.session_id
-WHERE review_run.worker_notice = 'pending' AND NOT sessions.is_terminated
+WHERE review_run.worker_notice = 'pending' AND review_run.worker_notice_attempts < ?1
+  AND NOT sessions.is_terminated
 `
 
 // Live workers still owed a "review done" message. Terminated sessions are
 // skipped: they cannot receive one until they are restored.
-func (q *Queries) ListSessionsWithPendingReviewRunNotices(ctx context.Context) ([]domain.SessionID, error) {
-	rows, err := q.db.QueryContext(ctx, listSessionsWithPendingReviewRunNotices)
+func (q *Queries) ListSessionsWithPendingReviewRunNotices(ctx context.Context, maxAttempts int64) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionsWithPendingReviewRunNotices, maxAttempts)
 	if err != nil {
 		return nil, err
 	}

@@ -125,9 +125,12 @@ FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, i
 
 -- name: ListPendingReviewRunNoticesBySession :many
 -- Final passes that still owe the worker a "review done" message, oldest
--- first so notices arrive in the order the passes were requested.
+-- first so notices arrive in the order the passes were requested. A notice
+-- whose delivery failed max_attempts times has given up and is not listed.
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
-FROM review_run WHERE session_id = ? AND worker_notice = 'pending' ORDER BY created_at ASC, id ASC;
+FROM review_run WHERE session_id = sqlc.arg(session_id) AND worker_notice = 'pending'
+  AND worker_notice_attempts < sqlc.arg(max_attempts)
+ORDER BY created_at ASC, id ASC;
 
 -- name: ListSessionsWithPendingReviewRunNotices :many
 -- Live workers still owed a "review done" message. Terminated sessions are
@@ -135,7 +138,8 @@ FROM review_run WHERE session_id = ? AND worker_notice = 'pending' ORDER BY crea
 SELECT DISTINCT review_run.session_id
 FROM review_run
 JOIN sessions ON sessions.id = review_run.session_id
-WHERE review_run.worker_notice = 'pending' AND NOT sessions.is_terminated;
+WHERE review_run.worker_notice = 'pending' AND review_run.worker_notice_attempts < sqlc.arg(max_attempts)
+  AND NOT sessions.is_terminated;
 
 -- name: MarkReviewRunNoticeSent :execrows
 UPDATE review_run SET worker_notice = 'sent' WHERE id = ? AND worker_notice = 'pending';

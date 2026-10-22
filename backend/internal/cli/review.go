@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const (
@@ -512,10 +514,22 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	// miss; name the run and why its last delivery failed.
 	for _, review := range res.Reviews {
 		run := review.LatestRun
-		if run == nil || run.WorkerNotice != "pending" || run.WorkerNoticeError == "" {
+		if run == nil || run.WorkerNoticeError == "" {
 			continue
 		}
-		if _, err := fmt.Fprintf(out, "#%d: review done message for run %s not delivered after %d attempt(s): %s\n", review.PRNumber, run.ID, run.WorkerNoticeAttempts, run.WorkerNoticeError); err != nil {
+		var state string
+		switch run.WorkerNotice {
+		case "pending":
+			state = "not delivered yet"
+		case "failed":
+			state = "not delivered, gave up"
+		default:
+			continue
+		}
+		// The error comes from the worker's runtime; strip control characters
+		// before writing it to the terminal.
+		reason := domain.SanitizeControlChars(run.WorkerNoticeError)
+		if _, err := fmt.Fprintf(out, "#%d: review done message for run %s %s after %d failed attempt(s): %s\n", review.PRNumber, run.ID, state, run.WorkerNoticeAttempts, reason); err != nil {
 			return err
 		}
 	}

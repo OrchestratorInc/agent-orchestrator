@@ -18514,6 +18514,7 @@ components:
           - ""
           - pending
           - sent
+          - failed
           type: string
         workerNoticeAttemptedAt:
           format: date-time
