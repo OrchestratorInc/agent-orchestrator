@@ -64,6 +64,12 @@ type driver struct {
 	plugin Plugin
 }
 
+// SupportsPermissionMode lets a switch preflight fall back from modes MiniMax
+// refuses at Start (acceptEdits) instead of advertising every AO mode.
+func (d *driver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	return !errors.Is(validateTurnSettings(mode, ports.ChatTurnSettings{Approval: mode}), ports.ErrChatPermissionModeUnsupported)
+}
+
 func (d *driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if err := d.plugin.ValidateChatHistory(ctx, cfg); err != nil {
 		return nil, fmt.Errorf("%w: MiniMax exact history preflight: %w", ports.ErrChatResumeFailed, err)
@@ -260,7 +266,7 @@ func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnS
 	switch mode {
 	case "", ports.PermissionModeDefault, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
 	default:
-		return fmt.Errorf("%w: MiniMax Chat supports default, auto, and bypassPermissions; acceptEdits has no native equivalent", ports.ErrChatConfigOptionInvalid)
+		return fmt.Errorf("%w: %w: MiniMax Chat supports default, auto, and bypassPermissions; acceptEdits has no native equivalent", ports.ErrChatConfigOptionInvalid, ports.ErrChatPermissionModeUnsupported)
 	}
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		if _, err := modelValue(model); err != nil {

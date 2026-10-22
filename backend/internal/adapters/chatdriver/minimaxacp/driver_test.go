@@ -187,8 +187,28 @@ func TestNativePermissionPolicyUsesConfigNotPlanMode(t *testing.T) {
 		}
 	}
 	for _, mode := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, "unknown"} {
-		if err := validateTurnSettings(mode, ports.ChatTurnSettings{}); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		if err := validateTurnSettings(mode, ports.ChatTurnSettings{}); !errors.Is(err, ports.ErrChatConfigOptionInvalid) || !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
 			t.Fatalf("unsupported mode %q: %v", mode, err)
+		}
+	}
+}
+
+func TestDriverAdvertisesOnlyNativePermissionModes(t *testing.T) {
+	checker, ok := New(stubPlugin{}, nil).(ports.ChatPermissionModeChecker)
+	if !ok {
+		t.Fatal("MiniMax driver does not expose its supported permission modes")
+	}
+	for _, tc := range []struct {
+		mode ports.PermissionMode
+		want bool
+	}{
+		{ports.PermissionModeDefault, true},
+		{ports.PermissionModeAuto, true},
+		{ports.PermissionModeBypassPermissions, true},
+		{ports.PermissionModeAcceptEdits, false},
+	} {
+		if got := checker.SupportsPermissionMode(tc.mode); got != tc.want {
+			t.Fatalf("SupportsPermissionMode(%q) = %v, want %v", tc.mode, got, tc.want)
 		}
 	}
 }
