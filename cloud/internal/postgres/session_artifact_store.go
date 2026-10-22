@@ -296,45 +296,127 @@ func (s *Store) CommitSessionArtifacts(
 				return fmt.Errorf("upsert session artifact: %w", normalizeConstraintError(err))
 			}
 		}
-		var files, bytes int64
-		var hasPR bool
-		if err := tx.QueryRow(
-			ctx,
-			`SELECT count(*), COALESCE(sum(size), 0)::bigint,
-				EXISTS (
-					SELECT 1 FROM ao_pull_requests
-					WHERE org_id = $1 AND session_id = $2
-				)
-			FROM ao_session_artifacts
-			WHERE org_id = $1 AND session_id = $2`,
-			orgID, sessionID,
-		).Scan(&files, &bytes, &hasPR); err != nil {
-			return fmt.Errorf("total session artifacts: %w", err)
+		totals, err := sessionArtifactTotalsTx(ctx, tx, orgID, sessionID)
+		if err != nil {
+			return err
 		}
-		if files > domain.MaxSessionArtifactFiles || bytes > domain.MaxSessionArtifactBytes {
+		if totals.files > domain.MaxSessionArtifactFiles || totals.bytes > domain.MaxSessionArtifactBytes {
 			return ErrArtifactLimit
-		}
-		if _, err := tx.Exec(
-			ctx,
-			`UPDATE ao_sessions SET output_type = $3 WHERE org_id = $1 AND id = $2`,
-			orgID, sessionID, domain.DeriveSessionOutputType(hasPR, files > 0),
-		); err != nil {
-			return fmt.Errorf("update session output type: %w", err)
 		}
 		changed := make([]string, 0, len(upserts))
 		for _, artifact := range upserts {
 			changed = append(changed, artifact.Path)
 		}
-		payload, err := json.Marshal(map[string][]string{
-			"changed": changed,
-			"deleted": deleted,
-		})
+		return recordArtifactChangeTx(ctx, tx, orgID, sessionID, totals, changed, deleted)
+	})
+}
+
+// ArtifactsChangedNotifyPrefix marks an ao_worker_work notification that
+// tells the session's worker its committed artifacts changed without it.
+const ArtifactsChangedNotifyPrefix = "artifacts:"
+
+// DeleteSessionArtifact deletes one committed artifact of a session for a
+// member of its organization, and returns the object version it pointed to.
+// In one transaction it removes the row, queues the version for collection
+// now, updates the session's output type, appends an artifact.changed event,
+// and notifies the session's worker, which removes the file from its disk
+// unless the file changed there since. A path with no committed file, or a
+// session outside the organization, is ErrNotFound.
+func (s *Store) DeleteSessionArtifact(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID, path string,
+) (domain.ArtifactObjectVersion, error) {
+	var version domain.ArtifactObjectVersion
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		if err := requireSessionTx(ctx, tx, orgID, sessionID, true); err != nil {
+			return err
+		}
+		var size int64
+		err := tx.QueryRow(
+			ctx,
+			`DELETE FROM ao_session_artifacts
+			WHERE org_id = $1 AND session_id = $2 AND path = $3
+			RETURNING s3_key, version_id, size`,
+			orgID, sessionID, path,
+		).Scan(&version.S3Key, &version.VersionID, &size)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("delete session artifact: %w", err)
+		}
+		if _, err := tx.Exec(
+			ctx,
+			`INSERT INTO ao_artifact_object_versions (
+				org_id, session_id, s3_key, version_id, reason, size, collect_after
+			) VALUES ($1, $2, $3, $4, 'replaced', $5, now())
+			ON CONFLICT (s3_key, version_id) DO UPDATE SET collect_after = now()`,
+			orgID, sessionID, version.S3Key, version.VersionID, size,
+		); err != nil {
+			return fmt.Errorf("queue deleted artifact version: %w", err)
+		}
+		totals, err := sessionArtifactTotalsTx(ctx, tx, orgID, sessionID)
 		if err != nil {
 			return err
 		}
-		_, err = appendSessionEventTx(ctx, tx, orgID, sessionID, ArtifactChangedEventType, payload)
-		return err
+		if err := recordArtifactChangeTx(ctx, tx, orgID, sessionID, totals, []string{}, []string{path}); err != nil {
+			return err
+		}
+		// Delivered on commit. A worker that is not connected removes the
+		// file when it next starts.
+		if _, err := tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, ArtifactsChangedNotifyPrefix+sessionID); err != nil {
+			return fmt.Errorf("notify artifact change: %w", err)
+		}
+		return nil
 	})
+	return version, err
+}
+
+type sessionArtifactTotals struct {
+	files, bytes int64
+	hasPR        bool
+}
+
+// sessionArtifactTotalsTx counts a session's committed artifacts and their
+// bytes, and reports whether it owns a pull request.
+func sessionArtifactTotalsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (sessionArtifactTotals, error) {
+	var totals sessionArtifactTotals
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT count(*), COALESCE(sum(size), 0)::bigint,
+			EXISTS (
+				SELECT 1 FROM ao_pull_requests
+				WHERE org_id = $1 AND session_id = $2
+			)
+		FROM ao_session_artifacts
+		WHERE org_id = $1 AND session_id = $2`,
+		orgID, sessionID,
+	).Scan(&totals.files, &totals.bytes, &totals.hasPR); err != nil {
+		return totals, fmt.Errorf("total session artifacts: %w", err)
+	}
+	return totals, nil
+}
+
+// recordArtifactChangeTx sets the session's output type from its totals and
+// appends an artifact.changed event naming the changed and deleted paths.
+func recordArtifactChangeTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, totals sessionArtifactTotals, changed, deleted []string) error {
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE ao_sessions SET output_type = $3 WHERE org_id = $1 AND id = $2`,
+		orgID, sessionID, domain.DeriveSessionOutputType(totals.hasPR, totals.files > 0),
+	); err != nil {
+		return fmt.Errorf("update session output type: %w", err)
+	}
+	payload, err := json.Marshal(map[string][]string{
+		"changed": changed,
+		"deleted": deleted,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = appendSessionEventTx(ctx, tx, orgID, sessionID, ArtifactChangedEventType, payload)
+	return err
 }
 
 // ClaimArtifactObjectVersions claims up to limit object versions whose

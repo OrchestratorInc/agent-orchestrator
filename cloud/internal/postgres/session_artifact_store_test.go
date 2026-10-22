@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -497,4 +498,51 @@ func TestArtifactCommitLoopHitsThePendingCap(t *testing.T) {
 		}
 	}
 	t.Fatal("upload-and-commit loop never reached the pending limit")
+}
+
+func TestUserDeletesASessionArtifact(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	report := testArtifact("report.html", 10)
+	notes := testArtifact("notes.md", 5)
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{report, notes}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteSessionArtifact(ctx, domain.Principal{UserID: uuid.NewString(), Provider: "local"}, fixture.orgID, fixture.sessionID, "report.html"); err == nil {
+		t.Fatal("a non-member deleted an artifact")
+	}
+
+	version, err := store.DeleteSessionArtifact(ctx, principal, fixture.orgID, fixture.sessionID, "report.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.S3Key != report.S3Key || version.VersionID != report.VersionID {
+		t.Fatalf("deleted version = %+v", version)
+	}
+	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || len(listed) != 1 || listed[0].Path != "notes.md" {
+		t.Fatalf("listed after delete = %+v, %v", listed, err)
+	}
+	var due bool
+	if err := admin.QueryRow(ctx,
+		`SELECT collect_after <= now() FROM ao_artifact_object_versions WHERE s3_key = $1 AND version_id = $2`,
+		report.S3Key, report.VersionID).Scan(&due); err != nil || !due {
+		t.Fatalf("the deleted version is not due for collection: %v, %v", due, err)
+	}
+	if got := artifactEventCount(t, admin, fixture.sessionID); got != 2 {
+		t.Fatalf("artifact events = %d, want 2", got)
+	}
+
+	if _, err := store.DeleteSessionArtifact(ctx, principal, fixture.orgID, fixture.sessionID, "report.html"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleting a deleted path err = %v", err)
+	}
+	if _, err := store.DeleteSessionArtifact(ctx, principal, fixture.orgID, fixture.sessionID, "notes.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sessionOutputType(t, admin, fixture.sessionID); got != domain.SessionOutputNone {
+		t.Fatalf("output type after the last delete = %q, want none", got)
+	}
 }
