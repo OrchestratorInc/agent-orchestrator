@@ -36,8 +36,6 @@ const (
 	// artifactRestoreTimeout bounds the restore that runs before the agent
 	// starts; a restore it cuts short is finished in the background.
 	artifactRestoreTimeout = 30 * time.Second
-	// artifactRestoreDir holds files being restored until they are complete.
-	artifactRestoreDir = ".ao-restore"
 	// artifactFinalFlushTimeout bounds the sync that runs at shutdown.
 	artifactFinalFlushTimeout = 20 * time.Second
 	// artifactRetryBase and artifactRetryMax bound the backoff after a failed
@@ -59,7 +57,6 @@ const (
 // and tool directories an agent may create that are not deliverables.
 var skippedArtifactDirs = map[string]bool{
 	domain.ArtifactVersionsDir: true,
-	artifactRestoreDir:         true,
 	".git":                     true,
 	"node_modules":             true,
 }
@@ -206,11 +203,14 @@ func (s *artifactSyncer) run(ctx context.Context) error {
 
 // restore puts back the session's committed artifact files that are not in
 // the directory, so a worker on a new sandbox, after a restore or a
-// replacement, starts with them. A path that already exists keeps its local
-// file, which syncs as usual. A restored file counts as synced: it is not
-// uploaded again, and deleting it deletes the committed file. It returns the
-// number of files written; with a control plane that keeps no artifacts it
-// writes none. A failed restore is tried again before each sync.
+// replacement, starts with them. Each file is written in place, where the
+// agent writes. A path that already exists keeps its local file, which counts
+// as the committed file until a scan finds it changed. A restored or kept file
+// counts as synced: it is not uploaded again unless it changes, and deleting
+// it deletes the committed file. A path already synced is left alone, so a
+// retry never brings back a file the agent deleted. It returns the number of
+// files written; with a control plane that keeps no artifacts it writes none.
+// A failed restore is tried again before each sync.
 func (s *artifactSyncer) restore(ctx context.Context) (int, error) {
 	s.restorePending = true
 	var list worker.ArtifactListResponse
@@ -227,19 +227,30 @@ func (s *artifactSyncer) restore(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer root.Close()
-	defer func() { _ = root.RemoveAll(artifactRestoreDir) }()
 	restored := 0
 	for _, file := range list.Files {
+		if _, done := s.synced[file.Path]; done {
+			continue
+		}
 		if !artifactPathStorable(file.Path) || file.Size > domain.MaxArtifactFileBytes {
 			s.skipOnce(file.Path, "committed file cannot be restored")
 			continue
 		}
-		if _, err := root.Lstat(file.Path); !errors.Is(err, fs.ErrNotExist) {
+		committed := artifactState{size: file.Size, sha: file.SHA256}
+		info, err := root.Lstat(file.Path)
+		if err == nil {
+			if info.Mode().IsRegular() {
+				s.synced[file.Path] = committed
+			}
+			continue
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		state, err := s.restoreFile(ctx, root, file)
 		if errors.Is(err, fs.ErrExist) {
 			// The agent wrote the file while it was downloaded.
+			s.synced[file.Path] = committed
 			continue
 		}
 		if err != nil {
@@ -272,10 +283,10 @@ func (s *artifactSyncer) retryRestore(ctx context.Context) {
 	}
 }
 
-// restoreFile downloads one committed file into the directory. The file is
-// written under artifactRestoreDir, checked against its size and SHA-256, and
-// then linked into place, which fails with fs.ErrExist rather than replace a
-// file created meanwhile.
+// restoreFile downloads one committed file to its path in the directory. The
+// file is created only if it does not exist, so it never replaces a file the
+// agent wrote (that fails with fs.ErrExist), and a download that fails or
+// does not match its size and SHA-256 is removed.
 func (s *artifactSyncer) restoreFile(ctx context.Context, root *os.Root, file worker.ArtifactManifestFile) (artifactState, error) {
 	ctx, cancel := context.WithTimeout(ctx, artifactUploadTimeout)
 	defer cancel()
@@ -294,33 +305,26 @@ func (s *artifactSyncer) restoreFile(ctx context.Context, root *os.Root, file wo
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return artifactState{}, artifactResponseError("download", response.StatusCode, snippet)
 	}
-	if err := root.MkdirAll(artifactRestoreDir, 0o700); err != nil {
-		return artifactState{}, err
-	}
-	temp := artifactRestoreDir + "/" + file.SHA256
-	out, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return artifactState{}, err
-	}
-	defer func() { _ = root.Remove(temp) }()
-	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(response.Body, file.Size+1))
-	if err := out.Close(); copyErr == nil {
-		copyErr = err
-	}
-	if copyErr != nil {
-		return artifactState{}, copyErr
-	}
-	if written != file.Size || hex.EncodeToString(hash.Sum(nil)) != file.SHA256 {
-		return artifactState{}, errors.New("downloaded file does not match its size and SHA-256")
-	}
 	if dir := path.Dir(file.Path); dir != "." {
 		if err := root.MkdirAll(dir, 0o700); err != nil {
 			return artifactState{}, err
 		}
 	}
-	if err := root.Link(temp, file.Path); err != nil {
+	out, err := root.OpenFile(file.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
 		return artifactState{}, err
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(response.Body, file.Size+1))
+	if err := out.Close(); copyErr == nil {
+		copyErr = err
+	}
+	if copyErr == nil && (written != file.Size || hex.EncodeToString(hash.Sum(nil)) != file.SHA256) {
+		copyErr = errors.New("downloaded file does not match its size and SHA-256")
+	}
+	if copyErr != nil {
+		_ = root.Remove(file.Path)
+		return artifactState{}, copyErr
 	}
 	info, err := root.Lstat(file.Path)
 	if err != nil {

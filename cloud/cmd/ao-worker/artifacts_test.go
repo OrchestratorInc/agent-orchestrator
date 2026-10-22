@@ -51,8 +51,10 @@ type fakeArtifactPlane struct {
 	disabled      bool
 	// corruptDownloads serves downloads with a changed body.
 	corruptDownloads bool
-	deleted          []string
-	nextVersion      int
+	// failDownload answers downloads of this path with 503.
+	failDownload string
+	deleted      []string
+	nextVersion  int
 }
 
 func newFakeArtifactPlane(t *testing.T) (*fakeArtifactPlane, *client) {
@@ -99,6 +101,10 @@ func (p *fakeArtifactPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		row, ok := p.rows[path]
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if path == p.failDownload {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		body := p.bodies[row.versionID]
@@ -645,8 +651,9 @@ func TestArtifactRestorePutsBackCommittedFiles(t *testing.T) {
 			t.Fatalf("%s = %q, %v", path, got, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, artifactRestoreDir)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("restore left its temporary directory: %v", err)
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("restore wrote more than the committed files: %v, %v", entries, err)
 	}
 
 	// Restored files count as synced: no request goes out for them.
@@ -728,5 +735,91 @@ func TestArtifactRestoreWithoutArtifacts(t *testing.T) {
 	s := testSyncer(c, t.TempDir())
 	if restored, err := s.restore(context.Background()); err != nil || restored != 0 || s.restorePending {
 		t.Fatalf("restore = %d, %v, pending %t", restored, err, s.restorePending)
+	}
+}
+
+func TestArtifactRestoreLeavesOtherFilesAlone(t *testing.T) {
+	_, c := newFakeArtifactPlane(t)
+	first := t.TempDir()
+	writeArtifact(t, first, "report.html", "<h1>report</h1>")
+	syncSettled(testSyncer(c, first))
+
+	// A folder named like a temporary one is an ordinary artifact folder.
+	dir := t.TempDir()
+	writeArtifact(t, dir, ".ao-restore/notes.md", "# keep me")
+	s := testSyncer(c, dir)
+	if restored, err := s.restore(context.Background()); err != nil || restored != 1 {
+		t.Fatalf("restore = %d, %v", restored, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, ".ao-restore", "notes.md")); err != nil || string(got) != "# keep me" {
+		t.Fatalf("restore changed an unrelated file: %q, %v", got, err)
+	}
+}
+
+func TestArtifactRestoreRetryKeepsTheAgentsDeletions(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	first := t.TempDir()
+	writeArtifact(t, first, "a.md", "# a")
+	writeArtifact(t, first, "b.md", "# b")
+	syncSettled(testSyncer(c, first))
+
+	dir := t.TempDir()
+	s := testSyncer(c, dir)
+	plane.mu.Lock()
+	plane.failDownload = "b.md"
+	plane.mu.Unlock()
+	if _, err := s.restore(context.Background()); err == nil {
+		t.Fatal("a failed download was not reported")
+	}
+	// The agent deletes the restored a.md before the retry.
+	if err := os.Remove(filepath.Join(dir, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	plane.mu.Lock()
+	plane.failDownload = ""
+	plane.mu.Unlock()
+	s.retryRestore(context.Background())
+	if _, err := os.Stat(filepath.Join(dir, "a.md")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the retry brought back a deleted file: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "b.md")); string(got) != "# b" {
+		t.Fatalf("the retry did not restore b.md: %q", got)
+	}
+	s.sync(context.Background())
+	if got := plane.paths(); !slices.Equal(got, []string{"b.md"}) {
+		t.Fatalf("the deletion did not sync: committed = %v", got)
+	}
+}
+
+func TestArtifactRestoreCountsFilesStillOnDiskAsSynced(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	first := t.TempDir()
+	writeArtifact(t, first, "same.md", "# same")
+	writeArtifact(t, first, "edited.md", "# before")
+	syncSettled(testSyncer(c, first))
+	_, uploads, _ := plane.counts()
+
+	// A resumed sandbox kept its disk: one file is as committed, one was edited.
+	dir := t.TempDir()
+	writeArtifact(t, dir, "same.md", "# same")
+	writeArtifact(t, dir, "edited.md", "# after")
+	s := testSyncer(c, dir)
+	if restored, err := s.restore(context.Background()); err != nil || restored != 0 {
+		t.Fatalf("restore = %d, %v", restored, err)
+	}
+	if len(s.synced) != 2 {
+		t.Fatalf("files on disk were not counted as synced: %v", s.synced)
+	}
+	syncSettled(s)
+	if _, u, _ := plane.counts(); u != uploads+1 {
+		t.Fatalf("uploads = %d, want only the edited file (%d)", u, uploads+1)
+	}
+	// A kept file the agent deletes is deleted from the committed files.
+	if err := os.Remove(filepath.Join(dir, "same.md")); err != nil {
+		t.Fatal(err)
+	}
+	s.sync(context.Background())
+	if got := plane.paths(); !slices.Equal(got, []string{"edited.md"}) {
+		t.Fatalf("committed = %v", got)
 	}
 }
