@@ -1430,7 +1430,19 @@ func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
 				continue
 			}
 		}
-		res, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion, old.version)
+		// A later migration may legitimately use the same numeric version (the
+		// schema-app-version migration uses 216). The provider-switching preview
+		// row is the most recently applied row for that number, so move only that
+		// row instead of rewriting the unrelated migration history entry.
+		res, err := db.Exec(`
+UPDATE goose_db_version
+SET version_id = ?
+WHERE id = (
+    SELECT id FROM goose_db_version
+    WHERE version_id = ? AND is_applied = 1
+    ORDER BY id DESC
+    LIMIT 1
+)`, providerSwitchingVersion, old.version)
 		if err != nil {
 			return err
 		}
