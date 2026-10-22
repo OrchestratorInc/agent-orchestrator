@@ -31,8 +31,15 @@ Copy the closest existing harness. `harness_touchpoints.mjs --like <id>` prints
 where that harness is wired in every file. Rerun it after each merge from main.
 
 1. **TUI adapter** (`backend/internal/adapters/agent/<id>/`): launch command,
-   first-prompt delivery, hooks/activity, session-ID capture, resume by ID,
-   system-prompt channel, permission modes, terminal version refresh.
+   first-prompt delivery, session-ID capture, resume by ID, system-prompt
+   channel, permission modes, terminal version refresh.
+   - **Hooks for session status.** AO knows a session is working, idle,
+     waiting for input or exited only through the CLI's hooks calling
+     `ao hooks <id> <event>`. Install them in the adapter's `GetAgentHooks`
+     (the default does nothing) without overwriting the user's own hooks, and
+     map the callbacks in `activitydispatch/dispatch.go`. Without both, status
+     is silently never reported. The SessionStart hook also gives AO the
+     CLI's session ID, which restore needs.
 2. **Chat driver** (`backend/internal/adapters/chatdriver/<id>acp/` or an SDK
    driver), only when the protocol works for session start, load or resume,
    permissions and cancel.

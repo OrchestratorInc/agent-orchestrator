@@ -75,7 +75,7 @@ daemon, in a temporary folder that it deletes afterwards. Then it checks:
 | --- | --- |
 | CLI on its own | installed, version, logged in, model list |
 | AO sees it | registered, installed, authenticated (verified, not just configured), models |
-| TUI | spawn in a scratch project; first prompt runs once in the worktree; follows AO's system prompt and AGENTS.md; activity; session ID; follow-up; usage; Kill stops a running command; exact restore; remembers history after restore |
+| TUI | spawn in a scratch project; first prompt runs once in the worktree; follows AO's system prompt and AGENTS.md; session status tracked by hooks (working → idle); session ID captured; follow-up; usage; Kill stops a running command; exact restore; remembers history after restore |
 | Chat | spawn; first prompt, worktree, system prompt, AGENTS.md; follow-up; models and switching model; Kill and restore of the same conversation; remembers history |
 | Roles (V1) | a standalone worker and an orchestrator each answer "worker" / "orchestrator" from AO's system prompt alone |
 

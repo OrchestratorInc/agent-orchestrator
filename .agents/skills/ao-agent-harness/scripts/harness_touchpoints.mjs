@@ -96,8 +96,22 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "product-ui-label", surface: "tui", required: true, file: "packages/product-ui/src/agents.ts",
     check: (ctx, text) => ({ ok: new RegExp(`${objectKey(ctx.id)}\\s*"`).test(text) && new RegExp(`^\\s*"${escapeRe(ctx.id)}",\\s*$`, "m").test(text) }),
     like: ref => new RegExp(`"${escapeRe(ref.id)}"`) },
-  { id: "activity-dispatch", surface: "tui", required: false, file: "backend/internal/adapters/agent/activitydispatch/dispatch.go",
-    check: (ctx, text) => ({ ok: new RegExp(`"${escapeRe(ctx.id)}"\\s*:`).test(text) }),
+  // Session status (working / idle / waiting / exited) and the native session
+  // ID come from the CLI's hooks calling `ao hooks <id> <event>`. The adapter
+  // installs them in GetAgentHooks (agentbase's default is a no-op), and
+  // activitydispatch must map the callbacks, or status is silently never reported.
+  { id: "agent-hooks", surface: "tui", required: true, file: "backend/internal/adapters/agent/{pkg}/",
+    check: async (ctx) => {
+      const dir = join(ctx.repo, "backend/internal/adapters/agent", ctx.pkg);
+      let names = [];
+      try { names = (await readdir(dir)).filter(name => name.endsWith(".go") && !name.endsWith("_test.go")); } catch { return { ok: false, detail: "adapter package not found" }; }
+      for (const name of names) {
+        if (/func \([^)]*\) GetAgentHooks\(/.test(await readFile(join(dir, name), "utf8"))) return { ok: true, detail: name };
+      }
+      return { ok: false, detail: "no GetAgentHooks of its own: AO cannot track session status or capture the native session ID. Install the CLI's hooks, or document that it has none" };
+    } },
+  { id: "activity-dispatch", surface: "tui", required: true, file: "backend/internal/adapters/agent/activitydispatch/dispatch.go",
+    check: (ctx, text) => ({ ok: new RegExp(`"${escapeRe(ctx.id)}"\\s*:`).test(text), detail: "map `ao hooks <id>` callbacks to activity states here, or the hooks report nothing" }),
     like: ref => new RegExp(`"${escapeRe(ref.id)}"\\s*:|adapters/agent/${escapeRe(ref.pkg)}"`) },
   { id: "cli-spawn-help", surface: "tui", required: false, file: "backend/internal/cli/spawn.go",
     check: (ctx, text) => ({ ok: new RegExp(`[ ,]${escapeRe(ctx.id)}[ ,(]`).test(text) }),

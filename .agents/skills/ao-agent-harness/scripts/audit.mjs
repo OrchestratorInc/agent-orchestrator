@@ -419,7 +419,7 @@ async function auditTui(run_, { ao, baseURL, dataDir, projectId, tokens, timeout
   }
   const activity = first.state?.data?.session?.activity?.state;
   await run_.add("tui_activity", sawActive && SETTLED.has(activity) ? "PASS" : "FAIL",
-    sawActive && SETTLED.has(activity) ? `AO showed the turn working, then ${activity}` : `AO never showed the turn as working (hooks or terminal activity not reported); last state ${activity}`, first.state);
+    sawActive && SETTLED.has(activity) ? `session status is tracked: AO showed the turn working, then ${activity}` : `session status is not tracked: AO never showed the turn as working, so the CLI's hooks did not report to \`ao hooks ${run_.agent}\` (last state ${activity})`, first.state);
   const nativeId = await sqlite(dataDir, `SELECT agent_session_id FROM sessions WHERE id='${sessionId.replaceAll("'", "''")}';`);
   await run_.add("tui_native_id", nativeId ? "PASS" : "FAIL", nativeId ? "AO stored the CLI's own session ID (needed for restore)" : "AO did not store the CLI's session ID: its SessionStart hook or ID capture did not run");
 
@@ -621,8 +621,8 @@ const FIX_HINTS = {
   tui_worktree: ["backend/internal/adapters/agent/{tui}/ (working directory)"],
   tui_system_prompt: ["backend/internal/adapters/agent/{tui}/ (system-prompt flag or file)", "backend/internal/session_manager/prompt.go"],
   tui_agents_md: ["backend/internal/adapters/agent/{tui}/ (project instruction file)"],
-  tui_activity: ["backend/internal/adapters/agent/{tui}/ (hooks or terminal activity)", "backend/internal/cli/hooks.go"],
-  tui_native_id: ["backend/internal/adapters/agent/{tui}/ (session ID capture)", "backend/internal/cli/hooks.go"],
+  tui_activity: ["backend/internal/adapters/agent/{tui}/ (GetAgentHooks: are the hooks installed?)", "backend/internal/adapters/agent/activitydispatch/dispatch.go (are the callbacks mapped?)", "backend/internal/cli/hooks.go"],
+  tui_native_id: ["backend/internal/adapters/agent/{tui}/ (SessionStart hook or SessionInfo)", "backend/internal/cli/hooks.go"],
   tui_follow_up: ["backend/internal/adapters/agent/{tui}/ (input submission)"],
   tui_usage: ["backend/internal/adapters/agent/{tui}/ (usage from hooks or transcript)"],
   tui_stop: ["backend/internal/session_manager/manager.go (Kill)", "backend/internal/adapters/agent/{tui}/"],
