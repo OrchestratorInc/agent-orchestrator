@@ -308,6 +308,9 @@ func TestReplacedOpenCode1MessageOnlyForDefaultLocations(t *testing.T) {
 		{"v1 found for the OpenCode 2 harness", IncompatibleVersionError{ExpectedMajor: 2, FoundMajor: 1, FoundVersion: "1.19.3", Path: "/Users/me/.opencode/bin/opencode"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tc.err.Path, "/opt/homebrew/opt/") {
+				t.Skip("Homebrew opt links do not exist on Windows")
+			}
 			got := tc.err.ReplacedOpenCode1Message()
 			if tc.replaced != (got != "") {
 				t.Fatalf("ReplacedOpenCode1Message() = %q, want replaced=%v", got, tc.replaced)
@@ -345,6 +348,9 @@ func TestReplacedOpenCode1MessageForHomebrewLinkedV2(t *testing.T) {
 }
 
 func TestV2HomebrewCandidatesIncludeCustomPrefix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew does not run on Windows")
+	}
 	prefix := filepath.Join(t.TempDir(), "brew")
 	t.Setenv("HOMEBREW_PREFIX", prefix)
 	want := filepath.ToSlash(filepath.Join(prefix, "opt", "opencode-v2", "bin", "opencode"))
