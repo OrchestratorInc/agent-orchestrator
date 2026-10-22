@@ -725,7 +725,7 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 		if dir, err := V2InstallerBinDir(); err == nil {
 			candidates = append(candidates, filepath.Join(dir, "opencode"))
 		}
-		candidates = append(candidates, v2HomebrewBinaries...)
+		candidates = append(candidates, v2HomebrewCandidates()...)
 	}
 	for _, candidate := range candidates {
 		if hookutil.IsExecutableFile(candidate) {
