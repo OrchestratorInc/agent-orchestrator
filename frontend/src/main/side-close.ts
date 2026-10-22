@@ -66,6 +66,12 @@ export class SideCloseRecovery {
 		if (intent) intent.accepted = true;
 	}
 
+	markRestoreAttempt(): void {
+		// Once cleanup may have reached a replacement daemon, an old daemon's
+		// rejection cannot establish that the close was never accepted.
+		for (const intent of this.closing.values()) intent.observed = true;
+	}
+
 	// Only call after an already-closed DELETE and a fresh snapshot from the
 	// same daemon: absence then proves its stop-before-delete cleanup finished.
 	reconcileMissing(id: string, snapshot: SideLaunchSnapshot): void {

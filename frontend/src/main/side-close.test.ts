@@ -49,4 +49,12 @@ describe("side close recovery ownership", () => {
 		expect(recovery.pending()).toEqual([]);
 		expect(recovery.state?.sides).toEqual([]);
 	});
+	it("does not let an old rejection undo cleanup offered to a replacement daemon", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side");
+		recovery.markRestoreAttempt();
+		recovery.cancel("side");
+		expect(recovery.pending()).toHaveLength(1);
+		expect(recovery.state?.sides).toMatchObject([{ cleanupOnly: true }]);
+	});
 });
