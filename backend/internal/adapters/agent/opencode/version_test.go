@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -315,5 +316,44 @@ func TestReplacedOpenCode1MessageOnlyForDefaultLocations(t *testing.T) {
 				t.Fatalf("message %q must name %s and the repair steps", got, tc.err.Path)
 			}
 		})
+	}
+}
+
+func TestReplacedOpenCode1MessageForHomebrewLinkedV2(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew links are POSIX symlinks")
+	}
+	prefix := t.TempDir()
+	keg := filepath.Join(prefix, "Cellar", "opencode-v2", "2.1.2", "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(keg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keg, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(prefix, "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(keg, link); err != nil {
+		t.Fatal(err)
+	}
+	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: link}
+	if got := err.ReplacedOpenCode1Message(); !strings.Contains(got, "brew unlink opencode-v2") || !strings.Contains(got, link) {
+		t.Fatalf("message = %q, want the Homebrew unlink repair for %s", got, link)
+	}
+}
+
+func TestV2HomebrewCandidatesIncludeCustomPrefix(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "brew")
+	t.Setenv("HOMEBREW_PREFIX", prefix)
+	want := filepath.ToSlash(filepath.Join(prefix, "opt", "opencode-v2", "bin", "opencode"))
+	candidates := v2HomebrewCandidates()
+	if !slices.Contains(candidates, want) {
+		t.Fatalf("candidates = %v, want %s", candidates, want)
+	}
+	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.FromSlash(want)}
+	if got := err.ReplacedOpenCode1Message(); got != "" {
+		t.Fatalf("OpenCode 2 at a custom prefix's opt link = %q, want no replacement message", got)
 	}
 }

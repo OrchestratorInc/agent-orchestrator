@@ -40,6 +40,12 @@ func (e *IncompatibleVersionError) ReplacedOpenCode1Message() string {
 	if e.ExpectedMajor != 1 || e.FoundMajor != 2 || isPrivateV2Location(e.Path) {
 		return ""
 	}
+	if linkedByHomebrewV2(e.Path) {
+		// The linked keg also blocks linking OpenCode 1's formula, and an npm
+		// reinstall of OpenCode 2 would leave it linked, so unlink it first.
+		return fmt.Sprintf("OpenCode 1 is not installed: %s is OpenCode 2 (%s), linked by Homebrew's opencode-v2 formula where OpenCode 1 belongs. "+
+			"Run `brew unlink opencode-v2` (AO still finds OpenCode 2 through Homebrew's opt link), then reinstall OpenCode 1 and check again.", e.Path, e.FoundVersion)
+	}
 	return fmt.Sprintf("OpenCode 1 is not installed: %s is OpenCode 2 (%s), which replaced OpenCode 1 at its default location. "+
 		"To run both, first reinstall OpenCode 2 from AO, which keeps it in its own folder, then reinstall OpenCode 1 "+
 		"(official installer, Homebrew, or npm opencode-ai) and check again.", e.Path, e.FoundVersion)
@@ -53,7 +59,7 @@ func isPrivateV2Location(path string) bool {
 		return false
 	}
 	path = filepath.Clean(path)
-	if slices.Contains(v2HomebrewBinaries, filepath.ToSlash(path)) {
+	if slices.Contains(v2HomebrewCandidates(), filepath.ToSlash(path)) {
 		return true
 	}
 	home, err := V2DataHome()
@@ -62,6 +68,16 @@ func isPrivateV2Location(path string) bool {
 	}
 	relative, err := filepath.Rel(home, path)
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+// linkedByHomebrewV2 reports whether path is a Homebrew link into the
+// opencode-v2 formula's keg (<prefix>/Cellar/opencode-v2/<version>/...).
+func linkedByHomebrewV2(path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(filepath.ToSlash(resolved), "/Cellar/opencode-v2/")
 }
 
 // ResolveBinaryForMajor returns the opencode executable whose major version
