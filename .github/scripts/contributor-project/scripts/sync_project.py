@@ -32,6 +32,10 @@ class RateLimitError(SyncError):
     """GitHub is still rate limited after the one allowed retry."""
 
 
+TRANSIENT_RETRY_SECONDS = 5.0
+GITHUB_INTERNAL_ERROR = "Something went wrong while executing your query"
+
+
 @dataclass(frozen=True)
 class ProjectRef:
     url: str
@@ -382,34 +386,61 @@ def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSn
     )
 
 
+def _retry_transient(reason: str) -> None:
+    print(f"transient GitHub API failure, retrying once in {TRANSIENT_RETRY_SECONDS:g}s: {reason}", file=sys.stderr)
+    time.sleep(TRANSIENT_RETRY_SECONDS)
+
+
 def _api_request(arguments: list[str], request: str | None = None) -> Any:
-    for attempt in range(2):
+    # Rate limits and transient failures each get one retry of their own.
+    rate_limit_retried = transient_retried = False
+    while True:
         try:
             result = subprocess.run(["gh", "api", "--include", *arguments], input=request,
                                     capture_output=True, text=True, timeout=150, check=False)
+        except subprocess.TimeoutExpired as exc:
+            if transient_retried:
+                raise SyncError("gh API request timed out after one retry") from exc
+            transient_retried = True
+            _retry_transient("request timed out")
+            continue
         except OSError as exc:
             raise SyncError(f"cannot run gh: {exc}") from exc
         headers, separator, body = result.stdout.replace("\r\n", "\n").partition("\n\n")
         status = re.match(r"HTTP/\S+ (\d{3})", headers)
         if not status or not separator:
-            raise SyncError(f"gh API response has no HTTP headers: {result.stderr.strip()}")
+            # gh prints no response when the connection itself failed.
+            if transient_retried:
+                raise SyncError(f"gh API response has no HTTP headers: {result.stderr.strip()}")
+            transient_retried = True
+            _retry_transient(result.stderr.strip() or "no HTTP response")
+            continue
         retry = re.search(r"(?im)^retry-after:[ \t]*(.*)$", headers)
         http_rate_limited = int(status[1]) == 429 or (int(status[1]) == 403 and (
             retry is not None or re.search(r"(?im)^x-ratelimit-remaining:[ \t]*0[ \t]*$", headers)
             or re.search(r"secondary[ -]rate[ -]limit", body, re.IGNORECASE)
         ))
+        server_error = int(status[1]) >= 500
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
-            if not http_rate_limited:
+            if not (http_rate_limited or server_error):
                 raise SyncError(f"gh API returned invalid JSON: {result.stderr.strip()}") from exc
             payload = {}
+        server_error = server_error or (isinstance(payload, dict) and any(
+            isinstance(error, dict) and str(error.get("message", "")).startswith(GITHUB_INTERNAL_ERROR)
+            for error in (payload.get("errors") or [])
+        ))
+        if server_error and not transient_retried:
+            transient_retried = True
+            _retry_transient(f"HTTP {status[1]} {body.strip()[:200]}")
+            continue
         graphql_rate_limited = isinstance(payload, dict) and any(
             isinstance(error, dict) and error.get("type") == "RATE_LIMITED"
             for error in (payload.get("errors") or [])
         )
         if http_rate_limited or graphql_rate_limited:
-            if attempt:
+            if rate_limit_retried:
                 raise RateLimitError(f"GitHub API rate limited (HTTP {status[1]})")
             delay = 60.0
             if retry:
@@ -420,6 +451,7 @@ def _api_request(arguments: list[str], request: str | None = None) -> Any:
                         delay = (parsedate_to_datetime(retry[1]) - datetime.now(timezone.utc)).total_seconds()
                     except (TypeError, ValueError):
                         pass
+            rate_limit_retried = True
             time.sleep(max(0, delay))
             continue
         if isinstance(payload, dict) and payload.get("errors"):
@@ -786,7 +818,9 @@ def apply_plan(plan: SyncPlan) -> dict[str, int]:
             item_id = operation.item_id or added.get(operation.issue.number)
             if not item_id:
                 raise SyncError(f"cannot fill issue #{operation.issue.number} without a project item id")
-            if operation.issue.number not in added and not _can_fill_field(item_id, field):
+            # Recheck added items too: addProjectV2ItemById returns the existing item when the
+            # Project item list lagged, so a "new" item may already hold a human value.
+            if not _can_fill_field(item_id, field):
                 summary["fields_skipped_after_recheck"] += 1
                 continue
             if field.data_type == "SINGLE_SELECT":

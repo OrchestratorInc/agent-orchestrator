@@ -14,9 +14,10 @@ with read-only repository permissions. Sync reads trusted default-branch code.
 It adds missing open issues and fills blank `Suggested area` and `Suggested
 owner` fields. Missing fields and area options are added. Option updates preserve
 existing IDs, names, colors and descriptions. Archived items and human values
-are preserved. Existing items get a field/archive recheck before each fill;
-items added in the same run skip it because their fields start blank. The API
-cannot make a recheck and write atomic.
+are preserved. Every item gets a field/archive recheck before each fill,
+including items added in the same run: when the Project item list lags, adding
+an issue returns the item that is already there. The API cannot make a recheck
+and write atomic.
 
 It never changes assignees, labels, status, contributor approval or archive
 choices. An owner suggestion does not establish capacity or consent. Nonblank
@@ -50,10 +51,11 @@ python3 scripts/sync_project.py --project-url "$PROJECT_URL"
 
 HTTP 429 responses, rate-limited HTTP 403 responses and GraphQL `RATE_LIMITED`
 errors retry once after `Retry-After`, or 60 seconds if absent. Other HTTP 403
-errors fail immediately. If apply is still rate limited after the retry, it logs
-completed operations, prints a partial summary and exits successfully. The next
-run resumes blanks. The first backfill may also need more than one run due to
-the workflow timeout.
+errors fail immediately. Timeouts, connection failures, HTTP 5xx and GraphQL
+internal errors get their own single retry after 5 seconds, then fail. If apply
+is still rate limited after the retry, it logs completed operations, prints a
+partial summary and exits successfully. The next run resumes blanks. The first
+backfill may also need more than one run due to the workflow timeout.
 
 ## Refresh owners and routes
 

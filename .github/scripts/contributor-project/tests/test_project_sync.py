@@ -137,11 +137,12 @@ class ProjectSyncTests(unittest.TestCase):
         plan = sync_project.build_plan(mapped, [issue(1)], snapshot, owners=people)
         self.assertFalse(any(op.field_name == "Suggested owner" for op in plan.operations))
 
-    def test_new_items_skip_rechecks_and_existing_items_still_recheck(self):
+    def test_added_and_existing_items_both_recheck_before_fill(self):
         snapshot = project([project_item("PVTI_existing", 2)])
         plan = sync_project.build_plan(mapping(), [issue(1), issue(2)], snapshot)
         responses = [
             {"addProjectV2ItemById": {"item": {"id": "PVTI_new"}}},
+            {"node": {"isArchived": False, "fieldValueByName": None}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_new"}}},
             {"node": {"isArchived": False, "fieldValueByName": None}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_existing"}}},
@@ -151,7 +152,19 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(result["items_added"], 1)
         self.assertEqual(result["fields_filled"], 2)
         rechecks = [call for call in graphql.call_args_list if call.args[0] == sync_project.FIELD_VALUE_QUERY]
-        self.assertEqual([call.args[1]["itemId"] for call in rechecks], ["PVTI_existing"])
+        self.assertEqual([call.args[1]["itemId"] for call in rechecks], ["PVTI_new", "PVTI_existing"])
+
+    def test_lagging_item_list_does_not_overwrite_human_value(self):
+        plan = sync_project.build_plan(mapping(), [issue(1)], project())
+        human = {"node": {"isArchived": False, "fieldValueByName": {
+            "name": "Shared infrastructure", "optionId": "OPT_SHARED",
+            "field": {"id": ROUTING_FIELD_ID, "name": "Suggested area", "dataType": "SINGLE_SELECT"}}}}
+        responses = [{"addProjectV2ItemById": {"item": {"id": "PVTI_already_there"}}}, human]
+        with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
+            result = sync_project.apply_plan(plan)
+        self.assertEqual(result["fields_filled"], 0)
+        self.assertEqual(result["fields_skipped_after_recheck"], 1)
+        self.assertEqual(graphql.call_count, 2)
 
     def test_missing_area_options_are_added_with_existing_ids_colors_and_descriptions(self):
         snapshot = project()
@@ -306,11 +319,73 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(summary["fields_created"], 1)
         self.assertIn("rate limited; 1 operations applied", err.getvalue())
 
+    def test_transient_failures_retry_once_after_five_seconds(self):
+        no_headers = unittest.mock.Mock(returncode=1, stdout="", stderr="read: can't assign requested address")
+        internal = response({"errors": [{"message": "Something went wrong while executing your query on 2026-10-22T22:05:06Z."}]})
+        timeout = sync_project.subprocess.TimeoutExpired(["gh"], 150)
+        html_502 = unittest.mock.Mock(returncode=1, stderr="", stdout="HTTP/2.0 502\r\n\r\n<html>Bad gateway</html>")
+        for name, failure in [("no headers", no_headers), ("internal", internal), ("html 502", html_502), ("timeout", timeout)]:
+            with (
+                self.subTest(failure=name),
+                patch.object(sync_project.sys, "stderr", io.StringIO()) as err,
+                patch.object(sync_project.subprocess, "run", side_effect=[failure, response({"data": {"ok": True}})]) as run,
+                patch.object(sync_project.time, "sleep") as sleep,
+            ):
+                self.assertEqual(sync_project._graphql_payload("query { ok }", {}), {"ok": True})
+                self.assertEqual(run.call_count, 2)
+                sleep.assert_called_once_with(5.0)
+                self.assertIn("retrying once in 5s", err.getvalue())
+
+    def test_persistent_transient_failures_raise_after_one_retry(self):
+        no_headers = unittest.mock.Mock(returncode=1, stdout="", stderr="connection reset")
+        internal = response({"errors": [{"message": "Something went wrong while executing your query."}]})
+        timeout = sync_project.subprocess.TimeoutExpired(["gh"], 150)
+        for name, failure, message in [("no headers", no_headers, "no HTTP headers"), ("internal", internal, "Something went wrong"), ("timeout", timeout, "timed out")]:
+            with (
+                self.subTest(failure=name),
+                patch.object(sync_project.subprocess, "run", side_effect=[failure, failure]) as run,
+                patch.object(sync_project.time, "sleep"),
+                patch.object(sync_project.sys, "stderr", io.StringIO()),
+                self.assertRaisesRegex(sync_project.SyncError, message) as raised,
+            ):
+                sync_project._graphql_payload("query { ok }", {})
+            self.assertNotIsInstance(raised.exception, sync_project.RateLimitError)
+            self.assertEqual(run.call_count, 2)
+
+    def test_rate_limit_and_transient_retries_do_not_share_a_budget(self):
+        limited = response({"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded"}]})
+        bad_gateway = response({"message": "Bad gateway"}, 502)
+        for name, sequence in [("transient then limited", [bad_gateway, limited]), ("limited then transient", [limited, bad_gateway])]:
+            with (
+                self.subTest(order=name),
+                patch.object(sync_project.subprocess, "run", side_effect=[*sequence, response({"data": {"ok": True}})]) as run,
+                patch.object(sync_project.time, "sleep") as sleep,
+                patch.object(sync_project.sys, "stderr", io.StringIO()),
+            ):
+                self.assertEqual(sync_project._graphql_payload("query { ok }", {}), {"ok": True})
+                self.assertEqual(run.call_count, 3)
+                self.assertEqual(sorted(call.args[0] for call in sleep.call_args_list), [5.0, 60])
+
+    def test_persistent_server_error_fails_after_one_retry(self):
+        plan = sync_project.build_plan(mapping(), [issue(1)], project())
+        with (
+            patch.object(sync_project, "run", side_effect=lambda args: sync_project.apply_plan(plan)),
+            patch.object(sync_project.subprocess, "run", return_value=response({"message": "Internal Server Error"}, 500)) as run,
+            patch.object(sync_project.time, "sleep") as sleep,
+            patch.object(sync_project.sys, "stdout", io.StringIO()) as out,
+            patch.object(sync_project.sys, "stderr", io.StringIO()) as err,
+        ):
+            exit_code = sync_project.main(["--apply"])
+        self.assertNotEqual(exit_code, 0)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("HTTP 500", err.getvalue())
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(5.0)
+
     def test_apply_other_errors_still_exit_nonzero_without_retry(self):
         plan = sync_project.build_plan(mapping(), [issue(1)], project())
         for denied, message in [
             (response({"message": "Resource not accessible by integration"}, 403), "not accessible"),
-            (response({"message": "Internal Server Error"}, 500), "HTTP 500"),
             (response({"errors": [{"type": "FORBIDDEN", "message": "Token requires project scope"}]}), "project scope"),
         ]:
             with (
