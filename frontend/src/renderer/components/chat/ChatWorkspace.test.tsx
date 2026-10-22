@@ -1846,6 +1846,37 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
 	});
 
+	it("shows a reconnect in progress while the daemon is still checking the session", () => {
+		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
+		const view = render(
+			<ChatWorkspace
+				snapshot={stopped}
+				session={{ ...chatSession, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("AO restarted. History is kept.")).toBeInTheDocument();
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Reconnecting to the agent…")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
+
+		// Once the check fails for good, the real recovery actions come back.
+		view.rerender(
+			<ChatWorkspace
+				snapshot={stopped}
+				session={{ ...chatSession, statusReadiness: "unavailable" }}
+				onResumeAgent={vi.fn()}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+	});
+
 	it("keeps a sleeping conversation usable without exposing wake controls", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

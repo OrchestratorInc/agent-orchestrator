@@ -754,6 +754,10 @@ function ChatWorkspaceContent({
 	if (snapshot.controller.state === "ready" || snapshot.controller.state === "busy") wakingFromHibernate.current = false;
 	if (snapshot.controller.state === "stopped" && !resumingAgent) wakingFromHibernate.current = false;
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
+	// After a restart the daemon is still verifying this session and reconnects
+	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
+	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent &&
+		session?.statusReadiness === "checking";
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -1697,6 +1701,7 @@ function ChatWorkspaceContent({
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
+						reconnecting={startupReconnecting}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
@@ -1840,7 +1845,9 @@ function ChatWorkspaceContent({
 												? ""
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
-													: undefined
+													: startupReconnecting
+														? "Reconnecting to the agent…"
+														: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -2266,6 +2273,7 @@ function ControllerBanner({
 	provisionState,
 	transitioning,
 	automaticWakePending,
+	reconnecting,
 	onResume,
 	resuming,
 	resumeError,
@@ -2277,6 +2285,8 @@ function ControllerBanner({
 	provisionState?: WorkspaceSession["provisionState"];
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
+	/** The daemon is still reconnecting this session after a restart. */
+	reconnecting?: boolean;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -2287,6 +2297,9 @@ function ControllerBanner({
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
+	// Nothing to act on yet: offering Resume here invites a click the daemon is
+	// about to make unnecessary.
+	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
 	const resumeClick = () => {
 		void Promise.resolve().then(() => onResume?.()).catch(() => {});
 	};
@@ -2307,17 +2320,18 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking ? "Waking agent…" : "The agent controller stopped",
-			tone: waking ? "text-muted-foreground" : "text-destructive",
+			title: waking ? "Waking agent…" : restarting ? "Reconnecting to the agent…" : "The agent controller stopped",
+			tone: waking || restarting ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
-	const loading = controller.state === "connecting" || waking;
+	const loading = controller.state === "connecting" || waking || restarting;
+	const actionable = controller.state === "stopped" && !waking && !restarting;
 
 	return (
 		<div
-			role={controller.state === "stopped" && !waking ? "alert" : "status"}
+			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -2333,10 +2347,12 @@ function ControllerBanner({
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
 				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
+				) : restarting ? (
+					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
 				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{controller.state === "stopped" && !waking ? (
+				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.

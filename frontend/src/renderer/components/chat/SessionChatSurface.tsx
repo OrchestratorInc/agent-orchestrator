@@ -11,6 +11,7 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  * preview and live data here.
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -25,6 +26,7 @@ import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } f
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
+	conversationQueryKey,
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
@@ -231,6 +233,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		snapshot?.controller?.state === "busy" || commands.busy || acceptedLocalWorkPending;
 	const hasRunningTurn = Boolean(snapshot?.turns.some((turn) => turn.state === "running"));
 	const queuedTurnCount = snapshot?.turns.filter((turn) => turn.state === "queued").length ?? 0;
+	// After a daemon restart the daemon reattaches surviving Chats on its own, and
+	// that reattach emits no change event. The session's recovery check settling
+	// on "ready" is the signal to refresh the controller state this view shows.
+	const statusReadiness = session.statusReadiness;
+	const lastReadiness = useRef({ id: session.id, readiness: statusReadiness });
+	useEffect(() => {
+		const previous = lastReadiness.current;
+		lastReadiness.current = { id: session.id, readiness: statusReadiness };
+		if (hostId || previous.id !== session.id || statusReadiness !== "ready" ||
+			!previous.readiness || previous.readiness === "ready") return;
+		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
+	}, [hostId, queryClient, session.id, statusReadiness]);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
 			acknowledgeAcceptedTurn(pendingAcceptedTurnId);
