@@ -21,6 +21,10 @@ import (
 // ReportInterruptWindow is the durable per-worker urgent interruption limit.
 const ReportInterruptWindow = 3 * time.Minute
 
+// ReportOrchestratorBackoff reschedules a due batch whose project has no
+// active orchestrator, instead of retrying it every tick forever.
+const ReportOrchestratorBackoff = time.Minute
+
 // ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
 
@@ -173,7 +177,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
+		return c.deferWithoutOrchestrator(ctx, projectID)
 	}
 	batch, err := c.claim(ctx, projectID)
 	if err != nil || len(batch.Reports) == 0 {
@@ -205,6 +209,19 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return c.release(ctx, batch, err)
 	}
 	return c.ackBatch(ctx, batch.ProjectID, batch.Token)
+}
+
+// deferWithoutOrchestrator keeps a due batch retryable while no orchestrator
+// can receive it. It claims the batch so the attempt is durable and visible
+// (delivery_attempts, last_error) and reschedules instead of leaving a silent
+// pending head that starves every other project's due work.
+func (c *Coordinator) deferWithoutOrchestrator(ctx context.Context, projectID domain.ProjectID) error {
+	batch, err := c.claim(ctx, projectID)
+	if err != nil || len(batch.Reports) == 0 {
+		return err
+	}
+	_, err = c.store.DeferReportBatch(ctx, projectID, batch.Token, c.now().UTC().Add(ReportOrchestratorBackoff), "project has no active orchestrator")
+	return err
 }
 
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {

@@ -50,16 +50,19 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	store.add(reportAt("need", "worker", now, now, "decision"))
 	delivery := &coordinatorDelivery{}
 	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
-	if delay, err := c.RunDue(context.Background()); err == nil || delay != time.Second {
+	// Without an orchestrator the due batch reschedules at the backoff instead
+	// of erroring at the head forever, and keeps its visible retry state.
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != ReportOrchestratorBackoff {
 		t.Fatalf("no orchestrator delay = %v, err = %v", delay, err)
 	}
-	if store.reports[0].DeliveryState != domain.ReportPending {
-		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].LastError == "" || store.reports[0].DeliveryAttempts != 1 {
+		t.Fatalf("deferred state = %+v", store.reports[0])
 	}
 	store.sessions = []domain.SessionRecord{
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
 	}
+	now = store.reports[0].AvailableAt
 	if _, err := c.RunDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +233,90 @@ func TestCoordinatorBusyClaimBlocksRunDue(t *testing.T) {
 	}
 }
 
+// TestCoordinatorDeferredBatchReclaimsAfterExpiry pins the literal issue #121
+// lane that already works: a stuck batch deferred inside the interrupt window
+// is re-claimed once the clock shifts past its availability and delivers.
+func TestCoordinatorDeferredBatchReclaimsAfterExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	stuck := reportAt("stuck", "worker", now, now, "cannot continue")
+	stuck.State = domain.ReportStuck
+	store.add(stuck)
+	// The interrupt budget is spent, so the first pass defers inside the window.
+	store.interrupts["worker"] = now
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || !store.reports[0].AvailableAt.After(now) {
+		t.Fatalf("deferred batch = %+v", store.reports[0])
+	}
+
+	// The clock shifts past the deferral while the old orchestrator is gone;
+	// the replacement session is running by the time the deferral expires.
+	now = now.Add(10 * time.Minute)
+	store.sessions = []domain.SessionRecord{{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now}}
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.acked != 1 || len(delivery.submissions) != 1 || delivery.submissions[0].target != "replacement" {
+		t.Fatalf("expired deferral re-claim: acked = %d, submissions = %#v", store.acked, delivery.submissions)
+	}
+}
+
+// TestCoordinatorExpiredBatchWithoutOrchestratorStaysClaimable pins the issue
+// #121 freeze: a batch whose availability expired while its project had no
+// orchestrator must still be re-claimed — visibly, with retry state — instead
+// of spinning as a silent pending head that starves every other project. A
+// replacement orchestrator delivers it at the rescheduled availability.
+func TestCoordinatorExpiredBatchWithoutOrchestratorStaysClaimable(t *testing.T) {
+	now := time.Date(2026, 10, 21, 18, 23, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	// The checkpoint fallback deadline (+1h) expired with no orchestrator left.
+	expired := reportAt("expired", "worker", now.Add(-time.Hour), now, "checkpoint context")
+	store.add(expired)
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatalf("expired batch without orchestrator: %v", err)
+	}
+	if store.reports[0].DeliveryAttempts == 0 {
+		t.Fatal("expired available_at was never re-claimed: delivery_attempts stayed 0")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].LastError == "" {
+		t.Fatalf("re-claim left no visible retry state: %+v", store.reports[0])
+	}
+	if !store.reports[0].AvailableAt.After(now) {
+		t.Fatalf("re-claim did not reschedule availability: %+v", store.reports[0])
+	}
+
+	// The blocked project must not starve a due batch in another project.
+	other := reportAt("other", "worker2", now, now, "other project")
+	other.ProjectID = "q"
+	store.add(other)
+	store.sessions = []domain.SessionRecord{{ID: "orch-q", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "orch-q" {
+		t.Fatalf("starved submissions = %#v", delivery.submissions)
+	}
+
+	// A replacement orchestrator delivers the re-claimed batch at its next
+	// availability.
+	store.sessions = append(store.sessions, domain.SessionRecord{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)})
+	now = store.reports[0].AvailableAt
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.acked != 2 || len(delivery.submissions) != 2 || delivery.submissions[1].target != "replacement" {
+		t.Fatalf("replacement delivery: acked = %d, submissions = %#v", store.acked, delivery.submissions)
+	}
+}
+
 type coordinatorStore struct {
 	mu         sync.Mutex
 	now        time.Time
@@ -330,13 +417,13 @@ func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project dom
 	s.acked += count
 	return count, nil
 }
-func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, _ string) (int, error) {
+func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, reason string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	count := 0
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
-			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportPending, ""
+			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].LastError = domain.ReportPending, "", reason
 			count++
 		}
 	}
