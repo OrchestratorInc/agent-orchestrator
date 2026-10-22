@@ -64,6 +64,10 @@ where that harness is wired in every file. Rerun it after each merge from main.
   needs the user.
 - Loose version matching (`strings.Contains`) or trusting the first PATH match
   for a generic binary name: check identity and the exact version.
+- Two harnesses sharing one binary (e.g. major versions 1 and 2 of the same
+  CLI): every probe must pick the right major. That covers launch, the auth
+  status, the `ao doctor` spec of each ID, and the update advisory, so a v1
+  update never installs v2.
 
 **Prompt delivery and ready cues**
 - Believing an HTTP 200 or an empty input box means the prompt was submitted:

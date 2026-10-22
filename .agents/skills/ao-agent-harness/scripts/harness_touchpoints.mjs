@@ -173,6 +173,9 @@ export const TOUCHPOINTS = Object.freeze([
       for (const name of [`${ctx.id}.svg`, `${ctx.id}.png`, `${ctx.id}-dark.svg`, `${ctx.id}-light.svg`, `${ctx.id}-dark.png`, `${ctx.id}-light.png`]) {
         if (await exists(ctx.repo, `frontend/src/renderer/assets/agents/${name}`)) return { ok: true, detail: name };
       }
+      // A variant harness may reuse another harness's logo through the avatar map.
+      const avatarMap = await readText(ctx.repo, "frontend/src/renderer/components/AgentAvatar.tsx") || "";
+      if (new RegExp(`${objectKey(ctx.id)}\\s*[{\\w]`).test(avatarMap)) return { ok: true, detail: "reuses a logo through AgentAvatar.tsx" };
       return { ok: false };
     } },
   // Main also accepts a source comment beside the import instead of a file.
@@ -186,7 +189,7 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "docs-index", surface: "docs", required: false, file: "docs/README.md",
     check: (ctx, text) => ({ ok: text.includes(`harnesses/${ctx.id}.md`) }),
     like: ref => new RegExp(`harnesses/${escapeRe(ref.id)}\\.md`) },
-  { id: "docs-agents-index", surface: "docs", required: false, file: "frontend/src/landing/content/docs/plugins/agents/index.mdx",
+  { id: "docs-agents-index", surface: "docs", required: false, file: "frontend/src/docs/content/plugins/agents/index.mdx",
     check: (ctx, text) => ({ ok: text.toLowerCase().includes(ctx.id) }),
     like: ref => new RegExp(escapeRe(ref.id), "i") },
   { id: "chat-registry", surface: "chat", required: true, file: "backend/internal/adapters/chatdriver/registry/registry.go",
