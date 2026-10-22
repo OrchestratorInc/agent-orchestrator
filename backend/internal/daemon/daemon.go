@@ -1388,9 +1388,16 @@ func newLogger() *slog.Logger {
 
 // lockDataDir takes the data-dir lock. When another AO process holds it, as a
 // predecessor still shutting down during a takeover does, it logs and waits up
-// to wait for that process to exit, then refuses to start.
+// to wait for that process to exit, then refuses to start. On a file system
+// that cannot lock it returns a nil lock (Release is a no-op) and no error.
 func lockDataDir(ctx context.Context, dataDir string, wait time.Duration, log *slog.Logger) (*datadirlock.Lock, error) {
 	lock, err := datadirlock.Acquire(ctx, dataDir, 0)
+	if errors.Is(err, datadirlock.ErrUnsupported) {
+		// Some NFS, SMB and FUSE mounts cannot lock files. Start unguarded, as AO
+		// did before the lock, rather than refuse to run on them.
+		log.Warn("data dir file system cannot lock files; starting without the single-daemon guard", "err", err)
+		return nil, nil
+	}
 	if !errors.Is(err, datadirlock.ErrLocked) {
 		return lock, err
 	}

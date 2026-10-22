@@ -4,6 +4,7 @@ package datadirlock
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -15,10 +16,9 @@ import (
 const lockOffset = 1 << 30
 
 // tryLock takes a non-blocking exclusive lock via
-// LockFileEx(LOCKFILE_EXCLUSIVE_LOCK|LOCKFILE_FAIL_IMMEDIATELY). ERROR_LOCK_VIOLATION
-// means another process holds it, reported as ErrLocked. Windows drops the lock
-// when the owning process's handle is closed on exit, so a crashed holder does
-// not wedge the data directory.
+// LockFileEx(LOCKFILE_EXCLUSIVE_LOCK|LOCKFILE_FAIL_IMMEDIATELY). Windows drops
+// the lock when the owning process's handle is closed on exit, so a crashed
+// holder does not wedge the data directory.
 func tryLock(file *os.File) error {
 	ol := &windows.Overlapped{Offset: lockOffset}
 	err := windows.LockFileEx(
@@ -29,11 +29,20 @@ func tryLock(file *os.File) error {
 		0,
 		ol,
 	)
-	if err == nil {
+	return lockError(err)
+}
+
+// lockError maps LockFileEx's result: ERROR_LOCK_VIOLATION means another process
+// holds the lock, and ERROR_NOT_SUPPORTED or ERROR_INVALID_FUNCTION means the
+// file system (some network redirectors) cannot lock.
+func lockError(err error) error {
+	switch {
+	case err == nil:
 		return nil
-	}
-	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING) {
+	case errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING):
 		return ErrLocked
+	case errors.Is(err, windows.ERROR_NOT_SUPPORTED) || errors.Is(err, windows.ERROR_INVALID_FUNCTION):
+		return fmt.Errorf("%w: %w", ErrUnsupported, err)
 	}
 	return err
 }

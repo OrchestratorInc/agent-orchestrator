@@ -114,7 +114,9 @@ func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, o
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return legacyimport.Report{}, usageError{fmt.Errorf("%w; stop that process before importing", err)}
 	}
-	if err != nil {
+	// A file system that cannot lock files leaves only the run-file check, as
+	// before the lock; lock is nil then and Release a no-op.
+	if err != nil && !errors.Is(err, datadirlock.ErrUnsupported) {
 		return legacyimport.Report{}, err
 	}
 	defer func() { _ = lock.Release() }()

@@ -40,6 +40,11 @@ const retryInterval = 100 * time.Millisecond
 // data-directory lock after the wait.
 var ErrLocked = errors.New("data dir is in use by another AO process")
 
+// ErrUnsupported is returned by Acquire when the data dir's filesystem cannot
+// lock files at all (some NFS, SMB and FUSE mounts). Callers start without the
+// guard rather than refuse to run, which is how AO behaved before the lock.
+var ErrUnsupported = errors.New("file locks are not supported on this filesystem")
+
 // Lock is a held data-directory lock. Release (or the process exiting) frees it.
 type Lock struct {
 	file *os.File
