@@ -795,7 +795,9 @@ async function withPersistenceFixture(options, run) {
   }, 80) : undefined;
   try {
     await withMuxFixture("lifecycle-cleanup-" + (options.alreadyEmpty ? "already-empty" : "success"), async fixture => {
-      const result = await auditCleanup(fixture, { dataDir, timeoutMs: 400,
+      // The fake sqlite3 is a Node script; 400 ms killed it during Node's cold
+      // start on macOS ("sqlite3 exited null"), so the native ID never bound.
+      const result = await auditCleanup(fixture, { dataDir, timeoutMs: 4000,
         cleanupSpec: { persistence: { path: options.path ?? persistenceTemplate } } });
       await run({ fixture, result, witnessPath, removedAt, relativePath, witnessAtKill });
     }, hooks);

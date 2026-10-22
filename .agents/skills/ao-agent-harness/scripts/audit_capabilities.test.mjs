@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -17,7 +18,10 @@ import {
 import { SUITES } from "./audit_suites.mjs";
 import { markdownReport, parseArgs } from "./audit_ao.mjs";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+// The skill normally lives in the AO checkout; a copy elsewhere points at one
+// with AO_REPO. Without a checkout the path check is skipped, not failed.
+const repoRoot = process.env.AO_REPO || resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const hasCheckout = existsSync(join(repoRoot, "backend/internal/domain/harness.go"));
 
 test("every suite gate maps to a catalog capability", () => {
   for (const name of Object.values(SUITES).flat()) {
@@ -25,7 +29,7 @@ test("every suite gate maps to a catalog capability", () => {
   }
 });
 
-test("catalog inspect paths exist in this checkout for codex and claude-code", async () => {
+test("catalog inspect paths exist in this checkout for codex and claude-code", { skip: hasCheckout ? false : `no AO checkout at ${repoRoot}; set AO_REPO` }, async () => {
   const missing = [];
   for (const capability of CAPABILITIES) {
     for (const agent of ["codex", "claude-code"]) {

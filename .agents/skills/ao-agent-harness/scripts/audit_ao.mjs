@@ -653,7 +653,7 @@ function draftPersistencePath(spec, { dataDir, sessionId, workspacePath, nativeS
   if (/[{}]/.test(relativePath) || components.length > 32 || components.some(part => !part || part === "." || part === "..")) {
     throw new Error("draft persistence path contains traversal, empty components or unknown placeholders");
   }
-  return { path: resolve(dataDir, relativePath), relativePath };
+  return { path: resolve(dataDir, relativePath), relativePath, base: resolve(dataDir) };
 }
 
 async function waitForDraftPersistence(witness, wanted, deadline) {
@@ -664,9 +664,17 @@ async function waitForDraftPersistence(witness, wanted, deadline) {
       const remaining = Math.max(1, deadline - performance.now());
       const state = await Promise.race([
         (async () => {
-          const root = parse(witness.path).root;
-          const components = witness.path.slice(root.length).split(sep);
-          let current = root;
+          // The AO data dir is trusted runner state; resolve it once so OS
+          // symlinks above it (macOS /tmp -> /private/tmp, /var -> /private/var)
+          // are not mistaken for planted links. Every component below it, the
+          // part bound to the session, must still be a real directory/file.
+          let current;
+          try { current = await realpath(witness.base ?? parse(witness.path).root); }
+          catch (error) {
+            if (error.code === "ENOENT") return "missing-parent";
+            throw new Error("draft persistence metadata check failed: " + (error.code || "unknown"));
+          }
+          const components = witness.base ? witness.relativePath.split("/") : witness.path.slice(current.length).split(sep);
           for (let index = -1; index < components.length; index++) {
             if (index >= 0) current = join(current, components[index]);
             const leaf = index === components.length - 1;

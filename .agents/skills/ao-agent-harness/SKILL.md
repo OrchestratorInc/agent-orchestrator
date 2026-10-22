@@ -48,6 +48,30 @@ integration. Missing safe screenshots need an explicit unavailable reason.
 
 ## Run
 
+### Run locally (Codex and Claude Code)
+
+`scripts/run_local.sh` sets up a local run. It does four things:
+
+- picks Node 24 or newer (including from nvm)
+- finds the AO checkout (or uses `AO_REPO`)
+- uses the bundled starter contract
+  [`assets/local-contract.codex-claude.json`](assets/local-contract.codex-claude.json)
+- writes each attempt to a fresh report under `~/Desktop/agents/ao-audit-reports`
+  (or `AO_AUDIT_REPORTS`)
+
+```bash
+scripts/run_local.sh fixtures          # offline fixture tests, no provider calls
+scripts/run_local.sh check             # build AO + safe probes, no provider turns
+scripts/run_local.sh audit codex       # full live audit for one agent (provider calls)
+scripts/run_local.sh next              # the fix loop's next step from the last report
+scripts/run_local.sh only chat_interrupt codex   # rerun one gate against the last report
+```
+
+The contract's restored ready cues are taken from the empty-composer frames in
+AO's own adapter tests. If `post_restore_terminal_ready` blocks on a newer CLI,
+the fix loop classifies it as `contract`. Then update the pattern from a real
+restored frame, and `audit_local_contract.test.mjs` keeps it honest.
+
 Use Node 24 or newer, Git, SQLite CLI, installed native agents, and the Go version
 required by the selected checkout when building AO. Prepare existing authorized
 credentials in the execution account and isolated native profiles. Live audits
