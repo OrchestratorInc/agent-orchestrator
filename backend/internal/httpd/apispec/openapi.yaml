@@ -4439,7 +4439,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Clone and register a project from a git repository URL
+      tags:
+      - projects
+  /api/v1/projects/clone/check:
+    post:
+      operationId: checkCloneDestination
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneProjectInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneDestination'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Check a clone destination and normalize its repository URL without
+        network access
       tags:
       - projects
   /api/v1/projects/clone/cleanup:
@@ -4503,6 +4541,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
@@ -14206,6 +14250,22 @@ components:
       - clearEpoch
       - clearSequence
       type: object
+    CloneDestination:
+      properties:
+        canUseExisting:
+          type: boolean
+        exists:
+          type: boolean
+        path:
+          type: string
+        remoteUrl:
+          type: string
+      required:
+      - remoteUrl
+      - path
+      - exists
+      - canUseExisting
+      type: object
     ClonePreparationResult:
       properties:
         path:
@@ -17789,6 +17849,8 @@ components:
       type: object
     ProjectClonePreparationCleanupInput:
       properties:
+        keepCheckout:
+          type: boolean
         path:
           minLength: 1
           type: string

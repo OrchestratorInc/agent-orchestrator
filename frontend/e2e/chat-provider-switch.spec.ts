@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
+import { openInspector } from "./support/open-inspector";
 import { installFakeAgent } from "./support/fake-bridge";
 
 const projectId = "chat-provider-switch";
@@ -51,7 +52,11 @@ function snapshot(harness: string, switches: Switch[]) {
  * A chat on Codex whose daemon switches agents as asked, or refuses with
  * refusal. Returns the switch requests the app sent.
  */
-async function installSwitchingChat(page: Page, refusal?: { status: number; code: string; message: string }) {
+async function installSwitchingChat(
+	page: Page,
+	refusal?: { status: number; code: string; message: string },
+	model?: { id: string; displayName: string },
+) {
 	await page.emulateMedia({ reducedMotion: "reduce" });
 	await installFakeAgent(page, {
 		projectId,
@@ -90,7 +95,14 @@ async function installSwitchingChat(page: Page, refusal?: { status: number; code
 			return;
 		}
 		if (pathname === `/api/v1/sessions/${sessionId}/conversation` && method === "GET") {
-			await route.fulfill({ json: snapshot(harness, switches) });
+			await route.fulfill({ json: {
+				...snapshot(harness, switches),
+				settings: model ? { model: model.id, reasoningEffort: "high" } : {},
+				usage: model ? {
+					contextUsed: 20000, contextWindow: 200000,
+					inputTokens: 20000, outputTokens: 0, cachedTokens: 0, totalTokens: 20000,
+				} : undefined,
+			} });
 			return;
 		}
 		if (pathname === `/api/v1/sessions/${sessionId}/provider-switch` && method === "POST") {
@@ -113,7 +125,10 @@ async function installSwitchingChat(page: Page, refusal?: { status: number; code
 			return;
 		}
 		if (pathname === `/api/v1/sessions/${sessionId}/conversation/models`) {
-			await route.fulfill({ json: { models: [], selected: {} } });
+			await route.fulfill({ json: {
+				models: model ? [{ ...model, efforts: ["high"], defaultEffort: "high" }] : [],
+				selected: model ? { model: model.id, reasoningEffort: "high" } : {},
+			} });
 			return;
 		}
 		if (pathname === `/api/v1/sessions/${sessionId}/conversation/skills`) {
@@ -191,4 +206,34 @@ test("a refused switch keeps the draft and the previous agent @T0", async ({ pag
 	await expect(picker(page)).toContainText("Codex");
 	await notice.getByRole("button", { name: "Dismiss" }).click();
 	await expect(notice).toHaveCount(0);
+});
+
+test("composer pickers stay inside the composer beside an open browser @P0", async ({ page }) => {
+	await installSwitchingChat(page, undefined, { id: "gpt-5.4-long", displayName: "GPT 5.4 with a longer model name" });
+	await openInspector(page);
+	await page.locator("#inspector").getByRole("tab", { name: "Browser" }).click();
+	const model = picker(page);
+	await expect(model).toContainText("GPT 5.4 with a longer model name");
+	const permissions = page.getByRole("button", { name: "Approval policy for the next turn" });
+	for (const width of [1280, 1100, 960]) {
+		await page.setViewportSize({ width, height: 720 });
+		await expect.poll(async () => {
+			const box = await model.locator("xpath=ancestor::form").boundingBox();
+			const modelBox = await model.boundingBox();
+			const permissionBox = await permissions.boundingBox();
+			if (!box || !modelBox || !permissionBox) return false;
+			return modelBox.y >= box.y && modelBox.y + modelBox.height <= box.y + box.height
+				&& modelBox.x >= box.x && modelBox.x + modelBox.width <= permissionBox.x
+				&& Math.abs(modelBox.y - permissionBox.y) <= 1;
+		}).toBe(true);
+	}
+	await permissions.click();
+	await expect(page.getByRole("menu")).toHaveAttribute("data-browser-native-overlay", "true");
+	await page.keyboard.press("Escape");
+	await model.click();
+	await page.getByRole("menuitem", { name: /^Agent/ }).focus();
+	await page.keyboard.press("ArrowRight");
+	const agent = page.getByRole("menuitemradio", { name: "Claude Code" });
+	await expect(agent).toBeVisible();
+	await expect(agent.locator('xpath=ancestor::*[@role="menu"]')).toHaveAttribute("data-browser-native-overlay", "true");
 });

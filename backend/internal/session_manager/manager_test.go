@@ -229,12 +229,12 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	return true, nil
 }
 
-func (f *fakeStore) SetSessionNamedWorkspace(_ context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
-	if !ok || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" || rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != expectedPath && rec.Metadata.WorkspacePath != workspacePath {
+	if !ok || rec.IsTerminated || rec.Metadata.Branch != expectedBranch {
 		return false, nil
 	}
-	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = branch, workspacePath, workspaceRepoPath
+	rec.Metadata.Branch = branch
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil

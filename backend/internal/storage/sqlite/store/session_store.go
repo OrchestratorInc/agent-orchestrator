@@ -166,16 +166,15 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
-// SetSessionNamedWorkspace publishes naming facts before an agent can launch.
-func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+// SetSessionTaskBranch records a background task branch rename.
+func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
-		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
-		WorkspaceRepoPath: workspaceRepoPath, UpdatedAt: now,
+	rows, err := s.qw.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+		ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
 	})
 	if err != nil {
-		return false, fmt.Errorf("record named workspace for %s: %w", id, err)
+		return false, fmt.Errorf("record task branch for %s: %w", id, err)
 	}
 	return rows > 0, nil
 }

@@ -943,6 +943,107 @@ describe("bounded live refresh", () => {
 	});
 });
 
+describe("id-only session updates", () => {
+	// Usage bookkeeping (and, rarely, agent switches, cleanup facts and reported
+	// PRs) emits session_updated with nothing but the session id.
+	const idOnly = (sessionId: string) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId, type: "session_updated", payload: { id: sessionId } }));
+	// The sessions-row trigger's payload, as backend migration 0191 builds it.
+	const sessionRow = (sessionId: string, activity: string) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({
+			sessionId,
+			type: "session_updated",
+			payload: {
+				id: sessionId, activity, isTerminated: false, terminateOnPrMerge: false, previewUrl: "", previewRevision: 0,
+				isPinned: false, mode: "chat", autoInjectReview: true, autoInjectCI: true, autoReviewEnabled: false, provisionState: "ready",
+			},
+		}));
+	const workspaceRefreshes = (client: ReturnType<typeof fakeQueryClient>) =>
+		vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["workspaces"]').length;
+	afterEach(() => vi.useRealTimers());
+
+	it("refreshes the workspace at most once per interval for a stream of id-only updates", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		// Three running agents whose usage is recorded every 100 ms for 12 s.
+		for (let elapsed = 0; elapsed < 12_000; elapsed += 100) {
+			for (const sessionId of ["a", "b", "c"]) idOnly(sessionId);
+			await vi.advanceTimersByTimeAsync(100);
+		}
+		// The first update refreshes at once (t=0), then one refresh at 5 s and 10 s.
+		expect(workspaceRefreshes(client)).toBe(3);
+		// While the workspace waits, the session's own caches still refresh at once.
+		idOnly("d");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "d"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation", "d"] }, { cancelRefetch: false });
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("keeps status changes, sessions-row updates and new sessions prompt while id-only updates wait", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("busy");
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("busy");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(1);
+
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(2);
+		// The sessions-row trigger also fires for columns its payload omits (title,
+		// start-up checklist, branch state), so carried fields that did not change
+		// do not mean the board did not.
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(3);
+		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(4);
+		// Those refreshes already covered the waiting id-only update.
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(4);
+		disconnect();
+	});
+
+	it("waits a full interval after a newer workspace refresh before the id-only refresh", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("a"); // 0 s: refreshes at once.
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a"); // 1 s: waits until 5 s.
+		await vi.advanceTimersByTimeAsync(1_000);
+		sessionRow("b", "active"); // 2 s: refreshes at once, covering the 1 s update.
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a"); // 3 s: now waits until 7 s, 5 s after the newer refresh.
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(2_100);
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("drops a waiting id-only refresh on disconnect", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a");
+		disconnect();
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(1);
+	});
+});
+
 it("does not cancel an unrelated inactive workspace fetch on CDC", async () => {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const key = ["workspaces"];

@@ -355,27 +355,26 @@ flowchart TD
 
 New Git worker sessions from the desktop, CLI, or orchestrator with an initial
 prompt generate a title and task slug together
-through the selected agent's background-task driver during provisioning. This
-call overlaps worktree preparation and has a twenty-second deadline. Failure,
-invalid output, or a full four-call naming limit uses a local prompt slug;
-prompts without usable ASCII words fall back to the session ID. Git tasks use
-`ao/<slug>/root` and `worktrees/<project-id>/<slug>`, with the same numeric suffix
-on both when the folder or branch namespace is occupied. Generated slugs prefer
-two short words, allow at most three, and are capped at 24 characters. The daemon
-finalizes prepared worktrees and repairs every repository registration before setup or
-agent launch, then records the resulting paths and branches. Naming persists its
-provisioning checkpoint and a synced move journal before changing Git names.
-After an interrupted move, background reconciliation or retry verifies linked
-Git identities, finishes registration repair, and saves root and child paths
-before acknowledging the journal. Recovery refuses occupied destinations and
-sessions with a runtime or provider conversation identity. Retry resumes
-unfinished setup using the durable stages. Session IDs remain
-unchanged. Explicit CLI/API session titles are preserved while their workspaces
-receive task names. Restore uses the persisted names. Explicit branches, promptless
-sessions, Scratch sessions, and existing sessions keep their naming behavior.
-The desktop hides provisional branches until the worktree step completes and
-shows a text shimmer with a randomly selected naming label while provisioning
-is active. The label stays stable across updates while it is displayed.
+through the selected agent's background-task driver. The call starts with
+provisioning and has a twenty-second deadline, but neither setup nor the agent
+waits for it: the worktree is created at `worktrees/<project-id>/<session-id>` on
+the temporary branch `ao/<session-id>/root` and keeps that folder for its whole
+life. After launch, a background step renames only the branch to
+`ao/<slug>/root` (numeric suffix when the namespace is occupied) in every
+repository of the task, records it, then applies the title. Failure, invalid
+output, or a full four-call naming limit uses a local prompt slug; prompts
+without usable ASCII words fall back to the session ID. Generated slugs prefer
+two short words, allow at most three, and are capped at 24 characters. The
+rename is skipped, keeping the temporary branch, when the agent has already left
+it, pushed it, or created refs under its namespace, because AO attributes PRs to
+the session by that namespace. A rename the session row no longer accepts is put
+back in Git. Session IDs remain unchanged. Explicit CLI/API session titles are
+preserved. Explicit branches, promptless sessions, Scratch sessions, and
+existing sessions keep their naming behavior.
+The desktop hides provisional branches until the worktree step completes, and
+keeps a launched task's temporary branch hidden for up to thirty seconds while
+its generated name is on the way. Both show a text shimmer with a randomly
+selected naming label, which stays stable across updates while it is displayed.
 
 ### Session interface handoff
 
