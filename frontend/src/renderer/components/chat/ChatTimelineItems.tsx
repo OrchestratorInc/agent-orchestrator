@@ -79,7 +79,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
-import { BreathingOrb } from "./BreathingOrb";
+import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
@@ -752,13 +752,14 @@ export function ResponseSpinner() {
 }
 
 /**
- * The live turn's thinking mark: a dotted ring that breathes (see BreathingOrb).
- * Decorative here, since the label and timer beside it carry the meaning.
+ * The live turn's working mark: a lattice of dots with a trail running round it
+ * (see LatticeLoader). Decorative here, since the label and timer beside it carry
+ * the meaning.
  */
-export function ThinkingOrb() {
+export function LiveWorkingMark() {
 	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center">
-			<BreathingOrb size={20} className="text-muted-foreground" />
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+			<LatticeLoader />
 		</span>
 	);
 }
@@ -1220,7 +1221,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 		<div className="min-w-0">
 			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">
 				<span aria-hidden="true" className="flex shrink-0">
-					{failed ? <X className="size-3 text-destructive" /> : <ThinkingOrb />}
+					{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 				</span>
 				<span
 					role={failed ? "alert" : "status"}
