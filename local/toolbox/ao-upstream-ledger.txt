@@ -43,3 +43,4 @@ c9c17ec4c1ba68cb494b2ecfff2a3e6ab2fe544a taken fix(projects): let large reposito
 1d48f99b93c7cc36c7b681afb6d0de210fd0a98a taken fix(harness): keep harness update failures short in the notice (#7006)
 503033ae0de7842b69fabbe6533d1e5be790bad3 taken fix(agents): follow the default account in readiness and list the CLI login with the others (#7007)
 ea889e3795d03025b2bc06805fc96379eefa19f0 taken fix(harness): install the copilot launcher, not its platform binary (#7005)
+5525713f686b31c885f6afcdfd3aad31eb49d03e taken fix: hide manual-update and login-required harness notices (#7042)
