@@ -1237,10 +1237,15 @@ export async function auditLocalAgent({ agent, contract, root = tmpdir(), live =
   if (!contract.models || !Array.isArray(contract.models.args)) {
     await record(gate("local_models_list", "NOT_RUN", "local model-list command is not defined"));
   } else {
-    const outcome = await runCommand(executable, commandArgs(contract.models), { timeoutMs });
+    // Catalogs can be large (codex debug models prints ~0.5 MB of JSON); the
+    // default 64 KB output tail would cut the JSON and read as "no models".
+    const outcome = await runCommand(executable, commandArgs(contract.models), { timeoutMs, outputLimit: 16 * 1024 * 1024 });
     models = modelsFromCommand(outcome, contract.models.format);
     const passed = outcome.ok && models.length > 0;
-    await record(gate("local_models_list", passed ? "PASS" : "FAIL", passed ? `local CLI listed ${models.length} model(s)` : "local model-list command failed or returned no models", {
+    const unparsable = outcome.ok && contract.models.format === "json" && !models.length && outcome.stdout.trim();
+    await record(gate("local_models_list", passed ? "PASS" : "FAIL", passed ? `local CLI listed ${models.length} model(s)`
+      : unparsable ? `model-list output (${outcome.stdoutBytes ?? outcome.stdout.length} bytes) is not JSON with a models/data/items list keyed by id, model, value or slug`
+      : "local model-list command failed or returned no models", {
       ...commandEvidence(outcome, !passed, { arguments: sanitizedArgs(contract.models.args) }),
       models,
     }));
