@@ -609,6 +609,7 @@ export type AgentModelCatalog = {
 	fetchedAt: string;
 	validatedAt?: string;
 	refreshRecommended?: boolean;
+	refreshState?: "idle" | "queued" | "refreshing" | "error";
 	warning?: string;
 };
 
@@ -663,10 +664,21 @@ export async function refreshAgents(cfg: ServerConfig): Promise<AgentCatalog> {
 	};
 }
 
+// The daemon answers an agent it has never discovered with an empty catalog
+// marked refreshing while discovery runs in the background, rather than making
+// the picker wait. Re-read until the discovered list arrives.
+const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
+const MODEL_CATALOG_REFRESH_POLL_LIMIT = 20;
+
 export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
 	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-	const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
-	return await res.json() as AgentModelCatalog;
+	for (let attempt = 0; ; attempt++) {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
+		const catalog = await res.json() as AgentModelCatalog;
+		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
+		if (!discovering || attempt >= MODEL_CATALOG_REFRESH_POLL_LIMIT) return catalog;
+		await new Promise((resolve) => setTimeout(resolve, MODEL_CATALOG_REFRESH_POLL_MS));
+	}
 }
 
 export async function refreshAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {

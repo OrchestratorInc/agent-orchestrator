@@ -59,6 +59,22 @@ describe("mobile Chat API boundaries", () => {
 		expect(catalog.models[0]).toMatchObject({ id: "gpt-5", isDefault: true });
 	});
 
+	it("re-reads a catalog the daemon is still discovering until its models arrive", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(fetch)
+				.mockResolvedValueOnce(response({ agentId: "opencode", models: [], refreshState: "refreshing" }))
+				.mockResolvedValueOnce(response({ agentId: "opencode", models: [{ id: "big-pickle", label: "Big Pickle" }], refreshState: "idle" }));
+			const pending = getAgentModels(cfg, "opencode");
+			await vi.advanceTimersByTimeAsync(1_500);
+			const catalog = await pending;
+			expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+			expect(catalog.models.map((model) => model.id)).toEqual(["big-pickle"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("loads the model catalog without a project scope for standalone", async () => {
 		vi.mocked(fetch).mockResolvedValue(response({ agentId: "codex", models: [] }));
 		await getAgentModels(cfg, "codex");
