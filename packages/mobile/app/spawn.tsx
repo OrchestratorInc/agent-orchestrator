@@ -425,8 +425,11 @@ function SpawnModalContent() {
 					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
 				</View>
 
+				{/* A ScrollView grows by default. Unpinned, the chip row split the
+				    sheet's spare height with the prompt and floated in the middle of
+				    it, far from the selectors. */}
 				{attachments.length ? (
-					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>
+					<ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attachmentRow} contentContainerStyle={styles.attachments}>
 						{attachments.map((item, index) => (
 							<View key={`${item.name}-${index}`} style={styles.attachment}>
 								<Feather name="file-text" size={iconSize.sm} color={t.accent} />
@@ -548,6 +551,7 @@ const makeStyles = (t: Theme) =>
 		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
 		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
+		attachmentRow: { flexGrow: 0, flexShrink: 0 },
 		attachments: { gap: space.sm },
 		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
 		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },

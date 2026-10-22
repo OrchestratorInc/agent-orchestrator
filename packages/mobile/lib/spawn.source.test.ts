@@ -20,6 +20,11 @@ describe("spawn composer", () => {
 		expect(spawn).toContain('promptHostFill: { height: undefined, flex: 1, minHeight: 0 }');
 	});
 
+	it("keeps the attachment row at its own height so the chips sit on the selectors", () => {
+		expect(spawn).toContain("style={styles.attachmentRow} contentContainerStyle={styles.attachments}");
+		expect(spawn).toContain("attachmentRow: { flexGrow: 0, flexShrink: 0 }");
+	});
+
 	it("shows a prompt-specific error for the daemon's 16 KiB rejection", () => {
 		expect(spawn).toContain('e instanceof ApiError && e.code === "PROMPT_TOO_LONG"');
 		expect(spawn).toContain('Task prompt is too long. Keep it to 16 KiB or fewer');
