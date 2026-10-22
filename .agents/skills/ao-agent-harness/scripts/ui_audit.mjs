@@ -126,14 +126,16 @@ async function checkpoint(context, id, title, run) {
   return result;
 }
 
-async function openHarnessSettings(page, harness) {
+// The search box filters by display name ("Claude Code"), not by harness ID
+// ("claude-code"), so the row is found by its data-agent ID with an empty search.
+async function openHarnessSettings(page, harness, label = "") {
   if (!(await visible(page.locator(SELECTORS.settingsDialog), 500))) await locate(page, SELECTORS.settingsButton).first().click();
   await page.locator(SELECTORS.settingsDialog).waitFor({ timeout: 10_000 });
   await locate(page, SELECTORS.navSection("Harness")).first().click();
   const section = page.locator(SELECTORS.harnessSection);
   await section.waitFor({ timeout: 10_000 });
   const search = locate(section, SELECTORS.harnessSearch);
-  if (await visible(search, 1_000)) await search.fill(harness);
+  if (await visible(search, 1_000)) await search.fill(label);
   return section;
 }
 
@@ -181,8 +183,9 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
   let displayName = label;
 
   await checkpoint(context, "harness-listed", "Agent Harness page lists the harness", async () => {
-    const section = await openHarnessSettings(page, harness);
+    const section = await openHarnessSettings(page, harness, label);
     const item = section.locator(SELECTORS.harnessListItem(harness));
+    await item.first().scrollIntoViewIfNeeded().catch(() => {});
     if (!(await visible(item))) return { status: "FAIL", reason: `no harness "${harness}" on the Harness page: not registered, or hidden on this host` };
     await item.first().click();
     detail = page.locator(SELECTORS.harnessDetail(harness));
