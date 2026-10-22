@@ -319,6 +319,31 @@ describe("ArtifactsView", () => {
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-1" } });
 	});
 
+	it("opens a session directly from the card arrow without opening a modal", async () => {
+		const user = userEvent.setup();
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		expect(project.queryByRole("button", { name: "Delete artifact: pricing.md" })).not.toBeInTheDocument();
+		await user.click(project.getByRole("button", { name: "Open in session: pricing.md" }));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "ao", sessionId: "ao-2" } });
+	});
+
+	it("keeps pin and delete in the modal menu without duplicating Open in session there", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: /^pricing\.md/ }));
+		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
+		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
+		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
+		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
+		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
+		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));
+		expect(useArtifactsViewStore.getState().pinnedArtifactIds).toHaveLength(1);
+		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
+
 	it("closes a preview with Escape and restores focus without navigating", async () => {
 		const user = userEvent.setup();
 		renderView();

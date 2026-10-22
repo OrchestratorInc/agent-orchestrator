@@ -12,6 +12,7 @@ import {
 	type ArtifactRow,
 } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
+import { useNavigateToSession } from "../lib/navigate-to-session";
 import { hidesShellTopbar } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
@@ -266,10 +267,16 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
+	const navigateToSession = useNavigateToSession();
 	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
 
 	const open = () => {
 		onPreview(row, projectName);
+	};
+	const openInSession = () => {
+		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");
+		navigateToSession(row.projectId, row.sessionId);
 	};
 
 	if (view === "list") {
@@ -295,7 +302,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 							artifact={row}
 							session={{ id: row.sessionId }}
 							iconOnly
-							showDeleteButton
+							onOpenInSession={openInSession}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
@@ -339,7 +346,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 					artifact={row}
 					session={{ id: row.sessionId }}
 					iconOnly
-					showDeleteButton
+					onOpenInSession={openInSession}
 					pinned={pinned}
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"

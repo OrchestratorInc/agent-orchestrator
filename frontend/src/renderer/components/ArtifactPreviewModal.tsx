@@ -12,6 +12,8 @@ import { isSvgPath } from "../lib/image-files";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
+import { useArtifactsViewStore } from "../stores/artifacts-view-store";
+import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { FileMediaPreview } from "./FileMediaPreview";
 import { SvgFileView } from "./SvgFileView";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -30,6 +32,9 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const restoreFocusOnClose = useRestoreFocusOnClose(Boolean(artifact));
 	const titleRef = useRef<HTMLHeadingElement>(null);
+	const id = artifact ? artifactKey(artifact) : "";
+	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
+	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
@@ -40,7 +45,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 		<Dialog open={Boolean(artifact)} onOpenChange={(open) => { if (!open) onClose(); }}>
 			{artifact ? (
 				<DialogContent
-					className={cn(settingsDialogContentClass, "h-[min(52rem,calc(100svh-var(--space-8)))] max-h-none w-[min(72rem,calc(100vw-var(--space-8)))]")}
+					className={cn(settingsDialogContentClass, "h-[min(52rem,calc(100svh_-_var(--size-toolbar)_-_var(--size-toolbar)_-_var(--space-8)))] max-h-none w-[min(72rem,calc(100vw-var(--space-8)))]")}
 					onCloseAutoFocus={restoreFocusOnClose}
 					onOpenAutoFocus={(event) => {
 						event.preventDefault();
@@ -52,6 +57,19 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 						<div className="min-w-0 flex-1">
 							<DialogTitle className="truncate text-heading-sm outline-none" ref={titleRef} tabIndex={-1}>{artifact.name}</DialogTitle>
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
+						</div>
+						<div className="relative z-10 flex shrink-0 items-center gap-1">
+							<ArtifactActionsMenu
+								artifact={artifact}
+								session={{ id: artifact.sessionId }}
+								iconOnly
+								pinInMenu
+								pinned={pinned}
+								onTogglePin={() => togglePinnedArtifact(id)}
+								onDeleted={onClose}
+								errorClassName="bottom-auto top-full mb-0 mt-2"
+								className="transition-none"
+							/>
 						</div>
 						<Button className="shrink-0 transition-none" onClick={openInSession} size="sm" variant="secondary">
 							{t("artifacts.openInSession")}
