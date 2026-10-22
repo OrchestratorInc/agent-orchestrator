@@ -54,11 +54,13 @@ func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 		mode ports.PermissionMode
 		want string
 	}{
-		{ports.PermissionModeDefault, ""},
-		{ports.PermissionMode("bogus"), ""},
-		{ports.PermissionModeAcceptEdits, "accept_edits"},
-		{ports.PermissionModeAuto, "dont_ask"},
-		{ports.PermissionModeBypassPermissions, "dont_ask"},
+		{ports.PermissionModeDefault, hermesModeDefault},
+		// NormalizePermissionMode collapses unknown modes onto Default, so an
+		// unrecognized AO mode still lands on Hermes' explicit ask mode.
+		{ports.PermissionMode("bogus"), hermesModeDefault},
+		{ports.PermissionModeAcceptEdits, hermesModeAcceptEdits},
+		{ports.PermissionModeAuto, hermesModeDontAsk},
+		{ports.PermissionModeBypassPermissions, hermesModeDontAsk},
 	}
 	for _, tt := range tests {
 		if got := sessionMode(tt.mode); got != tt.want {

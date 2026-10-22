@@ -62,17 +62,33 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 // Hermes' modes are edit-approval policies (`default` asks, `accept_edits`
 // auto-allows workspace edits, `dont_ask` auto-allows all edits for the
 // session), so both of AO's autonomous modes land on `dont_ask`; bypass's
-// client-side remainder is handled by permissionPolicy.
+// client-side remainder is handled by permissionPolicy. Default must resolve to
+// the explicit `default` mode id: an empty result makes the shared ACP
+// conversation skip session/set_mode entirely, so a session started in
+// accept_edits or dont_ask keeps auto-allowing edits after the user selects
+// Default, because Hermes has already approved them internally.
 func sessionMode(mode ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeDefault:
+		return hermesModeDefault
 	case ports.PermissionModeAcceptEdits:
-		return "accept_edits"
+		return hermesModeAcceptEdits
 	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
-		return "dont_ask"
+		return hermesModeDontAsk
 	default:
 		return ""
 	}
 }
+
+// Hermes' ACP session mode ids, read from the mode list the Hermes ACP server
+// advertises in session/new (acp_adapter/server.py _MODES). Pinned here so a
+// provider-side rename surfaces as an unknown-mode error instead of silently
+// dropping the user's approval choice.
+const (
+	hermesModeDefault     = "default"
+	hermesModeAcceptEdits = "accept_edits"
+	hermesModeDontAsk     = "dont_ask"
+)
 
 // permissionPolicy resolves permission requests that have an exact AO policy
 // mapping before the generic client parks them for a human. Only bypass
