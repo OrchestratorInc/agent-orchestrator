@@ -12,13 +12,13 @@ import {
 	type ArtifactRow,
 } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
-import { useNavigateToSession } from "../lib/navigate-to-session";
 import { hidesShellTopbar } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 import { Button } from "./ui/button";
@@ -45,6 +45,8 @@ export function ArtifactsView() {
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
 	const [query, setQuery] = useState("");
 	const [projectId, setProjectId] = useState("");
+	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
+	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
@@ -171,12 +173,12 @@ export function ArtifactsView() {
 								<div>
 									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={Pin} view={view}>
 										{pinnedCards.map(({ row, projectName }) => (
-											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName />
+											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName onPreview={openPreview} />
 										))}
 									</ArtifactSection> : null}
 									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
-											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName />
+											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName onPreview={openPreview} />
 										))}
 									</ArtifactSection> : null}
 									{visibleGroups.map((group) => {
@@ -192,7 +194,7 @@ export function ArtifactsView() {
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
 											>
 												{group.rows.map((row) => (
-													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} />
+													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} onPreview={openPreview} />
 												))}
 											</ArtifactSection>
 										);
@@ -206,6 +208,7 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
+			<ArtifactPreviewModal artifact={preview?.row ?? null} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
 }
@@ -258,18 +261,15 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	);
 }
 
-function ArtifactCard({ row, projectName, view, showProjectName = false }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean }) {
+function ArtifactCard({ row, projectName, view, showProjectName = false, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
-	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
-	const navigateToSession = useNavigateToSession();
 	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
 
 	const open = () => {
-		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");
-		navigateToSession(row.projectId, row.sessionId);
+		onPreview(row, projectName);
 	};
 
 	if (view === "list") {

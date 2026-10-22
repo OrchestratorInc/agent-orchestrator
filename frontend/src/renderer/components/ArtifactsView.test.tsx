@@ -290,11 +290,15 @@ describe("ArtifactsView", () => {
 		expect(container.querySelector("a, script")).toBeNull();
 	});
 
-	it("opens the source session and hands it the clicked artifact", async () => {
+	it("previews the artifact on this page before opening its source session", async () => {
 		const user = userEvent.setup();
 		renderView();
 
 		await user.click(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: /^artifacts-user-flow\.html/ }));
+		const preview = within(screen.getByRole("dialog", { name: "artifacts-user-flow.html" }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(preview.getByText("agent-orchestrator · Design the Artifacts entry point")).toBeInTheDocument();
+		await user.click(preview.getByRole("button", { name: "Open in session" }));
 
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "ao", sessionId: "ao-1" } });
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
@@ -309,8 +313,55 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		await user.click(within(screen.getByRole("dialog", { name: "caching-options.md" })).getByRole("button", { name: "Open in session" }));
 
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-1" } });
+	});
+
+	it("closes a preview with Escape and restores focus without navigating", async () => {
+		const user = userEvent.setup();
+		renderView();
+		const trigger = within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: /^pricing\.md/ });
+		await user.click(trigger);
+		expect(screen.getByRole("dialog", { name: "pricing.md" })).toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(trigger).toHaveFocus();
+	});
+
+	it("opens the same preview from list view without navigating", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "List view" }));
+		await user.click(within(screen.getByRole("region", { name: "Recent" })).getByRole("button", { name: /^pricing\.md/ }));
+		expect(screen.getByRole("dialog", { name: "pricing.md" })).toBeInTheDocument();
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Close", exact: true }));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("opens a pinned artifact in a preview without navigating", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: "Pin artifact: pricing.md" }));
+		await user.click(within(screen.getByRole("region", { name: "Pinned" })).getByRole("button", { name: /^pricing\.md/ }));
+		expect(screen.getByRole("dialog", { name: "pricing.md" })).toBeInTheDocument();
+		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("previews HTML on its isolated origin inside the modal", async () => {
+		const user = userEvent.setup();
+		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
+		renderView();
+		await user.click(within(screen.getByRole("region", { name: "AO" })).getByRole("button", { name: /^page\.html/ }));
+		const frame = screen.getByRole("dialog", { name: "page.html" }).querySelector("iframe");
+		expect(frame).toHaveAttribute("src", html.artifactFiles![0].inlineUrl);
+		expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+		expect(mocks.navigate).not.toHaveBeenCalled();
 	});
 
 	it("offers New artifact beside the filters with the same Scratchpad and project menu", async () => {
