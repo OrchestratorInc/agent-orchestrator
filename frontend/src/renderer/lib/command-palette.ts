@@ -23,6 +23,7 @@ import {
 import { appI18n, type MessageKey } from "../i18n";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
+import { renderedSnippetText } from "./chat-annotation-navigation";
 import { applyNamesFirst, buildNameIndex, matchName, type NameIndex, type NameKind, type RankedEntry } from "./palette-search";
 
 export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
@@ -333,7 +334,7 @@ export function buildSearchResultCommands(
 				...(target?.hostId ? { hostId: target.hostId } : {}),
 				// A message an edit forked away is not in the transcript to scroll to.
 				...(hit.olderVersion ? {} : { messageId: hit.messageId }),
-				text: hit.snippet.text,
+				text: renderedSnippetText(hit.snippet.text),
 			},
 		});
 	}
