@@ -11433,24 +11433,50 @@ func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 }
 
 func TestSend_ConfirmAcceptsRetainedSubmissionEvidence(t *testing.T) {
-	// A prompt accepted (UserPromptSubmit advances LatestUserPromptAt) whose turn
-	// completes between activity polls leaves the session idle, with Active never
-	// observed. Confirmation must treat that durable submission evidence as
-	// success instead of returning a false ErrDeliveryUnconfirmed, which would
-	// prompt a duplicate retry of an already-delivered message.
+	// A user prompt whose UserPromptSubmit hook lands AFTER delivery (advancing
+	// LatestUserPromptAt past the delivery instant) but whose turn completes
+	// between activity polls leaves the session idle, with Active never observed.
+	// Confirmation must treat that later durable submission evidence as success
+	// instead of returning a false ErrDeliveryUnconfirmed, which would prompt a
+	// duplicate retry of an already-delivered message. The baseline is the
+	// delivery instant (options.InteractionAt), so the hook's later write is
+	// detectable regardless of when, relative to a store read, it arrives.
 	st := newFakeStore()
 	base := time.Now()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle},
 		Metadata: domain.SessionMetadata{LatestUserPromptAt: base}})
-	msg := &advancePromptOnNudgeMessenger{sessionID: "s1", store: st, at: base.Add(time.Second)}
+	msg := &advancePromptOnNudgeMessenger{sessionID: "s1", store: st, at: base.Add(time.Hour)}
 	m := newSendTestManager(t, signalingAgent{}, msg, st)
 
-	if err := m.Send(context.Background(), "s1", "do the thing", nil); err != nil {
+	if err := m.SendWithOptions(context.Background(), "s1", "do the thing", nil,
+		ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("Send error = %v, want nil (retained submission evidence recognized)", err)
 	}
 	if got := st.sessions["s1"].Activity.State; got == domain.ActivityActive {
 		t.Fatalf("Activity.State = active, want it to have stayed idle (evidence path, not the active path)")
+	}
+}
+
+func TestSend_CoordinationDeliveryIgnoresPromptEvidence(t *testing.T) {
+	// A coordination (ao send) delivery is not user-authored, so it deliberately
+	// leaves LatestUserPromptAt unchanged. The confirmation evidence check must be
+	// disabled for it: an advance of the marker during the confirm window can only
+	// come from an unrelated concurrent user prompt, and crediting it would falsely
+	// confirm a coordination send that never went active. Here the nudge advances
+	// the marker, yet confirmation must still exhaust its budget and surface
+	// ErrDeliveryUnconfirmed rather than treat the advance as acceptance.
+	st := newFakeStore()
+	base := time.Now().Add(-time.Hour)
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{LatestUserPromptAt: base}})
+	msg := &advancePromptOnNudgeMessenger{sessionID: "s1", store: st, at: time.Now()}
+	m := newSendTestManager(t, signalingAgent{}, msg, st)
+
+	err := m.Send(context.Background(), "s1", "status update please", nil)
+	if !errors.Is(err, ErrDeliveryUnconfirmed) {
+		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed (coordination send ignores prompt evidence)", err)
 	}
 }
 

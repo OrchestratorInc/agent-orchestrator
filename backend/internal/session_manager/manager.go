@@ -5037,6 +5037,24 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 			}
 		}
 	}
+	// Baseline for the confirmation evidence check. Only a user-authored send
+	// records a prompt: afterWrite durably writes LatestUserPromptAt at
+	// options.InteractionAt as this delivery's own fact (kept because the
+	// provider hook may be lost). That exact instant is the baseline, so a LATER
+	// advance — the UserPromptSubmit hook landing after delivery — proves the
+	// prompt was accepted even when the turn finishes between activity polls,
+	// while an unsubmitted draft leaves the marker at the baseline and still
+	// nudges. Fixing the baseline to the delivery instant (not a post-delivery
+	// store read) closes the race where the hook lands before that read and so
+	// hides itself inside the baseline. Coordination (ao send) deliberately
+	// leaves the marker unchanged, so it carries no baseline and skips the
+	// evidence check entirely — otherwise an unrelated concurrent prompt could
+	// falsely confirm it.
+	recordsPrompt := afterWrite != nil
+	var baselinePromptAt time.Time
+	if recordsPrompt {
+		baselinePromptAt = options.InteractionAt
+	}
 	outcome, err := m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
@@ -5085,7 +5103,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return nil
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
-		if err := m.confirmActive(ctx, m.messenger, id, rec.Metadata.LatestUserPromptAt); err != nil {
+		if err := m.confirmActive(ctx, m.messenger, id, baselinePromptAt, recordsPrompt); err != nil {
 			return fmt.Errorf("send %s: %w", id, err)
 		}
 	}
@@ -5189,20 +5207,20 @@ const (
 // answer it for the user. Sticky ActivityWaitingInput does NOT stop the loop:
 // an idle-prompt session with an unsubmitted pasted draft is exactly the case
 // the nudge exists for.
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, baselinePromptAt time.Time) error {
-	return m.confirmActiveWithNudge(ctx, id, baselinePromptAt, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
+func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, baselinePromptAt time.Time, promptEvidence bool) error {
+	return m.confirmActiveWithNudge(ctx, id, baselinePromptAt, promptEvidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
 		return guard.Deliver(nudgeCtx, id, "")
 	})
 }
 
 type confirmationStopCheck func(context.Context) (bool, error)
 
-func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionID, baselinePromptAt time.Time, stop confirmationStopCheck, nudge func(context.Context) (sessionguard.Outcome, error)) error {
+func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionID, baselinePromptAt time.Time, promptEvidence bool, stop confirmationStopCheck, nudge func(context.Context) (sessionguard.Outcome, error)) error {
 	for attempt := 1; ; attempt++ {
 		if m.confirmationStopRequested(ctx, id, attempt, stop) {
 			return nil
 		}
-		outcome, err := m.waitForActive(ctx, id, baselinePromptAt)
+		outcome, err := m.waitForActive(ctx, id, baselinePromptAt, promptEvidence)
 		if err != nil {
 			return err
 		}
@@ -5218,9 +5236,13 @@ func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionI
 			// returning the session to idle with Active never observed. Honor the
 			// durable LatestUserPromptAt evidence before declaring failure, so an
 			// accepted message is not reported as a false ErrDeliveryUnconfirmed.
-			if rec, ok, readErr := m.store.GetSession(ctx, id); readErr == nil && ok &&
-				rec.Metadata.LatestUserPromptAt.After(baselinePromptAt) {
-				return nil
+			// Only a prompt-recording send can move the marker for this delivery,
+			// so coordination sends never consult it.
+			if promptEvidence {
+				if rec, ok, readErr := m.store.GetSession(ctx, id); readErr == nil && ok &&
+					rec.Metadata.LatestUserPromptAt.After(baselinePromptAt) {
+					return nil
+				}
 			}
 			m.logger.Warn("send: activity confirmation budget exhausted", "sessionID", id, "attempts", attempt)
 			return ErrDeliveryUnconfirmed
@@ -5270,9 +5292,12 @@ func (m *Manager) confirmationStopRequested(ctx context.Context, id domain.Sessi
 // burning the deadline. A prompt accepted and completed between polls returns
 // the session to idle with Active never observed, so an advance of
 // LatestUserPromptAt past baselinePromptAt is honored as acceptance: durable
-// submission evidence that the message landed. A non-nil error means polling
-// cannot continue (ctx cancelled, store failure, session gone).
-func (m *Manager) waitForActive(ctx context.Context, id domain.SessionID, baselinePromptAt time.Time) (waitOutcome, error) {
+// submission evidence that the message landed. That evidence is consulted only
+// when promptEvidence is set — a user-authored send that records the marker as
+// part of this delivery — because a coordination send never moves it and any
+// advance during its window would be an unrelated concurrent prompt. A non-nil
+// error means polling cannot continue (ctx cancelled, store failure, session gone).
+func (m *Manager) waitForActive(ctx context.Context, id domain.SessionID, baselinePromptAt time.Time, promptEvidence bool) (waitOutcome, error) {
 	deadlineAt := m.clock().Add(m.sendConfirm.attemptDeadline)
 	ticker := time.NewTicker(m.sendConfirm.pollInterval)
 	defer ticker.Stop()
@@ -5290,7 +5315,7 @@ func (m *Manager) waitForActive(ctx context.Context, id domain.SessionID, baseli
 		case domain.ActivityBlocked:
 			return waitBlocked, nil
 		}
-		if rec.Metadata.LatestUserPromptAt.After(baselinePromptAt) {
+		if promptEvidence && rec.Metadata.LatestUserPromptAt.After(baselinePromptAt) {
 			return waitActive, nil
 		}
 		if !m.clock().Before(deadlineAt) {
