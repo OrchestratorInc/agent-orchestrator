@@ -1,5 +1,5 @@
-import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { useId, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { ArrowUp, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
@@ -139,21 +139,48 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 }
 
 /** The full question stays visible above its answers, alongside the step count. */
-function DockHeader({ id, title, pager }: { id?: string; title: string; pager?: string }) {
+function DockHeader({
+	id,
+	title,
+	pager,
+	onDismiss,
+	disabled,
+}: {
+	id?: string;
+	title: string;
+	pager?: string;
+	/** Cancel lives in the header as a quiet close, not as a footer pill. */
+	onDismiss?: () => void;
+	disabled?: boolean;
+}) {
 	return (
-		<div className="flex min-h-8 items-start gap-2 px-3 py-2">
-			<p id={id} className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-foreground">
-				{title}
-			</p>
-			{pager ? (
-				<span className="shrink-0 text-caption tabular-nums text-muted-foreground">{pager}</span>
+		<div className="flex items-start gap-2 px-4 pb-2 pt-3">
+			<div className="min-w-0 flex-1">
+				<p className="text-caption leading-snug text-muted-foreground">
+					Question{pager ? <span className="tabular-nums"> · {pager}</span> : null}
+				</p>
+				<p id={id} className="mt-0.5 whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground">
+					{title}
+				</p>
+			</div>
+			{onDismiss ? (
+				<button
+					type="button"
+					aria-label="Cancel"
+					title="Cancel"
+					disabled={disabled}
+					onClick={onDismiss}
+					className="-mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+				>
+					<X aria-hidden="true" className="size-3.5" />
+				</button>
 			) : null}
 		</div>
 	);
 }
 
 function DockFooter({ children }: { children: ReactNode }) {
-	return <div className="flex flex-wrap items-center justify-between gap-1.5 px-3 pb-2.5 pt-1">{children}</div>;
+	return <div className="flex flex-wrap items-center justify-between gap-1.5 px-4 pb-3 pt-1.5">{children}</div>;
 }
 
 function URLRequest({
@@ -267,6 +294,22 @@ function FormRequest({
 			? `${activeQuestion + 1} of ${questionGroups.length}`
 			: undefined;
 
+	// Number keys pick the matching choice and 0 jumps to "Other", the same
+	// shortcuts the rows print. Typing in a text field is left alone.
+	function pickByNumber(event: KeyboardEvent<HTMLFormElement>) {
+		if (!questionGroups || disabled || event.metaKey || event.ctrlKey || event.altKey) return;
+		if (event.target instanceof HTMLInputElement && event.target.type !== "radio" && event.target.type !== "checkbox") return;
+		if (!/^[0-9]$/.test(event.key)) return;
+		const form = event.currentTarget;
+		const target = event.key === "0"
+			? form.querySelector<HTMLInputElement>("input[type=text], input[type=number]")
+			: form.querySelectorAll<HTMLInputElement>("input[type=radio], input[type=checkbox]")[Number(event.key) - 1];
+		if (!target) return;
+		event.preventDefault();
+		if (event.key === "0") target.focus();
+		else target.click();
+	}
+
 	function submit(event: FormEvent) {
 		event.preventDefault();
 		const absent = new Set(
@@ -284,8 +327,14 @@ function FormRequest({
 	}
 
 	return (
-		<form onSubmit={submit}>
-			<DockHeader id={headerId} title={title} pager={pager} />
+		<form onSubmit={submit} onKeyDown={pickByNumber}>
+			<DockHeader
+				id={headerId}
+				title={title}
+				pager={pager}
+				disabled={disabled}
+				onDismiss={() => void onResolve("cancel")}
+			/>
 			{!questionGroups && schema?.description ? (
 				<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
 			) : null}
@@ -316,38 +365,43 @@ function FormRequest({
 				))}
 			</div>
 			<DockFooter>
-				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
-						Cancel
-					</button>
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
-						Skip
-					</button>
-				</div>
-				<div className="flex items-center gap-1.5">
+				<div className="flex items-center gap-1">
 					{hasPreviousQuestion ? (
 						<button
 							type="button"
-							className={QUIET_ACTION_PILL}
+							aria-label="Back"
+							title="Back"
+							className="grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
 							disabled={disabled}
 							onClick={() => {
 								setMissing(new Set());
 								setActiveQuestion((current) => current - 1);
 							}}
 						>
-							Back
+							<ChevronLeft aria-hidden="true" className="size-4" />
 						</button>
 					) : null}
-					<button type="submit" className={cn(ACCENT_ACTION_PILL, "min-w-20 justify-center")} disabled={disabled}>
-						{disabled ? (
-							<Loader2 aria-label="Sending answer" className="size-3.5 animate-spin" />
-						) : hasNextQuestion ? (
-							"Next"
-						) : (
-							"Continue"
-						)}
+					<button
+						type="button"
+						className="h-7 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
+						disabled={disabled}
+						onClick={() => onResolve("decline")}
+					>
+						Skip
 					</button>
 				</div>
+				<button type="submit" className={cn(ACCENT_ACTION_PILL, "min-w-20 justify-center")} disabled={disabled}>
+					{disabled ? (
+						<Loader2 aria-label="Sending answer" className="size-3.5 animate-spin" />
+					) : hasNextQuestion ? (
+						"Next"
+					) : (
+						<>
+							Continue
+							<ArrowUp aria-hidden="true" className="size-3.5" />
+						</>
+					)}
+				</button>
 			</DockFooter>
 		</form>
 	);
@@ -402,8 +456,8 @@ function FormField({
 				{description && !labelledBy ? (
 					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{description}</p>
 				) : null}
-				<div className={cn(rows ? "flex flex-col" : "flex flex-col px-1")}>
-					{options.map((option) => {
+				<div className="flex flex-col gap-0.5 px-2">
+					{options.map((option, index) => {
 						const checked = multi
 							? Array.isArray(value) && value.includes(option.value)
 							: value === option.value;
@@ -411,9 +465,8 @@ function FormField({
 							<label
 								key={option.value}
 								className={cn(
-									"flex min-h-10 min-w-0 cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors",
-									rows ? "" : "rounded-lg",
-									checked ? "bg-logo-accent/[0.08]" : "hover:bg-interactive-hover",
+									"group flex min-w-0 cursor-pointer items-start gap-3 rounded-lg px-2 py-2 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40",
+									checked ? "bg-logo-accent/[0.1]" : "hover:bg-interactive-hover",
 								)}
 							>
 								<input
@@ -424,12 +477,24 @@ function FormField({
 									onChange={() =>
 										onChange(multi ? toggleValue(Array.isArray(value) ? value : [], option.value) : option.value)
 									}
-									className="size-3 shrink-0 accent-[var(--logo-accent)]"
+									className="sr-only"
 								/>
+								{/* The number doubles as the keyboard shortcut and the selection mark. */}
+								<span
+									aria-hidden="true"
+									className={cn(
+										"grid size-5 shrink-0 place-items-center rounded-md text-caption tabular-nums transition-colors",
+										checked
+											? "bg-logo-accent text-logo-accent-foreground"
+											: "bg-background/40 text-muted-foreground group-hover:text-foreground",
+									)}
+								>
+									{index < 9 ? index + 1 : ""}
+								</span>
 								<span className="min-w-0 flex-1">
-									<span className="block text-xs leading-relaxed text-foreground">{option.label}</span>
+									<span className="block text-xs font-medium leading-5 text-foreground">{option.label}</span>
 									{option.description ? (
-										<span className="mt-0.5 block text-caption leading-relaxed text-muted-foreground">
+										<span className="block text-caption leading-relaxed text-muted-foreground">
 											{option.description}
 										</span>
 									) : null}
@@ -489,7 +554,7 @@ function FormField({
 		<input
 			id={id}
 			type={numeric ? "number" : "text"}
-			aria-required={required || undefined}
+			placeholder={rows ? `${label}…` : undefined}			aria-required={required || undefined}
 			min={typeof property.minimum === "number" ? property.minimum : undefined}
 			max={typeof property.maximum === "number" ? property.maximum : undefined}
 			step={property.type === "integer" ? 1 : undefined}
@@ -501,9 +566,9 @@ function FormField({
 			aria-describedby={invalid ? errorId : undefined}
 			onChange={(event) => onChange(numeric && event.target.value !== "" ? Number(event.target.value) : event.target.value)}
 			className={cn(
-				"h-8 w-full min-w-0 rounded-lg border bg-background/40 px-2.5 text-xs leading-relaxed text-foreground outline-none transition-colors focus-visible:border-border-strong",
-				rows ? "mt-1" : "mt-1.5",
-				invalid ? "border-destructive" : "border-border",
+				"w-full min-w-0 rounded-lg border bg-background/40 px-2.5 text-xs leading-relaxed text-foreground outline-none transition-colors focus-visible:border-border-strong",
+				rows ? "h-7 bg-transparent px-1" : "mt-1.5 h-8",
+				invalid ? "border-destructive" : rows ? "border-transparent" : "border-border",
 			)}
 		/>
 	);
@@ -516,15 +581,15 @@ function FormField({
 	if (rows) {
 		return (
 			<>
-				<div className="flex min-w-0 items-start gap-2.5 px-3 py-2">
-					<span aria-hidden="true" className="size-3 shrink-0" />
-					<span className="flex min-w-0 flex-1 flex-col">
-						<label htmlFor={id} className="text-xs leading-snug text-muted-foreground">
-							{label}
-							{required ? " *" : ""}
-						</label>
-						{control}
+				<div className="mx-2 mt-0.5 flex min-w-0 items-center gap-3 rounded-lg px-2 py-1.5 focus-within:bg-interactive-hover">
+					<span aria-hidden="true" className="grid size-5 shrink-0 place-items-center rounded-md bg-background/40 text-caption tabular-nums text-muted-foreground">
+						0
 					</span>
+					<label htmlFor={id} className="sr-only">
+						{label}
+						{required ? " *" : ""}
+					</label>
+					<span className="min-w-0 flex-1">{control}</span>
 				</div>
 				{invalid ? (
 					<p id={errorId} className="px-3 pb-1 text-xs text-destructive">

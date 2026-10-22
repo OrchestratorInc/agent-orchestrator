@@ -256,7 +256,7 @@ describe("ElicitationDock", () => {
 		expect(document.getElementById(describedBy)).toHaveTextContent("This field is required.");
 	});
 
-	it("names the Other row with a visible label rather than a placeholder", () => {
+	it("shows the Other row as a single field named by its placeholder", () => {
 		render(
 			<ElicitationDock
 				activity={activity({ inputMode: "form", schema: claudeQuestions })}
@@ -264,10 +264,25 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		// DESIGN.md §9: a placeholder is an example, never the only name a field has.
+		// The hidden label keeps the accessible name; the placeholder is what shows.
 		const other = screen.getByLabelText("Other approach");
-		expect(other).not.toHaveAttribute("placeholder");
-		expect(screen.getByText("Other approach")).toBeVisible();
+		expect(other).toHaveAttribute("placeholder", "Other approach…");
+	});
+
+	it("picks a choice with its number key and jumps to Other with 0", async () => {
+		const user = userEvent.setup();
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		screen.getAllByRole("radio")[0]?.focus();
+		await user.keyboard("2");
+		expect(screen.getAllByRole("radio")[1]).toBeChecked();
+		await user.keyboard("0");
+		expect(screen.getByLabelText("Other approach")).toHaveFocus();
 	});
 
 	it("opens an external URL only after the user explicitly consents", async () => {
