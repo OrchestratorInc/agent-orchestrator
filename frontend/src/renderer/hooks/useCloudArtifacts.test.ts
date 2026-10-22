@@ -1,6 +1,7 @@
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { CloudCpSession } from "../lib/cloud-cp/types";
-import { cloudArtifactFileUrl } from "./useCloudArtifacts";
+import { cloudArtifactFileUrl, usePinnedArtifactUrl } from "./useCloudArtifacts";
 import { toCloudWorkspaceSession } from "./useWorkspaceQuery";
 
 function cloudSession(overrides: Partial<CloudCpSession> = {}): CloudCpSession {
@@ -64,5 +65,27 @@ describe("toCloudWorkspaceSession artifacts", () => {
 		const session = toCloudWorkspaceSession(cloudSession(), { id: "p-1", displayName: "Project" }, "org-1");
 		expect(session.artifactFiles).toBeUndefined();
 		expect(session.outputType).toBeUndefined();
+	});
+});
+
+describe("usePinnedArtifactUrl", () => {
+	const first = "https://cp.test/api/cloud/v1/artifact-files/one/";
+	const second = "https://cp.test/api/cloud/v1/artifact-files/two/";
+
+	it("keeps a refused URL until the root gives a different one", () => {
+		const { result, rerender } = renderHook(({ root }) => usePinnedArtifactUrl(root, "a.png", "v1"), { initialProps: { root: first } });
+		expect(result.current.url).toBe(`${first}a.png?v=v1`);
+		act(() => result.current.repin());
+		// A refresh in the same second gives the same root: the file keeps its URL.
+		rerender({ root: first });
+		expect(result.current.url).toBe(`${first}a.png?v=v1`);
+		rerender({ root: second });
+		expect(result.current.url).toBe(`${second}a.png?v=v1`);
+	});
+
+	it("keeps an unrefused URL while the root is refreshed", () => {
+		const { result, rerender } = renderHook(({ root }) => usePinnedArtifactUrl(root, "a.png", "v1"), { initialProps: { root: first } });
+		rerender({ root: second });
+		expect(result.current.url).toBe(`${first}a.png?v=v1`);
 	});
 });

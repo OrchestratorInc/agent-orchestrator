@@ -63,15 +63,15 @@ export function cloudArtifactFileUrl(root: string, path: string, version?: strin
  * The URL an open cloud file is shown from, and the access root it was taken
  * from (for its relative links). It is taken when the file opens or changes,
  * and kept while the root is refreshed, so a refresh does not reload the open
- * file. After a read with the kept URL was refused, repin drops it and waits
- * for a root that gives a different URL; refresh takes the current root now,
- * for a view that reloads anyway.
+ * file. After a read with the kept URL was refused, repin keeps it until a
+ * root gives a different URL, then takes that one; refresh takes the current
+ * root now, for a view that reloads anyway.
  */
 export function usePinnedArtifactUrl(root: string | undefined, path: string | undefined, version: string | undefined) {
 	const [pinned, setPinned] = useState<{ key: string; url?: string; root?: string; refused?: string }>();
 	const key = path === undefined ? "" : `${path}\n${version ?? ""}`;
 	let current = pinned?.key === key ? pinned : { key };
-	if (current.url === undefined && root !== undefined && path !== undefined) {
+	if ((current.url === undefined || current.refused !== undefined) && root !== undefined && path !== undefined) {
 		const url = cloudArtifactFileUrl(root, path, version);
 		if (url !== current.refused) {
 			current = { key, url, root };
@@ -81,7 +81,7 @@ export function usePinnedArtifactUrl(root: string | undefined, path: string | un
 	return {
 		url: current.url,
 		root: current.root,
-		repin: () => setPinned((previous) => (previous ? { key: previous.key, refused: previous.url } : previous)),
+		repin: () => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)),
 		refresh: () => setPinned(undefined),
 	};
 }

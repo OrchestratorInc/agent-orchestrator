@@ -1735,6 +1735,7 @@
 	"artifacts.showIn": "{{name}}で表示",
 	"artifacts.copyMarkdown": "Markdownとしてコピー",
 	"artifacts.copyContents": "内容をコピー",
+	"artifacts.download": "ダウンロード",
 	"artifacts.delete": "アーティファクトを削除",
 	"artifacts.deleteTitle": "アーティファクトを削除しますか？",
 	"artifacts.deleteDescription": "{{name}} をこのセッションのアーティファクトフォルダから完全に削除します。",

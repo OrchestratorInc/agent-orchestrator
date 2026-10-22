@@ -1764,6 +1764,7 @@
 	"artifacts.showIn": "Afficher dans {{name}}",
 	"artifacts.copyMarkdown": "Copier en Markdown",
 	"artifacts.copyContents": "Copier le contenu",
+	"artifacts.download": "Télécharger",
 	"artifacts.delete": "Supprimer l'artefact",
 	"artifacts.deleteTitle": "Supprimer l'artefact ?",
 	"artifacts.deleteDescription": "Cette action supprime définitivement {{name}} du dossier d'artefacts de cette session.",

@@ -1987,6 +1987,7 @@
 	"artifacts.showIn": "Show in {{name}}",
 	"artifacts.copyMarkdown": "Copy as Markdown",
 	"artifacts.copyContents": "Copy contents",
+	"artifacts.download": "Download",
 	"artifacts.delete": "Delete artifact",
 	"artifacts.deleteTitle": "Delete artifact?",
 	"artifacts.deleteDescription": "This permanently deletes {{name}} from this session's artifacts folder.",

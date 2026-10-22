@@ -74,4 +74,20 @@ describe("useCloudSessionsQuery artifact files", () => {
 		release({ artifacts: files });
 		await waitFor(() => expect(result.current.data?.[0]?.artifactFiles).toEqual(files));
 	});
+
+	it("follows a change in how many sessions have files without a hook warning", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		cloud.listSessions.mockResolvedValue({ items: [session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:00:00Z" })] });
+		const { result } = renderHook(() => useCloudSessionsQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.[0]?.artifactFiles).toEqual(files));
+
+		cloud.listSessions.mockResolvedValue({ items: [
+			session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:00:00Z" }),
+			session("s-2", { count: 1, artifactsUpdatedAt: "2026-10-16T10:05:00Z" }),
+		] });
+		await result.current.refetch();
+		await waitFor(() => expect(result.current.data?.[1]?.artifactFiles).toEqual(files));
+		expect(errors.mock.calls.flat().join(" ")).not.toContain("changed size between renders");
+		errors.mockRestore();
+	});
 });

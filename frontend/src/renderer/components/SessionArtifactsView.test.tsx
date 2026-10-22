@@ -37,10 +37,12 @@ vi.mock("./ArtifactFileView", () => ({
 	),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
-	CloudArtifactFrame: ({ url, onAccessRefused }: { url: string; onAccessRefused?: () => void }) => (
+	CloudArtifactFrame: ({ url, onAccessRefused, onNavigate }: { url: string; onAccessRefused?: () => void; onNavigate?: (path: string) => void }) => (
 		<div data-testid="cloud-frame">
 			{url}
 			<button type="button" onClick={onAccessRefused}>refuse</button>
+			<button type="button" onClick={() => onNavigate?.("docs/notes.md")}>open notes</button>
+			<button type="button" onClick={() => onNavigate?.("assets/logo.png")}>open asset</button>
 		</div>
 	),
 }));
@@ -182,6 +184,31 @@ describe("SessionArtifactsView for a cloud session", () => {
 		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
 
 		expect(screen.getByText("Couldn’t load this session’s artifacts. Try again.")).toBeInTheDocument();
+	});
+
+	it("names the file a framed page opened in the header", async () => {
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: "open asset" }));
+		expect(screen.getByRole("button", { name: "report.html" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "open notes" }));
+		expect(screen.getByRole("button", { name: "notes.md" })).toBeInTheDocument();
+	});
+
+	it("downloads a cloud file from the session's current access link", async () => {
+		const fetchFile = vi.spyOn(aoBridge.cloudArtifact, "fetch").mockResolvedValue(new Uint8Array([1, 2]));
+		const save = vi.spyOn(aoBridge.chatImage, "save").mockResolvedValue(true);
+		const session = cloudSession();
+		session.artifactFiles = [{ kind: "file", name: "report.pdf", path: "report.pdf", size: 2, updatedAt: "2026-09-24T00:00:00Z" }];
+		renderView(<SessionArtifactsView session={session} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.pdf/ }));
+		await userEvent.click(screen.getByRole("button", { name: "report.pdf" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+		expect(fetchFile).toHaveBeenCalledWith(`${CLOUD_ROOT}report.pdf?v=2026-09-24T00%3A00%3A00Z`);
+		expect(save).toHaveBeenCalledWith({ name: "report.pdf", bytes: new Uint8Array([1, 2]) });
+		fetchFile.mockRestore();
+		save.mockRestore();
 	});
 
 	it("offers no local folder or delete actions", async () => {
@@ -416,7 +443,7 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as Markdown"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as Markdown", "Download"]);
 	});
 
 	it("opens a requested artifact and passes its feedback request through", () => {

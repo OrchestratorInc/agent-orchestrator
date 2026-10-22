@@ -607,6 +607,11 @@ function cloudArtifactVersion(session: CloudCpSession): string {
 	return `${session.artifactCount ?? 0}:${session.artifactsUpdatedAt ?? session.updatedAt}`;
 }
 
+/** Each query's data. useQueries keeps the array while no query changes. */
+function queryResultsData<T>(results: { data?: T }[]): (T | undefined)[] {
+	return results.map((result) => result.data);
+}
+
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
@@ -629,7 +634,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	// read in their own query, once per artifact version, without holding up
 	// the list.
 	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
-	const fileQueries = useQueries({
+	const fileData = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
 			enabled: orgId !== undefined && options.enabled !== false,
@@ -639,11 +644,11 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			queryFn: ({ signal }: { signal: AbortSignal }) =>
 				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(orgId ?? "", session.id, { signal })).artifacts),
 		})),
+		combine: queryResultsData,
 	});
 	// A session keeps its last good list while a new version loads or after a
 	// failed read, so its Artifacts tab and open file stay.
 	const lastFiles = useRef(new Map<string, CloudCpSessionArtifact[]>());
-	const fileData = fileQueries.map((query) => query.data);
 	const data = useMemo(() => {
 		if (list.data === undefined) return undefined;
 		const read = new Map(withFiles.map((session, index) => [session.id, fileData[index]] as const));
@@ -653,7 +658,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			return files && (session.artifactCount ?? 0) > 0 ? { ...session, artifactFiles: files } : session;
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [list.data, ...fileData]);
+	}, [list.data, fileData]);
 	return { ...list, data };
 }
 

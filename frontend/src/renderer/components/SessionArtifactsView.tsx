@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, Copy, Download, FileText, FolderOpen, Globe, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
@@ -94,7 +94,13 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
  * The open artifact's name, as a menu: show it in the file manager or a
  * terminal (local sessions only), copy its contents, or delete it.
  */
-function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact; hostId?: string; session: WorkspaceSession }) {
+function ArtifactMenu({ artifact, downloadUrl, hostId, session }: {
+	artifact: SessionArtifact;
+	/** A cloud file's URL under the session's current access link, for Download. */
+	downloadUrl?: string;
+	hostId?: string;
+	session: WorkspaceSession;
+}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const open = useOpenSessionArtifacts();
@@ -125,6 +131,17 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
+	const download = async () => {
+		open.reset();
+		setCopyError("");
+		try {
+			if (!downloadUrl) throw new Error(t("artifacts.accessError"));
+			const bytes = await aoBridge.cloudArtifact.fetch(downloadUrl);
+			await aoBridge.chatImage.save({ name: artifact.name, bytes });
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		}
+	};
 	const error = open.error?.message || copyError;
 	const resetOpen = open.reset;
 	useEffect(() => {
@@ -136,15 +153,8 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 		return () => clearTimeout(timer);
 	}, [error, resetOpen]);
 	// A cloud file that is not text is read for its headers only, so it has no
-	// contents to copy; with nothing else to offer it gets no menu.
+	// contents to copy; it can still be downloaded.
 	const copyable = !fileMediaKind(artifact.path) && (!session.cloud || CLOUD_TEXT_ARTIFACT.test(artifact.path));
-	if (session.cloud && !copyable) {
-		return (
-			<span className="min-w-0 truncate px-1.5 text-sm" title={artifact.path}>
-				{artifact.name}
-			</span>
-		);
-	}
 	return (
 		<>
 			<DropdownMenu>
@@ -172,6 +182,12 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 						<DropdownMenuItem onSelect={() => void copy()}>
 							<Copy aria-hidden="true" />
 							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
+						</DropdownMenuItem>
+					) : null}
+					{session.cloud ? (
+						<DropdownMenuItem onSelect={() => void download()}>
+							<Download aria-hidden="true" />
+							{t("artifacts.download")}
 						</DropdownMenuItem>
 					) : null}
 					{/* Cloud sessions keep their artifacts behind the cloud control plane. */}
@@ -382,6 +398,7 @@ function CloudHtmlArtifactView({
 	feedbackRequestKey,
 	onAccessRefused,
 	onFeedbackRequestConsumed,
+	onNavigate,
 	sendMessage,
 	sessionId,
 	toolbarHost,
@@ -391,6 +408,8 @@ function CloudHtmlArtifactView({
 	feedbackRequestKey?: number;
 	onAccessRefused: () => void;
 	onFeedbackRequestConsumed?: (key: number) => void;
+	/** Called with the path of another file the page opened. */
+	onNavigate: (path: string) => void;
 	sendMessage: (message: string) => Promise<void>;
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
@@ -428,7 +447,7 @@ function CloudHtmlArtifactView({
 			{toolbarHost ? createPortal(feedbackButton, toolbarHost) : null}
 			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
 			<div className="min-h-0 flex-1">
-				<CloudArtifactFrame onAccessRefused={onAccessRefused} title={artifact.name} url={url} />
+				<CloudArtifactFrame onAccessRefused={onAccessRefused} onNavigate={onNavigate} title={artifact.name} url={url} />
 			</div>
 		</div>
 	);
@@ -503,6 +522,11 @@ export function SessionArtifactsView({
 		void refetchAccess();
 		repin();
 	}, [refetchAccess, repin]);
+	// A page that opens another file of its session selects it, so the header
+	// names the file shown.
+	const followFrame = useCallback((path: string) => {
+		if (session.artifactFiles?.some((artifact) => artifact.path === path)) setSelectedPath(path);
+	}, [session.artifactFiles]);
 	const readRefused = selectedFile.error instanceof CloudArtifactAccessError;
 	useEffect(() => {
 		if (readRefused) accessRefused();
@@ -526,7 +550,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactMenu artifact={selected} hostId={hostId} key={selected.path} session={session} />
+					<ArtifactMenu artifact={selected} downloadUrl={listed?.rawUrl} hostId={hostId} key={selected.path} session={session} />
 					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
 					{session.cloud || selectedFile.data?.binary ? null : (
 						<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
@@ -565,6 +589,7 @@ export function SessionArtifactsView({
 							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
 							onAccessRefused={accessRefused}
 							onFeedbackRequestConsumed={onRequestConsumed}
+							onNavigate={followFrame}
 							sendMessage={sendCloudFeedback}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}

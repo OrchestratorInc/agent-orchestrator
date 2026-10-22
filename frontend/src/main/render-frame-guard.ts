@@ -1,7 +1,7 @@
 import { isAgentPageUrl } from "../shared/agent-page-url";
 
 /** The access prefix of a cloud artifact file URL, or undefined for any other URL. */
-function cloudArtifactPrefix(url: URL): string | undefined {
+export function cloudArtifactPrefix(url: URL): string | undefined {
 	return /^(.*\/api\/cloud\/v1\/artifact-files\/[^/]+\/)/.exec(url.pathname)?.[1];
 }
 

@@ -1735,6 +1735,7 @@
 	"artifacts.showIn": "{{name}}에서 보기",
 	"artifacts.copyMarkdown": "Markdown으로 복사",
 	"artifacts.copyContents": "내용 복사",
+	"artifacts.download": "다운로드",
 	"artifacts.delete": "아티팩트 삭제",
 	"artifacts.deleteTitle": "아티팩트를 삭제할까요?",
 	"artifacts.deleteDescription": "이 세션의 아티팩트 폴더에서 {{name}}을(를) 영구적으로 삭제합니다.",

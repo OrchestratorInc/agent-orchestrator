@@ -86,6 +86,14 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		cloudArtifact: {
+			fetch: async (url: string) => {
+				const response = await fetch(url);
+				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
+				return new Uint8Array(await response.arrayBuffer());
+			},
+			onFrameNavigated: () => () => undefined,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",
