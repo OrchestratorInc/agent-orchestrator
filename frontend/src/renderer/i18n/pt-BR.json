@@ -2416,7 +2416,7 @@
 	"settings.computerUse.grant": "Conceder",
 	"settings.computerUse.granting": "Aguardando os Ajustes do Sistema…",
 	"settings.computerUse.agentAccess": "Permitir que agentes usem este computador",
-	"settings.computerUse.agentAccessDescription": "Novas sessões de agentes ficam sabendo que podem operar apps de desktop com ao cua e leem o guia primeiro. As capturas são salvas como arquivos, então nunca enchem o contexto de um agente.",
+	"settings.computerUse.agentAccessDescription": "Novas sessões de chat recebem ferramentas para ler a tela e operar apps de desktop. O resultado de cada ação inclui uma captura da janela.",
 	"settings.computerUse.agentAccessNeedsDriver": "Instale o Cua Driver para ativar.",
 	"settings.computerUse.details": "Detalhes",
 	"settings.computerUse.runDoctor": "Executar diagnóstico",

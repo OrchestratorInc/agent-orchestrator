@@ -35,7 +35,7 @@ async function fetchInstallJob(): Promise<InstallJob> {
 }
 
 /**
- * Cua Driver, the computer-use driver agents reach through `ao cua`. Installs
+ * Cua Driver, the computer-use driver behind the agents' computer-use tools. Installs
  * through the daemon's fixed installer allowlist like the agent CLIs do, then
  * shows the facts that decide whether agents can use it: the background
  * service and, on macOS, the privacy permissions CuaDriver.app holds.
@@ -251,8 +251,8 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 }
 
 /**
- * "Let agents use this computer": while on, new agent sessions get a standing
- * instruction that `ao cua` exists and to read `ao cua guide` before using it.
+ * "Let agents use this computer": while on, new chat sessions get the
+ * computer-use tools and a standing instruction to read their guide first.
  * It needs Cua Driver installed to turn on; once on it can always be turned off.
  */
 function AgentAccessRow({ installed }: { installed: boolean }) {

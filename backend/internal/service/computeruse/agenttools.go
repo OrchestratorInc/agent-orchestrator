@@ -19,7 +19,7 @@ type AgentTool struct {
 // agent's context on every request, so the list stays short: click covers
 // double and right clicks, run_steps runs the stepToolNames, and tools for
 // zooming, menus, recording, configuration, the clipboard, whole-screen
-// capture, scripts, and browsers are left to `ao cua`, or turned off.
+// capture, scripts, and browsers are left out.
 var agentToolNames = []string{
 	"list_windows", "launch_app", "get_window_state", "click", "type_text", "press_key", "run_steps",
 }

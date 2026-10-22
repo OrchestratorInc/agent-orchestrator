@@ -2077,26 +2077,10 @@ type ComputerUseDoctorResponse struct {
 	Report string `json:"report" description:"Cua Driver's own environment report (cua-driver doctor)."`
 }
 
-// ComputerUseToolsResponse is the body of GET /api/v1/computer-use/tools.
-type ComputerUseToolsResponse struct {
-	Tools []computeruse.Tool `json:"tools"`
-}
-
 // ComputerUseAgentToolsResponse lists the driver tools AO offers agents as
 // MCP tools, with their input schemas.
 type ComputerUseAgentToolsResponse struct {
 	Tools []computeruse.AgentTool `json:"tools"`
-}
-
-// ComputerUseToolParam is the {tool} path parameter for /computer-use/tools/{tool}.
-type ComputerUseToolParam struct {
-	Tool string `path:"tool" description:"Cua Driver tool name, e.g. get_window_state."`
-}
-
-// ComputerUseToolDescription is the body of GET /api/v1/computer-use/tools/{tool}.
-type ComputerUseToolDescription struct {
-	Name        string `json:"name"`
-	Description string `json:"description" description:"The tool's description and JSON input schema as Cua Driver prints them."`
 }
 
 // StartInstallResponse is the body of POST /api/v1/system/install/{target} (202).
@@ -3507,8 +3491,8 @@ type SettingsResponse struct {
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
-	// ComputerUse adds the `ao cua` standing instruction to new agent sessions.
-	ComputerUse bool `json:"computerUse" description:"New agent sessions are told they can drive desktop apps through ao cua (Settings, Computer use agents)."`
+	// ComputerUse gives new chat sessions the computer-use tools.
+	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3548,7 +3532,7 @@ type UpdateVersionRefreshRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
-// UpdateComputerUseRequest flips whether new agent sessions are told about ao cua.
+// UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
 type UpdateComputerUseRequest struct {
 	Enabled *bool `json:"enabled"`
 }

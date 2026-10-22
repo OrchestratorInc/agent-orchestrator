@@ -2376,7 +2376,7 @@
 	"settings.computerUse.grant": "許可",
 	"settings.computerUse.granting": "システム設定を待っています…",
 	"settings.computerUse.agentAccess": "エージェントにこのコンピューターの使用を許可",
-	"settings.computerUse.agentAccessDescription": "新しいエージェントセッションに、ao cua でデスクトップアプリを操作できることと、先にガイドを読むことを伝えます。スクリーンショットはファイルとして保存されるため、エージェントのコンテキストを圧迫しません。",
+	"settings.computerUse.agentAccessDescription": "新しいチャットセッションに、画面を読み取りデスクトップアプリを操作するツールが追加されます。各操作の結果にはウィンドウのスクリーンショットが含まれます。",
 	"settings.computerUse.agentAccessNeedsDriver": "オンにするには Cua Driver をインストールしてください。",
 	"settings.computerUse.details": "詳細",
 	"settings.computerUse.runDoctor": "診断を実行",

@@ -2708,100 +2708,6 @@ paths:
         background service, and macOS permissions
       tags:
       - computer-use
-  /api/v1/computer-use/tools:
-    get:
-      operationId: listComputerUseTools
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ComputerUseToolsResponse'
-          description: OK
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: List the tools Cua Driver offers
-      tags:
-      - computer-use
-  /api/v1/computer-use/tools/{tool}:
-    get:
-      operationId: describeComputerUseTool
-      parameters:
-      - description: Cua Driver tool name, e.g. get_window_state.
-        in: path
-        name: tool
-        required: true
-        schema:
-          description: Cua Driver tool name, e.g. get_window_state.
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ComputerUseToolDescription'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "403":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Forbidden
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Describe one Cua Driver tool and its JSON input
-      tags:
-      - computer-use
   /api/v1/cues/{cueId}:
     delete:
       operationId: deleteCue
@@ -12278,8 +12184,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Choose whether new agent sessions are told they can drive desktop apps
-        through ao cua
+      summary: Choose whether new chat sessions get tools to drive desktop apps through
+        Cua Driver
       tags:
       - settings
   /api/v1/settings/harness-defaults/{agent}:
@@ -15347,7 +15253,7 @@ components:
           - unknown
           type: string
         imageDirectory:
-          description: Where screenshots from ao cua are saved.
+          description: Where screenshots from computer-use calls are saved.
           type: string
         installed:
           type: boolean
@@ -15373,37 +15279,6 @@ components:
       - updateAvailable
       - daemon
       - imageDirectory
-      type: object
-    ComputerUseTool:
-      properties:
-        description:
-          type: string
-        name:
-          type: string
-      required:
-      - name
-      - description
-      type: object
-    ComputerUseToolDescription:
-      properties:
-        description:
-          description: The tool's description and JSON input schema as Cua Driver
-            prints them.
-          type: string
-        name:
-          type: string
-      required:
-      - name
-      - description
-      type: object
-    ComputerUseToolsResponse:
-      properties:
-        tools:
-          items:
-            $ref: '#/components/schemas/ComputerUseTool'
-          type: array
-      required:
-      - tools
       type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:
@@ -20258,8 +20133,8 @@ components:
         cloudOffering:
           type: boolean
         computerUse:
-          description: New agent sessions are told they can drive desktop apps through
-            ao cua (Settings, Computer use agents).
+          description: New chat sessions get tools to drive desktop apps through Cua
+            Driver (Settings, Computer use agents).
           type: boolean
         defaultSessionMode:
           enum:
@@ -22424,8 +22299,8 @@ tags:
 - description: Local machine readiness checks the desktop app runs before showing
     the board
   name: system
-- description: Cua Driver computer-use integration behind Settings and ao cua (loopback
-    only)
+- description: Cua Driver computer-use integration behind Settings and the agents'
+    computer-use tools (loopback only)
   name: computer-use
 - description: Server-side unfurl of external links for the CSP-locked renderer
   name: link-preview

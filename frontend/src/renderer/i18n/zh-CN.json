@@ -2442,7 +2442,7 @@
 	"settings.computerUse.grant": "授予",
 	"settings.computerUse.granting": "正在等待系统设置…",
 	"settings.computerUse.agentAccess": "允许智能体使用这台电脑",
-	"settings.computerUse.agentAccessDescription": "新的智能体会话会得知可以用 ao cua 操作桌面应用，并先阅读其指南。截图会保存为文件，因此不会占满智能体的上下文。",
+	"settings.computerUse.agentAccessDescription": "新的聊天会话会获得读取屏幕和操作桌面应用的工具。每个操作的结果都包含该窗口的截图。",
 	"settings.computerUse.agentAccessNeedsDriver": "安装 Cua Driver 后即可开启。",
 	"settings.computerUse.details": "详细信息",
 	"settings.computerUse.runDoctor": "运行诊断",

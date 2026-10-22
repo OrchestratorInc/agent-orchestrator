@@ -184,7 +184,7 @@ describe("ComputerUseSection", () => {
 		await screen.findByText("0.28.2");
 		const toggle = screen.getByRole("switch", { name: "Let agents use this computer" });
 		expect(toggle).not.toBeChecked();
-		expect(screen.getByText(/drive desktop apps with ao cua and to read its guide first/)).toBeInTheDocument();
+		expect(screen.getByText(/New chat sessions get tools to read the screen and operate desktop apps/)).toBeInTheDocument();
 		await userEvent.click(toggle);
 		expect(settingsMocks.update).toHaveBeenCalledWith(true);
 	});

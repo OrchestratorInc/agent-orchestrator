@@ -9,10 +9,10 @@ import (
 	"strings"
 )
 
-// envComputerUse is set on a session's `ao mcp` server when the user had
+// envComputerUse is set on a chat session's `ao mcp` server when the user had
 // "Let agents use this computer" on as the session started. The server then
 // also offers Cua Driver tools, and a call returns the screenshot as an image
-// the agent sees, which `ao cua call` in a shell cannot do.
+// the agent sees.
 const envComputerUse = "AO_COMPUTER_USE"
 
 // maxMCPImageBytes bounds one screenshot sent inline.
@@ -25,6 +25,25 @@ type mcpState struct {
 	cuaNames  map[string]bool
 }
 
+// cuaCallRequest, cuaImage, and cuaCallResponse mirror the daemon's
+// computer-use call DTOs.
+type cuaCallRequest struct {
+	Tool      string         `json:"tool"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	SessionID string         `json:"sessionId,omitempty"`
+}
+
+type cuaImage struct {
+	Path     string `json:"path"`
+	MimeType string `json:"mimeType"`
+}
+
+type cuaCallResponse struct {
+	Tool   string     `json:"tool"`
+	Result any        `json:"result"`
+	Images []cuaImage `json:"images"`
+}
+
 type cuaAgentTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -32,7 +51,7 @@ type cuaAgentTool struct {
 }
 
 // readOnlyCuaTools look at the screen without acting on it.
-var readOnlyCuaTools = map[string]bool{"list_windows": true, "get_window_state": true, "zoom": true}
+var readOnlyCuaTools = map[string]bool{"list_windows": true, "get_window_state": true}
 
 // cuaTools are the computer-use tools this server offers: none unless the
 // session has computer use, and none while the daemon cannot list them (Cua
@@ -67,9 +86,9 @@ func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[st
 	return state.cuaTools
 }
 
-// callCua runs one Cua Driver tool through the daemon, like `ao cua call`,
-// and returns its result as text (the window line, the tree or the diff, and
-// the stale snapshots) with each screenshot as an image.
+// callCua runs one Cua Driver tool through the daemon and returns its result
+// as text (the window line, the tree or the diff, and the stale snapshots)
+// with each screenshot as an image.
 func (c *commandContext) callCua(ctx context.Context, tool string, raw json.RawMessage) map[string]any {
 	var arguments map[string]any
 	if len(raw) > 0 && string(raw) != "null" {
@@ -82,7 +101,7 @@ func (c *commandContext) callCua(ctx context.Context, tool string, raw json.RawM
 	if err := c.postJSON(ctx, "computer-use/call", request, &response); err != nil {
 		return mcpToolError(err)
 	}
-	text, ok := renderCuaCallText(response, false)
+	text, ok := renderCuaCall(response)
 	if !ok {
 		encoded, err := json.MarshalIndent(response.Result, "", "  ")
 		if err != nil {

@@ -1,5 +1,5 @@
 // Package cuadriver locates and runs Cua Driver (https://cua.ai), the
-// computer-use driver behind `ao cua`. It owns only process concerns: where
+// computer-use driver behind AO's computer-use tools. It owns only process concerns: where
 // the official installers put the binary on each platform, how to execute it,
 // and how its background service is started. What to run lives in
 // service/computeruse.

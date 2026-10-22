@@ -2416,7 +2416,7 @@
 	"settings.computerUse.grant": "Accorder",
 	"settings.computerUse.granting": "En attente des Réglages Système…",
 	"settings.computerUse.agentAccess": "Laisser les agents utiliser cet ordinateur",
-	"settings.computerUse.agentAccessDescription": "Les nouvelles sessions d'agents savent qu'elles peuvent piloter les apps de bureau avec ao cua et lisent d'abord son guide. Les captures sont enregistrées dans des fichiers et ne remplissent jamais le contexte d'un agent.",
+	"settings.computerUse.agentAccessDescription": "Les nouvelles sessions de chat reçoivent des outils pour lire l'écran et piloter les apps de bureau. Le résultat de chaque action inclut une capture de la fenêtre.",
 	"settings.computerUse.agentAccessNeedsDriver": "Installez Cua Driver pour activer cette option.",
 	"settings.computerUse.details": "Détails",
 	"settings.computerUse.runDoctor": "Lancer le diagnostic",

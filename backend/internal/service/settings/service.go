@@ -40,8 +40,8 @@ type Snapshot struct {
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran (Settings, General). On by default.
 	VersionRefresh bool
-	// ComputerUse adds the `ao cua` standing instruction to new agent sessions
-	// (Settings, Computer use agents). Off by default.
+	// ComputerUse gives new chat sessions the computer-use tools and their
+	// standing instruction (Settings, Computer use agents). Off by default.
 	ComputerUse bool
 	UpdatedAt   time.Time
 }
@@ -170,7 +170,7 @@ func (s *Service) ComputerUseEnabled(ctx context.Context) bool {
 	return err == nil && snapshot.ComputerUse
 }
 
-// SetComputerUse changes whether new agent sessions are told about `ao cua`.
+// SetComputerUse changes whether new chat sessions get the computer-use tools.
 func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err

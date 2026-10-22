@@ -17,13 +17,12 @@ type ComputerUse interface {
 	StartDaemon(ctx context.Context) (computeruse.Status, error)
 	GrantPermissions(ctx context.Context) (computeruse.Status, error)
 	Doctor(ctx context.Context) (string, error)
-	Tools(ctx context.Context) ([]computeruse.Tool, error)
-	DescribeTool(ctx context.Context, tool string) (string, error)
 	AgentTools(ctx context.Context) ([]computeruse.AgentTool, error)
 	Call(ctx context.Context, request computeruse.CallRequest) (computeruse.CallResult, error)
 }
 
-// ComputerUseController owns the /computer-use routes behind Settings and `ao cua`.
+// ComputerUseController owns the /computer-use routes behind Settings and the
+// computer-use tools.
 type ComputerUseController struct {
 	Svc ComputerUse
 }
@@ -34,8 +33,6 @@ func (c *ComputerUseController) Register(r chi.Router) {
 	r.Post("/computer-use/daemon/start", c.startDaemon)
 	r.Post("/computer-use/permissions/grant", c.grantPermissions)
 	r.Get("/computer-use/doctor", c.doctor)
-	r.Get("/computer-use/tools", c.tools)
-	r.Get("/computer-use/tools/{tool}", c.describeTool)
 	r.Get("/computer-use/agent-tools", c.agentTools)
 	r.Post("/computer-use/call", c.call)
 }
@@ -75,33 +72,6 @@ func (c *ComputerUseController) doctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ComputerUseDoctorResponse{Report: report})
-}
-
-func (c *ComputerUseController) tools(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "GET", "/api/v1/computer-use/tools")
-		return
-	}
-	tools, err := c.Svc.Tools(r.Context())
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, ComputerUseToolsResponse{Tools: tools})
-}
-
-func (c *ComputerUseController) describeTool(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "GET", "/api/v1/computer-use/tools/{tool}")
-		return
-	}
-	tool := chi.URLParam(r, "tool")
-	description, err := c.Svc.DescribeTool(r.Context(), tool)
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, ComputerUseToolDescription{Name: tool, Description: description})
 }
 
 func (c *ComputerUseController) agentTools(w http.ResponseWriter, r *http.Request) {

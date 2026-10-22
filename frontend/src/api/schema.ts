@@ -1131,40 +1131,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/computer-use/tools": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List the tools Cua Driver offers */
-        get: operations["listComputerUseTools"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/computer-use/tools/{tool}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Describe one Cua Driver tool and its JSON input */
-        get: operations["describeComputerUseTool"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/cues/{cueId}": {
         parameters: {
             query?: never;
@@ -4086,7 +4052,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Choose whether new agent sessions are told they can drive desktop apps through ao cua */
+        /** Choose whether new chat sessions get tools to drive desktop apps through Cua Driver */
         patch: operations["updateComputerUse"];
         trace?: never;
     };
@@ -5303,7 +5269,7 @@ export interface components {
              * @enum {string}
              */
             daemon: "running" | "stopped" | "unknown";
-            /** @description Where screenshots from ao cua are saved. */
+            /** @description Where screenshots from computer-use calls are saved. */
             imageDirectory: string;
             installed: boolean;
             /** @description Newest release on the driver's update channel, when it could be checked. */
@@ -5315,18 +5281,6 @@ export interface components {
             releaseNotesUrl?: string;
             updateAvailable: boolean;
             version?: string;
-        };
-        ComputerUseTool: {
-            description: string;
-            name: string;
-        };
-        ComputerUseToolDescription: {
-            /** @description The tool's description and JSON input schema as Cua Driver prints them. */
-            description: string;
-            name: string;
-        };
-        ComputerUseToolsResponse: {
-            tools: components["schemas"]["ComputerUseTool"][];
         };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
@@ -7187,7 +7141,7 @@ export interface components {
             cloudControlPlaneUrl: string;
             cloudEnabled: boolean;
             cloudOffering: boolean;
-            /** @description New agent sessions are told they can drive desktop apps through ao cua (Settings, Computer use agents). */
+            /** @description New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents). */
             computerUse: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
@@ -11555,139 +11509,6 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    listComputerUseTools: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ComputerUseToolsResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    describeComputerUseTool: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Cua Driver tool name, e.g. get_window_state. */
-                tool: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ComputerUseToolDescription"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };

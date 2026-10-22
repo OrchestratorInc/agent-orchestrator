@@ -76,7 +76,7 @@ type APIDeps struct {
 	// phone's endpoint-refresh route.
 	Endpoints controllers.EndpointSource
 	Installer controllers.Installer
-	// ComputerUse is the Cua Driver integration behind Settings and `ao cua`.
+	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
 	ComputerUse controllers.ComputerUse
 	AgentAuth   controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.

@@ -1,5 +1,5 @@
 // Package computeruse is AO's integration with Cua Driver, the computer-use
-// driver agents reach through `ao cua`. It reports whether the driver is
+// driver behind the agents' computer-use tools. It reports whether the driver is
 // installed and ready, starts its background service, and runs driver tools
 // on an agent's behalf.
 //
@@ -66,13 +66,7 @@ type Status struct {
 	ReleaseNotesURL string       `json:"releaseNotesUrl,omitempty"`
 	Daemon          DaemonState  `json:"daemon" enum:"running,stopped,unknown" description:"Whether Cua Driver's background service answers."`
 	Permissions     *Permissions `json:"permissions,omitempty" description:"macOS only."`
-	ImageDirectory  string       `json:"imageDirectory" description:"Where screenshots from ao cua are saved."`
-}
-
-// Tool is one driver tool an agent can call.
-type Tool struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ImageDirectory  string       `json:"imageDirectory" description:"Where screenshots from computer-use calls are saved."`
 }
 
 // CallRequest runs one driver tool.
@@ -117,11 +111,11 @@ var (
 	endedSession     = regexp.MustCompile(`^session has ended; tool call '[a-z0-9_]+' was rejected\b`)
 	terminalEscape   = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 	errNotInstalled  = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Cua Driver is not installed. Install it in Settings > Computer use agents.", nil)
-	errDaemonStopped = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it with `ao cua start` or from Settings > Computer use agents.", nil)
+	errDaemonStopped = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it from Settings > Computer use agents.", nil)
 )
 
 // browserTool reports whether tool is one of Cua Driver's browser tools.
-// `ao cua` hides and refuses them: they attach to a browser over CDP and
+// AO refuses them: they attach to a browser over CDP and
 // would fight `ao browser`, AO's own browser control, for the same pages.
 // run_steps and run_script cannot reach them, so blocking direct calls is
 // enough.
@@ -133,7 +127,7 @@ func browserToolBlocked(tool string) error {
 	return apierr.Forbidden("COMPUTER_USE_BROWSER_TOOL_DISABLED", fmt.Sprintf("%q is a Cua Driver browser tool, which AO turns off. Use `ao browser` for web pages.", tool))
 }
 
-// Service runs Cua Driver for the settings page and `ao cua`.
+// Service runs Cua Driver for the settings page and the computer-use tools.
 type Service struct {
 	driver ports.ComputerUseDriver
 	images imageStore
@@ -280,49 +274,6 @@ func (s *Service) Doctor(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("cua-driver doctor: %w", err)
 	}
 	return report, nil
-}
-
-// Tools lists the driver's tools, without its browser tools.
-func (s *Service) Tools(ctx context.Context) ([]Tool, error) {
-	binary, err := s.locate(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	stdout, stderr, err := s.driver.Run(ctx, binary, "list-tools")
-	if err != nil {
-		return nil, apierr.Unavailable("COMPUTER_USE_TOOLS_FAILED", commandFailure(err, stdout, stderr))
-	}
-	tools := []Tool{}
-	for _, tool := range parseTools(string(stdout)) {
-		if !browserTool(tool.Name) {
-			tools = append(tools, tool)
-		}
-	}
-	return tools, nil
-}
-
-// DescribeTool returns the driver's description and input schema for tool.
-func (s *Service) DescribeTool(ctx context.Context, tool string) (string, error) {
-	if !toolNamePattern.MatchString(tool) {
-		return "", invalidTool(tool)
-	}
-	if browserTool(tool) {
-		return "", browserToolBlocked(tool)
-	}
-	binary, err := s.locate(ctx)
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	stdout, _, err := s.driver.Run(ctx, binary, "describe", tool)
-	// An unknown tool prints the tool list instead of a description.
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(stdout)), "name:") {
-		return "", apierr.NotFound("COMPUTER_USE_TOOL_NOT_FOUND", fmt.Sprintf("Cua Driver has no tool %q. Run `ao cua tools` for the list.", tool))
-	}
-	return cleanText(string(stdout)), nil
 }
 
 // Call runs one driver tool and returns its output with images saved to
@@ -605,7 +556,7 @@ func permissionState(granted *bool) PermissionState {
 }
 
 func invalidTool(tool string) error {
-	return apierr.Invalid("COMPUTER_USE_INVALID_TOOL", fmt.Sprintf("%q is not a Cua Driver tool name. Run `ao cua tools` for the list.", tool), nil)
+	return apierr.Invalid("COMPUTER_USE_INVALID_TOOL", fmt.Sprintf("%q is not a Cua Driver tool name.", tool), nil)
 }
 
 func daemonNotRunning(stdout, stderr []byte) bool {
@@ -640,17 +591,4 @@ func parseVersion(output string) string {
 		return ""
 	}
 	return strings.TrimPrefix(fields[len(fields)-1], "v")
-}
-
-// parseTools reads list-tools output: one "name: description" per line.
-func parseTools(output string) []Tool {
-	var tools []Tool
-	for _, line := range strings.Split(output, "\n") {
-		name, description, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok || !toolNamePattern.MatchString(name) {
-			continue
-		}
-		tools = append(tools, Tool{Name: name, Description: strings.TrimSpace(description)})
-	}
-	return tools
 }

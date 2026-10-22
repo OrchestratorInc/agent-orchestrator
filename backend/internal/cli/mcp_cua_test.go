@@ -82,8 +82,8 @@ func TestMCPHasNoComputerUseToolsWithoutIt(t *testing.T) {
 	}
 }
 
-// A call goes to the daemon for this AO session and comes back as the text
-// `ao cua call` prints, without screenshot paths, plus the screenshot itself.
+// A call goes to the daemon for this AO session and comes back as text plus
+// the screenshot itself.
 func TestMCPComputerUseCallReturnsTextAndTheScreenshot(t *testing.T) {
 	t.Setenv(envComputerUse, "1")
 	t.Setenv("AO_SESSION_ID", "aa-47")

@@ -37,7 +37,7 @@ export interface Settings {
 	trackerIntakeEnabled: boolean;
 	/** Idle open sessions move to a harness release installed while they ran. */
 	versionRefresh?: boolean;
-	/** New agent sessions are told they can drive desktop apps through ao cua. */
+	/** New chat sessions get tools to drive desktop apps through Cua Driver. */
 	computerUse?: boolean;
 }
 

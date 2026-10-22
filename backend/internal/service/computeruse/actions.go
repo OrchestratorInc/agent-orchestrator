@@ -133,7 +133,7 @@ func actionRefused(code, tool string, step int, message string) error {
 }
 
 // driverRefusalHints add AO's advice to driver refusals whose own suggestion
-// would be unsafe or misleading under `ao cua`.
+// would be unsafe or misleading for an agent.
 var driverRefusalHints = map[string]string{
 	"desktop_scope_disabled": "AO does not act on the whole screen: pass the pid and window_id of the window you read with get_window_state, not scope \"desktop\".",
 }

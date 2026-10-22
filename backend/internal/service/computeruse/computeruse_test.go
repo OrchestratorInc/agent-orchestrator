@@ -54,8 +54,6 @@ func (f *fakeDriver) Run(_ context.Context, _ string, args ...string) ([]byte, [
 		return []byte(`{"latest_version":"0.37.0","update_available":true,"release_notes_url":"https://example.test/notes"}`), nil, nil
 	case "permissions":
 		return []byte(`{"accessibility":true,"screen_recording":false}`), nil, nil
-	case "list-tools":
-		return []byte("browser_click: Click a page element\nclick: Click against a target pid\nget_browser_state: Read-only browser inspection\npage: Legacy browser compatibility tool\nzoom: Capture a cropped JPEG\nnot a tool line\n"), nil, nil
 	}
 	if f.onCall != nil {
 		return f.onCall(args)
@@ -227,8 +225,9 @@ func newStatefulService(t *testing.T) (*Service, *statefulDriver) {
 
 var snapshotArgs = map[string]any{"pid": 7, "window_id": 9, "include_screenshot": false}
 
-// Separate `ao cua call` processes snapshot a window and then zoom into it, so
-// both must run in one driver session tied to the AO session.
+// Separate calls snapshot a window and then zoom into it, each in its own
+// driver process, so both must run in one driver session tied to the AO
+// session.
 func TestCallKeepsOneDriverSessionPerAOSession(t *testing.T) {
 	s, state := newStatefulService(t)
 	ctx := context.Background()
@@ -427,29 +426,15 @@ func TestCallWhenNotInstalled(t *testing.T) {
 	}
 }
 
-func TestToolsParsesListOutput(t *testing.T) {
-	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
-	tools, err := s.Tools(context.Background())
-	if err != nil {
-		t.Fatalf("Tools() error = %v", err)
-	}
-	if len(tools) != 2 || tools[0].Name != "click" || tools[1].Description != "Capture a cropped JPEG" {
-		t.Fatalf("tools = %+v", tools)
-	}
-}
-
 func TestBrowserToolsAreBlocked(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	s := newTestService(t, driver, "darwin")
 	for _, tool := range []string{"browser_click", "browser_prepare", "get_browser_state", "page"} {
 		t.Run(tool, func(t *testing.T) {
-			_, callErr := s.Call(context.Background(), CallRequest{Tool: tool})
-			_, describeErr := s.DescribeTool(context.Background(), tool)
-			for _, err := range []error{callErr, describeErr} {
-				var apiErr *apierr.Error
-				if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_BROWSER_TOOL_DISABLED" {
-					t.Fatalf("err = %v, want COMPUTER_USE_BROWSER_TOOL_DISABLED", err)
-				}
+			_, err := s.Call(context.Background(), CallRequest{Tool: tool})
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_BROWSER_TOOL_DISABLED" {
+				t.Fatalf("err = %v, want COMPUTER_USE_BROWSER_TOOL_DISABLED", err)
 			}
 		})
 	}

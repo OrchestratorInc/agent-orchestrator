@@ -97,7 +97,7 @@ func Build() ([]byte, error) {
 		*(&openapi31.Tag{Name: "system"}).WithDescription(
 			"Local machine readiness checks the desktop app runs before showing the board"),
 		*(&openapi31.Tag{Name: "computer-use"}).WithDescription(
-			"Cua Driver computer-use integration behind Settings and ao cua (loopback only)"),
+			"Cua Driver computer-use integration behind Settings and the agents' computer-use tools (loopback only)"),
 		*(&openapi31.Tag{Name: "link-preview"}).WithDescription(
 			"Server-side unfurl of external links for the CSP-locked renderer"),
 		*(&openapi31.Tag{Name: "github"}).WithDescription(
@@ -492,19 +492,15 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"SystemcheckReport":             "SystemRequirementsResponse",
 	"SystemcheckRequirement":        "SystemRequirement",
 	"ControllersInstallTargetParam": "InstallTargetParam",
-	// service/computeruse: the Cua Driver integration behind Settings and `ao cua`.
+	// service/computeruse: the Cua Driver integration behind Settings and the computer-use tools.
 	"ComputeruseStatus":                        "ComputerUseStatus",
 	"ComputerusePermissions":                   "ComputerUsePermissions",
-	"ComputeruseTool":                          "ComputerUseTool",
 	"ComputeruseCallRequest":                   "ComputerUseCallRequest",
 	"ComputeruseCallResult":                    "ComputerUseCallResult",
 	"ComputeruseImage":                         "ComputerUseImage",
 	"ControllersComputerUseDoctorResponse":     "ComputerUseDoctorResponse",
-	"ControllersComputerUseToolsResponse":      "ComputerUseToolsResponse",
 	"ComputeruseAgentTool":                     "ComputerUseAgentTool",
 	"ControllersComputerUseAgentToolsResponse": "ComputerUseAgentToolsResponse",
-	"ControllersComputerUseToolParam":          "ComputerUseToolParam",
-	"ControllersComputerUseToolDescription":    "ComputerUseToolDescription",
 	// service/systeminstall: Job backs both StartInstallResponse and
 	// InstallStatusResponse (they're the same Go type), so it reflects to one
 	// shared component — name it after the domain concept, not either alias.
@@ -940,8 +936,9 @@ func systemOperations() []operation {
 }
 
 // computerUseOperations declares the Cua Driver integration: the status and
-// actions Settings shows, and the tool calls `ao cua` makes. Every image a call
-// produces is saved to a file; responses carry paths, never base64.
+// actions Settings shows, and the tool calls a chat session's `ao mcp` server
+// makes. Every image a call produces is saved to a file; responses carry
+// paths, never base64.
 func computerUseOperations() []operation {
 	statusResps := []respUnit{
 		{http.StatusOK, controllers.ComputerUseStatusResponse{}},
@@ -977,31 +974,6 @@ func computerUseOperations() []operation {
 			summary: "Run Cua Driver's environment report",
 			resps: []respUnit{
 				{http.StatusOK, controllers.ComputerUseDoctorResponse{}},
-				{http.StatusConflict, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/computer-use/tools", id: "listComputerUseTools", tag: "computer-use",
-			summary: "List the tools Cua Driver offers",
-			resps: []respUnit{
-				{http.StatusOK, controllers.ComputerUseToolsResponse{}},
-				{http.StatusConflict, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-				{http.StatusServiceUnavailable, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/computer-use/tools/{tool}", id: "describeComputerUseTool", tag: "computer-use",
-			summary:    "Describe one Cua Driver tool and its JSON input",
-			pathParams: []any{controllers.ComputerUseToolParam{}},
-			resps: []respUnit{
-				{http.StatusOK, controllers.ComputerUseToolDescription{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusForbidden, envelope.APIError{}},
-				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -1197,7 +1169,7 @@ func shellTerminalOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/settings/computer-use", id: "updateComputerUse", tag: "settings",
-			summary: "Choose whether new agent sessions are told they can drive desktop apps through ao cua",
+			summary: "Choose whether new chat sessions get tools to drive desktop apps through Cua Driver",
 			reqBody: controllers.UpdateComputerUseRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},

@@ -8,8 +8,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The computer-use section follows the setting at spawn time: on adds the
-// ao cua pointer, off (or never wired) leaves the prompt as it was.
+// The computer-use section follows the setting at spawn time, and only chat
+// sessions get it: their `ao mcp` server carries the tools. Off (or never
+// wired) leaves the prompt as it was.
 func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 	ctx := context.Background()
 	newManager := func() *Manager {
@@ -27,7 +28,7 @@ func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 	}
 
 	unwired := newManager()
-	sp, err := unwired.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
+	sp, err := unwired.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -39,36 +40,35 @@ func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 	m := newManager()
 	m.SetComputerUseEnabled(func(context.Context) bool { return enabled })
 	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
-		sp, err = m.buildSystemPrompt(ctx, kind, "mer", "mer-1", "", false)
-		if err != nil {
-			t.Fatalf("buildSystemPrompt(%s): %v", kind, err)
-		}
-		if strings.Contains(sp, "## Computer use") {
-			t.Fatalf("%s: computer use section present while off", kind)
-		}
-	}
-
-	enabled = true
-	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
-		sp, err = m.buildSystemPrompt(ctx, kind, "mer", "mer-1", "", false)
-		if err != nil {
-			t.Fatalf("buildSystemPrompt(%s): %v", kind, err)
-		}
-		for _, want := range []string{"## Computer use", "`ao cua guide`", "`ao cua call`", "never `cua-driver call`", "Settings > Computer use agents", "commands/cua.md", "untrusted"} {
-			if !strings.Contains(sp, want) {
-				t.Fatalf("%s: prompt missing %q", kind, want)
+		for _, chat := range []bool{false, true} {
+			enabled = false
+			sp, err = m.buildSystemPrompt(ctx, kind, "mer", "mer-1", "", chat)
+			if err != nil {
+				t.Fatalf("buildSystemPrompt(%s, chat=%v): %v", kind, chat, err)
 			}
-		}
-	}
+			if strings.Contains(sp, "## Computer use") {
+				t.Fatalf("%s chat=%v: computer use section present while off", kind, chat)
+			}
 
-	// A chat session gets the tools from its `ao mcp` server instead.
-	sp, err = m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
-	if err != nil {
-		t.Fatalf("buildSystemPrompt(chat): %v", err)
-	}
-	for _, want := range []string{"## Computer use", "AO's `ao` tool server", "`get_window_state`", "screenshot as an image", "commands/cua.md", "use `ao cua` in your shell", "untrusted"} {
-		if !strings.Contains(sp, want) {
-			t.Fatalf("chat prompt missing %q", want)
+			enabled = true
+			sp, err = m.buildSystemPrompt(ctx, kind, "mer", "mer-1", "", chat)
+			if err != nil {
+				t.Fatalf("buildSystemPrompt(%s, chat=%v): %v", kind, chat, err)
+			}
+			if !chat {
+				if strings.Contains(sp, "## Computer use") {
+					t.Fatalf("%s: terminal session got the computer use section", kind)
+				}
+				continue
+			}
+			for _, want := range []string{"## Computer use", "AO's `ao` tool server", "`get_window_state`", "screenshot as an image", "commands/cua.md", "not available in this session", "Settings > Computer use agents", "untrusted"} {
+				if !strings.Contains(sp, want) {
+					t.Fatalf("%s: chat prompt missing %q", kind, want)
+				}
+			}
+			if strings.Contains(sp, "ao cua") {
+				t.Fatalf("%s: chat prompt still mentions ao cua", kind)
+			}
 		}
 	}
 }

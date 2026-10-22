@@ -30,8 +30,8 @@ type AppSettings struct {
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran.
 	VersionRefresh bool
-	// ComputerUse tells new agent sessions they can drive desktop apps through
-	// `ao cua`.
+	// ComputerUse gives new chat sessions tools to drive desktop apps through
+	// Cua Driver.
 	ComputerUse bool
 	UpdatedAt   time.Time
 }
@@ -100,7 +100,7 @@ func (s *Store) SetVersionRefresh(ctx context.Context, enabled bool, now time.Ti
 	return nil
 }
 
-// SetComputerUse persists whether new agent sessions are told about `ao cua`.
+// SetComputerUse persists whether new chat sessions get the computer-use tools.
 func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

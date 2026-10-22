@@ -88,8 +88,8 @@ const (
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
-	// TargetCuaDriver is Cua Driver, the optional computer-use driver agents
-	// reach through `ao cua`.
+	// TargetCuaDriver is Cua Driver, the optional computer-use driver behind
+	// the agents' computer-use tools.
 	TargetCuaDriver Target = "cua-driver"
 )
 

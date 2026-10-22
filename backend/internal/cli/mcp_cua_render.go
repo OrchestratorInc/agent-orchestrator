@@ -7,24 +7,18 @@ import (
 	"strings"
 )
 
-// renderCuaCall prints a call's result the way Cua Driver's MCP server
-// presents it, with each screenshot's file path where MCP puts the image: a
-// window read as a header line, the tree (or the diff since the last read)
-// and the snapshots it made stale; an action as its summary followed by AO's
-// read of the window; run_steps as one line per step and its observation.
-// Tools without such a layout report false and are printed as JSON.
+// renderCuaCall writes a call's result as text the way Cua Driver's MCP
+// server presents it; the screenshots go alongside as images. A window read
+// is a header line, the tree (or the diff since the last read), and the
+// snapshots it made stale; an action is its summary followed by AO's read of
+// the window; run_steps is one line per step and its observation. Tools
+// without such a layout report false and are sent as JSON.
 func renderCuaCall(response cuaCallResponse) (string, bool) {
-	return renderCuaCallText(response, true)
-}
-
-// renderCuaCallText renders like renderCuaCall; without paths it leaves out
-// the screenshot lines, for `ao mcp`, which sends the images themselves.
-func renderCuaCallText(response cuaCallResponse, paths bool) (string, bool) {
 	result, ok := response.Result.(map[string]any)
 	if !ok {
 		return "", false
 	}
-	out := cuaText{paths: paths}
+	var out cuaText
 	switch {
 	case response.Tool == "get_window_state":
 		out.window(result)
@@ -34,11 +28,6 @@ func renderCuaCallText(response cuaCallResponse, paths bool) (string, bool) {
 		out.action(result)
 	default:
 		return "", false
-	}
-	for _, image := range response.Images {
-		if paths && !out.printed[image.Path] {
-			out.line("screenshot: " + image.Path)
-		}
 	}
 	return out.String(), true
 }
@@ -51,8 +40,6 @@ var cuaObservedTools = map[string]bool{
 
 type cuaText struct {
 	strings.Builder
-	paths   bool
-	printed map[string]bool
 }
 
 func (t *cuaText) line(text string) {
@@ -124,13 +111,6 @@ func (t *cuaText) runSteps(result map[string]any) {
 
 // window prints a get_window_state result.
 func (t *cuaText) window(state map[string]any) {
-	if path := cuaString(state["screenshot_file_path"]); path != "" && t.paths {
-		if t.printed == nil {
-			t.printed = map[string]bool{}
-		}
-		t.printed[path] = true
-		t.line("screenshot: " + path)
-	}
 	header := []string{}
 	for _, key := range []string{"window_id", "pid"} {
 		if value := cuaNumber(state[key]); value != "" {

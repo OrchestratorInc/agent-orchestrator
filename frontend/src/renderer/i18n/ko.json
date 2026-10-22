@@ -2376,7 +2376,7 @@
 	"settings.computerUse.grant": "허용",
 	"settings.computerUse.granting": "시스템 설정을 기다리는 중…",
 	"settings.computerUse.agentAccess": "에이전트가 이 컴퓨터를 사용하도록 허용",
-	"settings.computerUse.agentAccessDescription": "새 에이전트 세션에 ao cua로 데스크톱 앱을 조작할 수 있으며 먼저 가이드를 읽으라고 알립니다. 스크린샷은 파일로 저장되므로 에이전트의 컨텍스트를 채우지 않습니다.",
+	"settings.computerUse.agentAccessDescription": "새 채팅 세션에 화면을 읽고 데스크톱 앱을 조작하는 도구가 제공됩니다. 각 작업 결과에는 창의 스크린샷이 포함됩니다.",
 	"settings.computerUse.agentAccessNeedsDriver": "켜려면 Cua Driver를 설치하세요.",
 	"settings.computerUse.details": "세부 정보",
 	"settings.computerUse.runDoctor": "진단 실행",

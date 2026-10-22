@@ -1462,7 +1462,7 @@
 	"settings.computerUse.grant": "Grant",
 	"settings.computerUse.granting": "Waiting for System Settings…",
 	"settings.computerUse.agentAccess": "Let agents use this computer",
-	"settings.computerUse.agentAccessDescription": "New agent sessions are told they can drive desktop apps with ao cua and to read its guide first. Screenshots are saved as files, so they never fill an agent's context.",
+	"settings.computerUse.agentAccessDescription": "New chat sessions get tools to read the screen and operate desktop apps. Each action's result includes a screenshot of the window.",
 	"settings.computerUse.agentAccessNeedsDriver": "Install Cua Driver to turn this on.",
 	"settings.computerUse.details": "Details",
 	"settings.computerUse.runDoctor": "Run doctor",

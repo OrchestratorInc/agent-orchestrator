@@ -27,8 +27,7 @@ func TestRenderCuaWindowRead(t *testing.T) {
 	if !ok {
 		t.Fatal("window read not rendered")
 	}
-	want := `screenshot: /data/a.png
-window_id=1234567 pid=42166 size=460x816 elements=33 snapshot_id=s0000002e
+	want := `window_id=1234567 pid=42166 size=460x816 elements=33 snapshot_id=s0000002e
 element_token for row [N] = s0000002e:N (row [1] is "s0000002e:1")
 
 - [7] AXWindow "Calculator"
@@ -51,7 +50,7 @@ func TestRenderCuaActionWithObservation(t *testing.T) {
 		"images":[{"path":"/data/b.png","mimeType":"image/png"}]}`)
 	text, _ := renderCuaCall(response)
 	for _, want := range []string{
-		"✅ Performed AXPress on [12] AXButton \"\".\n\nscreenshot: /data/b.png\nwindow_id=37545 pid=42166 elements=33 snapshot_id=s0000002f\n",
+		"✅ Performed AXPress on [12] AXButton \"\".\n\nwindow_id=37545 pid=42166 elements=33 snapshot_id=s0000002f\n",
 		"\nsince s0000002e: 0 added, 1 changed, 0 removed.\n~ AXStaticText = \"7\" (Edit field)\n",
 		"Invalidated snapshots s0000002e: their element_tokens are stale.\n",
 	} {
@@ -59,8 +58,8 @@ func TestRenderCuaActionWithObservation(t *testing.T) {
 			t.Fatalf("text missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "Read what changed.") || strings.Count(text, "/data/b.png") != 1 {
-		t.Fatalf("hint or duplicate path printed after a read:\n%s", text)
+	if strings.Contains(text, "Read what changed.") || strings.Contains(text, "/data/b.png") {
+		t.Fatalf("hint or screenshot path printed after a read:\n%s", text)
 	}
 }
 
@@ -85,7 +84,6 @@ func TestRenderCuaRunSteps(t *testing.T) {
 2. type_text failed (find): no textfield named Search
 observation: changed since s00000030: 1 changed
 
-screenshot: /data/c.png
 window_id=9 pid=7 snapshot_id=s00000032
 
 since s00000030: 1 changed
