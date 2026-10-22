@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "Request turn",
 	"chat.shared.leaveLine": "Leave line",
 	"chat.shared.takeOver": "Take over",
+	"chat.shared.terminalRefused": "Someone else is writing to the agent. Request a turn in Chat to type.",
 	"share.open": "Share session",
 	"share.title": "Share session",
 	"share.description": "Anyone with the link can open this session in AO.",

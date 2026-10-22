@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "Pedir turno",
 	"chat.shared.leaveLine": "Salir de la fila",
 	"chat.shared.takeOver": "Tomar el control",
+	"chat.shared.terminalRefused": "Otra persona está escribiendo al agente. Pide turno en el chat para escribir.",
 	"share.open": "Compartir sesión",
 	"share.title": "Compartir sesión",
 	"share.description": "Cualquiera con el enlace puede abrir esta sesión en AO.",
