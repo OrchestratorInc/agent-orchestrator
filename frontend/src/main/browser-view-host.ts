@@ -889,14 +889,17 @@ const DEFAULT_ENTRY_READY_TIMEOUT_MS = 60_000;
 const loadEntryReady = (
   view: { webContents: { loadURL: (url: string) => Promise<void> } },
   timeoutMs: number,
+  onLateSuccess?: () => void,
 ): Promise<void> => {
   const ready = view.webContents.loadURL("about:blank");
   // Keep an unobserved tab initialization failure from becoming an unhandled
   // rejection; callers that need the target still await the raced promise.
   void ready.catch(() => undefined);
+  let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      timedOut = true;
       reject(
         Object.assign(new Error("Browser tab initialization timed out"), {
           code: "BROWSER_DEVTOOLS_UNAVAILABLE",
@@ -904,6 +907,16 @@ const loadEntryReady = (
       );
     }, timeoutMs);
   });
+  // A load that finishes after the timeout already rejected readiness would
+  // otherwise leave entry.ready permanently rejected, so every later navigation
+  // and command keeps failing until the tab is recreated (#5369 follow-up). Let
+  // a late success restore readiness via the caller-supplied repair.
+  void ready.then(
+    () => {
+      if (timedOut) onLateSuccess?.();
+    },
+    () => undefined,
+  );
   return Promise.race([
     ready.finally(() => {
       if (timer !== undefined) clearTimeout(timer);
@@ -1420,10 +1433,17 @@ export function createBrowserViewHost(
     // document has completed, so make readiness explicit for every tab.
     entry.ready = popupOptions
       ? new Promise<void>((resolve) => {
-          view.webContents.on("dom-ready", () => resolve());
-          view.webContents.on("destroyed", () => resolve());
+          const done = () => resolve();
+          view.webContents.on("dom-ready", done);
+          view.webContents.on("destroyed", done);
+          // Bound the wait: an adopted popup that never fires dom-ready or
+          // destroyed must not block native tab sync (and the session queue)
+          // indefinitely. resolve is idempotent, so an earlier event still wins.
+          setTimeout(done, entryReadyTimeoutMs);
         })
-      : loadEntryReady(view, entryReadyTimeoutMs);
+      : loadEntryReady(view, entryReadyTimeoutMs, () => {
+          entry.ready = Promise.resolve();
+        });
     // Keep an unobserved tab initialization failure from becoming an unhandled
     // rejection; callers that need the target still await the original promise.
     void entry.ready.catch(() => undefined);
@@ -2849,7 +2869,9 @@ export function createBrowserViewHost(
         forgetNativeFocus(viewId);
         forgetBrowserShortcutTarget(viewId);
       }
-      entry.ready = loadEntryReady(entry.view, entryReadyTimeoutMs);
+      entry.ready = loadEntryReady(entry.view, entryReadyTimeoutMs, () => {
+        entry.ready = Promise.resolve();
+      });
       await entry.ready;
       entry.view.webContents.clearHistory();
       return pushNavState(options, active);

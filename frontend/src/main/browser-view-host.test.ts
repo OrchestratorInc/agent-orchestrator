@@ -3054,6 +3054,44 @@ describe("browser profile partitions and replacement", () => {
 		await expect(host.execute("worker-1", "snapshot", {})).resolves.toBeTruthy();
 	});
 
+	it("restores readiness when a timed-out initial load later succeeds", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		let gatedFirstLoad = true;
+		const { host, invoke } = setupTabHost(
+			store,
+			false,
+			async (_viewIndex, url) => {
+				if (gatedFirstLoad && url === "about:blank") {
+					gatedFirstLoad = false;
+					await gate;
+				}
+			},
+			undefined,
+			undefined,
+			{ entryReadyTimeoutMs: 20 },
+		);
+		await invoke("browser:ensure", "worker-1");
+
+		// The initial about:blank load is stuck past the readiness deadline, so a
+		// command fails typed instead of hanging.
+		await expect(host.execute("worker-1", "snapshot", {})).rejects.toMatchObject({
+			code: "BROWSER_DEVTOOLS_UNAVAILABLE",
+		});
+
+		// The same load then completes: readiness must be restored so the SAME tab
+		// serves commands again, without recreating it.
+		release();
+		await vi.waitFor(async () => {
+			await expect(
+				host.execute("worker-1", "snapshot", {}),
+			).resolves.toBeTruthy();
+		});
+	});
+
 	it("releases profile usage when worker tab startup fails", async () => {
 		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
 		const failing = setupTabHost(store, true);
