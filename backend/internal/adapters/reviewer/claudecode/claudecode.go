@@ -95,12 +95,15 @@ var reviewerDisallowedTools = []string{
 // through an AO-owned prompt file so only the short task-file reference is
 // terminal-visible.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
-	agentSessionID := workeragent.SessionUUID(inv.ReviewerID)
+	agentSessionID, err := r.freshSessionID(ctx, inv)
+	if err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config: inv.Config,
-		// Pin the same deterministic reviewer-native id we persist. Hooks can
-		// later replace it with Claude's reported id, but restore must never start
-		// from an id that the process was not launched with.
+		// Pin the same reviewer-native id we persist. Hooks can later replace it
+		// with Claude's reported id, but restore must never start from an id that
+		// the process was not launched with.
 		SessionID:        inv.ReviewerID,
 		NativeSessionID:  agentSessionID,
 		WorkspacePath:    inv.WorkspacePath,
@@ -118,6 +121,33 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		return ports.ReviewCommandSpec{}, err
 	}
 	return ports.ReviewCommandSpec{Argv: argv, AgentSessionID: agentSessionID}, nil
+}
+
+// freshSessionID picks the native id a fresh reviewer launch pins with
+// --session-id. It is the reviewer's deterministic id unless Claude already
+// has a conversation under that id, as when a config override relaunches a
+// reviewer that has reviewed before; Claude refuses to start a new session on
+// an id in use, so the launch then takes an id derived from its launch id.
+// Without a launch (preflight) nothing is started, so history is not probed.
+func (r *Reviewer) freshSessionID(ctx context.Context, inv ports.ReviewInvocation) (string, error) {
+	id := workeragent.SessionUUID(inv.ReviewerID)
+	launchID := strings.TrimSpace(inv.LaunchID)
+	if launchID == "" {
+		return id, nil
+	}
+	probe, ok := r.agent.(ports.AgentInterfaceHandoffHistoryProbe)
+	if !ok {
+		return id, nil
+	}
+	session := ports.SessionRef{ID: inv.ReviewerID, WorkspacePath: inv.WorkspacePath}
+	exists, err := probe.NativeConversationExists(ctx, session, id, nil)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return id, nil
+	}
+	return workeragent.SessionUUID(inv.ReviewerID + "/" + launchID), nil
 }
 
 // PreLaunch runs reviewer-specific preflight. For Claude Code this installs the
