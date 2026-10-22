@@ -638,7 +638,8 @@ async function auditChatApprovals({ baseURL, sessionId, timeoutMs, record }) {
     const file = join(outside, `${sessionId}-${wanted}-${token("x").slice(2, 10)}.txt`);
     const prompt = [
       `Use your shell/command tool (not a file-editing tool) to run exactly: node -e "require('fs').writeFileSync(${JSON.stringify(file).replaceAll('"', "'")},'ao-audit')"`,
-      "If the command is denied, do not retry it and do not create the file any other way; just stop.",
+      "The file is outside your workspace, so your sandbox may block it: if it does, request approval (escalated permissions) to run this exact command once.",
+      "If the approval is denied, do not retry and do not create the file any other way; just stop.",
     ].join("\n");
     const send = await sendChat(baseURL, sessionId, prompt);
     const pending = send.ok ? await waitUntil(async () => {

@@ -131,7 +131,7 @@ async function checkpoint(context, id, title, run) {
 // true once the terminal shows `pattern`, false on timeout, null when the
 // terminal text is not in the DOM at all.
 async function waitForTerminalText(page, pattern, timeoutMs) {
-  const rows = page.locator(".xterm-rows");
+  const rows = page.locator(".xterm-rows:visible");
   if (!(await visible(rows, 5_000))) return null;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -273,7 +273,8 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
   await closeSettings(page);
 
   for (const mode of interfaces) {
-    if (interfaces.length > 1) {
+    // Always set it: the default interface persists between runs.
+    {
       await setInterface(page, mode === "chat" ? "Chat" : "Terminal").catch((error) => console.error(`could not set the default interface to ${mode}: ${error.message.split("\n")[0]}`));
     }
     let dialog;
@@ -312,10 +313,12 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
       await dialog.locator(SELECTORS.submit).first().click();
       await page.locator(SELECTORS.sessionDetail).first().waitFor({ timeout: 60_000 });
       // Some CLIs (Claude Code) take well over 30 s to paint their first frame.
-      const surface = page.locator(mode === "chat" ? SELECTORS.chat : `${SELECTORS.terminal}, .xterm`);
+      // AO keeps earlier sessions' terminals mounted but hidden; only a visible
+      // surface belongs to the session that just opened.
+      const surface = page.locator(mode === "chat" ? `${SELECTORS.chat}:visible` : `${SELECTORS.terminal}:visible, .xterm:visible`);
       if (!(await visible(surface, 90_000))) return { status: "FAIL", reason: `session opened without a ${mode} surface within 90 s` };
       if (mode === "chat") {
-        const answered = await visible(page.locator(SELECTORS.chatMessages), 120_000);
+        const answered = await visible(page.locator(`${SELECTORS.chat}:visible ${SELECTORS.chatMessages}`), 120_000);
         return answered ? { status: "PASS", reason: "Chat session answered" } : { status: "FAIL", reason: "Chat session opened but no assistant reply within 2 minutes" };
       }
       // The DOM renderer exposes the screen text; the WebGL renderer does not,
