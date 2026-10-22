@@ -64,7 +64,7 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 				<DeviceCodePanel code={login.userCode ?? ""} url={login.verificationUrl ?? DEFAULT_VERIFICATION_URL} onCancel={setup.cancelSignIn} />
 			) : (
 				<SetupList>
-					{setup.cliMissing ? (
+					{setup.cliMissing && !setup.signInActive ? (
 						<SetupRow
 							icon={<GitHubMarkIcon aria-hidden="true" />}
 							label={installFailed ? t("onboarding.tryAgain") : t("startup.installGh")}
@@ -87,6 +87,9 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 					)}
 				</SetupList>
 			)}
+			{setup.signInActive && !awaitingApproval ? (
+				<Button type="button" variant="ghost" onClick={setup.cancelSignIn}>{t("confirm.cancel")}</Button>
+			) : null}
 			{installDetail ? (
 				<p className="px-4 text-caption leading-snug text-warning" role="status">
 					{installDetail}

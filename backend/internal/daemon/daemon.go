@@ -616,6 +616,7 @@ func Run(buildVersion string) error {
 
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
+	defer systemChecks.Close()
 	privateNPMPrefixes := map[systeminstall.Target]string{}
 	if prefix, err := opencode.V2NPMPrefix(); err == nil {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix

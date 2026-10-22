@@ -25,12 +25,13 @@ type Adapter struct {
 }
 
 var (
-	_ ports.ExecutableFinder       = Adapter{}
-	_ ports.CommandRunner          = Adapter{}
-	_ ports.InstallCommandRunner   = Adapter{}
-	_ ports.InstallScriptRunner    = Adapter{}
-	_ ports.InstallCapabilityProbe = Adapter{}
-	_ ports.PathWritableProbe      = Adapter{}
+	_ ports.ExecutableFinder        = Adapter{}
+	_ ports.CommandRunner           = Adapter{}
+	_ ports.GitHubDeviceLoginRunner = Adapter{}
+	_ ports.InstallCommandRunner    = Adapter{}
+	_ ports.InstallScriptRunner     = Adapter{}
+	_ ports.InstallCapabilityProbe  = Adapter{}
+	_ ports.PathWritableProbe       = Adapter{}
 )
 
 // New creates a host adapter whose installer scratch space stays inside AO's
@@ -185,6 +186,20 @@ func pathWritable(ctx context.Context, path string) (bool, error) {
 
 // Run executes argv with ctx and connects its output to the supplied writers.
 func (Adapter) Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
+	return runCommand(ctx, argv, nil, stdout, stderr)
+}
+
+// RunGitHubDeviceLogin leaves browser navigation to the renderer, including on
+// legacy gh versions that ignore non-interactive mode when opening a browser.
+func (Adapter) RunGitHubDeviceLogin(ctx context.Context, path string, stdout, stderr io.Writer) error {
+	// gh appends the URL to this command. Its auth-free version subcommand accepts
+	// positional arguments, so it is a portable no-op browser on every platform.
+	browser := "'" + strings.ReplaceAll(path, "'", "'\\''") + "' version"
+	return runCommand(ctx, []string{path, "auth", "login", "--web", "--hostname", "github.com"},
+		[]string{"BROWSER=" + browser, "GH_BROWSER=" + browser}, stdout, stderr)
+}
+
+func runCommand(ctx context.Context, argv, env []string, stdout, stderr io.Writer) error {
 	cmd, err := commandContext(ctx, argv[0], argv[1:]...)
 	if err != nil {
 		return err
@@ -193,5 +208,8 @@ func (Adapter) Run(ctx context.Context, argv []string, stdout, stderr io.Writer)
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	return cmd.Run()
 }

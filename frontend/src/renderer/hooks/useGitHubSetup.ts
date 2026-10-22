@@ -1,9 +1,8 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useInstallRunner } from "../components/InstallDependencyDialog";
 import { aoBridge } from "../lib/bridge";
-import { githubAuthRequirementQueryOptions, useGitHubAuthRequirement, useGitHubDeviceLogin, useSystemRequirementsGate } from "./useSystemRequirementsGate";
+import { useGitHubAuthRequirement, useGitHubDeviceLogin, useSystemRequirementsGate } from "./useSystemRequirementsGate";
 
 const GH_INSTALL_TARGET = "gh" as const;
 /** The GitHub page watches long-running external work (a package install, a
@@ -19,7 +18,6 @@ const STEP_POLL_INTERVAL_MS = 2_500;
  */
 export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const gate = useSystemRequirementsGate();
 	const { login, start, cancel } = useGitHubDeviceLogin();
 	const signInActive = start.isPending || login.state === "starting" || login.state === "awaiting_approval";
@@ -80,16 +78,12 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 		void aoBridge.app.openExternal(login.verificationUrl ?? "https://github.com/login/device");
 	}, [login.id, login.state, login.userCode, login.verificationUrl]);
 
-	// The daemon reports success as soon as gh exits; confirm it against the
-	// credential probe straight away rather than waiting for the next tick.
-	// gh exiting cleanly means it is signed in, so show that at once and let the
-	// probe confirm (or correct) it.
+	// A successful process still needs a credential probe before Continue enables.
 	const succeeded = login.state === "succeeded";
 	useEffect(() => {
 		if (!succeeded) return;
-		queryClient.setQueryData(githubAuthRequirementQueryOptions.queryKey, (current: { satisfied?: boolean } | undefined) => current ? { ...current, satisfied: true } : current);
 		void authRef.current();
-	}, [queryClient, succeeded]);
+	}, [succeeded]);
 
 	return {
 		authSatisfied,
@@ -104,7 +98,7 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 		signIn: () => start.mutate(),
 		cancelSignIn: () => cancel.mutate(),
 		signInActive,
-		signInError: start.isError ? start.error.message : cancel.isError ? cancel.error.message : null,
+		signInError: start.isError && start.error.name !== "AbortError" ? start.error.message : cancel.isError ? cancel.error.message : null,
 		signInPending: start.isPending,
 	};
 }
