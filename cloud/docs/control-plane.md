@@ -173,12 +173,16 @@ and no S3 client is built.
   restore or a replacement) lists the session's committed files with
   `GET /worker/artifacts` and downloads each one missing from the directory
   with `GET /worker/artifacts/blob/{path}`, which streams the row's
-  `version_id`. A download is written under `.ao-restore`, checked against
-  the row's size and SHA-256, and linked into place, so it never replaces a
-  file the agent wrote; a path that already exists keeps its local file, which
-  syncs as usual. A restored file counts as synced: it is not uploaded again,
-  and deleting it deletes the committed file. A restore that fails or runs past
-  30 s is retried in the background while the agent runs.
+  `version_id`. Each file is written straight to its path in the artifact
+  directory, created only if absent, so it never replaces a file the agent
+  wrote, and is checked against the row's size and SHA-256; a download that
+  fails or does not match is removed. A path that already exists keeps its
+  local file, which counts as the committed file until a scan finds it
+  changed. A restored or kept file counts as synced: it is not uploaded again
+  unless it changes, and deleting it deletes the committed file. A restore
+  that fails or runs past 30 s is retried in the background while the agent
+  runs, skipping paths already synced, so a retry never brings back a file
+  the agent deleted.
 - **Storage.** The worker sends a manifest of `(path, size, sha256)`; the
   control plane answers with the paths whose committed row differs. Each
   changed file is relayed to the versioned tenant artifact bucket at
