@@ -498,15 +498,17 @@ describe("startup harness update notice", () => {
 
 	it("keeps the stack when an installer refresh fails after it rendered", async () => {
 		const { client } = mountNotice();
-		await screen.findByRole("article", { name: "Claude Code" });
+		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/installers"
 			? Promise.resolve({ error: { message: "installers unavailable" } } as never)
 			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
 		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
 		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
+		// Query state changes before React renders the failed-check fallback.
+		expect(await screen.findByRole("button", { name: "View details" })).toBeEnabled();
 		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {

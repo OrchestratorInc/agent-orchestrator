@@ -1,0 +1,68 @@
+// Model selection functions from @agentclientprotocol/claude-agent-acp 0.70.0 (Apache-2.0).
+// Kept as source text so packaging patches execute against the upstream control flow.
+async function readResumedLiveModel(query, models, logger) {
+    try {
+        const usage = await query.getContextUsage();
+        return {
+            model: usage.model ? matchResumedModel(models, usage.model) : null,
+            contextWindow: usage.rawMaxTokens > 0 ? usage.rawMaxTokens : null,
+        };
+    }
+    catch (error) {
+        logger.error("Failed to read the resumed session's live model:", error);
+        return { model: null, contextWindow: null };
+    }
+}
+
+async function getAvailableModels(query, models, sdkModels, settingsManager, logger, isResumedSession) {
+    const settings = settingsManager.getSettings();
+    let currentModel = models[0];
+    let resolvedFromInput;
+    let resumedContextWindow = null;
+    if (process.env.ANTHROPIC_MODEL) {
+        const match = resolveModelPreference(models, process.env.ANTHROPIC_MODEL);
+        if (match) {
+            currentModel = match;
+            resolvedFromInput = process.env.ANTHROPIC_MODEL;
+        }
+    }
+    else if (typeof settings.model === "string") {
+        const match = resolveSettingsModel(models, settings.model, logger);
+        if (match) {
+            currentModel = match;
+            resolvedFromInput = settings.model;
+        }
+    }
+    if (resolvedFromInput === undefined && isResumedSession) {
+        const live = await readResumedLiveModel(query, models, logger);
+        currentModel = live.model ?? currentModel;
+        resumedContextWindow = live.contextWindow;
+    }
+    const sdkSawSameValue = sdkModels.some((m) => m.value === currentModel.value);
+    const skipSetModel = resolvedFromInput === undefined ||
+        (!isResumedSession && currentModel.value === resolvedFromInput && sdkSawSameValue);
+    if (!skipSetModel) {
+        try {
+            await query.setModel(currentModel.value);
+        }
+        catch (error) {
+            if (!isResumedSession)
+                throw error;
+            logger.error(`Failed to re-assert model "${currentModel.value}" on resume:`, error);
+            const live = await readResumedLiveModel(query, models, logger);
+            currentModel = live.model ?? currentModel;
+            resumedContextWindow = live.contextWindow;
+        }
+    }
+    return {
+        modelState: {
+            availableModels: models.map((model) => ({
+                modelId: model.value,
+                name: model.displayName,
+                description: model.description,
+            })),
+            currentModelId: currentModel.value,
+        },
+        resumedContextWindow,
+    };
+}

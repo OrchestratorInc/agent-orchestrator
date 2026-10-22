@@ -82,6 +82,71 @@ export function patchClaudeRetryDetails(adapterPath) {
 	return true;
 }
 
+// claude-agent-acp 0.70 skips the resumed context snapshot when an env/settings
+// model pin succeeds. A new host has no cached window, so even a large retained
+// conversation streams against the 200K default until its first result. AO's
+// subsequent explicit model selection can reseed that default a second time.
+export function patchClaudeContextWindow(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: refresh confirmed context windows.")) return false;
+	const replacements = [
+		["await query.setModel(currentModel.value);", `await query.setModel(currentModel.value);
+            if (isResumedSession) {
+                resumedContextWindow = await aoReadContextWindow(query, logger);
+            }`],
+		["contextWindowSize: seededWindow.size,", `aoContextReady: creationOpts.resume !== undefined,
+            contextWindowSize: seededWindow.size,`],
+		["session.contextWindowAuthoritative = seeded.authoritative;", `session.contextWindowAuthoritative = seeded.authoritative;
+                if (session.aoContextReady) {
+                    const window = await aoReadContextWindow(session.query, this.logger);
+                    if (window !== null) {
+                        session.contextWindowSize = window;
+                        session.contextWindowAuthoritative = true;
+                    }
+                }`],
+		["// AO: use the SDK's context snapshot.", `session.aoContextReady = true;
+                            // AO: use the SDK's context snapshot.`],
+	];
+	for (const [before, after] of replacements) {
+		if (source.split(before).length !== 2) {
+			throw new Error("claude-agent-acp no longer matches AO's context window patch");
+		}
+		source = source.replace(before, after);
+	}
+	const size = "size: session.contextWindowSize,";
+	if (!source.includes(size)) {
+		throw new Error("claude-agent-acp no longer publishes the expected context window");
+	}
+	// ACP size 0 is already rendered as unknown by AO. Never turn an unconfirmed
+	// seed into a false full-context warning, including when the SDK read fails.
+	source = source.replaceAll(size, "size: session.contextWindowAuthoritative ? session.contextWindowSize : 0,");
+	source += `
+// AO: refresh confirmed context windows.
+// Only call after resume or a completed turn. Fresh pre-prompt queries stall
+// the SDK control channel and must keep using unknown context until a result.
+async function aoReadContextWindow(query, logger) {
+    let timer;
+    try {
+        const usage = await Promise.race([
+            query.getContextUsage(),
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error("Claude context window timed out")), 2000);
+            }),
+        ]);
+        return Number.isFinite(usage.rawMaxTokens) && usage.rawMaxTokens > 0
+            ? usage.rawMaxTokens : null;
+    } catch (error) {
+        logger.error("Failed to refresh Claude context window:", error);
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+`;
+	writeFileSync(adapterPath, source);
+	return true;
+}
+
 /**
  * claude-agent-acp 0.70 reports the last assistant message's token usage as
  * context occupancy. The SDK's getContextUsage returns its current retained
