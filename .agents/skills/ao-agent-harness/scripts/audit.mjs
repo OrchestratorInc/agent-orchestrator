@@ -504,14 +504,24 @@ function chatIdle(snapshot) {
   return snapshot?.controller === "ready" && !turns.some((turn) => turn.state === "running" || turn.state === "queued") && !approvals.length;
 }
 
-async function waitChat(ao, sessionId, accept, timeoutMs) {
-  return waitUntil(async () => {
+// Waits for `accept(proof)` with the Chat idle. A turn that fails after the
+// first `turnsBefore` turns ends the wait early and its error is returned, so
+// a provider error is reported as itself, not as a timeout.
+async function waitChat(ao, sessionId, accept, timeoutMs, turnsBefore = Infinity) {
+  const outcome = await waitUntil(async () => {
     const [conversation, file] = await Promise.all([ao.conversation(sessionId), ao.file(sessionId, CHAT_PROOF)]);
     const snapshot = conversation.data?.conversation ?? conversation.data;
     const proof = jsonFile(file);
-    return { done: Boolean(accept(proof)) && chatIdle(snapshot), proof, snapshot };
+    const failed = (snapshot?.turns ?? []).slice(turnsBefore).find((turn) => turn.state === "failed");
+    return { done: (Boolean(accept(proof)) || Boolean(failed)) && chatIdle(snapshot), proof, snapshot, failed };
   }, timeoutMs, 1_000);
+  return { ...outcome, done: outcome.done && !outcome.failed, error: outcome.failed?.errorMessage ?? "" };
 }
+
+const turnCount = async (ao, sessionId) => {
+  const conversation = (await ao.conversation(sessionId)).data;
+  return ((conversation?.conversation ?? conversation)?.turns ?? []).length;
+};
 
 const sendChat = (ao, sessionId, text) => ao.post(`sessions/${encodeURIComponent(sessionId)}/conversation/messages`, { text, clientMessageId: token("audit") });
 
@@ -534,14 +544,16 @@ async function auditChat(run_, { ao, dataDir, projectId, tokens, timeoutMs }) {
     return run_.skip(ids.slice(1), "no Chat session");
   }
   const workspacePath = (await ao.get(`desktop/sessions/${encodeURIComponent(sessionId)}/workspace`)).data?.workspacePath;
-  const first = await waitChat(ao, sessionId, (proof) => proof?.initialPromptToken === tokens.initial, timeoutMs);
+  const first = await waitChat(ao, sessionId, (proof) => proof?.initialPromptToken === tokens.initial, timeoutMs, 0);
   await checkFirstProof(run_, "chat", first.proof, workspacePath, tokens, { conversation: chatSummary(first.snapshot), proof: first.proof });
+  if (!first.proof && first.error) run_.checks.find((item) => item.id === "chat_prompt").reason = `the first Chat turn failed: ${first.error}`;
   if (!first.proof) return run_.skip(ids.slice(2).filter((id) => !run_.checks.some((item) => item.id === id)), "the first Chat turn produced no proof file");
 
   const second = token("AO_CHAT_SECOND");
+  const beforeFollowUp = await turnCount(ao, sessionId);
   const sent = await sendChat(ao, sessionId, `Update ${CHAT_PROOF}: add the field secondMessageToken with the value ${second}. Keep every other field, then stop.`);
-  const followed = sent.ok ? await waitChat(ao, sessionId, (proof) => proof?.secondMessageToken === second, timeoutMs) : { done: false };
-  await run_.add("chat_follow_up", followed.done ? "PASS" : "FAIL", followed.done ? "a follow-up Chat message was answered" : sent.ok ? "the follow-up turn never finished" : `AO refused the follow-up: HTTP ${sent.status}`, { send: sent, conversation: chatSummary(followed.snapshot) });
+  const followed = sent.ok ? await waitChat(ao, sessionId, (proof) => proof?.secondMessageToken === second, timeoutMs, beforeFollowUp) : { done: false };
+  await run_.add("chat_follow_up", followed.done ? "PASS" : "FAIL", followed.done ? "a follow-up Chat message was answered" : followed.error ? `the follow-up turn failed: ${followed.error}` : sent.ok ? "the follow-up turn never finished" : `AO refused the follow-up: HTTP ${sent.status}`, { send: sent, conversation: chatSummary(followed.snapshot) });
 
   // Models come either as a list or, for some ACP drivers, as a "model" config option.
   const listed = await ao.get(`sessions/${encodeURIComponent(sessionId)}/conversation/models`);
@@ -555,11 +567,15 @@ async function auditChat(run_, { ao, dataDir, projectId, tokens, timeoutMs }) {
     const now_ = (await ao.conversation(sessionId)).data;
     const model = (now_?.conversation ?? now_)?.settings?.model;
     await run_.add("chat_models", patch.ok && model === target ? "PASS" : "FAIL", patch.ok && model === target ? `Chat lists ${listModels.length} model(s) and switched to ${target}` : `switching the Chat model to ${target} did not stick (now ${model})`, { listed: listModels, patch });
+    // Switch back: the picked model may not be one this account can run.
+    if (listed.data?.selected?.model) await ao.patch(`sessions/${encodeURIComponent(sessionId)}/conversation/settings`, { model: listed.data.selected.model });
   } else if (optionModels.length) {
     const target = optionModels.find((value) => value !== modelOption.currentValue) ?? optionModels[0];
     const patch = await ao.patch(`sessions/${encodeURIComponent(sessionId)}/conversation/config-options/${encodeURIComponent(modelOption.id)}`, { value: target });
     const current = ((await ao.get(`sessions/${encodeURIComponent(sessionId)}/conversation/config-options`)).data?.options ?? []).find((option) => option.id === modelOption.id)?.currentValue;
     await run_.add("chat_models", patch.ok && current === target ? "PASS" : "FAIL", patch.ok && current === target ? `Chat offers ${optionModels.length} model(s) and switched to ${target}` : `switching the Chat model to ${target} did not stick (now ${current})`, { choices: optionModels, patch });
+    // Switch back: the picked model may not be one this account can run.
+    if (modelOption.currentValue) await ao.patch(`sessions/${encodeURIComponent(sessionId)}/conversation/config-options/${encodeURIComponent(modelOption.id)}`, { value: modelOption.currentValue });
   } else {
     await run_.add("chat_models", "FAIL", "Chat offers no models (neither a model list nor a model option)", { listed, options });
   }
@@ -583,9 +599,10 @@ async function auditChat(run_, { ao, dataDir, projectId, tokens, timeoutMs }) {
   await run_.add("chat_restore", same ? "PASS" : "FAIL",
     same ? "AO restored the same Chat conversation" : !restore.ok ? `AO refused the restore: HTTP ${restore.status}` : !ready.done ? "the restored Chat never became ready" : "the restored Chat is a different conversation: history is lost", { restore });
   if (!same) return run_.skip(["chat_restore_history"], "no restore");
+  const beforeRecall = await turnCount(ao, sessionId);
   const recall = await sendChat(ao, sessionId, `Update ${CHAT_PROOF}: add the field historyToken with the history-only token from my first message (from memory, not from a file). Keep every other field, then stop.`);
-  const recalled = recall.ok ? await waitChat(ao, sessionId, (proof) => proof?.historyToken === tokens.history, timeoutMs) : { done: false };
-  await run_.add("chat_restore_history", recalled.done ? "PASS" : "FAIL", recalled.done ? "the restored Chat remembered the first message" : "the restored Chat did not remember the first message", { conversation: chatSummary(recalled.snapshot) });
+  const recalled = recall.ok ? await waitChat(ao, sessionId, (proof) => proof?.historyToken === tokens.history, timeoutMs, beforeRecall) : { done: false };
+  await run_.add("chat_restore_history", recalled.done ? "PASS" : "FAIL", recalled.done ? "the restored Chat remembered the first message" : recalled.error ? `the turn after restore failed: ${recalled.error}` : "the restored Chat did not remember the first message", { conversation: chatSummary(recalled.snapshot) });
 }
 
 // ------------------------------------------------------------------ roles
@@ -648,7 +665,7 @@ const FIX_HINTS = {
   role_orchestrator: ["backend/internal/session_manager/prompt.go", "the harness's system-prompt channel"],
 };
 
-const USER_TEXT = /not logged in|log ?in|unauthori[sz]ed|api key|quota|rate.?limit|limit exhausted|\b429\b|billing|subscription|not on PATH|install it/i;
+const USER_TEXT = /authentication failed|not logged in|log ?in|unauthori[sz]ed|api key|quota|rate.?limit|limit exhausted|\b429\b|billing|subscription|not on PATH|install it/i;
 
 export function triage(agent, contract, check) {
   if (/CHAT_DRIVER_UNAVAILABLE/.test(check.reason)) return { owner: "setup", action: "The machine is missing AO's Chat bridge: run `npm ci && npm run build:acp-runtime` in frontend/ (or set AO_ACP_RUNTIME_DIR), then rerun." };
