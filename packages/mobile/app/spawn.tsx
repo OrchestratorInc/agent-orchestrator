@@ -23,7 +23,7 @@ import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
@@ -346,17 +346,7 @@ function SpawnModalContent() {
 			preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
 		});
 		if (result.canceled) return null;
-		return result.assets.map((asset, index) => {
-			const file = new File(asset.uri);
-			const mimeType = asset.mimeType || "image/jpeg";
-			return {
-				name: asset.fileName || `photo-${index + 1}.${mimeType.split("/")[1] || "jpg"}`,
-				mimeType,
-				bytes: asset.fileSize ?? file.size,
-				previewUri: asset.uri,
-				readData: () => file.base64(),
-			};
-		});
+		return result.assets.map((asset, index) => photoPickerAttachment(asset, index, new File(asset.uri)));
 	}, "Couldn't open your photo library.");
 
 	const onSpawn = async () => {
