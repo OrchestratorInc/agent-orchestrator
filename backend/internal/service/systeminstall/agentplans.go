@@ -737,6 +737,8 @@ func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
 		if s.homebrewKegLinked(openCodeV1HomebrewKeg) {
 			plan.Prepare = append(slices.Clone(plan.Prepare), []string{"brew", "unlink", openCodeV1HomebrewKeg})
 			restore = [][]string{{"brew", "link", openCodeV1HomebrewKeg}}
+			// OpenCode 1 launches wait until its link is back.
+			plan.alsoChanges = []Target{TargetOpencode}
 		}
 		plan.Cleanup = append([][]string{{"brew", "unlink", openCodeV2HomebrewKeg}}, restore...)
 	}

@@ -726,6 +726,7 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 			candidates = append(candidates, filepath.Join(dir, "opencode"))
 		}
 		candidates = append(candidates, v2HomebrewCandidates()...)
+		candidates = append(candidates, v1HomebrewCandidates()...)
 	}
 	for _, candidate := range candidates {
 		if hookutil.IsExecutableFile(candidate) {

@@ -87,28 +87,27 @@ func V2InstallerBinDir() (string, error) {
 	return filepath.Join(home, ".opencode", "bin"), nil
 }
 
-// v2HomebrewBinaries are the opt links of the opencode-v2 formula. AO unlinks
-// the formula after installing it, so its executable never takes over
-// <prefix>/bin/opencode, and resolves it through the opt link instead.
-var v2HomebrewBinaries = []string{
-	"/opt/homebrew/opt/opencode-v2/bin/opencode",
-	"/usr/local/opt/opencode-v2/bin/opencode",
-	"/home/linuxbrew/.linuxbrew/opt/opencode-v2/bin/opencode",
-}
+// homebrewDefaultPrefixes are Homebrew's standard install prefixes.
+var homebrewDefaultPrefixes = []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"}
 
-// v2HomebrewCandidates adds the opt link under a custom Homebrew prefix, taken
-// from HOMEBREW_PREFIX or the brew on PATH (<prefix>/bin/brew), to the default
-// prefixes in v2HomebrewBinaries.
-func v2HomebrewCandidates() []string {
-	candidates := slices.Clone(v2HomebrewBinaries)
+// homebrewOptBinaries returns formula's opt link to its opencode executable
+// (<prefix>/opt/<formula>/bin/opencode) under the default prefixes and a
+// custom one, taken from HOMEBREW_PREFIX or the brew on PATH
+// (<prefix>/bin/brew). The opt link exists whether or not the formula is
+// linked into <prefix>/bin.
+func homebrewOptBinaries(formula string) []string {
+	var candidates []string
 	add := func(prefix string) {
 		if prefix == "" || !filepath.IsAbs(prefix) {
 			return
 		}
-		candidate := filepath.ToSlash(filepath.Join(prefix, "opt", "opencode-v2", "bin", "opencode"))
+		candidate := filepath.ToSlash(filepath.Join(prefix, "opt", formula, "bin", "opencode"))
 		if !slices.Contains(candidates, candidate) {
 			candidates = append(candidates, candidate)
 		}
+	}
+	for _, prefix := range homebrewDefaultPrefixes {
+		add(prefix)
 	}
 	add(strings.TrimSpace(os.Getenv("HOMEBREW_PREFIX")))
 	if brew, err := exec.LookPath("brew"); err == nil {
@@ -116,6 +115,16 @@ func v2HomebrewCandidates() []string {
 	}
 	return candidates
 }
+
+// v2HomebrewCandidates are the opencode-v2 formula's opt links. AO unlinks the
+// formula after installing it, so its executable never takes over
+// <prefix>/bin/opencode, and resolves it through the opt link instead.
+func v2HomebrewCandidates() []string { return homebrewOptBinaries("opencode-v2") }
+
+// v1HomebrewCandidates are the opencode formula's opt links. They keep
+// OpenCode 1 resolvable while its <prefix>/bin link is briefly removed so the
+// opencode-v2 formula (which conflicts with it) can be installed.
+func v1HomebrewCandidates() []string { return homebrewOptBinaries("opencode") }
 
 var v2DataMigrationLock = make(chan struct{}, 1)
 
