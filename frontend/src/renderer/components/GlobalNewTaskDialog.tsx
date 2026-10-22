@@ -20,7 +20,7 @@ export function GlobalNewTaskDialog() {
 	const [open, setOpen] = useState(false);
 	const [projectId, setProjectId] = useState<string | undefined>(undefined);
 	const [hostId, setHostId] = useState<string | undefined>(undefined);
-	const [prefill, setPrefill] = useState<{ initialPrompt?: string; displayName?: string }>({});
+	const [prefill, setPrefill] = useState<{ hiddenPrompt?: string; displayName?: string }>({});
 	const onContentChange = useCallback((hasContent: boolean) => useUiStore.setState({ newTaskDialogHasContent: hasContent }), []);
 	useEffect(() => () => useUiStore.setState({ newTaskDialogHasContent: false }), []);
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
@@ -31,11 +31,11 @@ export function GlobalNewTaskDialog() {
 		// Consume requests that arrive while this dialog is already open. In
 		// particular, do not retarget a populated form to another project, and do
 		// not replay the ignored request when the user later closes the dialog.
-		if (open && (!newTaskRequest.initialPrompt || useUiStore.getState().newTaskDialogHasContent)) return;
+		if (open && (!newTaskRequest.hiddenPrompt || useUiStore.getState().newTaskDialogHasContent)) return;
 		setDialogKey(newTaskRequest.nonce);
 		setProjectId(newTaskRequest.projectId);
 		setHostId(newTaskRequest.hostId);
-		setPrefill({ initialPrompt: newTaskRequest.initialPrompt, displayName: newTaskRequest.displayName });
+		setPrefill({ hiddenPrompt: newTaskRequest.hiddenPrompt, displayName: newTaskRequest.displayName });
 		setOpen(true);
 	}, [newTaskRequest, open]);
 

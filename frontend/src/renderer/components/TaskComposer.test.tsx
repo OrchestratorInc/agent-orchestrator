@@ -559,20 +559,44 @@ describe("TaskComposer", () => {
 		expect(h.get.mock.calls.some(([path]) => path === "/api/v1/projects/{id}")).toBe(false);
 	});
 
-	it("starts a prefilled report through the existing standalone creation path", async () => {
+	it.each(["", "  The composer froze after clicking Create.  "])("starts a report with hidden instructions and user text %j", async (text) => {
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
 		h.post.mockResolvedValueOnce({ data: { session: { id: "report-session" } } });
 		const onCreated = vi.fn();
 		const onContentChange = vi.fn();
-		render(<Wrap><TaskComposer projectId="__standalone__" initialPrompt="Read /home/me/.ao/triage/context.md" displayName="Report a problem" onCreated={onCreated} onContentChange={onContentChange} /></Wrap>);
-		expect(onContentChange).toHaveBeenLastCalledWith(true);
-		expect(task()).toHaveValue("Read /home/me/.ao/triage/context.md");
+		render(<Wrap><TaskComposer projectId="__standalone__" hiddenPrompt="Read /home/me/.ao/triage/context.md" displayName="Report a problem" onCreated={onCreated} onContentChange={onContentChange} /></Wrap>);
+		expect(onContentChange).toHaveBeenLastCalledWith(false);
+		expect(task()).toHaveValue("");
+		expect(task()).toHaveAttribute("placeholder", "What went wrong? (optional)");
 		await waitForTaskReady();
+		if (text) fireEvent.change(task(), { target: { value: text } });
+		expect(onContentChange).toHaveBeenLastCalledWith(Boolean(text));
 		fireEvent.click(startTask());
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("report-session"));
 		expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({
-			prompt: "Read /home/me/.ao/triage/context.md", displayName: "Report a problem", harness: "codex",
+			prompt: "Read /home/me/.ao/triage/context.md" + (text ? `\n\n${text}` : ""), displayName: "Report a problem", harness: "codex",
 		}) }));
+	});
+
+	it("includes hidden instructions once on each Terminal UI retry", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.post
+			.mockResolvedValueOnce({ error: { code: "CHAT_DRIVER_UNAVAILABLE", message: "Chat unavailable" } })
+			.mockResolvedValueOnce({ data: { session: { id: "report-tui" } } });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" hiddenPrompt="Read the report context." displayName="Report a problem" onCreated={onCreated} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "The composer froze." } });
+		fireEvent.click(startTask());
+		fireEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("report-tui"));
+		expect(h.post).toHaveBeenCalledTimes(2);
+		for (const [, options] of h.post.mock.calls) {
+			expect(options.body.prompt).toBe("Read the report context.\n\nThe composer froze.");
+			expect(options.body.displayName).toBe("Report a problem");
+		}
+		expect(h.post.mock.calls[1][1].body.mode).toBe("tui");
+		expect(task()).toHaveValue("The composer froze.");
 	});
 
 	it("sends the visible default model when starting a standalone worker", async () => {

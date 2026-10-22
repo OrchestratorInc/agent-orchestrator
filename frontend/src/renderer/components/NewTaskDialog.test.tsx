@@ -521,11 +521,14 @@ describe("NewTaskDialog", () => {
 	});
 });
 
-it("keeps the typed prompt and content signal while Settings hides the real dialog", async () => {
+it.each([undefined, "Read the report context."])("keeps the typed prompt while Settings hides the dialog with hiddenPrompt %j", async (hiddenPrompt) => {
  const onContentChange = vi.fn();
  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
- render(<QueryClientProvider client={client}><NewTaskDialog open projectId="proj-1" onCreated={vi.fn()} onOpenChange={vi.fn()} onContentChange={onContentChange} /></QueryClientProvider>);
+ render(<QueryClientProvider client={client}><NewTaskDialog open projectId="proj-1" hiddenPrompt={hiddenPrompt} onCreated={vi.fn()} onOpenChange={vi.fn()} onContentChange={onContentChange} /></QueryClientProvider>);
  const prompt = await screen.findByLabelText("Task");
+ expect(prompt).toHaveValue("");
+ expect(onContentChange).toHaveBeenLastCalledWith(false);
+ if (hiddenPrompt) expect(prompt).toHaveAttribute("placeholder", "What went wrong? (optional)");
  fireEvent.change(prompt, { target: { value: "keep my observation" } });
  expect(onContentChange).toHaveBeenLastCalledWith(true);
  act(() => useUiStore.setState({ settingsModal: { scope: "global", section: "help" } }));

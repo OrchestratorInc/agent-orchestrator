@@ -1,5 +1,6 @@
 {
 	"report.action": "Report a problem",
+	"report.promptPlaceholder": "What went wrong? (optional)",
 	"report.description": "Starts an agent that gathers logs, asks what went wrong and can file the issue for you.",
 	"report.opening": "Opening...",
 	"report.failed": "Could not start the report. Try again.",

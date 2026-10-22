@@ -1,5 +1,6 @@
 {
 	"report.action": "Signaler un problème",
+	"report.promptPlaceholder": "Que s’est-il passé ? (facultatif)",
 	"report.description": "Lance un agent qui recueille les journaux, vous demande ce qui a échoué et peut envoyer le signalement pour vous.",
 	"report.opening": "Ouverture...",
 	"report.failed": "Impossible de lancer le signalement. Réessayez.",

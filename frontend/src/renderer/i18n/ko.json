@@ -1,5 +1,6 @@
 {
 	"report.action": "문제 신고",
+	"report.promptPlaceholder": "어떤 문제가 발생했나요? (선택 사항)",
 	"report.description": "로그를 수집하고 문제 상황을 물어보며 이슈를 등록할 수 있는 에이전트를 시작합니다.",
 	"report.opening": "여는 중...",
 	"report.failed": "신고를 시작하지 못했습니다. 다시 시도하세요.",

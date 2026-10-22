@@ -55,7 +55,7 @@ function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; ur
 }
 
 type NewTaskDialogProps = {
-	initialPrompt?: string;
+	hiddenPrompt?: string;
 	displayName?: string;
 	open: boolean;
 	projectId?: string;
@@ -66,9 +66,9 @@ type NewTaskDialogProps = {
 	onContentChange?: (hasContent: boolean) => void;
 };
 
-export function NewTaskDialog({ open, projectId, hostId, initialPrompt, displayName, onProjectChange, onCreated, onOpenChange, onContentChange }: NewTaskDialogProps) {
+export function NewTaskDialog({ open, projectId, hostId, hiddenPrompt, displayName, onProjectChange, onCreated, onOpenChange, onContentChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
-	const [draftPrompt, setDraftPrompt] = useState(initialPrompt ?? "");
+	const [draftPrompt, setDraftPrompt] = useState("");
 	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
@@ -185,6 +185,7 @@ export function NewTaskDialog({ open, projectId, hostId, initialPrompt, displayN
 					<TaskComposer
 						onContentChange={onContentChange}
 						initialPrompt={draftPrompt}
+						hiddenPrompt={hiddenPrompt}
 						onPromptChange={setDraftPrompt}
 						displayName={displayName}
 						projectId={selectedProjectId}

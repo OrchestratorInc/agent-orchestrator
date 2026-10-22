@@ -19,6 +19,8 @@ vi.mock("./NewTaskDialog", () => ({
 		open,
 		projectId,
 		hostId,
+		hiddenPrompt,
+		onContentChange,
 		onProjectChange,
 		onCreated,
 		onOpenChange,
@@ -26,16 +28,18 @@ vi.mock("./NewTaskDialog", () => ({
 		open: boolean;
 		projectId?: string;
 		hostId?: string;
+		hiddenPrompt?: string;
+		onContentChange?: (hasContent: boolean) => void;
 		onProjectChange: (projectId: string) => void;
 		onCreated: (id: string) => void;
 		onOpenChange: (open: boolean) => void;
 	}) => {
 		const [draft, setDraft] = useState("");
 		return open ? (
-			<div data-testid="new-task-dialog" data-project={projectId} data-host={hostId}>
+			<div data-testid="new-task-dialog" data-project={projectId} data-host={hostId} data-hidden-prompt={hiddenPrompt}>
 				<label>
 					task
-					<input aria-label="task" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} />
+					<input aria-label="task" value={draft} onChange={(event) => { setDraft(event.currentTarget.value); onContentChange?.(Boolean(event.currentTarget.value.trim())); }} />
 				</label>
 				<button type="button" onClick={() => onCreated("sess-9")}>
 					create
@@ -63,7 +67,7 @@ function renderDialog() {
 
 beforeEach(() => {
 	navigateMock.mockReset();
-	useUiStore.setState({ newTaskRequest: null });
+	useUiStore.setState({ newTaskRequest: null, newTaskDialogHasContent: false });
 });
 
 afterEach(() => {
@@ -71,6 +75,21 @@ afterEach(() => {
 });
 
 describe("GlobalNewTaskDialog", () => {
+	it.each(["", "keep this draft"])("handles a report request while the open composer contains %j", async (draft) => {
+		const user = userEvent.setup();
+		renderDialog();
+		act(() => useUiStore.getState().requestNewTask("proj-7"));
+		await screen.findByTestId("new-task-dialog");
+		if (draft) await user.type(screen.getByRole("textbox", { name: "task" }), draft);
+		act(() => useUiStore.getState().requestNewTask("__standalone__", undefined, { hiddenPrompt: "Read the report context." }));
+		const dialog = screen.getByTestId("new-task-dialog");
+		expect(dialog).toHaveAttribute("data-project", draft ? "proj-7" : "__standalone__");
+		expect(screen.getByRole("textbox", { name: "task" })).toHaveValue(draft);
+		expect(useUiStore.getState().newTaskDialogHasContent).toBe(Boolean(draft));
+		if (draft) expect(dialog).not.toHaveAttribute("data-hidden-prompt");
+		else expect(dialog).toHaveAttribute("data-hidden-prompt", "Read the report context.");
+	});
+
 	it("stays closed until a new-task request arrives", () => {
 		renderDialog();
 		expect(screen.queryByTestId("new-task-dialog")).not.toBeInTheDocument();

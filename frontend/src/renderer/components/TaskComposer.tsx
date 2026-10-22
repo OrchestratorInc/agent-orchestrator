@@ -115,6 +115,7 @@ function hasErrorDetail(details: components["schemas"]["APIError"]["details"] | 
 
 export type TaskComposerProps = {
 	initialPrompt?: string;
+	hiddenPrompt?: string;
 	displayName?: string;
 	projectId?: string;
 	hostId?: string;
@@ -129,6 +130,7 @@ export type TaskComposerProps = {
 
 export function TaskComposer({
 	initialPrompt,
+	hiddenPrompt,
 	displayName,
 	projectId,
 	hostId,
@@ -684,7 +686,7 @@ export function TaskComposer({
 			const submittedPreparation = taskPreparationRef.current;
 			const request: CreateTaskInput = {
 				projectId,
-				brief,
+				brief: hiddenPrompt ? hiddenPrompt + (brief.trim() ? `\n\n${brief}` : "") : brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 				model: requestedModel,
 				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
@@ -757,7 +759,7 @@ export function TaskComposer({
 				start: createLabel ?? t("newTask.start"),
 				starting: t("newTask.starting"),
 				task: t("newTask.task"),
-				taskPlaceholder,
+				taskPlaceholder: hiddenPrompt ? t("report.promptPlaceholder") : taskPlaceholder,
 			}}
 			agent={{
 				label: t("newTask.agent"),

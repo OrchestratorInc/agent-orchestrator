@@ -1,5 +1,6 @@
 {
 	"report.action": "Informar de un problema",
+	"report.promptPlaceholder": "¿Qué salió mal? (opcional)",
 	"report.description": "Inicia un agente que recopila registros, pregunta qué ha fallado y puede crear el informe por ti.",
 	"report.opening": "Abriendo...",
 	"report.failed": "No se pudo iniciar el informe. Inténtalo de nuevo.",

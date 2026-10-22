@@ -1,5 +1,6 @@
 {
 	"report.action": "报告问题",
+	"report.promptPlaceholder": "出了什么问题？（可选）",
 	"report.description": "启动一个代理来收集日志、询问问题经过，并可代你提交问题。",
 	"report.opening": "正在打开...",
 	"report.failed": "无法开始报告，请重试。",

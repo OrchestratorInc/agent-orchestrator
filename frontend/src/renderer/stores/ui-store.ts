@@ -160,7 +160,7 @@ export type UiState = {
 	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
 	// still lives in the URL — this is a one-shot action, not persisted state.
 	newTaskDialogHasContent: boolean;
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number; initialPrompt?: string; displayName?: string } | null;
+	newTaskRequest: { projectId: string; hostId?: string; nonce: number; hiddenPrompt?: string; displayName?: string } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
@@ -235,7 +235,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string, prefill?: { initialPrompt?: string; displayName?: string }) => void;
+	requestNewTask: (projectId: string, hostId?: string, prefill?: { hiddenPrompt?: string; displayName?: string }) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact") => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestCreateProject: () => void;

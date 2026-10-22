@@ -42,7 +42,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 			if (ui.newTaskDialogHasContent) { setError(t("report.composerBusy")); return; }
 			ui.closeSettings();
 			ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, {
-				initialPrompt: result.prompt, displayName: t("report.action"),
+				hiddenPrompt: result.prompt, displayName: t("report.action"),
 			});
 			outcome = "succeeded";
 		} catch {

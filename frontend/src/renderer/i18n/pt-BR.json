@@ -1,5 +1,6 @@
 {
 	"report.action": "Relatar um problema",
+	"report.promptPlaceholder": "O que deu errado? (opcional)",
 	"report.description": "Inicia um agente que coleta logs, pergunta o que deu errado e pode abrir a issue para você.",
 	"report.opening": "Abrindo...",
 	"report.failed": "Não foi possível iniciar o relato. Tente novamente.",
