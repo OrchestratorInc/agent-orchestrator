@@ -219,6 +219,7 @@ var shippedMigrations = map[int64]string{
 	20261020131539535: "20261020131539535_provider_switching.sql",
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
+	20261022172659826: "20261022172659826_allow_stakpak_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
