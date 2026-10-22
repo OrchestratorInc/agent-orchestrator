@@ -8,10 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/aider"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -29,12 +35,105 @@ func (f fakeSessions) ListAllSessions(context.Context) ([]domain.SessionRecord, 
 type fakeSink struct {
 	id      domain.SessionID
 	signals []ports.ActivitySignal
+	applied func()
+	err     error
 }
 
 func (f *fakeSink) ApplyActivitySignal(_ context.Context, id domain.SessionID, signal ports.ActivitySignal) error {
 	f.id = id
 	f.signals = append(f.signals, signal)
+	if f.err != nil {
+		return f.err
+	}
+	if f.applied != nil {
+		f.applied()
+	}
 	return nil
+}
+
+type pollingResolverAgent struct {
+	ports.Agent
+	state        domain.ActivityState
+	resolvedID   string
+	resolveErr   error
+	resolveCalls int
+}
+
+func (a *pollingResolverAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
+	return a.state, true
+}
+func (*pollingResolverAgent) ContinuouslyDetectTerminalActivity() bool { return true }
+func (a *pollingResolverAgent) ResolveNativeSessionID(context.Context, ports.NativeSessionResolveConfig) (string, bool, error) {
+	a.resolveCalls++
+	return a.resolvedID, true, a.resolveErr
+}
+
+func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityActive, resolvedID: "native-id"}
+	sink := &fakeSink{}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 0 || len(sink.signals) != 0 {
+		t.Fatalf("unchanged state scanned native identity: calls=%d signals=%+v", agent.resolveCalls, sink.signals)
+	}
+	agent.state = domain.ActivityIdle
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 1 || len(sink.signals) != 1 || sink.signals[0].AgentSessionID != "native-id" {
+		t.Fatalf("state change missed native identity: calls=%d signals=%+v", agent.resolveCalls, sink.signals)
+	}
+}
+
+type renderedResolverAgent struct{ *pollingResolverAgent }
+
+func (renderedResolverAgent) RequiresRenderedActivity() bool { return true }
+
+func TestPollReconcilesActivityWhenNativeIdentityResolutionFails(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		current, next domain.ActivityState
+		event         string
+	}{
+		{"active to idle", domain.ActivityActive, domain.ActivityIdle, "terminal-idle"},
+		{"blocked to idle", domain.ActivityBlocked, domain.ActivityIdle, "permission-resolved"},
+		{"blocked to active", domain.ActivityBlocked, domain.ActivityActive, "permission-resolved"},
+		{"blocked to waiting", domain.ActivityBlocked, domain.ActivityWaitingInput, "permission-resolved"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessHermes)
+			session.Activity.State = tt.current
+			session.Metadata.AgentSessionID = "previous-native-id"
+			agent := &pollingResolverAgent{
+				state:      tt.next,
+				resolvedID: "unconfirmed-native-id",
+				resolveErr: errors.New("native state unavailable"),
+			}
+			sink := &fakeSink{}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &renderedRuntime{}, fakeAgents{session.Harness: renderedResolverAgent{agent}}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+			for range 2 {
+				if err := observer.Poll(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(sink.signals) != 2 || agent.resolveCalls != 2 {
+				t.Fatalf("identity failures dropped activity: resolves=%d signals=%+v", agent.resolveCalls, sink.signals)
+			}
+			for _, signal := range sink.signals {
+				if !signal.Valid || signal.State != tt.next || signal.Event != tt.event || signal.AgentSessionID != "" {
+					t.Fatalf("activity or unconfirmed identity was projected incorrectly: %+v", signal)
+				}
+				if signal.ExpectedRevision == nil || *signal.ExpectedRevision != session.Revision || signal.LaunchID != session.Metadata.RuntimeLaunchID {
+					t.Fatalf("activity reconciliation lost its fences: %+v", signal)
+				}
+			}
+		})
+	}
 }
 
 type fakeRuntime struct {
@@ -152,6 +251,35 @@ func TestPollContinuouslyReconcilesMuse(t *testing.T) {
 			}
 			if len(sink.signals) != 1 || sink.signals[0].State != tt.want || sink.signals[0].Event != tt.event {
 				t.Fatalf("unexpected reconciliation: %+v", sink.signals)
+			}
+		})
+	}
+}
+
+func TestPollPreservesHookBlockedContinuousDetectors(t *testing.T) {
+	for _, tt := range []struct {
+		harness domain.AgentHarness
+		agent   ports.Agent
+	}{
+		{domain.HarnessAider, aider.New()},
+		{domain.HarnessCline, cline.New()},
+		{domain.HarnessContinue, continueagent.New()},
+		{domain.HarnessKiro, kiro.New()},
+		{domain.HarnessMuse, muse.New()},
+		{domain.HarnessFake, unrenderedWaitingAgent{}},
+	} {
+		t.Run(string(tt.harness), func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, tt.harness)
+			session.Activity.State = domain.ActivityBlocked
+			sink := &fakeSink{}
+			runtime := &fakeRuntime{output: "◇ Finishing up (25s · esc to interrupt)\n"}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, runtime, fakeAgents{tt.harness: tt.agent}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if runtime.calls != 0 || len(sink.signals) != 0 {
+				t.Fatalf("hook-owned block was sampled or reconciled: output calls=%d signals=%+v", runtime.calls, sink.signals)
 			}
 		})
 	}
@@ -330,5 +458,144 @@ func TestPollReturnsSessionListFailure(t *testing.T) {
 	observer := New(fakeSessions{err: want}, &fakeSink{}, &fakeRuntime{}, nil, Config{Logger: testLogger()})
 	if err := observer.Poll(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+type renderedRuntime struct {
+	fakeRuntime
+	rendered    string
+	renderedErr error
+}
+
+type renderedWaitingAgent struct{ ports.Agent }
+
+type unrenderedWaitingAgent struct{ renderedWaitingAgent }
+
+func (unrenderedWaitingAgent) RequiresRenderedActivity() bool { return false }
+
+func (renderedWaitingAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
+	return domain.ActivityWaitingInput, true
+}
+func (renderedWaitingAgent) ContinuouslyDetectTerminalActivity() bool { return true }
+func (renderedWaitingAgent) RequiresRenderedActivity() bool           { return true }
+
+func TestRenderedModalResolutionKeepsBoundaryEvent(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	rec := activeSession(now, domain.HarnessHermes)
+	rec.Activity.State = domain.ActivityBlocked
+	sink := &fakeSink{}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{rec}}, sink, &renderedRuntime{}, fakeAgents{domain.HarnessHermes: renderedWaitingAgent{}}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].Event != "permission-resolved" || sink.signals[0].State != domain.ActivityWaitingInput {
+		t.Fatalf("blocked to waiting lost modal boundary: %+v", sink.signals)
+	}
+}
+
+func (r *renderedRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	return r.rendered, r.renderedErr
+}
+func TestRenderedAdapterNeverUsesOldRingComposer(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	rec := activeSession(now, domain.HarnessHermes)
+	sink := &fakeSink{}
+	runtime := &renderedRuntime{fakeRuntime: fakeRuntime{output: "❯ \n"}, renderedErr: errors.New("surface unavailable")}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{rec}}, sink, runtime, fakeAgents{domain.HarnessHermes: hermes.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 0 || runtime.calls != 0 {
+		t.Fatal("fell back to stale output ring")
+	}
+	runtime.renderedErr = nil
+	runtime.rendered = "Confirm: Allow this command?\n[1] Allow once"
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 0 {
+		t.Fatalf("quoted modal text emitted activity: %+v", sink.signals)
+	}
+	runtime.rendered += "\n⚠ ❯"
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityBlocked {
+		t.Fatalf("signals=%+v", sink.signals)
+	}
+	rec.Activity.State = domain.ActivityBlocked
+	observer.sessions = fakeSessions{rows: []domain.SessionRecord{rec}}
+	runtime.rendered = "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
+	sink.signals = nil
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "permission-resolved" {
+		t.Fatalf("blocked recovery=%+v", sink.signals)
+	}
+}
+
+type renderedMemcodeRuntime struct {
+	*fakeRuntime
+	rendered    string
+	styledCalls int
+}
+
+func (r *renderedMemcodeRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	r.styledCalls++
+	return r.rendered, r.err
+}
+
+func TestMemcodeDecisionObservationBlocksAndResolvesOnlyOnCurrentChrome(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	card := "Do you want to proceed?\n❯ 1. Yes\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"
+	idle := "○ idle\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"
+	for _, tc := range []struct {
+		name    string
+		current domain.ActivityState
+		output  string
+		want    domain.ActivityState
+		event   string
+	}{{"approval", domain.ActivityActive, card, domain.ActivityBlocked, "terminal-blocked"}, {"resolved", domain.ActivityBlocked, idle, domain.ActivityIdle, "permission-resolved"}, {"still blocked", domain.ActivityBlocked, card, "", ""}, {"unknown cannot resolve", domain.ActivityBlocked, "loading", "", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := activeSession(now, domain.HarnessMemcode)
+			session.Activity.State = tc.current
+			sink := &fakeSink{}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{output: "stale raw history"}, rendered: tc.output}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatal(sink.signals)
+				}
+				return
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tc.want || sink.signals[0].Event != tc.event || sink.signals[0].LaunchID != "launch-1" {
+				t.Fatal(sink.signals)
+			}
+		})
+	}
+}
+
+func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMemcode)
+	sink := &fakeSink{}
+	rt := &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{output: "⠋ Thinking… (1s · esc to interrupt)"}, rendered: "○ idle\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, rt, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rt.calls != 0 || rt.styledCalls != 1 || len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle {
+		t.Fatal(rt.calls, rt.styledCalls, sink.signals)
+	}
+	rawSink := &fakeSink{}
+	observer = New(fakeSessions{rows: []domain.SessionRecord{session}}, rawSink, &fakeRuntime{output: rt.rendered}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rawSink.signals) != 1 || rawSink.signals[0].State != domain.ActivityIdle {
+		t.Fatal("raw output fallback did not detect current chrome", rawSink.signals)
 	}
 }

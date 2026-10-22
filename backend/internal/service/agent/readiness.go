@@ -70,6 +70,18 @@ func (s *Service) EnsureReadiness(ctx context.Context, agentIDs []string, purpos
 	return s.withReadinessUsage(ctx, items)
 }
 
+// EnsureInstallationReadiness refreshes installation observations older than
+// the display policy, without authentication checks, and returns every
+// snapshot. Periodic work uses it so a harness installed outside AO since the
+// last observation is seen without anyone opening a page.
+func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, error) {
+	items, err := s.readiness.EnsureInstallation(ctx, nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		return Readiness{}, err
+	}
+	return s.withReadinessUsage(ctx, items)
+}
+
 // EnsureAgentReadiness is the narrow service boundary used by launch paths.
 func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	result, err := s.EnsureReadiness(ctx, []string{agentID}, purpose)
@@ -110,8 +122,9 @@ func (s *Service) RecheckAgent(agentID string) {
 	}()
 }
 
-// WarmReadiness starts the coordinator's bounded asynchronous warm-up.
-func (s *Service) WarmReadiness() { s.readiness.Warm() }
+// WarmReadiness starts the coordinator's bounded asynchronous warm-up and
+// signals after its installation and authentication passes finish.
+func (s *Service) WarmReadiness() <-chan struct{} { return s.readiness.Warm() }
 
 func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.AgentReadinessSnapshot) (Readiness, error) {
 	if s.sessions == nil {

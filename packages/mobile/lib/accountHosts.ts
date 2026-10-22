@@ -68,7 +68,7 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 	const response = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts`, {
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
-	if (!response.ok) throw new Error(`AO Cloud host sync failed (${response.status}).`);
+	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
 	const { hosts } = response.body as { hosts: AccountHost[] };
 	if (!await current()) return;
 	const paired = await loadHosts();

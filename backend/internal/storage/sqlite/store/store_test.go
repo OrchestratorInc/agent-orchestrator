@@ -125,6 +125,46 @@ func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t 
 	}
 }
 
+func TestClientRequestIdentitySurvivesNormalSessionReads(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "retry-key", "v1:payload"
+	created, _, err := s.CreateClientRequestSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, committed := range []bool{false, true} {
+		if committed {
+			if err := s.CommitClientRequestSession(ctx, created.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, found, err := s.GetSession(ctx, created.ID)
+		if err != nil || !found {
+			t.Fatalf("get session: found=%v err=%v", found, err)
+		}
+		project, err := s.ListSessions(ctx, "mer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAllSessions(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(project) != 1 || len(all) != 1 {
+			t.Fatalf("session counts: project=%d all=%d", len(project), len(all))
+		}
+		for _, read := range []domain.SessionRecord{got, project[0], all[0]} {
+			if read.ID != created.ID || read.ClientRequestID != rec.ClientRequestID ||
+				read.ClientRequestHash != rec.ClientRequestHash || read.ClientRequestCommitted != committed {
+				t.Fatalf("request identity lost: got %+v, committed=%v", read, committed)
+			}
+		}
+	}
+}
+
 func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1359,6 +1399,78 @@ func TestPRCRUD(t *testing.T) {
 	}
 	if list, _ := s.ListPRsBySession(ctx, r.ID); len(list) != 1 {
 		t.Fatalf("list prs = %d, want 1", len(list))
+	}
+}
+
+func TestMarkPRMergedPreservesObservedFactsAndEmitsCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{
+		URL: "https://github.com/acme/repo/pull/7", SessionID: r.ID, Number: 7,
+		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
+		Provider: "github", Host: "github.com", Repo: "acme/repo", ProviderID: "provider-pr-7",
+		SourceBranch: "feature", TargetBranch: "main", HeadSHA: "head-sha", Title: "keep this title",
+		MetadataHash: "metadata-v1", CIHash: "ci-v1", ReviewHash: "review-v1",
+		UpdatedAt: now, StateChangedAt: now, ObservedAt: now,
+	}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	base, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mergedAt := now.Add(time.Minute)
+	if err := s.MarkPRMerged(ctx, pr.URL, "merge-sha", mergedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" {
+		t.Fatalf("merge state = merged:%v draft:%v closed:%v sha:%q", got.Merged, got.Draft, got.Closed, got.MergeCommitSHA)
+	}
+	if !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("merge timestamps = state:%s updated:%s observed:%s, want %s", got.StateChangedAt, got.UpdatedAt, got.ObservedAt, mergedAt)
+	}
+	if got.Title != pr.Title || got.HeadSHA != pr.HeadSHA || got.CI != pr.CI || got.Review != pr.Review || got.Mergeability != pr.Mergeability ||
+		got.MetadataHash != pr.MetadataHash || got.CIHash != pr.CIHash || got.ReviewHash != pr.ReviewHash {
+		t.Fatalf("mark merged replaced observed facts: got=%+v want preserved=%+v", got, pr)
+	}
+
+	events, err := s.EventsAfter(ctx, base, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || string(events[0].Type) != "pr_updated" {
+		t.Fatalf("merge events = %+v, want one pr_updated", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["url"] != pr.URL || payload["state"] != "merged" {
+		t.Fatalf("merge event payload = %#v", payload)
+	}
+
+	// A provider poll may have fetched the old open state before the merge
+	// completed and reach SQLite afterward. That stale observation must not
+	// regress the authoritative merge result.
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err = s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr after stale observation: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" || !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("stale observation regressed merged state: %+v", got)
 	}
 }
 

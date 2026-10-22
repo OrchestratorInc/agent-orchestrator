@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { APP_LOCALES, coerceLocale, DEFAULT_LOCALE } from "./locales";
-import { createAppI18n, type TranslationCatalogs } from "./instance";
+import { createAppI18n as createBaseAppI18n, createLazyAppI18n, loadLocaleCatalog, type TranslationCatalogs } from "./instance";
+import { createFullAppI18n as createAppI18n } from "./all-messages";
 import {
 	deMessages,
 	enMessages,
@@ -10,7 +11,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	zhCNMessages,
-} from "./messages";
+} from "./all-messages";
 
 const allCatalogs = {
 	en: enMessages,
@@ -221,5 +222,28 @@ describe("app i18next instance", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("lazy locale catalogs", () => {
+	it("loads a locale's catalog when the app instance changes language", async () => {
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
+		expect(instance.language).toBe("ja");
+	});
+
+	it("can warm a catalog before switching", async () => {
+		const instance = createLazyAppI18n();
+		await loadLocaleCatalog("fr", instance);
+		expect(instance.getResource("fr", "translation", "settings.general")).toBe(frMessages["settings.general"]);
+	});
+
+	it("loads into an instance without the lazy backend", async () => {
+		const instance = createBaseAppI18n("en");
+		await loadLocaleCatalog("ja", instance);
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
 	});
 });

@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -34,6 +35,11 @@ const (
 	startupTimeout   = 10 * time.Second
 	// Host hello is local control-plane I/O and must not stall daemon recovery.
 	handshakeTimeout = time.Second
+	// A stopped provider gets providerStdinGrace (providerQuickGrace for a quick
+	// stop) to exit on stdin closing, then SIGTERM, then a kill at the deadline.
+	providerStdinGrace   = time.Second
+	providerQuickGrace   = 300 * time.Millisecond
+	providerStopDeadline = 3 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -139,6 +145,8 @@ type hello struct {
 	Version int    `json:"version"`
 	Token   string `json:"token"`
 	Action  string `json:"action"`
+	// QuickStop on a shutdown: see ShutdownQuick.
+	QuickStop bool `json:"quickStop,omitempty"`
 }
 
 type helloResponse struct {
@@ -506,6 +514,16 @@ func HostPID(dataDir, sessionID string) (int, bool) {
 // Missing/dead hosts are harmless; unknown live owners fail closed.
 // The protocol acknowledgement only confirms that shutdown was requested.
 func Shutdown(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, false)
+}
+
+// ShutdownQuick is Shutdown for a provider that gains nothing from the stdin
+// grace (session closed, or deaf to stdin). An older host waits the full grace.
+func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, true)
+}
+
+func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
 	d, err := readDescriptor(dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -527,7 +545,7 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	}
 	defer func() { _ = conn.Close() }()
 	finishHandshake := bindConnToContext(handshakeCtx, conn)
-	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown", QuickStop: quick}); err != nil {
 		return finishHandshake(err)
 	}
 	var response helloResponse
@@ -540,7 +558,10 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	if !response.OK {
 		return errors.New(response.Error)
 	}
-	waitCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+	// The host's own shutdown can take about 6 s: 3 s for the provider to exit
+	// once stdin closes, a 1 s reap, and 2 s for its process group to exit on
+	// SIGTERM before SIGKILL. Wait past that, with room for a loaded machine.
+	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
@@ -636,24 +657,69 @@ func Run(ctx context.Context, cfg Config) error {
 	h.cond = sync.NewCond(&h.mu)
 	providerDone := make(chan error, 1)
 	go func() { providerDone <- h.forwardProvider(stdout) }()
+	if h.acp != nil {
+		watchCtx, stopWatch := context.WithCancel(ctx)
+		defer stopWatch()
+		go h.watchPromptStall(watchCtx)
+	}
 	acceptDone := make(chan error, 1)
 	go func() { acceptDone <- h.accept() }()
 
+	wait := sync.OnceValue(child.Wait)
+	// reapProvider waits up to a second for the provider to exit once its
+	// output ended, so its zombie does not hold the process group open while
+	// the group is asked to exit. A provider still running is left to the kill.
+	reapProvider := func() {
+		reaped := make(chan struct{})
+		go func() { _ = wait(); close(reaped) }()
+		select {
+		case <-reaped:
+		case <-time.After(time.Second):
+		}
+	}
 	stopProvider := func() {
 		_ = stdin.Close()
+		deadline := time.After(providerStopDeadline)
+		grace := providerStdinGrace
+		if h.quickStop.Load() {
+			grace = providerQuickGrace
+		}
 		select {
 		case <-providerDone:
 			// Wrapper adapters may exit before their provider child. The hosted
 			// process tree is the ownership boundary, so explicit shutdown reaps
 			// any descendant that did not follow stdin closure.
+			reapProvider()
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
-		case <-time.After(3 * time.Second):
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			return
+		case <-time.After(grace):
 		}
+		// Some agents (Cursor) ignore stdin closing and only exit on a signal.
+		_ = terminateProviderProcess(child)
+		// The provider's output can stay open after it exits when a helper it
+		// started inherited the pipe, so its own exit also ends the wait.
+		exited := time.NewTicker(100 * time.Millisecond)
+		defer exited.Stop()
+	wait:
+		for {
+			select {
+			case <-providerDone:
+				break wait
+			case <-deadline:
+				break wait
+			case <-exited.C:
+				if child.Process != nil && !processalive.Alive(child.Process.Pid) {
+					break wait
+				}
+			}
+		}
+		reapProvider()
+		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	}
 	var runErr error
 	select {
 	case runErr = <-providerDone:
+		reapProvider()
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	case <-h.shutdown:
 		stopProvider()
@@ -667,7 +733,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
-	_ = child.Wait()
+	_ = wait()
 	return runErr
 }
 
@@ -690,6 +756,7 @@ type host struct {
 	maxRequestID     int64
 	shutdown         chan struct{}
 	shutdownOnce     sync.Once
+	quickStop        atomic.Bool // set before shutdown closes; see ShutdownQuick
 }
 
 type pendingRequest struct {
@@ -727,6 +794,9 @@ func (h *host) handle(conn net.Conn) {
 	if request.Action == "shutdown" {
 		_ = json.NewEncoder(conn).Encode(helloResponse{OK: true})
 		_ = conn.Close()
+		if request.QuickStop {
+			h.quickStop.Store(true)
+		}
 		h.shutdownOnce.Do(func() { close(h.shutdown) })
 		return
 	}
@@ -854,6 +924,68 @@ func (h *host) detach(conn net.Conn) {
 	_ = conn.Close()
 }
 
+// deliverProviderFrameLocked routes one adapter frame to the attached
+// controller, or buffers it for replay while detached. Callers must hold
+// h.mu. retainedByACP marks frames the ACP relay owns for its own replay, so
+// they must not also enter the generic detached buffer.
+func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
+	if requestID, ok := serverRequestID(frame); ok && !retainedByACP {
+		if _, exists := h.pendingRequests[requestID]; !exists {
+			h.pendingRequests[requestID] = &pendingRequest{frame: append([]byte(nil), frame...)}
+			h.pendingOrder = append(h.pendingOrder, requestID)
+		}
+	}
+	for h.client == nil && h.detachedBytes+len(frame) > maxDetachedBytes {
+		h.cond.Wait()
+	}
+	if h.client != nil {
+		if _, writeErr := h.client.Write(frame); writeErr != nil {
+			_ = h.client.Close()
+			h.client = nil
+			h.bufferPendingRequestsLocked()
+			if _, pending := serverRequestID(frame); !pending && !retainedByACP {
+				h.bufferFrameLocked(frame)
+			}
+		}
+	} else if !retainedByACP {
+		if requestID, pending := serverRequestID(frame); !pending || !h.pendingRequests[requestID].buffered {
+			h.bufferFrameLocked(frame)
+			if pending {
+				h.pendingRequests[requestID].buffered = true
+			}
+		}
+	}
+}
+
+// watchPromptStall terminates an in-flight prompt whose adapter went silent.
+// Turn settlement lives inside the ACP adapter, and the host discards the
+// adapter's stderr, so a lost completion (upstream claude-agent-acp#1145
+// class) leaves the session's Working indicator hanging with nothing to
+// observe. The watchdog gives such turns a terminal error and cancels the
+// adapter's turn. It never races forwardProvider: both relay under h.mu.
+func (h *host) watchPromptStall(ctx context.Context) {
+	ticker := time.NewTicker(promptStallCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.mu.Lock()
+			frames, err := h.acp.failStalledPrompt(ctx, h.clientGeneration, h.client != nil, time.Now())
+			if err == nil && len(frames.client) > 0 {
+				h.deliverProviderFrameLocked(frames.client, true)
+			}
+			h.mu.Unlock()
+			// Like client frames, written outside h.mu: a full stdin pipe must
+			// not stall the provider reader.
+			if len(frames.provider) > 0 {
+				_, _ = h.stdin.Write(frames.provider)
+			}
+		}
+	}
+}
+
 func (h *host) forwardProvider(stdout io.Reader) error {
 	reader := bufio.NewReader(stdout)
 	for {
@@ -878,32 +1010,7 @@ func (h *host) forwardProvider(stdout io.Reader) error {
 				}
 				continue
 			}
-			if requestID, ok := serverRequestID(frame); ok && !retainedByACP {
-				if _, exists := h.pendingRequests[requestID]; !exists {
-					h.pendingRequests[requestID] = &pendingRequest{frame: append([]byte(nil), frame...)}
-					h.pendingOrder = append(h.pendingOrder, requestID)
-				}
-			}
-			for h.client == nil && h.detachedBytes+len(frame) > maxDetachedBytes {
-				h.cond.Wait()
-			}
-			if h.client != nil {
-				if _, writeErr := h.client.Write(frame); writeErr != nil {
-					_ = h.client.Close()
-					h.client = nil
-					h.bufferPendingRequestsLocked()
-					if _, pending := serverRequestID(frame); !pending && !retainedByACP {
-						h.bufferFrameLocked(frame)
-					}
-				}
-			} else if !retainedByACP {
-				if requestID, pending := serverRequestID(frame); !pending || !h.pendingRequests[requestID].buffered {
-					h.bufferFrameLocked(frame)
-					if pending {
-						h.pendingRequests[requestID].buffered = true
-					}
-				}
-			}
+			h.deliverProviderFrameLocked(frame, retainedByACP)
 			h.mu.Unlock()
 		}
 		if err != nil {

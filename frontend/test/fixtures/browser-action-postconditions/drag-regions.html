@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Browser drag regions</title>
+		<style>
+			html, body, #page, #page::before, #page::after {
+				app-region: drag !important;
+			}
+			#page::before, #page::after {
+				content: "Page decoration";
+			}
+		</style>
+	</head>
+	<body>
+		<main id="page" style="app-region: drag !important">
+			<button id="button" style="app-region: drag !important">Click me</button>
+		</main>
+	</body>
+</html>

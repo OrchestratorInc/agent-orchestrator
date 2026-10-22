@@ -15,6 +15,8 @@ import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader }
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import { backOr } from "../../lib/backNavigation";
 import { hostedRowKey } from "../../lib/hostedRows";
+import { SpawnFab } from "../../lib/spawn-fab";
+import { workerDockRestingBottom, workerListBottomInset } from "../../lib/worker-dock-layout";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -65,6 +67,9 @@ function ProjectScreenContent() {
 		haptics.tap();
 		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
 	};
+	// Same corner and height as the Workers dock, so the spawn button does not
+	// move between the two screens.
+	const fabBottom = workerDockRestingBottom(insets.bottom);
 
 	return (
 		<View style={styles.screen}>
@@ -105,13 +110,13 @@ function ProjectScreenContent() {
 				) : connection !== "open" ? (
 					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
 				) : (
-					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
+					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
 			) : (
 				<WorkerBoardList
 					sessions={projectSessions}
 					showProject={false}
-					contentBottomInset={insets.bottom + 32}
+					contentBottomInset={workerListBottomInset(fabBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
@@ -135,6 +140,11 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
+			{hostMatches && row ? (
+				<View style={[styles.fab, { bottom: fabBottom }]}>
+					<SpawnFab onPress={startTask} testID="project-spawn-worker" />
+				</View>
+			) : null}
 		</View>
 	);
 }
@@ -143,4 +153,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		fab: { position: "absolute", right: 16 },
 	});

@@ -28,6 +28,11 @@ func Dir(dataDir string, id domain.SessionID) string {
 	return filepath.Join(dataDir, "artifacts", string(id))
 }
 
+// VersionsDir is the directory inside a session's artifact directory that
+// holds the artifacts' version history. List skips it, so snapshots are not
+// artifacts themselves.
+const VersionsDir = ".versions"
+
 // MaxFiles bounds how many files List returns so a pathological artifact tree
 // cannot stall a session read or the lifecycle reconcile that runs under the
 // lifecycle mutex.
@@ -38,7 +43,7 @@ const MaxFiles = 1000
 const MaxVisited = 10000
 
 // List walks a session's artifact directory and returns up to MaxFiles of its
-// regular files, sorted by path. Unreadable entries are skipped rather than
+// regular files outside VersionsDir, sorted by path. Unreadable entries are skipped rather than
 // failing the walk.
 func List(dir string) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
@@ -72,6 +77,9 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 			return nil
 		}
 		if d.IsDir() {
+			if d.Name() == VersionsDir && filepath.Dir(path) == root {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := d.Info()

@@ -1106,3 +1106,59 @@ func TestSessionClaimPR_GHFallbackWhenProjectRepoMissing(t *testing.T) {
 		t.Fatalf("ghDir=%q out=%s", ghDir, out)
 	}
 }
+
+// A spawn and a restore run the project's Setup, which the daemon bounds by
+// the Setup steps' own limits; a client timeout would cut a long Setup short.
+func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call string
+		args []string
+	}{
+		{"spawn", "POST /api/v1/sessions", []string{"spawn", "--project", "demo", "--agent", "codex", "--name", "worker"}},
+		{"restore", "POST /api/v1/sessions/demo-1/restore", []string{"session", "restore", "demo-1", "-p", "demo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+					_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","defaultBranch":"main"}}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+					_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+					_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1":
+					_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "terminated", true)+`}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/restore":
+					_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","session":`+sessionJSON("demo-1", "demo", "worker", "idle", false)+`}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			var seen bool
+			var deadline time.Time
+			var hasDeadline bool
+			client := &http.Client{Timeout: 2 * time.Second, Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method+" "+req.URL.Path == tc.call {
+					seen = true
+					deadline, hasDeadline = req.Context().Deadline()
+				}
+				return http.DefaultTransport.RoundTrip(req)
+			})}
+			_, errOut, err := executeCLI(t, Deps{HTTPClient: client, ProcessAlive: func(int) bool { return true }}, tc.args...)
+			if err != nil {
+				t.Fatalf("%s failed: %v\nstderr=%s", tc.name, err, errOut)
+			}
+			if !seen {
+				t.Fatalf("%s never called %s", tc.name, tc.call)
+			}
+			if hasDeadline {
+				t.Fatalf("%s request deadline in %s, want no client timeout", tc.call, time.Until(deadline).Round(time.Minute))
+			}
+		})
+	}
+}

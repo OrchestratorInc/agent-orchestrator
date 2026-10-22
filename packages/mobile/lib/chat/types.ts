@@ -206,6 +206,8 @@ export type ConversationThreadState = {
 export type McpServer = { name: string; status: string; error?: string; failureReason?: string };
 
 export type ConversationSnapshot = {
+	/** Daemon-owned source verification; absent on older hosts. */
+	supportsExcerpts?: boolean;
 	conversationId: string;
 	sessionId: string;
 	harness: string;

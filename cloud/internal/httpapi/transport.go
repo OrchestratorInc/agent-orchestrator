@@ -72,15 +72,24 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 }
 
 func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var refusedBranch *postgres.BranchRefusedError
 	s.recordPlanRefusal(r, err)
 	if writePlanError(w, r, err) {
 		return
 	}
 	switch {
+	case errors.Is(err, postgres.ErrGitHubUserScopeNeedsPersonalOrg):
+		writeError(w, r, http.StatusConflict, "github_user_scope_personal_org_only",
+			"You don't administer this GitHub installation, so it can only be connected to your personal AO account, where you are the only member.")
+	case errors.Is(err, postgres.ErrNotOrchestratorChild):
+		writeError(w, r, http.StatusNotFound, "not_orchestrator_child",
+			"That session is not one this orchestrator started. An orchestrator can only kill or message the sessions it spawned.")
 	case errors.Is(err, postgres.ErrForbidden):
 		writeError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this organization.")
 	case errors.Is(err, postgres.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
+	case errors.Is(err, postgres.ErrSessionTerminated):
+		writeError(w, r, http.StatusConflict, "SESSION_TERMINATED", "This session was deleted. Restore it to continue.")
 	case errors.Is(err, postgres.ErrConflict):
 		writeError(w, r, http.StatusConflict, "conflict", "The resource conflicts with an existing record.")
 	case errors.Is(err, postgres.ErrTurnFinished):
@@ -89,6 +98,13 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, r, http.StatusConflict, "STALE_TURN", "The turn is owned by another worker attempt.")
 	case errors.Is(err, postgres.ErrInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The request violates a resource constraint.")
+	case errors.As(err, &refusedBranch):
+		writeBranchRefusal(w, r, refusedBranch)
+	case errors.Is(err, postgres.ErrInvalidBranch):
+		writeError(
+			w, r, http.StatusUnprocessableEntity, "invalid_branch",
+			"The branch name is invalid, or it is the project's default branch or session prefix.",
+		)
 	case errors.Is(err, postgres.ErrIdempotencyMismatch):
 		writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used for another request.")
 	case errors.Is(err, postgres.ErrSandboxQuotaExceeded):
@@ -157,4 +173,27 @@ func idempotencyKey(r *http.Request) (string, error) {
 		return "", errors.New("Idempotency-Key must be between 1 and 200 characters")
 	}
 	return value, nil
+}
+
+// writeBranchRefusal answers a refused requested session branch with the
+// reason: invalid_branch (422) for a name the rules refuse, branch_in_use (409)
+// when a live session already works on it. Details carry the reason and, for
+// branch_in_use, the session holding the branch.
+func writeBranchRefusal(w http.ResponseWriter, r *http.Request, refused *postgres.BranchRefusedError) {
+	status, code := http.StatusUnprocessableEntity, "invalid_branch"
+	details := map[string]any{"reason": refused.Reason, "branch": refused.Branch}
+	if refused.Reason == postgres.BranchReasonInUse {
+		status, code = http.StatusConflict, "branch_in_use"
+		details["sessionId"] = refused.SessionID
+	}
+	if refused.Repository != "" {
+		details["repository"] = refused.Repository
+	}
+	writeJSON(w, status, errorEnvelope{
+		Error:     http.StatusText(status),
+		Code:      code,
+		Message:   refused.Message(),
+		RequestID: requestID(r),
+		Details:   details,
+	})
 }

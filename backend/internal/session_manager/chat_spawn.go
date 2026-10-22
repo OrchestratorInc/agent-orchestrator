@@ -81,6 +81,23 @@ func (m *Manager) RunBackgroundTask(
 	if !ok {
 		return "", ports.ErrChatUnsupported
 	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, runner.RunBackgroundTask)
+}
+
+// RunPromptSuggestionTask preserves the requested turn's native context when available.
+func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+	runner, ok := m.chat.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
+	})
+	if !ok {
+		return m.RunBackgroundTask(ctx, id, systemPrompt, prompt)
+	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, func(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+		return runner.RunPromptSuggestionTask(ctx, id, turnID, harness, cfg, prompt)
+	})
+}
+
+func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return "", err
@@ -88,6 +105,12 @@ func (m *Manager) RunBackgroundTask(
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
 	}
+	// Existing background titles and suggestions use the provider's default effort.
+	rec.Metadata.Effort = ""
+	return m.runRecordBackgroundTask(ctx, rec, systemPrompt, prompt, run)
+}
+
+func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.SessionRecord, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return "", err
@@ -123,7 +146,7 @@ func (m *Manager) RunBackgroundTask(
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
 	pinRuntimePermissionEnv(env, config.Permissions)
 
-	return runner.RunBackgroundTask(ctx, rec.Harness, ports.ChatStartConfig{
+	return run(ctx, rec.Harness, ports.ChatStartConfig{
 		DataDir:       m.dataDir,
 		WorkspacePath: workspace,
 		Env:           env,
@@ -327,7 +350,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 // AO_BROWSER_CAPABILITY.
 func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
-		// Its driver refuses AO-supplied tool servers; the agent uses `ao render`.
+		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
 	}
 	executable, err := m.executable()
@@ -404,23 +427,38 @@ type SessionModeDefaults interface {
 	DefaultSessionMode(ctx context.Context) domain.SessionMode
 }
 
-// resolveSessionMode applies the precedence for a spawn:
+// resolveSessionMode applies startSessionMode with the daemon-owned default,
+// read here, at spawn time, so changing the preference affects only sessions
+// created afterwards. An existing session changes only through an explicit,
+// capability-gated interface transition; it is never re-resolved from the
+// default.
+func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKind, requested domain.SessionMode) domain.SessionMode {
+	var defaultMode domain.SessionMode
+	if m.defaults != nil {
+		defaultMode = m.defaults.DefaultSessionMode(ctx)
+	}
+	return startSessionMode(kind, requested, defaultMode)
+}
+
+// startSessionMode is the precedence for a spawn's controller mode:
 //
 //  1. the mode the caller explicitly requested;
-//  2. the daemon-owned default;
-//  3. the compatibility default, TUI.
+//  2. Chat for an orchestrator;
+//  3. the daemon-owned default;
+//  4. the compatibility default, TUI.
 //
-// The default is read here, at spawn time, so changing the preference affects only
-// sessions created afterwards. An existing session changes only through an explicit,
-// capability-gated interface transition; it is never re-resolved from the default.
-func (m *Manager) resolveSessionMode(ctx context.Context, requested domain.SessionMode) domain.SessionMode {
+// Whether the harness can run the result is checked afterwards. The cloud
+// control plane resolves a cloud session's interface with the same precedence
+// (cloud/internal/domain.StartInterface); both are tested against
+// contracts/session-start-interface.json so they cannot drift.
+func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.SessionMode) domain.SessionMode {
 	if requested.Valid() {
 		return requested
 	}
-	if m.defaults == nil {
-		return domain.DefaultSessionMode
+	if kind == domain.KindOrchestrator {
+		return domain.SessionModeChat
 	}
-	return domain.NormalizeSessionMode(m.defaults.DefaultSessionMode(ctx))
+	return domain.NormalizeSessionMode(defaultMode)
 }
 
 // resumeChatController reattaches a chat session to its provider conversation
@@ -440,6 +478,7 @@ func (m *Manager) resumeChatController(
 	reconnectOnly bool,
 	controllerGeneration string,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
+	awakeTargets ...domain.AwakeAgentTarget,
 ) (RestoreResult, error) {
 	if m.chat == nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w: chat mode is not available in this build",
@@ -457,11 +496,6 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
-	systemPrompt, err = m.systemPromptForNativeRestore(ctx, rec, systemPrompt)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: switched continuation: %w", operation, rec.ID, err)
-	}
-
 	agentConfig := restoredAgentConfig(rec, project.Config)
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
@@ -486,8 +520,17 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err)
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
+	var awakeTarget *domain.AwakeAgentTarget
+	if len(awakeTargets) > 0 {
+		if len(awakeTargets) != 1 || !reconnectOnly || awakeTargets[0].SessionID != rec.ID || awakeTargets[0].Owner != rec.ControllerOwner() {
+			return RestoreResult{}, fmt.Errorf("awake reconnect ownership changed")
+		}
+		target := awakeTargets[0]
+		awakeTarget = &target
+	}
 	var completionErr error
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		AwakeReconnectTarget:    awakeTarget,
 		ReconnectOnly:           reconnectOnly,
 		SessionID:               rec.ID,
 		ProjectID:               rec.ProjectID,

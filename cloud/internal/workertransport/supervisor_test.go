@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1145,5 +1146,132 @@ func TestWorkspaceReviewDispatchMapsStaleSnapshot(t *testing.T) {
 	})
 	if control.failureCode != "WORKSPACE_SNAPSHOT_STALE" || control.completed != nil {
 		t.Fatalf("completed=%T failure=%q", control.completed, control.failureCode)
+	}
+}
+
+// A session that started in Chat and cannot run it falls back to the
+// terminal before the Chat controller took any turn: the controller never
+// runs, and the agent terminal opens with a freshly built command.
+func TestFallBackToTUIReplacesAChatStartThatCannotRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	terminalID := "00000000-0000-0000-0000-000000000051"
+	runnerStarted := make(chan struct{})
+	started := make(chan error, 1)
+	built := false
+	supervisor := &Supervisor{
+		Control:   &supervisorControlStub{agentTerminal: terminalID},
+		Workspace: t.TempDir(), Started: started,
+		InitialInterface: InterfaceChat, ChatWorkspaceReady: make(chan struct{}),
+		ChatRunner: blockingChatRunner{started: runnerStarted},
+		AgentCommandFactory: func(_ context.Context, nativeConversationID, _, _ string) (workerexec.Command, error) {
+			built = nativeConversationID == ""
+			return workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "sleep 30"}}, nil
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.FallBackToTUI(ctx); err != nil {
+		t.Fatalf("fall back: %v", err)
+	}
+	if supervisor.iface.Current() != InterfaceTUI || supervisor.agentTerminalID() != terminalID || !built {
+		t.Fatalf("after fallback: interface=%q terminal=%q fresh command built=%v",
+			supervisor.iface.Current(), supervisor.agentTerminalID(), built)
+	}
+	select {
+	case <-runnerStarted:
+		t.Fatal("the Chat controller ran")
+	default:
+	}
+	// A second call (the session is no longer in Chat) changes nothing.
+	if err := supervisor.FallBackToTUI(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transport did not stop")
+	}
+}
+
+// busyLoopControl holds Run's serial loop inside its first transport claim
+// until release closes, as a control plane interface command being handled
+// would.
+type busyLoopControl struct {
+	supervisorControlStub
+	claimed chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *busyLoopControl) ClaimTransport(ctx context.Context) (*worker.TransportRequest, error) {
+	first := false
+	c.once.Do(func() { first = true })
+	if first {
+		close(c.claimed)
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+		}
+	}
+	return nil, nil
+}
+
+// The fallback is a command on Run's serial loop: it waits while the loop is
+// busy with the control plane's work and runs once the loop is free, so it
+// never interleaves with an interface command.
+func TestFallBackToTUIRunsOnTheSerialLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	control := &busyLoopControl{
+		supervisorControlStub: supervisorControlStub{agentTerminal: "00000000-0000-0000-0000-000000000052"},
+		claimed:               make(chan struct{}), release: make(chan struct{}),
+	}
+	started := make(chan error, 1)
+	supervisor := &Supervisor{
+		Control: control, Workspace: t.TempDir(), Started: started,
+		InitialInterface: InterfaceChat, ChatWorkspaceReady: make(chan struct{}),
+		ChatRunner: blockingChatRunner{started: make(chan struct{})},
+		AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
+			return workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "sleep 30"}}, nil
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	<-control.claimed
+	fellBack := make(chan error, 1)
+	go func() { fellBack <- supervisor.FallBackToTUI(ctx) }()
+	select {
+	case err := <-fellBack:
+		t.Fatalf("the fallback ran beside the busy loop: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if supervisor.iface.Current() != InterfaceChat {
+		t.Fatal("the interface changed while the loop was busy")
+	}
+	close(control.release)
+	select {
+	case err := <-fellBack:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fallback never ran on the loop")
+	}
+	if supervisor.iface.Current() != InterfaceTUI {
+		t.Fatalf("interface = %q, want tui", supervisor.iface.Current())
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transport did not stop")
 	}
 }

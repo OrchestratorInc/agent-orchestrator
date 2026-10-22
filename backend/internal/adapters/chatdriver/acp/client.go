@@ -293,6 +293,13 @@ func (c *conversation) requestInput(
 func (c *conversation) providerDetaching() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.closed && c.proc != nil && c.proc.terminate != nil && c.conn != nil {
+		select {
+		case <-c.conn.Done():
+			return true
+		default:
+		}
+	}
 	return c.detaching
 }
 
@@ -548,6 +555,31 @@ func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNot
 		return nil
 	}
 	return c.processUpdate(params)
+}
+
+// handleNotification runs updates and host receipts in wire order, before the
+// next frame is read. Permission requests retain the SDK's asynchronous
+// dispatch, and responses cannot overtake the updates they follow.
+func (c *conversation) handleNotification(method string, params json.RawMessage) bool {
+	var err error
+	switch method {
+	case acpsdk.ClientMethodSessionUpdate:
+		var update acpsdk.SessionNotification
+		if err = json.Unmarshal(params, &update); err == nil {
+			err = update.Validate()
+		}
+		if err == nil {
+			err = c.SessionUpdate(context.Background(), update)
+		}
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+		_, err = c.HandleExtensionMethod(context.Background(), method, params)
+	default:
+		return false
+	}
+	if err != nil {
+		c.log.Error("failed to handle ACP notification", "method", method, "err", err)
+	}
+	return true
 }
 
 // processUpdate runs the full ACP -> AO normalization for one update: live
@@ -806,6 +838,17 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 		copyDetail(detailMap, terminal, "signal", "signal")
 	}
 	if activityKind == domain.ActivityKindCommand {
+		// OpenCode includes the shell result in rawOutput.metadata.exit, even
+		// when ACP marks the tool call completed. Preserve it separately from
+		// output text; an explicit terminal_exit remains authoritative.
+		if _, exists := detailMap["exitCode"]; !exists {
+			if raw, ok := tool.rawOutput.(map[string]any); ok {
+				if exit, ok := number(nestedMap(raw, "metadata")["exit"]); ok &&
+					!math.IsNaN(exit) && !math.IsInf(exit, 0) && math.Trunc(exit) == exit {
+					detailMap["exitCode"] = exit
+				}
+			}
+		}
 		if rawCommand := rawCommandFromInput(tool.rawInput); rawCommand != "" {
 			// The neutral command-detail contract (`detail.command`) is what the
 			// chat timeline renders as the row's subject. rawInput is a
@@ -821,6 +864,11 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	}
 	detail, _ := json.Marshal(detailMap)
 	status := activityStatusFromTool(tool.status)
+	if completed && activityKind == domain.ActivityKindCommand && status == domain.ActivityStatusCompleted {
+		if exit, ok := number(detailMap["exitCode"]); ok && exit != 0 {
+			status = domain.ActivityStatusFailed
+		}
+	}
 	kind := ports.ChatEventActivityStarted
 	if completed {
 		kind = ports.ChatEventActivityCompleted

@@ -55,6 +55,7 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
+	| "open-orchestrator"
 	| "toggle-browser-devtools";
 
 export type ShortcutCategory = "General" | "Navigation" | "Session" | "Panels";
@@ -104,6 +105,7 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "open-in-editor", label: "Open in editor", category: "Session" },
 	{ id: "copy-session-path", label: "Copy session path", category: "Session" },
 	{ id: "model-picker", label: "Choose model", category: "Session" },
+	{ id: "open-orchestrator", label: "Open orchestrator", category: "Session" },
 	{ id: "toggle-sidebar", label: "Toggle sidebar", category: "Panels" },
 	{ id: "toggle-inspector", label: "Toggle inspector", category: "Panels" },
 	{ id: "toggle-terminal", label: "Toggle terminal", category: "Panels" },
@@ -197,6 +199,10 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
+		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
+		// readline), so that platform takes G for "go to orchestrator".
+		case "open-orchestrator":
+			return [isMac ? binding("o", { meta: true, shift: true }) : binding("g", { ctrl: true, shift: true })];
 		case "toggle-browser-devtools":
 			return [isMac ? binding("i", { meta: true, alt: true }) : binding("i", { ctrl: true, shift: true })];
 	}

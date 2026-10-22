@@ -136,19 +136,6 @@ function sessionWith(overrides: Partial<WorkspaceSession> = {}): WorkspaceSessio
 	};
 }
 
-function activeAgentSwitch(
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: "switch-1",
-		state: "starting_target",
-		targetHarness: "codex",
-		...overrides,
-	};
-}
-
 function renderTopbar(session: WorkspaceSession, embedded = false, sessionAction?: ReactNode) {
 	return renderTopbarSessions([session], session.id, embedded, sessionAction);
 }
@@ -333,7 +320,7 @@ describe("ShellTopbar status pill", () => {
 			true,
 			<>
 				<button type="button">New terminal</button>
-				<button type="button">Switch agent</button>
+				<button type="button">Session option</button>
 				<button type="button">Switch to chat UI</button>
 			</>,
 		);
@@ -344,7 +331,7 @@ describe("ShellTopbar status pill", () => {
 		expect(localActions).toHaveClass("gap-1");
 		expect(localActions).not.toHaveClass("gap-px", "mr-0.5");
 		expect(localActions.contains(screen.getByRole("button", { name: "New terminal" }))).toBe(true);
-		expect(localActions.contains(screen.getByRole("button", { name: "Switch agent" }))).toBe(true);
+		expect(localActions.contains(screen.getByRole("button", { name: "Session option" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Switch to chat UI" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Archive session" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Open orchestrator" }))).toBe(false);
@@ -417,22 +404,6 @@ describe("ShellTopbar status pill", () => {
 
 		expect(screen.queryByText("session/sess-1")).not.toBeInTheDocument();
 		expect(screen.getByText("Working")).toBeInTheDocument();
-	});
-
-	it("shows switch progress instead of the exited source in the status pill", () => {
-		renderTopbar(sessionWith({
-			status: "exited",
-			activity: {
-				state: "exited",
-				lastActivityAt: "2026-06-10T00:00:00Z",
-			},
-			activeAgentSwitch: activeAgentSwitch(),
-		}));
-
-		const pill = screen.getByText("Switching to Codex").closest("span") as HTMLElement;
-		expect(pill).toHaveStyle({ color: "var(--color-status-working)" });
-		expect(pill.querySelector("span")).toHaveClass("animate-status-pulse");
-		expect(screen.queryByText("Exited")).not.toBeInTheDocument();
 	});
 });
 
@@ -573,16 +544,10 @@ describe("ShellTopbar orchestrator actions", () => {
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
-	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
-		const switchingOrchestrator = {
-			...orchestrator,
-			activeAgentSwitch: activeAgentSwitch(),
-			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
-			status: "exited",
-		} satisfies WorkspaceSession;
-		renderTopbarSessions([worker, switchingOrchestrator], worker.id);
+	it("opens the project orchestrator from the open-orchestrator shortcut", () => {
+		renderTopbarSessions([worker, orchestrator], worker.id);
 
-		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+		act(() => appShortcutBus.emit({ id: "open-orchestrator" }));
 
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
@@ -757,6 +722,103 @@ describe("TopbarArchiveButton", () => {
 			params: { path: { sessionId: "sess-1" } },
 		});
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	describe("with artifacts", () => {
+		const artifact = (name: string): NonNullable<WorkspaceSession["artifactFiles"]>[number] => ({
+			kind: "markdown",
+			name,
+			path: name,
+			size: 1,
+			updatedAt: "2026-10-01T00:00:00Z",
+		});
+		const withArtifacts = (names: string[], outputType: WorkspaceSession["outputType"] = "artifact") =>
+			({ ...worker, outputType, artifactFiles: names.map(artifact) }) as WorkspaceSession;
+		const openDialog = async () => {
+			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+			return screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		};
+
+		it("offers an unchecked delete box and keeps the artifacts by default", async () => {
+			renderKill(withArtifacts(["report.md", "notes.md"]));
+
+			const dialog = await openDialog();
+			const box = within(dialog).getByRole("checkbox", { name: "Delete 2 artifacts" });
+			expect(box).not.toBeChecked();
+			expect(dialog).toHaveTextContent("Delete 2 artifactsThis can't be undone, and a restored session starts without them.");
+			expect(dialog).not.toHaveTextContent("report.md");
+
+			await clickKillDialogConfirm();
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			expect(postMock.mock.calls[0]?.[1]).toEqual({ params: { path: { sessionId: "sess-1" } }, body: undefined });
+		});
+
+		it("asks the daemon to delete the artifacts when the box is checked", async () => {
+			renderKill(withArtifacts(["report.md"]));
+
+			const dialog = await openDialog();
+			expect(dialog).toHaveTextContent("This can't be undone, and a restored session starts without it.");
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			expect(within(dialog).getByRole("button", { name: "Confirm, archive session" })).toHaveClass("bg-danger-strong");
+			await clickKillDialogConfirm();
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", {
+				params: { path: { sessionId: "sess-1" } },
+				body: { deleteArtifacts: true },
+			});
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		});
+
+		it("unchecks the box when the dialog opens again", async () => {
+			renderKill(withArtifacts(["report.md"]));
+
+			let dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await userEvent.click(within(dialog).getByRole("button", { name: "No" }));
+
+			dialog = await openDialog();
+			expect(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" })).not.toBeChecked();
+			expect(postMock).not.toHaveBeenCalled();
+		});
+
+		it("warns when the daemon does not confirm the delete", async () => {
+			useUiStore.setState({ globalToasts: [] });
+			// A failed delete and an older daemon both answer without artifactsDeleted.
+			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
+			renderKill(withArtifacts(["report.md"]));
+
+			const dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await clickKillDialogConfirm();
+
+			await waitFor(() =>
+				expect(useUiStore.getState().globalToasts).toEqual([
+					expect.objectContaining({
+						title: "Session archived, artifacts kept",
+						body: "Its artifact files could not be deleted and are still on disk.",
+						tone: "error",
+					}),
+				]),
+			);
+		});
+
+		it("does not warn once the daemon confirms the delete", async () => {
+			useUiStore.setState({ globalToasts: [] });
+			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1", artifactsDeleted: true }, error: undefined });
+			const { queryClient } = renderKill(withArtifacts(["report.md"]));
+
+			const dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await clickKillDialogConfirm();
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			await waitFor(() =>
+				expect(queryClient.getMutationCache().getAll().map((mutation) => mutation.state.status)).toEqual(["success"]),
+			);
+			expect(useUiStore.getState().globalToasts).toEqual([]);
+		});
 	});
 
 	it("can back out of the confirmation without killing", async () => {

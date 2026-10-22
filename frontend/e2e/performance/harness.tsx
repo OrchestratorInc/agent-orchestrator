@@ -110,7 +110,7 @@ export const performanceHarness = {
 			completions.length = 0;
 			started = performance.now();
 			const source = sources.find((entry) =>
-				entry.url.endsWith("/api/v1/events"),
+				entry.url.includes("/api/v1/events"),
 			)!;
 			for (let index = 0; index < 20; index++) {
 				source.emit(

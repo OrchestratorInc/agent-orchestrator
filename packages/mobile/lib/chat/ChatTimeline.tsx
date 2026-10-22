@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { authHeaders, httpBase } from "../config";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
@@ -26,6 +27,8 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { MascotLamp, Spinning } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { RenderFrame } from "./RenderFrame";
+import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
@@ -64,12 +67,19 @@ import {
 	countActivityNodes,
 	partitionTurnItems,
 	readableConversationItems,
+	startupPlacement,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { type, space } from "../tokens";
+import { press, type, space } from "../tokens";
+import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { SessionStartupStatus } from "./SessionStartup";
+import type { SessionStartupView } from "../session/sessionStartup";
+
+/** A starting session's checklist and where it sits; see ChatSessionScreen. */
+export type TimelineStartup = { view: SessionStartupView; visible: boolean; onRetry?(): void; retrying?: boolean };
 
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
@@ -87,6 +97,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	jumpToSequence,
 	onJumpHandled,
 	answeredBelow,
+	startup,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -104,6 +115,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	 * controls that could disagree.
 	 */
 	answeredBelow?: number;
+	/** Setup progress for a session that is still starting. */
+	startup?: TimelineStartup;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -121,7 +134,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	}, []);
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
-	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
+	const openingTurnId = startup?.view.openingTurnId;
+	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
@@ -145,6 +159,16 @@ export const ChatTimeline = memo(function ChatTimeline({
 		onJumpHandled?.();
 	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
+	if (plan.kind === "empty" && startup?.visible) {
+		// No brief in the timeline (a promptless start): the checklist stands alone.
+		return (
+			<View style={styles.timelineWrap}>
+				<View style={[styles.list, styles.content]}>
+					<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+				</View>
+			</View>
+		);
+	}
 	if (plan.kind === "empty") {
 		return (
 			<View style={styles.timelineWrap}>
@@ -154,6 +178,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
+	// A checklist no loaded turn can host sits at the live edge instead.
+	const standaloneStartup = placement === "standalone" && startup ? (
+		<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+	) : null;
 	const olderControl = snapshot.hasMoreBefore ? (
 		<Pressable
 			accessibilityRole="button"
@@ -181,24 +210,28 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maxToRenderPerBatch={4}
 				updateCellsBatchingPeriod={32}
 				windowSize={5}
-				maintainVisibleContentPosition={inverted ? { minIndexForVisible: 0 } : undefined}
+				// Content off screen can resize (a page measured ahead, earlier history
+				// loading in); what is on screen stays put on both platforms.
+				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
 				onScroll={(event) => {
 					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
 					followsTail.current = inverted
 						? Math.abs(contentOffset.y) < 120
 						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
+					notifyRenderViewport();
 				}}
 				scrollEventThrottle={100}
 				onContentSizeChange={() => {
+					notifyRenderViewport();
 					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
 					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListHeaderComponent={inverted ? null : olderControl}
-				ListFooterComponent={inverted ? olderControl : null}
+				ListHeaderComponent={inverted ? standaloneStartup : olderControl}
+				ListFooterComponent={inverted ? olderControl : standaloneStartup}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -210,6 +243,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 					answeredBelow={answeredBelow}
 					workedOpen={openWorked.has(group.key)}
 					onToggleWorked={toggleWorked}
+					startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 				/>}
 			/>
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
@@ -217,7 +251,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -228,6 +262,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	answeredBelow?: number;
 	workedOpen: boolean;
 	onToggleWorked(key: string): void;
+	startup?: TimelineStartup;
 }) {
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
@@ -239,6 +274,19 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
 		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+	if (startup) {
+		// The checklist sits exactly where the Working row will, under the brief,
+		// so the handoff moves nothing.
+		const firstWork = items.findIndex((item) => !(item.kind === "message" && item.role === "user"));
+		const leading = firstWork < 0 ? items.length : firstWork;
+		// The checklist explains the wait, so the brief drops its "Queued" note.
+		const brief = items.slice(0, leading).map((item) => item.kind === "message" && item.delivery === "queued" ? { ...item, delivery: undefined } : item);
+		return <View>
+			{renderRows(brief)}
+			<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+			{renderRows(items.slice(leading))}
+		</View>;
+	}
 	const partition = partitionTurnItems(items, group.turn);
 	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
@@ -317,6 +365,9 @@ const TimelineItem = memo(function TimelineItem({
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
 		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
 	}
+	// A page the agent published with html_render / ao render.
+	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
+	if (render) return <RenderFrame render={render} />;
 	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
@@ -411,7 +462,7 @@ function OriginMessage({ message }: { message: Extract<ConversationItem, { kind:
 	const long = message.text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "AO")}</Text></View>
+		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
 		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { haptics.tap(); setExpanded((value) => !value); }} style={styles.originMore}><Feather name={expanded ? "chevron-up" : "chevron-right"} size={12} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
@@ -481,7 +532,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					{detail.arguments !== undefined ? <CodeOutput value={printable(detail.arguments)} /> : null}
 					{detail.terminalInput ? <TerminalInput text={detail.terminalInput} truncated={detail.terminalInputTruncated} /> : null}
 					{output ? <CodeOutput value={output} /> : null}
-					{detail.outputTruncated || detail.patchOutputTruncated ? <Text style={[styles.partial, { color: t.amber }]}>This output is longer than AO stores, so it stops early. Open the worktree shell for the full run.</Text> : detail.outputMayBePartial ? <Text style={styles.partial}>{detail.outputSource === "stream" ? "Streamed live; the provider may have omitted the beginning." : "The provider's rolled-up output may omit the beginning."} Open the worktree shell for the full run.</Text> : null}
+					{detail.outputTruncated || detail.patchOutputTruncated ? <Text style={[styles.partial, { color: t.amber }]}>This output is longer than Orchestrator stores, so it stops early. Open the worktree shell for the full run.</Text> : detail.outputMayBePartial ? <Text style={styles.partial}>{detail.outputSource === "stream" ? "Streamed live; the provider may have omitted the beginning." : "The provider's rolled-up output may omit the beginning."} Open the worktree shell for the full run.</Text> : null}
 					{Array.isArray(detail.files) ? <FileList files={detail.files} /> : null}
 				</View>
 			) : null}
@@ -492,7 +543,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>AO stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
+	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
 }
 
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
@@ -510,7 +561,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
 			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
 		</Pressable>
-		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than AO stores.</Text> : null}</View> : null}</View> : null}
+		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
 }
 
@@ -557,7 +608,7 @@ function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[nu
 function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View><Pressable onLongPress={() => { void Clipboard.setStringAsync(patch); haptics.success(); }}><HighlightedCodeText code={patch} language="diff" style={styles.output} /></Pressable>{truncated ? <Text style={[styles.partial, { color: t.amber }]}>This patch is longer than AO stores. The complete change remains in the worktree.</Text> : null}</View>;
+	return <View><Pressable onLongPress={() => { void Clipboard.setStringAsync(patch); haptics.success(); }}><HighlightedCodeText code={patch} language="diff" style={styles.output} /></Pressable>{truncated ? <Text style={[styles.partial, { color: t.amber }]}>This patch is longer than Orchestrator stores. The complete change remains in the worktree.</Text> : null}</View>;
 }
 
 function PlanActivity({ activity }: { activity: ConversationActivity }) {
@@ -789,27 +840,57 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
-	const files = turn.diff?.files ?? [];
+	const changed = turn.diff?.files ?? [];
+	const additions = changed.reduce((sum, file) => sum + file.additions, 0);
+	const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
 	return <View style={styles.planCard}>
-		<Pressable
-			accessibilityRole="button"
-			accessibilityState={{ expanded: open }}
-			style={styles.planHeader}
-			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+		<View style={styles.changedHeader}>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityState={{ expanded: open }}
+				accessibilityLabel={`${changed.length} changed ${changed.length === 1 ? "file" : "files"}, ${additions} lines added, ${deletions} removed`}
+				style={[styles.planHeader, styles.changedToggle]}
+				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+				>
+				<Feather name="file-text" size={12} color={t.textTertiary} />
+				<Text numberOfLines={1} style={[styles.planTitle, styles.changedTitle]}>{files ? `${changed.length} ${changed.length === 1 ? "file" : "files"}` : `${changed.length} changed ${changed.length === 1 ? "file" : "files"}`}</Text>
+				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
+				<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{additions}</Text>
+				<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{deletions}</Text>
+				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
+			</Pressable>
+			{files ? <Pressable
+				accessibilityRole="button"
+				accessibilityLabel="Review changes"
+				accessibilityHint="Opens every changed file in this session"
+				hitSlop={6}
+				onPress={() => { haptics.tap(); files.openChanges(); }}
+				style={({ pressed }) => [styles.changedReview, pressed && { opacity: press.opacity }]}
 			>
-			<Feather name="file-text" size={12} color={t.textTertiary} />
-			<Text style={styles.planTitle}>{files.length} changed {files.length === 1 ? "file" : "files"}</Text>
-			{turn.state === "running" ? <><Text style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
-			<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{files.reduce((sum, file) => sum + file.additions, 0)}</Text>
-			<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{files.reduce((sum, file) => sum + file.deletions, 0)}</Text>
-			<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
-		</Pressable>
-		{open ? <View style={styles.fileBody}>{files.map((file) => <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>
-			<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
-			<Text selectable style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
-			<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
-		</View>)}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>This turn changed more files than AO lists here. Open the worktree shell for the complete diff.</Text> : null}</View> : null}
+				<Feather name="file-diff" size={12} color={t.textPrimary} />
+				<Text style={styles.changedReviewText}>Review</Text>
+			</Pressable> : null}
+		</View>
+		{open ? <View style={styles.fileBody}>{changed.map((file) => {
+			const row = <>
+				<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
+				<Text selectable={!files} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
+				<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
+				{files ? <Feather name="chevron-right" size={12} color={t.textFaint} /> : null}
+			</>;
+			return files
+				? <Pressable
+					key={`${file.oldPath}:${file.path}`}
+					accessibilityRole="button"
+					accessibilityLabel={`${file.path}, ${file.status}, ${file.additions} added, ${file.deletions} removed`}
+					accessibilityHint="Opens the diff"
+					onPress={() => { haptics.tap(); files.openFile(file.path, file.oldPath); }}
+					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && { opacity: press.opacity }]}
+				>{row}</Pressable>
+				: <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>{row}</View>;
+		})}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>{files ? "This turn changed more files than Orchestrator lists here. Review changes shows all of them." : "This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff."}</Text> : null}</View> : null}
 	</View>;
 }
 
@@ -856,7 +937,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(userFacingError(cause))).finally(() => setSubmitting(undefined));
 			}} />;
-		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions AO can present. Open diagnostics from the host.</Text>}
+		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
 	</View>;
 }
@@ -923,7 +1004,7 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 					.then(() => resolve("accept"))
 					.catch(() => setValidationError("This link could not be opened on this device."));
 			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary disabled={busy || submitting} onPress={submit} />}
-		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so AO cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
+		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so Orchestrator cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
 	</View>;
 }
 
@@ -1011,7 +1092,7 @@ function truncationNote(value: unknown): string | undefined {
 	const record = value as { truncated?: unknown; bytes?: unknown };
 	if (record.truncated !== true) return undefined;
 	const bytes = typeof record.bytes === "number" ? ` (${formatBytes(record.bytes)})` : "";
-	return `This payload${bytes} was larger than AO stores, so it was not kept.`;
+	return `This payload${bytes} was larger than Orchestrator stores, so it was not kept.`;
 }
 
 function formatBytes(bytes: number): string {
@@ -1103,7 +1184,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
 	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
-	statusRow: { alignSelf: "flex-start", minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
+	// Full width with a rule under it, matching the desktop's Working / Worked
+	// rows and the setup checklist header, so the line holds through the handoff.
+	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
@@ -1111,6 +1194,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rollbackCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
 	planCard: { backgroundColor: t.bgSurface, borderRadius: 12, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, overflow: "hidden" },
 	planHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
+	changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
+	changedToggle: { flex: 1, minWidth: 0 },
+	changedTitle: { flexShrink: 1 },
+	changedReview: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 999, backgroundColor: t.bgElevatedHover, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
+	changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
 	planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
 	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
@@ -1121,6 +1209,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
+	fileRowTap: { minHeight: 36 },
 	fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	filePath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },

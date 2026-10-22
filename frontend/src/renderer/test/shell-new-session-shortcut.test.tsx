@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { CancelledError } from "@tanstack/react-query";
+import { CancelledError, type QueryClient } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcuts";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -47,6 +47,7 @@ const shellMocks = vi.hoisted(() => {
 							workerAgent: string;
 							orchestratorAgent: string;
 							asWorkspace?: boolean;
+							clonePreparationId?: string;
 						}) => Promise<void>;
 				  }
 			| undefined,
@@ -92,6 +93,7 @@ const shellMocks = vi.hoisted(() => {
 		}),
 		router: {
 			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn() },
+			subscribe: vi.fn(() => () => {}),
 		},
 		getPathForFile: vi.fn((file: File) => `/dropped/${file.name}`),
 		onOpenFolderPath: vi.fn((listener: (path: string) => void) => {
@@ -129,6 +131,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
 	createFileRoute: () => (options: unknown) => ({ options }),
 	Outlet: () => null,
+	useMatch: () => undefined,
 	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
 	useRouter: () => shellMocks.router,
@@ -169,6 +172,7 @@ vi.mock("../lib/bridge", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
+	useWorkspacePolling: () => undefined,
 	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [] }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
@@ -237,6 +241,7 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null }));
+vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
 }));
@@ -452,6 +457,11 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
+	// The shell lazy-loads the starting chat; warm the module so the first render
+	// that needs it resolves within findBy's default timeout.
+	beforeAll(async () => {
+		await import("../components/chat/OrchestratorStartingChat");
+	});
 	it("rechecks a connected host when its session queries fail", async () => {
 		useUiStore.setState({ developerMode: true, remoteHosts: true });
 		const view = await renderShell();
@@ -544,6 +554,33 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1" },
 		});
 		expect(screen.getByTestId("global-toast")).toHaveTextContent("Project already added");
+	});
+
+	it("finishes clone provisioning after registration committed but its response was lost", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		vi.mocked(apiClient.POST)
+			.mockReset()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce({ error: {
+				code: "PATH_ALREADY_REGISTERED", message: "Already registered", details: { existingProjectId: "proj-1" },
+			} })
+			.mockResolvedValueOnce({ data: { session: {
+				id: "orch-existing", projectId: "proj-1", kind: "orchestrator", mode: "chat",
+			} } });
+		await renderShell();
+		const input = { path: "/one", workerAgent: "codex", orchestratorAgent: "codex", clonePreparationId: "prepared" };
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).rejects.toThrow("Failed to fetch");
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).resolves.toBeUndefined();
+		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "orch-existing" },
+		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+		});
+		expect(apiClient.POST).toHaveBeenCalledTimes(3);
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
 	});
 
 	it("uses the daemon project identity when an imported path is an alias", async () => {
@@ -639,14 +676,14 @@ describe("shell workspace startup", () => {
 		shellMocks.state.routeParams = { projectId: workspaces[0].id };
 		useUiStore.getState().setProjectProvisioning(workspaces[0].id, true);
 		await renderShell();
-		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(await screen.findByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 	});
 
 	it("opens optimistic chat during submission without a loading page", async () => {
 		useUiStore.getState().setProjectCreationPending(true);
 		const view = await renderShell();
-		const composer = screen.getByLabelText("Message the agent");
+		const composer = await screen.findByLabelText("Message the agent");
 		expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
 		expect(screen.getByTestId("session-workspace-topbar")).toBeVisible();
 		shellMocks.state.routeParams = { projectId: "proj-1" };
@@ -815,6 +852,22 @@ describe("shell workspace startup", () => {
 		);
 
 		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("ready"));
+	});
+});
+
+describe("shell route loader", () => {
+	const loader = Route.options.loader as (args: { context: { queryClient: Pick<QueryClient, "fetchQuery"> } }) => Promise<unknown>;
+
+	it("treats a workspace fetch cancelled by a newer refetch as warmed, not a shell error", async () => {
+		const fetchQuery = vi.fn(() => Promise.reject(new CancelledError()));
+		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient } })).resolves.toBeUndefined();
+		expect(fetchQuery).toHaveBeenCalledTimes(1);
+	});
+
+	it("still fails the shell on a real workspace fetch error", async () => {
+		const failure = new Error("daemon down");
+		const fetchQuery = vi.fn(() => Promise.reject(failure));
+		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient } })).rejects.toBe(failure);
 	});
 });
 

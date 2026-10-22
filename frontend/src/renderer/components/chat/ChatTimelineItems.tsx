@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
  *
@@ -15,11 +16,18 @@ import {
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { agentLabel } from "../../lib/agent-options";
+import { recordedModelName } from "../../lib/agent-model-choices";
+import { formatEffortLabel } from "../settings/EffortPicker";
+import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	ArrowRight,
 	Brain,
 	ChevronDown,
 	ChevronRight,
@@ -68,10 +76,12 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
+import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandBinaryLabel,
@@ -94,6 +104,7 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
 	type DiffStatus,
@@ -291,20 +302,23 @@ function TwoRowTimelineMarker({
 	tone = "text-muted-foreground/70",
 	detailTone = "text-muted-foreground/70",
 	action,
+	wrapDetail = false,
 }: {
 	message: string;
 	detail?: string;
 	tone?: string;
 	detailTone?: string;
 	action?: ReactNode;
+	/** The detail is an instruction the reader needs whole, so it wraps instead of truncating. */
+	wrapDetail?: boolean;
 }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1 py-1">
-			<div className={cn("flex min-w-0 items-baseline gap-2 text-xs", tone)}>
+			<div className={cn("flex min-w-0 items-baseline gap-x-2 gap-y-0.5 text-xs", wrapDetail && "flex-wrap", tone)}>
 				<span className="shrink-0">{message}</span>
 				{detail ? (
 					<span
-						className={cn("min-w-0 truncate", detailTone)}
+						className={cn("min-w-0", wrapDetail ? "text-pretty" : "truncate", detailTone)}
 						title={detail}
 					>
 						{detail}
@@ -332,6 +346,76 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 	);
 }
 
+/** The remote host a chat's session runs on, whose catalogs name its models. */
+export const ChatHostId = createContext<string | undefined>(undefined);
+
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
+	const { t } = useTranslation();
+	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
+	const hostId = useContext(ChatHostId);
+	const catalog = useQuery({ ...agentModelsQueryOptions(harness, "", hostId), enabled: Boolean(model) }).data;
+	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
+	return (
+		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
+			<ProviderMark provider={harness} />
+			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
+			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
+			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
+		</span>
+	);
+}
+
+/** Where one agent handed the conversation to another. */
+export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const detail = activity.detail;
+	const switching = Boolean(detail?.switching);
+	const named = Boolean(detail?.sourceHarness && detail.targetHarness);
+	// A switched row only seconds old is the one just made, so it opens from closed; older ones start open.
+	const [open, setOpen] = useState(() => switching || !(Date.now() - Date.parse(activity.createdAt) < 8000));
+	useEffect(() => {
+		if (switching || open) return;
+		let inner = 0;
+		const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setOpen(true)); });
+		return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+	}, [switching, open]);
+	const revealed = !switching && open;
+	const label = switching
+		? t("agentSwitch.switching")
+		: named
+			? t("agentSwitch.switchedFromTo", { from: agentLabel(detail?.sourceHarness ?? ""), to: agentLabel(detail?.targetHarness ?? "") })
+			: t("agentSwitch.switched");
+	return (
+		<div role="separator" aria-label={label} aria-busy={switching || undefined} className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+			<div className="flex min-w-0 items-center">
+				<span className={cn("inline-block shrink-0", switching ? "chat-working-shimmer" : undefined)}>
+					{switching ? t("agentSwitch.switching") : t("agentSwitch.switched")}
+				</span>
+				{named ? (
+					// Closed while the switch runs, then its width grows from 0 to its own.
+					<div
+						className={cn(
+							"grid min-w-0 transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",
+							revealed ? "grid-cols-[1fr]" : "grid-cols-[0fr]",
+						)}
+					>
+						<div className="min-w-0 overflow-hidden">
+							<span className="flex w-max shrink-0 items-center gap-3 whitespace-nowrap pl-3">
+								<HandoffSide harness={detail?.sourceHarness ?? ""} model={detail?.sourceModel} />
+								<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+								<HandoffSide harness={detail?.targetHarness ?? ""} model={detail?.targetModel} effort={detail?.targetEffort} compactWindow={detail?.targetAutoCompactWindow} bright />
+							</span>
+						</div>
+					</div>
+				) : null}
+			</div>
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+		</div>
+	);
+}
+
 export interface TurnOutcomeRetryControl {
 	onRetry: () => void;
 	pending?: boolean;
@@ -339,15 +423,37 @@ export interface TurnOutcomeRetryControl {
 	disabled?: boolean;
 }
 
+/** Where the user continued a stopped turn: a marker in place of the continue message. */
+export function ContinuedMarker() {
+	return <TwoRowTimelineMarker message="Continued" />;
+}
+
 export function TurnOutcome({
 	state,
 	error,
 	retry,
+	usageLimit,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
 	retry?: TurnOutcomeRetryControl;
+	usageLimit?: ConversationUsageLimit;
 }) {
+	if (state === "failed" && usageLimit) {
+		return (
+			<div className="flex min-w-0 flex-col gap-2 py-3">
+				<UsageLimitNotice
+					compact={!retry}
+					usageLimit={usageLimit}
+					onResume={retry?.onRetry}
+					pending={retry?.pending}
+					disabled={retry?.disabled}
+					error={retry?.error}
+				/>
+				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+			</div>
+		);
+	}
 	const copy = {
 		recovered: {
 			label: "This turn was recovered from an earlier session",
@@ -1047,6 +1153,9 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
+	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
+	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
@@ -2325,6 +2434,89 @@ function parseJsonObjectSuffix(raw: string): Record<string, unknown> | undefined
  * when it happened, so a turn that failed for this reason is not left looking like an
  * ordinary failure.
  */
+/** Whole seconds for a short duration, minutes and seconds past a minute. */
+function setupDuration(durationMs: number): { minutes: number; seconds: number } {
+	const total = Math.max(0, Math.round(durationMs / 1000));
+	return { minutes: Math.floor(total / 60), seconds: total % 60 };
+}
+
+/**
+ * How the project's Setup commands (Project settings > Scripts) ended, before
+ * the agent started. Compact like the other system rows; the failed step's
+ * output (the tail the worker kept, already redacted) opens below it in
+ * monospace. Workers that publish workspace.script.step events get the
+ * ScriptRunPanel instead; this row stays for workers that predate them.
+ */
+function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const detail = activity.detail;
+	const status = detail?.setupStatus ?? (activity.status === "completed" ? "succeeded" : "failed");
+	const step = detail?.setupStep ?? 1;
+	const duration = typeof detail?.durationMs === "number" ? setupDuration(detail.durationMs) : undefined;
+	const durationText = duration
+		? duration.minutes > 0
+			? t("chat.projectSetup.durationMinutes", { minutes: duration.minutes, seconds: duration.seconds })
+			: t("chat.projectSetup.durationSeconds", { seconds: duration.seconds })
+		: undefined;
+	const headline = status === "succeeded"
+		? durationText ? t("chat.projectSetup.succeededIn", { duration: durationText }) : t("chat.projectSetup.succeeded")
+		: status === "timed_out"
+			? t("chat.projectSetup.timedOut", { step })
+			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
+				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
+				: t("chat.projectSetup.failed", { step });
+	const failed = status !== "succeeded";
+	const stepOutput = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	// The failed step's command, who and where it ran, and its full log, one
+	// fact per line above its output.
+	const setupFailure = failed ? detail?.setupFailure : undefined;
+	const contextLines: string[] = [];
+	if (setupFailure?.command) contextLines.push(t("chat.projectSetup.stepCommand", { step, command: setupFailure.command }));
+	if (setupFailure?.user) {
+		contextLines.push(setupFailure.groups?.length
+			? t("chat.projectSetup.ranAsWithGroups", { user: setupFailure.user, groups: setupFailure.groups.join(" ") })
+			: t("chat.projectSetup.ranAs", { user: setupFailure.user }));
+	}
+	if (setupFailure?.dir) contextLines.push(t("chat.projectSetup.ranIn", { dir: setupFailure.dir }));
+	if (setupFailure?.logPath) contextLines.push(t("chat.projectSetup.fullOutput", { path: setupFailure.logPath }));
+	const context = contextLines.join("\n");
+	const output = context ? (stepOutput ? `${context}\n\n${stepOutput}` : context) : stepOutput;
+	const hint = failed ? detail?.setupHint?.trim() : undefined;
+	const Icon = failed ? CircleAlert : SquareTerminal;
+	return (
+		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
+			<div className="flex items-center gap-2.5">
+				<Icon aria-hidden="true" className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")} />
+				<span className={cn("min-w-0 flex-1 text-xs", failed ? "text-destructive" : "text-foreground")}>{headline}</span>
+				{output ? (
+					<button
+						type="button"
+						aria-expanded={expanded}
+						className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						onClick={() => setExpanded((value) => !value)}
+					>
+						{expanded ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
+						{expanded ? t("chat.projectSetup.hideOutput") : t("chat.projectSetup.showOutput")}
+					</button>
+				) : null}
+			</div>
+			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
+			{output && expanded ? (
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
+			) : null}
+		</div>
+	);
+}
+
+/** Where an account switch stopped the turn: not a failure, the conversation
+ * continues on the new account with the next message. */
+function AccountSwitchedRow({ accountId }: { accountId?: string }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
+}
+
 function ReauthRow({ activity }: { activity: ConversationActivity }) {
 	return (
 		<div className="flex items-start gap-2.5 rounded-md border border-destructive/40 bg-surface px-3 py-2">
@@ -2509,6 +2701,15 @@ export function ApprovalCard({
 			decision !== allowOnceDecision &&
 			!alternateAllowDecisions.includes(decision),
 	);
+	// Some agents ask a question through a permission request, offering each
+	// answer as its own option of the same kind. A generic per-kind label would
+	// render identical buttons, so a kind offered more than once keeps the
+	// provider's own wording.
+	const repeatedKinds = repeatedDecisionKinds(decisions);
+	const decisionLabel = (decision: DecisionOption) =>
+		repeatedKinds.has(approvalDecisionKind(decision) ?? "") && decision.label.trim()
+			? decision.label
+			: approvalDecisionLabel(decision, subjectKind);
 	const requestId = activity.requestId ?? "";
 	const cardRef = useRef<HTMLDivElement>(null);
 
@@ -2566,7 +2767,7 @@ export function ApprovalCard({
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, denyDecision.id)}
 						>
-							{approvalDecisionLabel(denyDecision, subjectKind)}
+							{decisionLabel(denyDecision)}
 							{denyDecision === rejectOnceDecision ? (
 								<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
 									Esc
@@ -2583,7 +2784,7 @@ export function ApprovalCard({
 								disabled={busy}
 								onClick={() => onDecide?.(requestId, allowOnceDecision.id)}
 							>
-								Allow once
+								{decisionLabel(allowOnceDecision)}
 								<kbd className="rounded-full bg-logo-accent-foreground/15 p-0.5" aria-label="Press Return">
 									<CornerDownLeft aria-hidden="true" className="size-3" />
 								</kbd>
@@ -2613,7 +2814,7 @@ export function ApprovalCard({
 												disabled={busy}
 												onSelect={() => onDecide?.(activity.requestId ?? "", decision.id)}
 											>
-												{approvalDecisionLabel(decision, subjectKind)}
+												{decisionLabel(decision)}
 											</DropdownMenuItem>
 										))}
 									</DropdownMenuContent>
@@ -2629,7 +2830,7 @@ export function ApprovalCard({
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, decision.id)}
 						>
-							{approvalDecisionLabel(decision, subjectKind)}
+							{decisionLabel(decision)}
 						</button>
 					))}
 					{decisions.length === 0 ? (
@@ -2690,6 +2891,18 @@ function approvalDecisionLabel(decision: DecisionOption, subjectKind?: ActivityK
 		default:
 			return decision.label;
 	}
+}
+
+function repeatedDecisionKinds(decisions: DecisionOption[]): Set<string> {
+	const seen = new Set<string>();
+	const repeated = new Set<string>();
+	for (const decision of decisions) {
+		const kind = approvalDecisionKind(decision);
+		if (!kind) continue;
+		if (seen.has(kind)) repeated.add(kind);
+		seen.add(kind);
+	}
+	return repeated;
 }
 
 function orderedApprovalDecisions(decisions: DecisionOption[]): DecisionOption[] {
