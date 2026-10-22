@@ -3,6 +3,7 @@
 	"sideChat.closing": "Seitenchat wird geschlossen. Er verschwindet nach bestätigtem Herunterfahren.",
 	"sideChat.retryClose": "Schließen erneut versuchen",
 	"report.action": "Problem melden",
+	"report.promptPlaceholder": "Was ist schiefgelaufen? (optional)",
 	"report.description": "Startet einen Agenten, der Protokolle sammelt, nach dem Problem fragt und einen Fehlerbericht für dich erstellen kann.",
 	"report.opening": "Wird geöffnet...",
 	"report.failed": "Der Bericht konnte nicht gestartet werden. Versuche es erneut.",
