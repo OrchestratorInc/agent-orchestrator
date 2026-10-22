@@ -774,6 +774,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Share what the holder is typing, so everyone else in the session sees it live, read-only. Counts as a keystroke, renewing the grant. Anyone not holding the grant they present is refused with granted false. */
+        post: operations["composerPublishDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
         parameters: {
             query?: never;
@@ -3098,6 +3118,13 @@ export interface components {
             epoch: number;
             /** @description Everyone waiting for the lease, first in line first. */
             waitlist: components["schemas"]["ComposerParticipant"][];
+            /** @description What the holder is typing, shown live and read-only to everyone else; null while they have typed nothing. It clears when their turn ends. */
+            draft?: components["schemas"]["ComposerDraft"] | null;
+        };
+        ComposerDraft: {
+            text: string;
+            /** @description The caret's offset into text, in UTF-16 code units as the writing client counts them. */
+            cursor: number;
         };
         ComposerLeaseAnswer: {
             composer: components["schemas"]["ComposerLeaseState"] & {
@@ -3115,6 +3142,10 @@ export interface components {
             epoch: number;
             /** @description renew only. True when the holder typed since the last renewal. */
             typing?: boolean;
+            /** @description draft only. The holder's draft. */
+            text?: string;
+            /** @description draft only. The caret's offset into text. */
+            cursor?: number;
         };
         UserMessageEvent: {
             sessionId: string;
@@ -4816,6 +4847,34 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerPublishDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. */
             200: {
                 headers: {
                     [name: string]: unknown;

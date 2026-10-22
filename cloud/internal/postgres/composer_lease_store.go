@@ -33,6 +33,9 @@ var (
 	ErrComposerLeaseLost = errors.New("composer lease lost")
 )
 
+// MaxComposerDraftBytes bounds a shared draft, as a message is bounded.
+const MaxComposerDraftBytes = 65536
+
 // composerLease is one session's lease row, locked for the transaction.
 type composerLease struct {
 	orgID, sessionID string
@@ -41,6 +44,11 @@ type composerLease struct {
 	expiresAt        *time.Time
 	lastInputAt      *time.Time
 	now              time.Time
+	// The holder's draft as everyone else sees it. A change moves the
+	// revision, which wakes the session's live streams.
+	draftText     string
+	draftCursor   int
+	draftRevision int64
 }
 
 func (l *composerLease) expired() bool {
@@ -49,6 +57,15 @@ func (l *composerLease) expired() bool {
 
 func (l *composerLease) free() {
 	l.holder, l.expiresAt, l.lastInputAt = "", nil, nil
+	l.clearDraft()
+}
+
+// clearDraft drops the shared draft: it belongs to one holder's turn.
+func (l *composerLease) clearDraft() {
+	if l.draftText != "" || l.draftCursor != 0 {
+		l.draftText, l.draftCursor = "", 0
+		l.draftRevision++
+	}
 }
 
 // grant gives the lease to userID for ttl. Every grant is a new epoch, which
@@ -57,6 +74,7 @@ func (l *composerLease) grant(userID string, ttl time.Duration) {
 	expires := l.now.Add(ttl)
 	now := l.now
 	l.holder, l.epoch, l.expiresAt, l.lastInputAt = userID, l.epoch+1, &expires, &now
+	l.clearDraft()
 }
 
 func (l *composerLease) heldBy(userID string, epoch int64) bool {
@@ -75,12 +93,14 @@ func lockComposerLeaseTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string
 	}
 	lease := &composerLease{orgID: orgID, sessionID: sessionID}
 	err := tx.QueryRow(ctx,
-		`SELECT COALESCE(holder_user_id::text, ''), epoch, expires_at, last_input_at, now()
+		`SELECT COALESCE(holder_user_id::text, ''), epoch, expires_at, last_input_at, now(),
+			draft_text, draft_cursor, draft_revision
 		FROM ao_composer_leases
 		WHERE org_id = $1 AND session_id = $2
 		FOR UPDATE`,
 		orgID, sessionID,
-	).Scan(&lease.holder, &lease.epoch, &lease.expiresAt, &lease.lastInputAt, &lease.now)
+	).Scan(&lease.holder, &lease.epoch, &lease.expiresAt, &lease.lastInputAt, &lease.now,
+		&lease.draftText, &lease.draftCursor, &lease.draftRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -91,9 +111,11 @@ func (l *composerLease) save(ctx context.Context, tx pgx.Tx) error {
 	_, err := tx.Exec(ctx,
 		`UPDATE ao_composer_leases
 		SET holder_user_id = NULLIF($3, '')::uuid, epoch = $4, expires_at = $5,
-			last_input_at = $6, updated_at = now()
+			last_input_at = $6, draft_text = $7, draft_cursor = $8, draft_revision = $9,
+			updated_at = now()
 		WHERE org_id = $1 AND session_id = $2`,
 		l.orgID, l.sessionID, l.holder, l.epoch, l.expiresAt, l.lastInputAt,
+		l.draftText, l.draftCursor, l.draftRevision,
 	)
 	return err
 }
@@ -199,17 +221,19 @@ func claimComposerForSendTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, us
 // composerStateTx reads the lease as everyone sees it.
 func composerStateTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (domain.ComposerLease, error) {
 	state := domain.ComposerLease{Waitlist: []domain.ComposerParticipant{}}
-	var holderID, holderName string
+	var holderID, holderName, draftText string
+	var draftCursor int
 	var expiresIn *time.Duration
 	err := tx.QueryRow(ctx,
 		`SELECT COALESCE(lease.holder_user_id::text, ''), COALESCE(person.display_name, ''), lease.epoch,
 			CASE WHEN lease.holder_user_id IS NULL THEN NULL
-				ELSE greatest(lease.expires_at - now(), interval '0') END
+				ELSE greatest(lease.expires_at - now(), interval '0') END,
+			lease.draft_text, lease.draft_cursor
 		FROM ao_composer_leases lease
 		LEFT JOIN ao_users person ON person.id = lease.holder_user_id
 		WHERE lease.org_id = $1 AND lease.session_id = $2`,
 		orgID, sessionID,
-	).Scan(&holderID, &holderName, &state.Epoch, &expiresIn)
+	).Scan(&holderID, &holderName, &state.Epoch, &expiresIn, &draftText, &draftCursor)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return state, err
 	}
@@ -217,6 +241,9 @@ func composerStateTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (d
 		state.Holder = &domain.ComposerParticipant{UserID: holderID, Name: holderName}
 		if expiresIn != nil {
 			state.ExpiresIn = *expiresIn
+		}
+		if draftText != "" {
+			state.Draft = &domain.ComposerDraft{Text: draftText, Cursor: draftCursor}
 		}
 	}
 	rows, err := tx.Query(ctx,
@@ -343,6 +370,35 @@ func (s *Store) ReleaseComposerLease(ctx context.Context, principal domain.Princ
 			lease.free()
 		}
 		return lease.settle(ctx, tx)
+	})
+}
+
+// PublishComposerDraft shares what principal, holding the grant at epoch, is
+// typing, so everyone else in the session sees it live. It counts as a
+// keystroke: it renews the grant. Anyone who does not hold that grant gets
+// ErrComposerLeaseLost, so only the writer's own text is ever shown.
+func (s *Store) PublishComposerDraft(ctx context.Context, principal domain.Principal, orgID, sessionID string, epoch int64, text string, cursor int) (domain.ComposerLease, error) {
+	if len(text) > MaxComposerDraftBytes || cursor < 0 {
+		return domain.ComposerLease{}, ErrInvalid
+	}
+	return s.composerOperation(ctx, principal, orgID, sessionID, func(tx pgx.Tx, lease *composerLease) error {
+		holds, err := lease.stillHolds(ctx, tx, principal.UserID, epoch)
+		if err != nil {
+			return err
+		}
+		if !holds {
+			if err := lease.settle(ctx, tx); err != nil {
+				return err
+			}
+			return ErrComposerLeaseLost
+		}
+		expires, now := lease.now.Add(ComposerLeaseTTL), lease.now
+		lease.expiresAt, lease.lastInputAt = &expires, &now
+		if text != lease.draftText || cursor != lease.draftCursor {
+			lease.draftText, lease.draftCursor = text, cursor
+			lease.draftRevision++
+		}
+		return nil
 	})
 }
 

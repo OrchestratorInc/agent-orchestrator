@@ -20,6 +20,7 @@ type composerStore interface {
 	RequestComposerTurn(ctx context.Context, principal domain.Principal, orgID, sessionID string) (domain.ComposerLease, error)
 	LeaveComposerQueue(ctx context.Context, principal domain.Principal, orgID, sessionID string) (domain.ComposerLease, error)
 	TakeOverComposerLease(ctx context.Context, principal domain.Principal, orgID, sessionID string) (domain.ComposerLease, error)
+	PublishComposerDraft(ctx context.Context, principal domain.Principal, orgID, sessionID string, epoch int64, text string, cursor int) (domain.ComposerLease, error)
 }
 
 type composerParticipantResponse struct {
@@ -34,6 +35,13 @@ type composerLiveResponse struct {
 	Holder   *composerParticipantResponse  `json:"holder"`
 	Epoch    int64                         `json:"epoch"`
 	Waitlist []composerParticipantResponse `json:"waitlist"`
+	// Draft is what the holder is typing, null while they have typed nothing.
+	Draft *composerDraftResponse `json:"draft"`
+}
+
+type composerDraftResponse struct {
+	Text   string `json:"text"`
+	Cursor int    `json:"cursor"`
 }
 
 // composerLeaseResponse answers a composer request: the lease, whether the
@@ -48,6 +56,9 @@ func toComposerLiveResponse(lease domain.ComposerLease) composerLiveResponse {
 	if lease.Holder != nil {
 		response.Holder = &composerParticipantResponse{UserID: lease.Holder.UserID, Name: lease.Holder.Name}
 	}
+	if lease.Draft != nil {
+		response.Draft = &composerDraftResponse{Text: lease.Draft.Text, Cursor: lease.Draft.Cursor}
+	}
 	for _, waiter := range lease.Waitlist {
 		response.Waitlist = append(response.Waitlist, composerParticipantResponse{UserID: waiter.UserID, Name: waiter.Name})
 	}
@@ -57,6 +68,9 @@ func toComposerLiveResponse(lease domain.ComposerLease) composerLiveResponse {
 type composerGrantRequest struct {
 	Epoch  int64 `json:"epoch"`
 	Typing bool  `json:"typing,omitempty"`
+	// Text and Cursor are the holder's draft, for draft requests only.
+	Text   string `json:"text,omitempty"`
+	Cursor int    `json:"cursor,omitempty"`
 }
 
 // composerAction runs one composer operation and answers with the resulting
@@ -134,5 +148,11 @@ func (s *Server) leaveComposerQueue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) takeOverComposerLease(w http.ResponseWriter, r *http.Request) {
 	s.composerAction(w, r, false, func(store composerStore, principal domain.Principal, orgID, sessionID string, _ composerGrantRequest) (domain.ComposerLease, error) {
 		return store.TakeOverComposerLease(r.Context(), principal, orgID, sessionID)
+	})
+}
+
+func (s *Server) publishComposerDraft(w http.ResponseWriter, r *http.Request) {
+	s.composerAction(w, r, true, func(store composerStore, principal domain.Principal, orgID, sessionID string, request composerGrantRequest) (domain.ComposerLease, error) {
+		return store.PublishComposerDraft(r.Context(), principal, orgID, sessionID, request.Epoch, request.Text, request.Cursor)
 	})
 }

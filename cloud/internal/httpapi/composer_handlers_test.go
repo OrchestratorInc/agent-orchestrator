@@ -25,14 +25,16 @@ const (
 // recording what it was asked.
 type composerTestStore struct {
 	Store
-	lease      domain.ComposerLease
-	err        error
-	calls      []string
-	epoch      int64
-	typing     bool
-	sendEpoch  int64
-	steerEpoch int64
-	sendErr    error
+	lease       domain.ComposerLease
+	err         error
+	calls       []string
+	epoch       int64
+	typing      bool
+	sendEpoch   int64
+	steerEpoch  int64
+	sendErr     error
+	draftText   string
+	draftCursor int
 }
 
 func (s *composerTestStore) record(call string) (domain.ComposerLease, error) {
@@ -66,6 +68,11 @@ func (s *composerTestStore) TakeOverComposerLease(context.Context, domain.Princi
 	return s.record("takeover")
 }
 
+func (s *composerTestStore) PublishComposerDraft(_ context.Context, _ domain.Principal, _, _ string, epoch int64, text string, cursor int) (domain.ComposerLease, error) {
+	s.epoch, s.draftText, s.draftCursor = epoch, text, cursor
+	return s.record("draft")
+}
+
 func (s *composerTestStore) SendMessageWithLease(_ context.Context, _ domain.Principal, _, sessionID, _, _ string, _ domain.ChatTurnSettings, epoch int64) (domain.ClientEvent, error) {
 	s.sendEpoch = epoch
 	return domain.ClientEvent{SessionID: sessionID, Sequence: 1, Type: "chat.user_message", Payload: json.RawMessage(`{}`)}, s.sendErr
@@ -93,6 +100,7 @@ func composerRouter(store Store) http.Handler {
 		router.Post("/composer/queue", server.requestComposerTurn)
 		router.Delete("/composer/queue", server.leaveComposerQueue)
 		router.Post("/composer/takeover", server.takeOverComposerLease)
+		router.Post("/composer/draft", server.publishComposerDraft)
 	})
 	return router
 }
@@ -159,6 +167,7 @@ func TestComposerRoutesAnswerWithTheLease(t *testing.T) {
 		{http.MethodPost, "/composer/queue", "", "queue"},
 		{http.MethodDelete, "/composer/queue", "", "leave"},
 		{http.MethodPost, "/composer/takeover", "", "takeover"},
+		{http.MethodPost, "/composer/draft", `{"epoch":4,"text":"hi","cursor":2}`, "draft"},
 	} {
 		store := &composerTestStore{lease: mine}
 		answer := decodeComposerAnswer(t, composerRequest(t, composerRouter(store), route.method, route.path, route.body))
@@ -250,7 +259,7 @@ func TestLiveFrameCarriesTheComposer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"type":"session.live","viewers":[],"composer":{"holder":{"userId":"user-1","name":"Alice"},"epoch":3,"waitlist":[]},"canTakeOver":false}`
+	want := `{"type":"session.live","viewers":[],"composer":{"holder":{"userId":"user-1","name":"Alice"},"epoch":3,"waitlist":[],"draft":null},"canTakeOver":false}`
 	if string(payload) != want {
 		t.Fatalf("frame = %s\nwant    %s", payload, want)
 	}
@@ -258,7 +267,31 @@ func TestLiveFrameCarriesTheComposer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(free), `"composer":{"holder":null,"epoch":0,"waitlist":[]}`) {
+	if !strings.Contains(string(free), `"composer":{"holder":null,"epoch":0,"waitlist":[],"draft":null}`) {
 		t.Fatalf("free frame = %s", free)
+	}
+}
+
+// The holder's draft rides the live frame, text and caret, for everyone
+// else to watch; the draft route passes both to the store.
+func TestComposerDraftReachesTheLiveFrame(t *testing.T) {
+	t.Parallel()
+	frame, err := json.Marshal(toSessionLiveResponse(domain.SessionLiveState{Composer: domain.ComposerLease{
+		Holder: &domain.ComposerParticipant{UserID: "user-1", Name: "Bob"}, Epoch: 2,
+		Draft: &domain.ComposerDraft{Text: "fix the test", Cursor: 7},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(frame), `"draft":{"text":"fix the test","cursor":7}`) {
+		t.Fatalf("frame = %s", frame)
+	}
+	store := &composerTestStore{}
+	recorder := composerRequest(t, composerRouter(store), http.MethodPost, "/composer/draft", `{"epoch":5,"text":"héllo","cursor":3}`)
+	if recorder.Code != http.StatusOK || store.epoch != 5 || store.draftText != "héllo" || store.draftCursor != 3 {
+		t.Fatalf("draft route: status %d, store %+v", recorder.Code, store)
+	}
+	if recorder := composerRequest(t, composerRouter(&composerTestStore{}), http.MethodPost, "/composer/draft", `{"text":"no grant"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("draft without an epoch: status %d", recorder.Code)
 	}
 }

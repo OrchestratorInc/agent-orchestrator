@@ -337,7 +337,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-live.wake():
-			if !live.write(w) {
+			if !live.throttle() || !live.write(w) {
 				return
 			}
 		case <-live.refresh():

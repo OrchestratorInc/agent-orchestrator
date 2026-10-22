@@ -31,6 +31,15 @@ type ComposerLease struct {
 	ExpiresIn time.Duration
 	// Waitlist is everyone waiting for the lease, first in line first.
 	Waitlist []ComposerParticipant
+	// Draft is what the holder is typing, nil while they have typed nothing.
+	Draft *ComposerDraft
+}
+
+// ComposerDraft is the lease holder's draft as the other participants see it.
+type ComposerDraft struct {
+	Text string
+	// Cursor is the caret's offset into Text, as the writing client counts it.
+	Cursor int
 }
 
 // SessionLiveState is the ephemeral, non-durable state a shared session's
