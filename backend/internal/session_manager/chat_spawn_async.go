@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -116,8 +115,13 @@ const asyncChatSpawnBudget = 10 * time.Minute
 func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) {
 	id := in.record.ID
 	totalStarted := time.Now()
-	taskName, cancelNaming := m.startTaskNaming(ctx, in.cfg, in.record, in.project.Config)
-	defer cancelNaming()
+	taskName, cancelNaming := m.startTaskNaming(in.cfg, in.record, in.project.Config)
+	namingHandedOff := false
+	defer func() {
+		if !namingHandedOff {
+			cancelNaming()
+		}
+	}()
 	stageStarted := totalStarted
 	var ws ports.WorkspaceInfo
 	var workspaceProject *ports.WorkspaceProjectInfo
@@ -154,20 +158,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(in.cfg.ProjectID))
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
-	if in.retry {
-		info, recovered, recoveryErr := m.recoverTaskNaming(ctx, in.record)
-		if recoveryErr != nil {
-			m.failAsyncChatSpawn(ctx, id, recoveryErr)
-			return
-		}
-		if recovered {
-			ws = info.Root
-			reusePublishedWorkspace = true
-			if in.projectKind == domain.ProjectKindWorkspace {
-				workspaceProject = &info
-			}
-		}
-	}
 	if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
@@ -190,47 +180,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
-	if reusePublishedWorkspace && ws.Branch != "" && slices.Contains(plan, domain.SessionProvisionStepWorktree) {
-		namer, ok := m.workspace.(ports.WorkspaceTaskNamer)
-		if !ok {
-			m.failAsyncChatSpawn(ctx, id, errors.New("workspace cannot repair interrupted task naming"))
-			return
-		}
-		info := ports.WorkspaceProjectInfo{Root: ws}
-		if workspaceProject != nil {
-			info = *workspaceProject
-			for i := range info.Worktrees {
-				info.Worktrees[i].Path = filepath.Join(ws.Path, filepath.FromSlash(info.Worktrees[i].RelativePath))
-			}
-		}
-		info, repairErr := namer.RepairTaskWorkspace(ctx, info)
-		persistErr := m.persistTaskWorkspace(ctx, id, info, in.record.Metadata.WorkspacePath)
-		ws = info.Root
-		if workspaceProject != nil {
-			workspaceProject = &info
-		}
-		if err := errors.Join(repairErr, persistErr); err != nil {
-			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
-			return
-		}
-	}
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
-	if taskName != nil && !reusePublishedWorkspace {
-		// A saved recovery path is not proof setup finished. Require its checkpoint
-		// before naming publishes that path so retry can resume unfinished stages.
-		if err := m.store.SetSessionProvisionSteps(ctx, id, progress.steps, m.clock()); err != nil {
-			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
-			m.failAsyncChatSpawn(ctx, id, err)
-			return
-		}
-		stageStarted = time.Now()
-		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, in.record, ws, workspaceProject, taskName())
-		if err != nil {
-			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
-			return
-		}
-		m.logAsyncChatSpawnStage(id, "workspace_name", stageStarted)
-	}
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
@@ -308,6 +258,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
+	namingHandedOff = true
+	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
@@ -328,8 +280,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 // provisionProgress publishes a start's checklist. Finishing one stage and
 // starting the next is a single write, so the checklist never shows a gap
 // between them. Updates are best effort; a missed completion can replay a stage
-// on retry. Naming requires a durable initial checkpoint before publishing a
-// moved workspace path, so a retry never mistakes that path for completed setup.
+// on retry.
 type provisionProgress struct {
 	m     *Manager
 	id    domain.SessionID
@@ -389,7 +340,7 @@ func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.Ses
 			plan = append(plan, domain.SessionProvisionStepFetch)
 		}
 		plan = append(plan, domain.SessionProvisionStepWorktree)
-		if in.cfg.NameFromPrompt || slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
+		if slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
 			return strings.TrimSpace(command) != ""
 		}) {
 			plan = append(plan, domain.SessionProvisionStepSetup)
