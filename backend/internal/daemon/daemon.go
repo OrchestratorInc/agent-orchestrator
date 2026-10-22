@@ -461,6 +461,11 @@ func Run(buildVersion string) error {
 					"sessionID", sessionID, "model", model, "error", err)
 			}
 		},
+		OnCardSummary: func(ctx context.Context, sessionID domain.SessionID, summary string) {
+			if _, err := store.UpdateSessionCardSummary(ctx, sessionID, summary); err != nil {
+				log.Warn("update card summary from event stream failed", "sessionID", sessionID, "error", err)
+			}
+		},
 	})
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
@@ -1063,6 +1068,7 @@ func Run(buildVersion string) error {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
+		SummaryStore:       store,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,
