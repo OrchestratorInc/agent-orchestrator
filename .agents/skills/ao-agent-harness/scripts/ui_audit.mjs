@@ -32,7 +32,7 @@ export const SELECTORS = Object.freeze({
   tab: (name) => ({ role: "tab", name }),
   primaryAction: "[data-harness-primary-action]",
   progress: '[role="status"]',
-  loginButton: { role: "button", name: /^(Login|Set up|Refresh login|Retry login)$/ },
+  loginButton: { role: "button", name: /^(Login|Log in|Log in again|Set up|Refresh login|Retry login)$/ },
   updateButton: { role: "button", name: /^Update$/ },
   authTerminal: '[data-testid="harness-auth-terminal"]',
   modelList: '[aria-label="Available models"]',
@@ -84,18 +84,32 @@ const DEFER_BUTTON = /^(Skip|Not now|Later|Maybe later|Dismiss)$/;
 
 export async function dismissBlockingDialogs(page, context) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const dialog = page.locator('[role="dialog"], [role="alertdialog"]').filter({ hasNot: page.locator(SELECTORS.settingsDialog) }).first();
+    // Any open dialog that offers a defer answer, wherever it sits in the stack.
+    const dialog = page.locator('[role="dialog"], [role="alertdialog"]')
+      .filter({ has: page.getByRole("button", { name: DEFER_BUTTON }) }).last();
     if (!(await visible(dialog, 300))) return;
     const title = ((await dialog.getByRole("heading").first().textContent().catch(() => "")) ?? "").trim();
-    if (/new task|settings/i.test(title)) return;
     const defer = dialog.getByRole("button", { name: DEFER_BUTTON }).first();
-    if (!(await visible(defer, 300))) return;
     const label = ((await defer.textContent()) ?? "").trim();
     await defer.click();
     context.dismissed.push(`${title || "dialog"} → ${label}`);
     console.error(`dismissed first-run dialog "${title}" with ${label}`);
     await page.waitForTimeout(500);
   }
+}
+
+// A run that was stopped can leave New Task or Settings open; close them so
+// every audit starts from the same screen.
+async function resetToHome(page, context) {
+  await dismissBlockingDialogs(page, context);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!(await visible(page.locator('[role="dialog"]'), 300))) break;
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+  }
+  await page.evaluate(() => { window.location.hash = "#/"; });
+  await page.waitForTimeout(800);
+  await dismissBlockingDialogs(page, context);
 }
 
 // One checkpoint: run it, then always screenshot, whatever happened.
@@ -129,8 +143,10 @@ async function closeSettings(page) {
   }
 }
 
+// innerText keeps the line breaks between elements; textContent would glue
+// "Account" + "Connected" into one word and hide every status.
 async function textOf(locator) {
-  return ((await locator.first().textContent().catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
+  return ((await locator.first().innerText().catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
 }
 
 async function openTab(detail, name) {
@@ -160,6 +176,7 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
   if (!page) throw new Error("connected, but the AO window has no page");
   await page.setViewportSize?.({ width: 1440, height: 900 }).catch(() => {});
   const context = { page, out, results: [], dismissed: [] };
+  await resetToHome(page, context);
   let detail;
   let displayName = label;
 
@@ -245,7 +262,11 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
     }
     let dialog;
     await checkpoint(context, `new-task-agent-${mode}`, `New Task lists the agent (${mode})`, async () => {
-      await page.goto(page.url().replace(/#.*$/, "#/"));
+      // Route by hash, not page.goto: a reload re-opens first-run dialogs
+      // that were already deferred for this page.
+      await page.evaluate(() => { window.location.hash = "#/"; });
+      await page.waitForTimeout(800);
+      await dismissBlockingDialogs(page, context);
       await locate(page, SELECTORS.standaloneStart).first().click();
       dialog = page.getByRole("dialog");
       await dialog.waitFor({ timeout: 10_000 });

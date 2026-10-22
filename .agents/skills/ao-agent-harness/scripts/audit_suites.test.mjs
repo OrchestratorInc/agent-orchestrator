@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { CHAT_GATES, IFACE_GATES, auditChatSuite, auditExtras, auditInterfaceSwitch, auditRoles } from "./audit_suites.mjs";
 
+process.env.AO_AUDIT_APPROVAL_DIR = mkdtempSync(join(tmpdir(), "ao-suite-approvals-"));
+
 const scenario = { hiddenInitialToken: "AO_HIDDEN_X", agentsToken: "AO_AGENTS_X", historyToken: "AO_HISTORY_X", proofFile: "AO_AUDIT_PROOF.json" };
 
 function json(status, body) {
@@ -35,7 +37,7 @@ const byName = (gates) => Object.fromEntries(gates.map((item) => [item.name, ite
 // resends the system prompt, so rules changed after Kill are ignored.
 function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt", "resume"], providerAfterRestore = null, replayOldPrompt = false } = {}) {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "ao-suite-ws-")));
-  const state = { mode: "chat", terminated: false, controller: "ready", turns: [], activities: [], messages: [], files: {}, clientIds: new Set(), settings: { model: "m1", reasoningEffort: "low" }, history: "", provider: "conv-1",
+  const state = { mode: "chat", terminated: false, controller: "ready", turns: [], activities: [], messages: [], files: {}, clientIds: new Set(), settings: { model: "m1", reasoningEffort: "low" }, history: "", provider: "conv-1", approved: [],
     rules: `Project convention: every file you create or update whose name ends in PROOF.json must include the field "rulesMarker" with the value "${scenario.hiddenInitialToken}".`, sessionRules: "" };
   let turnSeq = 0;
   const finishTurn = (status = "completed") => { state.turns.at(-1).state = status; };
@@ -44,9 +46,10 @@ function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt",
     turnSeq += 1;
     state.turns.push({ id: `t${turnSeq}`, providerTurnId: `p${turnSeq}`, state: "running", requestedAt: "now" });
     state.messages.push({ role: "assistant", text: "working", streaming: false });
-    const approval = /AO_AUDIT_APPROVAL_(REJECT|APPROVE)\.txt/.exec(text);
+    // The approval command writes outside the worktree (AO_AUDIT_APPROVAL_DIR).
+    const approval = /writeFileSync\('([^']+)'/.exec(text);
     if (approval) {
-      state.activities.push({ activityKind: "approval", status: "pending", requestId: `r${turnSeq}`, summary: "run node", file: approval[0], detail: { decisions: [{ id: "accept", label: "Allow", kind: "allow_once" }, { id: "decline", label: "Deny", kind: "reject_once" }] } });
+      state.activities.push({ activityKind: "approval", status: "pending", requestId: `r${turnSeq}`, summary: "run node", file: approval[1], detail: { decisions: [{ id: "accept", label: "Allow", kind: "allow_once" }, { id: "decline", label: "Deny", kind: "reject_once" }] } });
       return;
     }
     if (text.includes("Update AO_AUDIT_CHAT_PROOF.json")) {
@@ -96,7 +99,7 @@ function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt",
     if (resolve) {
       const activity = state.activities.find((item) => item.requestId === resolve[1]);
       activity.status = "resolved";
-      if (body.decisionId === "accept") state.files[activity.file] = "ao-audit";
+      if (body.decisionId === "accept") { writeFileSync(activity.file, "ao-audit"); state.approved.push(activity.file); }
       finishTurn();
       return json(200, { ok: true });
     }
@@ -156,8 +159,9 @@ test("Chat suite drives spawn, follow-up, settings, approvals and restore agains
     assert.match(gates.chat_interrupt.reason, /never started the witnessed foreground command/);
     assert.equal(fake.state.settings.reasoningEffort, "high", "a different offered effort is selected");
     assert.equal(fake.state.settings.approvalMode, "bypass-permissions", "approval mode is restored after the approval cases");
-    assert.equal(fake.state.files["AO_AUDIT_APPROVAL_REJECT.txt"], undefined);
-    assert.equal(fake.state.files["AO_AUDIT_APPROVAL_APPROVE.txt"], "ao-audit");
+    assert.equal(fake.state.approved.length, 1, "only the approved command wrote its file");
+    assert.match(fake.state.approved[0], /-approve-/);
+    assert.ok(fake.state.approved[0].startsWith(process.env.AO_AUDIT_APPROVAL_DIR), "approval files go outside the worktree, never to the real home in tests");
   } finally { restorePath(); }
 });
 

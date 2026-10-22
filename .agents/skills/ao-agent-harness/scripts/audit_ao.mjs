@@ -1522,8 +1522,10 @@ async function nativeSessionID(dataDir, sessionId, timeoutMs) {
   return { ok: true, reason: "provider-native ID is present", value, db, sha256: hash(value) };
 }
 
+// Fills defaults into the caller's own object rather than a copy: the restore
+// token is minted after Kill, and every later suite must check that value.
 function makeScenario(agent, supplied = {}) {
-  return {
+  return Object.assign(supplied, {
     proofFile: supplied.proofFile ?? "AO_AUDIT_PROOF.json",
     initialToken: supplied.initialToken ?? token("AO_INITIAL"),
     historyToken: supplied.historyToken ?? token("AO_HISTORY"),
@@ -1532,7 +1534,7 @@ function makeScenario(agent, supplied = {}) {
     agentsToken: supplied.agentsToken ?? token("AO_AGENTS_MD"),
     secondToken: supplied.secondToken ?? token("AO_SECOND"),
     agent,
-  };
+  });
 }
 
 function initialPrompt(scenario) {

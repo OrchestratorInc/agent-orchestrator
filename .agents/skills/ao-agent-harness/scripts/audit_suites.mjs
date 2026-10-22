@@ -7,7 +7,8 @@
 // suites back. The cycle is safe because neither module touches the other's
 // bindings at load time.
 
-import { readFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   CANCELLATION_PROMPT,
@@ -627,27 +628,32 @@ async function auditChatApprovals({ baseURL, sessionId, timeoutMs, record }) {
     }
     return;
   }
-  for (const [name, wanted, file] of [
-    ["chat_approval_reject", "reject", "AO_AUDIT_APPROVAL_REJECT.txt"],
-    ["chat_approval_approve", "approve", "AO_AUDIT_APPROVAL_APPROVE.txt"],
-  ]) {
+  // The target sits OUTSIDE the worktree (under ~/.ao): accept-edits runs
+  // Codex in a workspace-write sandbox, so a write inside the worktree is
+  // allowed without asking and would prove nothing.
+  const outside = process.env.AO_AUDIT_APPROVAL_DIR || join(homedir(), ".ao", "audit-approvals");
+  await mkdir(outside, { recursive: true });
+  const exists = (path) => access(path).then(() => true, () => false);
+  for (const [name, wanted] of [["chat_approval_reject", "reject"], ["chat_approval_approve", "approve"]]) {
+    const file = join(outside, `${sessionId}-${wanted}-${token("x").slice(2, 10)}.txt`);
     const prompt = [
-      `Use your shell/command tool (not a file-editing tool) to run exactly: node -e "require('fs').writeFileSync('${file}','ao-audit')"`,
+      `Use your shell/command tool (not a file-editing tool) to run exactly: node -e "require('fs').writeFileSync(${JSON.stringify(file).replaceAll('"', "'")},'ao-audit')"`,
       "If the command is denied, do not retry it and do not create the file any other way; just stop.",
     ].join("\n");
     const send = await sendChat(baseURL, sessionId, prompt);
     const pending = send.ok ? await waitUntil(async () => {
-      const [convResponse, fileResponse] = await Promise.all([conversation(baseURL, sessionId, 30_000), workspaceFile(baseURL, sessionId, file, 30_000)]);
+      const convResponse = await conversation(baseURL, sessionId, 30_000);
+      const written = await exists(file);
       const snapshot = snapshotOf(convResponse);
       const approval = pendingApprovals(snapshot)[0];
       const settledWithoutApproval = !approval && runningTurns(snapshot).length === 0 && (snapshot?.turns ?? []).length > 0 && chatIdle(snapshot);
-      return { done: Boolean(approval) || (settledWithoutApproval && fileResponse.ok), approval, snapshot, fileResponse };
+      return { done: Boolean(approval) || (settledWithoutApproval && written), approval, snapshot, written };
     }, Math.min(timeoutMs, 120_000), 500) : { done: false };
     if (!pending.approval) {
-      const executed = pending.fileResponse?.ok === true;
+      const executed = pending.written === true;
       await record(gate(name, "FAIL",
         !send.ok ? "approval test message was rejected"
-          : executed ? "command ran without any approval request in accept-edits mode (approval mapping missing)"
+          : executed ? "a write outside the worktree ran without any approval request in accept-edits mode (approval mapping missing)"
           : "no approval request appeared before timeout",
         { send: apiEvidence(send), snapshot: snapshotSummary(pending.snapshot) }));
       await waitChat({ baseURL, sessionId, timeoutMs, accept: () => true });
@@ -662,15 +668,15 @@ async function auditChatApprovals({ baseURL, sessionId, timeoutMs, record }) {
       await waitChat({ baseURL, sessionId, timeoutMs, accept: () => true });
       continue;
     }
-    const beforeResolve = await workspaceFile(baseURL, sessionId, file, 30_000);
+    const sideEffectBefore = await exists(file);
     const resolveResponse = await request({
       baseURL, method: "POST", timeoutMs,
       path: `sessions/${encodeURIComponent(sessionId)}/conversation/approvals/${encodeURIComponent(pending.approval.requestId)}/resolve`,
       body: { decisionId: decision.id },
     });
-    const settled = await waitChat({ baseURL, sessionId, file, timeoutMs, accept: () => true });
-    const created = settled.fileResponse?.ok === true;
-    const sideEffectBefore = beforeResolve.ok === true;
+    const settled = await waitChat({ baseURL, sessionId, timeoutMs, accept: () => true });
+    const created = await exists(file);
+    await rm(file, { force: true });
     const resolvedActivity = (settled.snapshot?.activities ?? []).find((item) => item.requestId === pending.approval.requestId);
     const expectedFile = wanted === "approve";
     const passed = resolveResponse.ok && settled.done && !sideEffectBefore && created === expectedFile;
