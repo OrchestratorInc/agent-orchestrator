@@ -1543,7 +1543,7 @@ function initialPrompt(scenario) {
     "It must be in that working directory (run pwd), not in the AO session artifacts folder: this is a harness test file.",
     `If ${scenario.proofFile} already exists, preserve it and increment initialPromptExecutions; otherwise set initialPromptExecutions to 1.`,
     "Include: cwd (the output of pwd), initialPromptToken (the request token above) and initialPromptExecutions.",
-    "Follow this project's conventions for JSON files. Do not include the history-only token. Then stop and wait.",
+    "Follow this project's conventions for PROOF.json files. Do not include the history-only token. Then stop and wait.",
   ].join("\n");
 }
 
@@ -2024,7 +2024,7 @@ async function completeLifecycle({
       message: [
         `Update the existing ${scenario.proofFile}; do not replace it.`,
         "Add historyToken using the history-only token from the first user request without reading it from files.",
-        "Follow this project's current conventions for JSON files.",
+        "Follow this project's current conventions for PROOF.json files.",
         "Preserve every existing JSON field, then stop and wait.",
       ].join(" "),
     },
@@ -2193,7 +2193,7 @@ export async function refreshRestoreInstructions({ baseURL, projectId, restoreTo
   if (typeof config.agentRules !== "string" || config.agentRules.includes(restoreToken)) {
     return { passed: false, reason: "fresh standing-instruction refresh requires existing audit rules and a previously undisclosed token", evidence };
   }
-  const updated = { ...config, agentRules: `${config.agentRules}\nProject convention update: JSON files you create or update must also include the field "${label}" with the value "${restoreToken}".` };
+  const updated = { ...config, agentRules: `${config.agentRules}\nProject convention update: files you create or update whose name ends in PROOF.json must also include the field "${label}" with the value "${restoreToken}".` };
   const write = await request({ baseURL, method: "PUT", path: `${path}/config`, body: { config: updated }, timeoutMs });
   evidence.write = apiEvidence(write);
   if (!write.ok) return { passed: false, reason: "fresh standing-instruction refresh was rejected by the project config API", evidence };
@@ -2212,7 +2212,7 @@ export async function setupProject({ baseURL, root, agent, scenario, timeoutMs }
   await mkdir(projectPath, { recursive: true });
   await writeFile(
     join(projectPath, "AGENTS.md"),
-    `# AO audit project\n\nProject convention: every JSON file you create or update must include the field "agentsMarker" with the value "${scenario.agentsToken}".\n`,
+    `# AO audit project\n\nProject convention: every file you create or update whose name ends in PROOF.json must include the field "agentsMarker" with the value "${scenario.agentsToken}".\n`,
     "utf8",
   );
   await writeFile(join(projectPath, "README.md"), "# Disposable AO harness audit project\n", "utf8");
@@ -2243,7 +2243,7 @@ export async function setupProject({ baseURL, root, agent, scenario, timeoutMs }
       config: {
         defaultBranch: "main",
         agentRules: [
-          `Project convention: every JSON file you create or update must include the field "rulesMarker" with the value "${scenario.hiddenInitialToken}".`,
+          `Project convention: every file you create or update whose name ends in PROOF.json must include the field "rulesMarker" with the value "${scenario.hiddenInitialToken}".`,
         ].join("\n"),
       },
     },

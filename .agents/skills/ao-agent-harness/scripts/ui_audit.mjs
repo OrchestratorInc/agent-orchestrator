@@ -77,8 +77,30 @@ async function visible(locator, timeout = 5_000) {
   try { await locator.first().waitFor({ state: "visible", timeout }); return true; } catch { return false; }
 }
 
+// First-run dialogs that cover the app (e.g. "Import projects from your
+// earlier AO?"). Only a defer-style answer is clicked, never one that decides
+// for the user (Proceed, Don't Migrate); anything else is left for a human.
+const DEFER_BUTTON = /^(Skip|Not now|Later|Maybe later|Dismiss)$/;
+
+export async function dismissBlockingDialogs(page, context) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const dialog = page.locator('[role="dialog"], [role="alertdialog"]').filter({ hasNot: page.locator(SELECTORS.settingsDialog) }).first();
+    if (!(await visible(dialog, 300))) return;
+    const title = ((await dialog.getByRole("heading").first().textContent().catch(() => "")) ?? "").trim();
+    if (/new task|settings/i.test(title)) return;
+    const defer = dialog.getByRole("button", { name: DEFER_BUTTON }).first();
+    if (!(await visible(defer, 300))) return;
+    const label = ((await defer.textContent()) ?? "").trim();
+    await defer.click();
+    context.dismissed.push(`${title || "dialog"} → ${label}`);
+    console.error(`dismissed first-run dialog "${title}" with ${label}`);
+    await page.waitForTimeout(500);
+  }
+}
+
 // One checkpoint: run it, then always screenshot, whatever happened.
 async function checkpoint(context, id, title, run) {
+  await dismissBlockingDialogs(context.page, context);
   const index = String(context.results.length + 1).padStart(2, "0");
   let outcome;
   try { outcome = await run(); } catch (error) { outcome = { status: "FAIL", reason: `error: ${error.message.split("\n")[0]}` }; }
@@ -137,7 +159,7 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
   const page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => !candidate.url().startsWith("devtools://"));
   if (!page) throw new Error("connected, but the AO window has no page");
   await page.setViewportSize?.({ width: 1440, height: 900 }).catch(() => {});
-  const context = { page, out, results: [] };
+  const context = { page, out, results: [], dismissed: [] };
   let detail;
   let displayName = label;
 
@@ -266,10 +288,11 @@ export async function uiAudit({ cdp, repo, harness, label = "", model = "", out,
 }
 
 async function finish(browser, context, meta) {
-  const report = { schemaVersion: 1, ...meta, finishedAt: new Date().toISOString(), checkpoints: context.results };
+  const report = { schemaVersion: 1, ...meta, finishedAt: new Date().toISOString(), dismissedDialogs: context.dismissed, checkpoints: context.results };
   const lines = [`# AO UI audit: ${meta.displayName || meta.harness}`, "", "| # | Checkpoint | Result | Reason | Screenshot |", "|---|---|---|---|---|"];
   context.results.forEach((item, index) => lines.push(`| ${index + 1} | ${item.title} | ${item.status} | ${String(item.reason).replaceAll("|", "\\|")} | ${item.screenshot ? `![](${item.screenshot.split("/").pop()})` : "none"} |`));
   await writeFile(join(context.out, "ui-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  if (context.dismissed.length) lines.push("", `Dismissed first-run dialogs (deferred, nothing chosen): ${context.dismissed.join("; ")}`);
   await writeFile(join(context.out, "ui-report.md"), `${lines.join("\n")}\n`);
   await browser.close().catch(() => {});
   return report;

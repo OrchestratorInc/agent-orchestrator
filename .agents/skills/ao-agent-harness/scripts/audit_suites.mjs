@@ -305,7 +305,7 @@ function chatInitialPrompt(chat) {
     "It must be in that working directory (run pwd), not in the AO session artifacts folder: this is a harness test file.",
     `If ${CHAT_PROOF} already exists, preserve it and increment initialPromptExecutions; otherwise set initialPromptExecutions to 1.`,
     "Include: cwd (the output of pwd), initialPromptToken (the request token above) and initialPromptExecutions.",
-    "Follow this project's conventions for JSON files. Do not include the history-only token. Then stop.",
+    "Follow this project's conventions for PROOF.json files. Do not include the history-only token. Then stop.",
   ].join("\n");
 }
 
@@ -724,7 +724,7 @@ async function auditChatKillRestore({ baseURL, sessionId, projectId, dataDir, wo
 
   const recall = await sendChat(baseURL, sessionId, [
     `Update ${CHAT_PROOF}: set chatHistoryRecall to the history-only token from the first message of this conversation,`,
-    "and follow this project's current conventions for JSON files.",
+    "and follow this project's current conventions for PROOF.json files.",
     "Preserve every existing field, write raw JSON only, then stop.",
   ].join(" "));
   const recalled = recall.ok ? await waitChat({ baseURL, sessionId, timeoutMs, accept: (proof) => proof?.chatHistoryRecall === chat.historyToken }) : { done: false, evidence: {} };

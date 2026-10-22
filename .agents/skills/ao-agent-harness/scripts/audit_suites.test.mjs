@@ -36,7 +36,7 @@ const byName = (gates) => Object.fromEntries(gates.map((item) => [item.name, ite
 function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt", "resume"], providerAfterRestore = null, replayOldPrompt = false } = {}) {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "ao-suite-ws-")));
   const state = { mode: "chat", terminated: false, controller: "ready", turns: [], activities: [], messages: [], files: {}, clientIds: new Set(), settings: { model: "m1", reasoningEffort: "low" }, history: "", provider: "conv-1",
-    rules: `Project convention: every JSON file you create or update must include the field "rulesMarker" with the value "${scenario.hiddenInitialToken}".`, sessionRules: "" };
+    rules: `Project convention: every file you create or update whose name ends in PROOF.json must include the field "rulesMarker" with the value "${scenario.hiddenInitialToken}".`, sessionRules: "" };
   let turnSeq = 0;
   const finishTurn = (status = "completed") => { state.turns.at(-1).state = status; };
   const proof = () => JSON.parse(state.files["AO_AUDIT_CHAT_PROOF.json"] ?? "{}");
@@ -54,7 +54,7 @@ function fakeChatDaemon({ capabilities = ["streaming", "approvals", "interrupt",
       for (const match of text.matchAll(/(\w+) = ("[^"]*"|true|false)/g)) next[match[1]] = JSON.parse(match[2]);
       if (text.includes("set chatHistoryRecall to the history-only token")) next.chatHistoryRecall = state.history;
       // An agent applies whatever conventions its current system prompt holds.
-      if (text.includes("current conventions for JSON files")) {
+      if (text.includes("current conventions for PROOF.json files")) {
         const marker = /"chatRestoreRulesMarker" with the value "([^"]+)"/.exec(state.sessionRules)?.[1];
         if (marker) next.chatRestoreRulesMarker = marker;
       }
