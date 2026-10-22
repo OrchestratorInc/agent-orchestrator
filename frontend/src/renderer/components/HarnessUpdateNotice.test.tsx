@@ -496,6 +496,19 @@ describe("startup harness update notice", () => {
 		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
 	});
 
+	it("keeps the stack when an installer refresh fails after it rendered", async () => {
+		const { client } = mountNotice();
+		await screen.findByRole("article", { name: "Claude Code" });
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/installers"
+			? Promise.resolve({ error: { message: "installers unavailable" } } as never)
+			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
+		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
+		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
 	it("dismisses the shown release across remounts but shows a newer target", async () => {
 		const view = mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });

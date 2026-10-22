@@ -138,8 +138,10 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// page offers the same updates there.
 	if (settingsOpen || !readinessComplete || readiness.isError) return null;
 	// Only advertise updates AO can run without a login or manual maintenance.
-	// Wait for these checks so ineligible harnesses never flash in the stack.
-	if (authPlans.isPending || authPlans.isError || installers.isPending || installers.isError) return null;
+	// Wait for these checks so ineligible harnesses never flash in the stack. A
+	// failed background refetch keeps the cached data, so an update in flight
+	// or its failure stays visible.
+	if (!authPlans.data || !installers.data) return null;
 	// Let the first batch settle so a fast, seldom-used harness cannot jump
 	// ahead of the most-used one. Failed lookups don't block the other results.
 	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
