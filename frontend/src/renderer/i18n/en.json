@@ -1600,6 +1600,7 @@
 	"settings.harness.signedInWithAccount": "Signed in with an account",
 	"settings.harness.usingToken": "Using a token",
 	"settings.harness.configured": "Configured",
+	"settings.harness.connected": "Connected",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",
 	"settings.harness.login": "Login",

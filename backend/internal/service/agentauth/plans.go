@@ -16,7 +16,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
-	terminalInputPlan("neovate", ActionSetup, "Set up Neovate Code", []string{"neovate"}, "/login\r", "Open setup after Neovate starts to select and configure a provider", "https://github.com/neovateai/neovate-code"),
+	neovateLoginPlan(),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),
@@ -112,6 +112,18 @@ func piLoginPlan() Plan {
 		{Text: "0.0%/"},
 		{Text: "Pi can explain its own features"},
 	}
+	p.sendInitialInputOnReadyTimeout = true
+	return p
+}
+
+// neovateLoginPlan opens Neovate's TUI and injects /login, its only provider
+// setup surface: API keys plus Codex and Qwen account sign-in. The startup
+// banner ends with the /help tip before the composer accepts input; if a
+// future banner drops it, /login is still sent when the ready wait expires.
+func neovateLoginPlan() Plan {
+	p := plan("neovate", ActionSetup, "Set up Neovate Code", []string{"neovate"}, "Neovate opens its provider login picker automatically", "https://github.com/neovateai/neovate-code")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "/help for more information"}}
 	p.sendInitialInputOnReadyTimeout = true
 	return p
 }

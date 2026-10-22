@@ -2555,6 +2555,7 @@
 	"settings.harness.signedInWithAccount": "Connecté avec un compte",
 	"settings.harness.usingToken": "Avec un jeton",
 	"settings.harness.configured": "Configured",
+	"settings.harness.connected": "Connected",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",
 	"settings.harness.login": "Login",

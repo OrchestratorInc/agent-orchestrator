@@ -2514,6 +2514,7 @@
 	"settings.harness.signedInWithAccount": "계정으로 로그인됨",
 	"settings.harness.usingToken": "토큰 사용 중",
 	"settings.harness.configured": "Configured",
+	"settings.harness.connected": "Connected",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",
 	"settings.harness.login": "Login",

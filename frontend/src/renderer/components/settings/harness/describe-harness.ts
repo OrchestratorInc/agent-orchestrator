@@ -113,7 +113,10 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
-	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
+	// Neovate's setup is a provider login (an API key or account sign-in), so a
+	// saved credential reads as a connection rather than local configuration.
+	const credentialLabel = agentId === "neovate" ? "settings.harness.connected" : "settings.harness.configured";
+	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction ? credentialLabel : "settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")

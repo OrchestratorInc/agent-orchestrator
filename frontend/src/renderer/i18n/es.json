@@ -2555,6 +2555,7 @@
 	"settings.harness.signedInWithAccount": "Sesión iniciada con una cuenta",
 	"settings.harness.usingToken": "Con un token",
 	"settings.harness.configured": "Configured",
+	"settings.harness.connected": "Connected",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",
 	"settings.harness.login": "Login",

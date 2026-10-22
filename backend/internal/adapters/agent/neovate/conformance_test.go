@@ -93,7 +93,7 @@ func TestReleasedNeovateTUIConformance(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: binary}
 	install := func(prompt string) {
 		t.Helper()
-		if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "ao-session", SystemPrompt: prompt}); err != nil {
+		if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "ao-session", SystemPrompt: prompt, Config: ports.AgentConfig{Model: "ao/test"}}); err != nil {
 			t.Fatal(err)
 		}
 	}

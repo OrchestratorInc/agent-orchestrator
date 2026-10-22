@@ -11,7 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var credentialEnv = []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"}
+var credentialEnv = []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY"}
 
 // AuthStatus reports local configuration, never proof of provider authorization.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {

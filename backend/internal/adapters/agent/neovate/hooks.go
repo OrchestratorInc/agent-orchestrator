@@ -48,7 +48,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return err
 	}
 	path := pluginPath(workspace, cfg.SessionID)
-	config, err := json.Marshal(map[string]string{"workspace": workspace, "prompt": prompt, "marker": path + ".session.json"})
+	config, err := json.Marshal(map[string]string{"workspace": workspace, "prompt": prompt, "marker": path + ".session.json", "model": strings.TrimSpace(cfg.Config.Model)})
 	if err != nil {
 		return err
 	}

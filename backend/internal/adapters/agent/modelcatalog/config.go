@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -52,6 +53,16 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 			return base, fmt.Errorf("%s model discovery parse %s: %w", agentID, path, err)
 		}
 		models = append(models, parsed...)
+	}
+	if agentID == "neovate" {
+		// Neovate also runs its built-in providers from key env vars alone.
+		// The default comes from configuration or a keyed provider only.
+		models = append(models, neovateEnvModels(env)...)
+		if len(models) > 0 && !slices.ContainsFunc(models, func(m ports.AgentModelInfo) bool { return m.IsDefault }) {
+			models[0].IsDefault = true
+		}
+		models = append(models, neovateAllModels()...)
+		found = true
 	}
 	if !found {
 		return base, fmt.Errorf("%s model configuration was not found", agentID)

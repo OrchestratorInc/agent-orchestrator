@@ -12,6 +12,7 @@ const resumedID = resumeIndex < 0 ? '' : optionArgs[resumeIndex + 1];
 let mainID = resumedID;
 let pendingAcceptance;
 let initialAccepted = false;
+let modelSeeded = false;
 
 function readEntries(transcript) {
   try {
@@ -77,6 +78,13 @@ function confirmAcceptance(context) {
 export default {
   name: 'ao-neovate',
   enforce: 'post',
+  // Seed AO's model on the first context only. Native /model rebuilds the
+  // context after saving its choice, which must not be overridden again.
+  config() {
+    if (modelSeeded || !config.model || path.resolve(this.cwd) !== config.workspace) return {};
+    modelSeeded = true;
+    return {model: config.model};
+  },
   initialized() {
     if (path.resolve(this.cwd) !== config.workspace) return;
     checkRestore(this, !initialAccepted);

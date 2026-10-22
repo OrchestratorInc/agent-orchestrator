@@ -26,7 +26,7 @@ func TestLaunchPreservesTaskAndSeparatesInstructions(t *testing.T) {
 			WorkspacePath: workspace, SessionID: "ao-session", Permissions: tc.mode,
 			Prompt: "--help\n$(touch nope) 'quoted'", SystemPrompt: "hidden-standing-instructions", Config: ports.AgentConfig{Model: "local/custom"},
 		})
-		want := []string{"neovate", "--cwd", workspace, "--approval-mode", tc.want, "--plugin", pluginPath(workspace, "ao-session"), "--model", "local/custom", "--", "--help\n$(touch nope) 'quoted'"}
+		want := []string{"neovate", "--cwd", workspace, "--approval-mode", tc.want, "--plugin", pluginPath(workspace, "ao-session"), "--", "--help\n$(touch nope) 'quoted'"}
 		if err != nil || !reflect.DeepEqual(cmd, want) {
 			t.Fatalf("command = %#v, %v; want %#v", cmd, err, want)
 		}

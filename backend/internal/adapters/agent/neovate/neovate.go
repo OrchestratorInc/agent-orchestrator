@@ -53,7 +53,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if len(cfg.AllowedTools) != 0 || len(cfg.DisallowedTools) != 0 {
 		return nil, errors.New("neovate: tool-restricted launches are unsupported")
 	}
-	return p.command(ctx, cfg.WorkspacePath, cfg.SessionID, cfg.Config, cfg.Permissions, "", cfg.Prompt)
+	return p.command(ctx, cfg.WorkspacePath, cfg.SessionID, cfg.Permissions, "", cfg.Prompt)
 }
 
 // GetRestoreCommand fails closed if the exact native transcript is unavailable.
@@ -68,11 +68,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := validateRestore(cfg.Session.WorkspacePath, cfg.Session.ID, id, cfg.Permissions); err != nil {
 		return nil, false, fmt.Errorf("neovate: cannot restore native session: %w", err)
 	}
-	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Session.ID, cfg.Config, cfg.Permissions, id, cfg.Prompt)
+	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Session.ID, cfg.Permissions, id, cfg.Prompt)
 	return cmd, err == nil, err
 }
 
-func (p *Plugin) command(ctx context.Context, workspace, session string, cfg ports.AgentConfig, mode ports.PermissionMode, nativeID, prompt string) ([]string, error) {
+func (p *Plugin) command(ctx context.Context, workspace, session string, mode ports.PermissionMode, nativeID, prompt string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -96,8 +96,9 @@ func (p *Plugin) command(ctx context.Context, workspace, session string, cfg por
 	default:
 		return nil, fmt.Errorf("neovate: unsupported permission mode %q", mode)
 	}
+	// The model reaches Neovate through the AO plugin's config hook, not
+	// --model: an argv model disables native /model for the whole session.
 	cmd := []string{binary, "--cwd", workspace, "--approval-mode", permission, "--plugin", pluginPath(workspace, session)}
-	agentbase.AppendModelFlag(&cmd, cfg, "--model")
 	if nativeID != "" {
 		cmd = append(cmd, "--resume", nativeID)
 	}
