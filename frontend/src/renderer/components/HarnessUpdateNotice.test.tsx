@@ -32,7 +32,8 @@ function mockStack() {
 	const original = vi.mocked(apiClient.GET).getMockImplementation()!;
 	vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 		if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
-		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0" } } as never;
+		if (path === "/api/v1/agents/installers") return { data: { agents: readiness.agents.map(({ id: agentId }) => ({ agentId, methods: [{ id: "official-installer", available: true, updateAvailable: true }] })) } } as never;
+		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer" } } as never;
 		return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 	});
 	vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
@@ -216,7 +217,7 @@ describe("startup harness update notice", () => {
 		// Claude Code is still eligible.
 		expect(screen.getByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => client.setQueryData(installerQueryKey, []));
-		await waitFor(() => expect(screen.getByRole("button", { name: "Update all" })).toBeDisabled());
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -337,7 +338,7 @@ describe("startup harness update notice", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
 		client.setQueryData(["agent-readiness"], readiness);
-		client.setQueryData(updateAdvisoryQueryKey("claude-code"), { status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292" });
+		client.setQueryData(updateAdvisoryQueryKey("claude-code"), { status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer" });
 		mountNotice(true, client);
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
 		expect(screen.queryByRole("region")).toBeNull();
@@ -408,7 +409,7 @@ describe("startup harness update notice", () => {
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("codex"))).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
-		await act(async () => pending.resolve({ data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0" } } as never));
+		await act(async () => pending.resolve({ data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer" } } as never));
 		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))[0]).toBe("Cursor");
 	});
@@ -438,15 +439,74 @@ describe("startup harness update notice", () => {
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 	});
 
-	it("offers login first when both login and update are needed", async () => {
+	it("hides an update while login is required and shows it after login", async () => {
 		const { client } = mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] }));
-		const login = await screen.findByRole("button", { name: "Login" });
-		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
-		await userEvent.click(login);
-		// The Harness page starts the login once it opens.
-		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true });
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code")] }));
+		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
+	it.each([
+		{ id: "official-installer", available: true, updateAvailable: false },
+		{ id: "official-installer", available: false, updateAvailable: true },
+		{ id: "npm", available: true, updateAvailable: true },
+	])("hides updates that require manual maintenance (%j)", async (method) => {
+		const { client } = mountNotice();
+		await screen.findByRole("region");
+		act(() => client.setQueryData(installerQueryKey, [{
+			agentId: "claude-code", documentationUrl: "https://code.claude.com/docs/en/setup", methods: [method],
+		}]));
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+	});
+
+	it("excludes hidden harnesses from the stack count and Update all", async () => {
+		mockUpdatableStack();
+		const { client } = mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
+		act(() => {
+			client.setQueryData(["agent-readiness"], { agents: [
+				agentReadiness("claude-code", "Claude Code"),
+				agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+				agentReadiness("cursor", "Cursor"),
+			] });
+			client.setQueryData(installerQueryKey, [
+				{ agentId: "claude-code", methods: [{ id: "official-installer", available: true, updateAvailable: true }] },
+				{ agentId: "codex", methods: [{ id: "official-installer", available: true, updateAvailable: true }] },
+				{ agentId: "cursor", methods: [{ id: "official-installer", available: true, updateAvailable: false }] },
+			]);
+		});
+		await waitFor(() => expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Claude Code"]));
+		expect(screen.queryByRole("button", { name: /Show all|Update all/ })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "claude-code" } } })));
+	});
+
+	it.each(["/api/v1/agents/installers", "/api/v1/agents/auth-plans"] as const)("waits for %s before showing update notices", async (endpoint) => {
+		const pending = deferred<never>();
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === endpoint
+			? pending.promise : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		const { client } = mountNotice();
+		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
+		expect(screen.queryByRole("region")).toBeNull();
+		await act(async () => pending.resolve(await (get as (path: string) => Promise<never>)(endpoint)));
+		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
+	});
+
+	it("keeps the stack when an installer refresh fails after it rendered", async () => {
+		const { client } = mountNotice();
+		await screen.findByRole("article", { name: "Claude Code" });
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/installers"
+			? Promise.resolve({ error: { message: "installers unavailable" } } as never)
+			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
+		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
+		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {
@@ -458,7 +518,7 @@ describe("startup harness update notice", () => {
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
-		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293" }));
+		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" }));
 		expect(await screen.findByText("v2.1.293")).toBeInTheDocument();
 	});
 

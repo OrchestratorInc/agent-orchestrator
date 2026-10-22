@@ -1336,3 +1336,32 @@ describe("side command routing", () => {
 		delete (conversationCommandState as { send?: unknown }).send;
 	});
 });
+
+describe("SessionChatSurface startup recovery", () => {
+	function conversationRefreshes(invalidate: { mock: { calls: unknown[][] } }) {
+		return invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify((filters as { queryKey?: unknown }).queryKey) === JSON.stringify(["conversation", session.id])).length;
+	}
+
+	it("refreshes the controller state when the daemon's recovery check settles", () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const tree = (statusReadiness: "checking" | "unavailable" | "ready") =>
+			<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness }} /></Wrapper>;
+		const view = render(tree("unavailable"));
+		view.rerender(tree("checking"));
+		expect(conversationRefreshes(invalidate)).toBe(0);
+		view.rerender(tree("ready"));
+		expect(conversationRefreshes(invalidate)).toBe(1);
+		view.rerender(tree("ready"));
+		expect(conversationRefreshes(invalidate)).toBe(1);
+	});
+
+	it("leaves a session that was ready from the start alone", () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		expect(conversationRefreshes(invalidate)).toBe(0);
+	});
+});

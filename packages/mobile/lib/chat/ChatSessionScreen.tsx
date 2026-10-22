@@ -1,15 +1,12 @@
 import { Feather } from "../icons";
-import { useHeaderHeight } from "expo-router/build/react-navigation/elements";
 import { useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import {
 	ActivityIndicator,
 	Alert,
 	Keyboard,
-	Platform,
 	Pressable,
 	StyleSheet,
 	Text,
@@ -30,7 +27,6 @@ import {
 	mobileInterfaceTransitionRecoveryMessage,
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
-import { dockRestingInset, keyboardVerticalOffset, screenKeyboardAvoidance } from "../session/keyboardInset";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
@@ -39,6 +35,7 @@ import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
+import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
@@ -92,8 +89,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const headerHeight = useHeaderHeight();
-	const insets = useSafeAreaInsets();
 	const [headerRightReady, setHeaderRightReady] = useState(false);
 	useLayoutEffect(
 		() => resetHeaderRightForSwap(
@@ -137,13 +132,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Banners closed this visit, by what they report. See conversationBanners.
 	const [dismissedBanners, setDismissedBanners] = useState<ReadonlySet<string>>(() => new Set());
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
-	// Listens on keyboardWillShow / keyboardDidHide on both platforms. The effect
-	// this replaces took its event names from screenKeyboardAvoidance, which gave
-	// Android keyboardDidShow — fired only after the IME had finished animating,
-	// which is why the composer needed a hand-rolled LayoutAnimation to cover the
-	// gap it left. Reporting early removes the gap rather than animating over it.
-	const keyboardHeight = useKeyboardState((state) => state.height);
-	const keyboardVisible = useKeyboardState((state) => state.isVisible);
+	// keyboard-controller's early events, corrected by React Native's when it
+	// misses a transition. See useChatKeyboard.
+	const chatKeyboard = useChatKeyboard();
+	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
 	const failedStart = "projectName" in session || session.provisionState !== "failed"
@@ -629,9 +621,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		// keyboard event on the JS thread, which is the single-frame jump up when
 		// the keyboard opens.
 		<KeyboardAvoidingView
-			style={[styles.screen, Platform.OS === "android" ? screenKeyboardAvoidance("android", keyboardHeight, insets.bottom).rootStyle : undefined]}
-			behavior={Platform.OS === "ios" ? "padding" : undefined}
-			keyboardVerticalOffset={Platform.OS === "ios" ? keyboardVerticalOffset(headerHeight) : 0}
+			style={[styles.screen, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
 			{interfaceTransitionActive ? (
 				<InlineBanner
@@ -747,7 +739,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				onOpenSettings={() => void openTurnSettings()}
 				onSettings={conversation.chooseSettings}
 				onConfigOption={conversation.setConfigOption}
-				restingInset={dockRestingInset(insets.bottom)}
+				restingInset={chatKeyboard.restingInset}
+				dockRiseOverride={chatKeyboard.dockRiseOverride}
 				openingTurnId={startupView?.openingTurnId}
 				startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
 			/>

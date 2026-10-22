@@ -505,15 +505,15 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
 		t.Fatal(err)
 	}
-	if signedIn, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || !signedIn {
-		t.Fatalf("saved default signed in = %v handled %v", signedIn, handled)
+	if identity, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || !identity.SignedIn || identity.Email != "b@example.com" {
+		t.Fatalf("saved default = %+v handled %v, want b@example.com signed in", identity, handled)
 	}
 	delete(claude.signedInAs, b)
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	if signedIn, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || signedIn {
-		t.Fatalf("saved default signed out = %v handled %v", signedIn, handled)
+	if identity, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || identity.SignedIn || identity.Email != "b@example.com" {
+		t.Fatalf("saved default signed out = %+v handled %v", identity, handled)
 	}
 	if len(changed) < 2 {
 		t.Fatalf("readiness was told %v, want at least the sign-in and the new default", changed)

@@ -36,7 +36,7 @@ import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } 
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, AutoCompactRow, compactsEarly, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
@@ -111,7 +111,7 @@ export function TurnSettingsBar({
 	agentSwitch,
 	beforePicker,
 	modelsLoading,
-	afterPermissions,
+	lastModel,
 	children,
 }: {
 	models: ChatModel[];
@@ -130,7 +130,8 @@ export function TurnSettingsBar({
 	reroute?: ModelReroute;
 	/** `picked` is set when the user chose that setting from its own menu. */
 	onChange?: (next: TurnSettings, picked?: keyof TurnSettings) => void;
-	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
+	/** `null` forgets the project's remembered mode. */
+	onRememberPermissions?: (mode: ApprovalMode | null) => Promise<unknown> | void;
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
 	rememberedPermissionMode?: ApprovalMode;
@@ -151,14 +152,14 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen?: boolean;
 	error?: string;
 	disabled?: boolean;
-	/** Turns the model control into one picker for agent, model and effort, laid out after the permissions. */
+	/** Turns the model control into one picker for agent, model and effort, laid out before the permissions. */
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
-	/** A control after the permission picker, such as the switch to the terminal view. */
-	afterPermissions?: ReactNode;
+	/** The model the chat's agent last reported running, when none is saved. */
+	lastModel?: string;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -260,16 +261,20 @@ export function TurnSettingsBar({
 	const rememberMode = modeOption
 		? modeOption.choices.find((choice) => choice.value === modeOption.currentValue)?.permissionMode
 		: settings.approvalMode ?? "default";
+	// Codex's default is Full access, which the project stores as bypass.
+	const remembered = rememberMode !== undefined && rememberedPermissionMode !== undefined && (
+		rememberedPermissionMode === rememberMode ||
+		(harness === "codex" && rememberMode === "default" && rememberedPermissionMode === "bypass-permissions")
+	);
 	const rememberAction = onRememberPermissions && rememberMode && !planning ? (
-		<OptionMenuItem
-			disabled={optionDisabled}
-			onSelect={() => {
-				void Promise.resolve(onRememberPermissions(rememberMode)).catch(() => {});
+		<ToggleRow
+			label="Remember for this project"
+			checked={remembered}
+			onChange={optionDisabled ? undefined : (on) => {
+				void Promise.resolve(onRememberPermissions(on ? rememberMode : null)).catch(() => {});
 			}}
-			className="mt-1 border-t border-border pt-2 text-xs"
-		>
-			Remember for this project
-		</OptionMenuItem>
+			className="mt-1 border-t border-border pt-2"
+		/>
 	) : null;
 	const unified = Boolean(agentSwitch && harness);
 	// The unified bar keeps the permission picker beside the Plan chip.
@@ -416,7 +421,7 @@ export function TurnSettingsBar({
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
 			<div className="flex h-7 min-w-0 flex-1 items-center justify-between gap-2">
-				<div className={cn("flex h-7 min-w-0 flex-wrap items-center gap-0.5", unified ? "order-2 ml-auto shrink-0" : undefined)}>
+				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
 					{unified && agentSwitch && harness ? (
 						<>
 							{beforePicker}
@@ -428,6 +433,7 @@ export function TurnSettingsBar({
 								// Only an agent that sends back its own settings has any to load; AO's would just flicker.
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
+								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								mark={reroute ? <Shuffle className="size-3 shrink-0 text-warning" aria-hidden="true" /> : undefined}
 								extras={pickerExtras}
@@ -481,8 +487,8 @@ export function TurnSettingsBar({
 					) : null}
 				</div>
 
-				{showRightDropdown || children || (unified && (planOn || afterPermissions)) ? (
-					<div className={cn("flex h-7 shrink-0 items-center gap-1", unified ? "order-1 min-w-0 flex-1" : undefined)}>
+				{showRightDropdown || children || (unified && planOn) ? (
+					<div className="flex h-7 shrink-0 items-center gap-1">
 						{children}
 						{showPermissions && pending && agentSwitch ? (
 							<Picker
@@ -560,7 +566,6 @@ export function TurnSettingsBar({
 								{rememberAction}
 							</Picker>
 						) : null}
-						{unified ? afterPermissions : null}
 						{unified && planOn ? (
 							<button
 								type="button"
@@ -577,11 +582,6 @@ export function TurnSettingsBar({
 					</div>
 				) : null}
 			</div>
-			{rememberPermissionsPending || (rememberedPermissionMode !== undefined && rememberedPermissionMode === rememberMode && !planning && !configPending) ? (
-				<p role="status" className="px-1 text-xs text-muted-foreground">
-					{rememberPermissionsPending ? "Saving project permissions…" : "Permission mode saved for new sessions in this project."}
-				</p>
-			) : null}
 			{rememberPermissionsError ? (
 				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
 			) : null}
@@ -1363,7 +1363,7 @@ function PermissionRow({
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className={cn("text-xs", unrestricted ? "text-warning" : "text-foreground")}>{title}</span>
 				{description ? (
-					<span className={cn("text-[11px] leading-snug", unrestricted ? "text-warning/80" : "text-muted-foreground")}>
+					<span className={cn("truncate text-[11px] leading-snug", unrestricted ? "text-warning/80" : "text-muted-foreground")}>
 						{description}
 					</span>
 				) : null}
@@ -1515,7 +1515,8 @@ function Picker({
 				</OptionMenuTrigger>
 			<OptionMenuContent
 				align={LeadIcon ? "start" : "end"}
-				className={cn(CHAT_MENU_CLASS, LeadIcon ? "w-80" : undefined)}
+				// The permission menu fits every mode on one line each, plus the remember switch, without scrolling.
+				className={cn(CHAT_MENU_CLASS, LeadIcon ? "max-h-(--radix-dropdown-menu-content-available-height)! max-w-[calc(100vw-2rem)]!" : undefined)}
 				onFocus={onFocus}
 			>
 				{children}

@@ -4183,6 +4183,44 @@ paths:
       tags:
       - projects
   /api/v1/projects/{id}/permissions:
+    delete:
+      operationId: forgetProjectPermissions
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Forget remembered project permissions
+      tags:
+      - projects
     patch:
       operationId: setProjectPermissions
       parameters:
@@ -16136,6 +16174,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - hermes
           - zcode
           - fake
           type: string
@@ -16837,6 +16876,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - hermes
           - zcode
           - cloudflared
           type: string
@@ -20184,6 +20224,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - hermes
           - zcode
           type: string
         issueId:

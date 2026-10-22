@@ -239,7 +239,6 @@ func Run(buildVersion string) error {
 	// runtime pane. Keep this path small until durable inbox semantics are needed.
 	// Built before the Lifecycle Manager so the LCM can use it for SCM-driven
 	// agent nudges (CI failure, review feedback, merge conflict).
-	messenger := newSessionMessenger(store, runtimeAdapter, log)
 	lifecycleMessenger := newModeAwareMessenger()
 	notificationHub := notify.NewHub()
 	notificationBarrier := &sync.Mutex{}
@@ -272,6 +271,7 @@ func Run(buildVersion string) error {
 		}
 		return fmt.Errorf("wire agent resolver: %w", err)
 	}
+	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
 	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
 

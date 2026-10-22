@@ -73,7 +73,7 @@ type Service struct {
 	readiness *readinessCoordinator
 	// savedDefaultSignIn reports the sign-in of the saved account new sessions
 	// of a harness start on; handled is false when they start on this computer.
-	savedDefaultSignIn func(ctx context.Context, harness domain.AgentHarness) (signedIn, handled bool)
+	savedDefaultSignIn func(ctx context.Context, harness domain.AgentHarness) (domain.AgentAccountIdentityCheck, bool)
 	cache              ports.AgentModelCatalogCache
 	discoverer         ports.AgentModelDiscoverer
 	modelDiscoveryDir  string
@@ -149,7 +149,7 @@ func NewWithDeps(deps Deps) *Service {
 	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
-		AuthenticationCheck: svc.codexAuthenticationWithAccount,
+		AuthenticationCheck: svc.authenticationWithAccount,
 		// A catalog built while the agent was signed out carries that failure
 		// (a rejected-credential warning or bare fallback aliases). A detected
 		// login must rediscover it without anyone pressing refresh.

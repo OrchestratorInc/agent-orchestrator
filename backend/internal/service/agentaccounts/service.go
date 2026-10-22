@@ -287,22 +287,23 @@ func (s *Service) beingRemoved(id string) bool {
 	return s.removing[id]
 }
 
-// DefaultSignIn reports whether the saved account new sessions of harness start
-// on is signed in; handled is false when they start on the computer's own
-// login, whose readiness the CLI reports itself. A reading older than the cache
-// window is read again, so readiness polling costs one CLI call per window.
-func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness) (signedIn, handled bool) {
+// DefaultSignIn reports the sign-in of the saved account new sessions of
+// harness start on, named by the email it was added with; handled is false when
+// they start on the computer's own login, whose readiness the CLI reports
+// itself. A reading older than the cache window is read again, so readiness
+// polling costs one CLI call per window.
+func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness) (identity domain.AgentAccountIdentityCheck, handled bool) {
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok || s.providers[p] == nil {
-		return false, false
+		return identity, false
 	}
 	def, err := s.defaultID(ctx, p)
 	if err != nil || def == domain.DeviceAgentAccountID(p) {
-		return false, false
+		return identity, false
 	}
 	account, err := s.find(ctx, def)
 	if err != nil {
-		return false, false
+		return identity, false
 	}
 	s.mu.Lock()
 	r := s.readings[account.ID]
@@ -314,9 +315,14 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 		s.mu.Unlock()
 	}
 	if r == nil || (r.identityErr != "" && !r.mismatch) {
-		return false, false // not known: leave it to the CLI's own readiness
+		return identity, false // not known: leave it to the CLI's own readiness
 	}
-	return r.identity.SignedIn, true
+	identity = r.identity
+	// A mismatched folder names another login; the account is still its own.
+	if account.Email != "" {
+		identity.Email = account.Email
+	}
+	return identity, true
 }
 
 // SetDefaultChanged late-binds what must hear that the account new sessions of

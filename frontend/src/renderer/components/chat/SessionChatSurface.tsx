@@ -38,6 +38,7 @@ import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
+import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
 import { clientForSessionHost } from "../../lib/host-clients";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -136,7 +137,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange,
 	interfaceSwitch,
 }: {
-	/** The control that moves this session to the terminal view, and its error. */
+	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
@@ -212,7 +213,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
-	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
+	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId, session.kind);
 	const {
 		acknowledgeAcceptedTurn,
 		acknowledgeLocalEcho,
@@ -240,6 +241,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (!chatInFront) setChosenSwitch(undefined);
 	}, [chatInFront]);
 	const queryClient = useQueryClient();
+	// After a daemon restart the daemon reattaches surviving Chats on its own, and
+	// that reattach emits no change event. The session's recovery check settling
+	// on "ready" is the signal to refresh the controller state this view shows.
+	const statusReadiness = session.statusReadiness;
+	const lastReadiness = useRef({ id: session.id, readiness: statusReadiness });
+	useEffect(() => {
+		const previous = lastReadiness.current;
+		lastReadiness.current = { id: session.id, readiness: statusReadiness };
+		if (hostId || previous.id !== session.id || statusReadiness !== "ready" ||
+			!previous.readiness || previous.readiness === "ready") return;
+		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
+	}, [hostId, queryClient, session.id, statusReadiness]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
@@ -495,6 +508,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? unavailableConversationSnapshot(session)
 			: undefined);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
+	// The model the running agent reports, kept so this chat names it at once the next time it loads.
+	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
+		: providerOptions.find((option) => option.category === "model" || option.id === "model")?.currentValue ?? snapshot?.settings?.model;
+	useEffect(() => {
+		if (liveModel && snapshot?.harness) rememberChatLastModel(uiSessionId, snapshot.harness, liveModel);
+	}, [liveModel, snapshot?.harness, uiSessionId]);
+	const lastModel = useMemo(
+		() => settingsLoading ? readChatLastModel(uiSessionId, renderSnapshot?.harness) : undefined,
+		[renderSnapshot?.harness, settingsLoading, uiSessionId],
+	);
 	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
 	useEffect(() => {
 		// Keep an ambiguous request's identity until durable progress confirms
@@ -682,7 +705,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerAction={interfaceSwitch?.control}
 				composerNotice={interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
@@ -717,6 +739,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
 					(!settingsLoading || Boolean(renderSnapshot.settings?.model || renderSnapshot.settings?.approvalMode))}
 				settingsLoading={settingsLoading}
+				lastModel={lastModel}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded

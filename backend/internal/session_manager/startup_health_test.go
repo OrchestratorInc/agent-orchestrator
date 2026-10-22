@@ -3,9 +3,12 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -134,5 +137,186 @@ func TestStartupHealthCleansOnlyUncommittedSetup(t *testing.T) {
 				t.Fatalf("protected request or workspace lost: found=%v path=%v", found, pathErr)
 			}
 		})
+	}
+}
+
+// flakyStartupLauncher fails reattach attempts until failures runs out, then
+// reports a live controller the way a successful reconnect does.
+type flakyStartupLauncher struct {
+	recordingLauncher
+	mu       sync.Mutex
+	failures int
+	err      error
+	attempts []ChatStart
+	attached bool
+}
+
+func (l *flakyStartupLauncher) StartChat(_ context.Context, cfg ChatStart) (ChatStarted, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempts = append(l.attempts, cfg)
+	if l.failures != 0 {
+		l.failures--
+		return ChatStarted{}, l.err
+	}
+	l.attached = true
+	return ChatStarted{}, nil
+}
+
+func (l *flakyStartupLauncher) HasLiveChatController(domain.SessionID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.attached
+}
+
+func (l *flakyStartupLauncher) attemptCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.attempts)
+}
+
+func (l *flakyStartupLauncher) setAttached() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attached = true
+}
+
+func startupChatRecord() domain.SessionRecord {
+	return domain.SessionRecord{
+		ID: "mer-chat", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/chat", Branch: "ao/chat/root", ProviderConversationID: "thread-1"},
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+}
+
+func waitFor(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestStartupChatCheckRetriesTransientFailure(t *testing.T) {
+	for name, cause := range map[string]error{
+		// The production failure: the check spent its deadline waiting for the writer.
+		"deadline":     fmt.Errorf("reconcile conversation authentication: %w", context.DeadlineExceeded),
+		"inconclusive": fmt.Errorf("persistent host: %w", ports.ErrChatRecoveryInconclusive),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			m, st, rt, ws := newLifecycleManager()
+			launcher := &flakyStartupLauncher{failures: 2, err: cause}
+			m.chat = launcher
+			m.startupChatRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+			rec := startupChatRecord()
+			st.sessions[rec.ID] = rec
+			if err := m.ReconcileBackground(ctx); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "the retry to reattach", func() bool { return launcher.HasLiveChatController(rec.ID) })
+			waitFor(t, "ready readiness", func() bool { return m.SessionStatusReadiness(st.sessions[rec.ID]) == "ready" })
+			if got := launcher.attemptCount(); got != 3 {
+				t.Fatalf("attempts = %d, want the startup check plus two retries", got)
+			}
+			for i, attempt := range launcher.attempts {
+				if !attempt.ReconnectOnly {
+					t.Fatalf("attempt %d may launch a provider: %+v", i, attempt)
+				}
+			}
+			if rt.created != 0 || len(ws.restoreConfigs) != 0 || st.sessions[rec.ID].Activity != rec.Activity {
+				t.Fatal("retry launched resources or changed activity")
+			}
+		})
+	}
+}
+
+func TestStartupChatCheckDoesNotRetryPermanentFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m, st, _, _ := newLifecycleManager()
+	launcher := &flakyStartupLauncher{failures: -1, err: errors.New("provider rejected the permission mode")}
+	m.chat = launcher
+	m.startupChatRetryDelays = []time.Duration{time.Millisecond}
+	rec := startupChatRecord()
+	st.sessions[rec.ID] = rec
+	if err := m.ReconcileBackground(ctx); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := launcher.attemptCount(); got != 1 {
+		t.Fatalf("attempts = %d, want no retry", got)
+	}
+	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "unavailable" {
+		t.Fatalf("readiness = %s, want unavailable so Resume is offered", got)
+	}
+}
+
+func TestStartupChatCheckRetryStopsOnceReattached(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m, st, _, _ := newLifecycleManager()
+	launcher := &flakyStartupLauncher{failures: -1, err: ports.ErrChatRecoveryInconclusive}
+	m.chat = launcher
+	m.startupChatRetryDelays = []time.Duration{20 * time.Millisecond, time.Millisecond}
+	rec := startupChatRecord()
+	st.sessions[rec.ID] = rec
+	if err := m.ReconcileBackground(ctx); err != nil {
+		t.Fatal(err)
+	}
+	launcher.setAttached() // Resume reconnected before the first retry.
+	time.Sleep(80 * time.Millisecond)
+	if got := launcher.attemptCount(); got != 1 {
+		t.Fatalf("attempts = %d, want the retry to leave a reattached chat alone", got)
+	}
+	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "ready" {
+		t.Fatalf("readiness = %s, want the reattached chat settled as ready", got)
+	}
+}
+
+func TestStartupChatCheckStaysCheckingWhileRetryPending(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m, st, _, _ := newLifecycleManager()
+	launcher := &flakyStartupLauncher{failures: 1, err: ports.ErrChatRecoveryInconclusive}
+	m.chat = launcher
+	m.startupChatRetryDelays = []time.Duration{100 * time.Millisecond}
+	rec := startupChatRecord()
+	st.sessions[rec.ID] = rec
+	if err := m.ReconcileBackground(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The startup attempt failed, but a reattach is scheduled: clients must show
+	// a reconnect in progress, not offer Resume.
+	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "checking" {
+		t.Fatalf("readiness while a retry is pending = %s, want checking", got)
+	}
+	waitFor(t, "the retry to reattach", func() bool { return launcher.HasLiveChatController(rec.ID) })
+	waitFor(t, "ready readiness", func() bool { return m.SessionStatusReadiness(st.sessions[rec.ID]) == "ready" })
+}
+
+func TestStartupChatCheckRetryGivesUpAfterSchedule(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m, st, _, _ := newLifecycleManager()
+	launcher := &flakyStartupLauncher{failures: -1, err: ports.ErrChatRecoveryInconclusive}
+	m.chat = launcher
+	m.startupChatRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	rec := startupChatRecord()
+	st.sessions[rec.ID] = rec
+	if err := m.ReconcileBackground(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "every scheduled retry", func() bool { return launcher.attemptCount() == 3 })
+	time.Sleep(20 * time.Millisecond)
+	if got := launcher.attemptCount(); got != 3 {
+		t.Fatalf("attempts = %d, want one per scheduled delay", got)
+	}
+	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "unavailable" {
+		t.Fatalf("readiness = %s, want unavailable so Resume is offered", got)
 	}
 }

@@ -204,6 +204,7 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	202: "0202_allow_memcode_harness.sql",
+	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
@@ -213,10 +214,12 @@ var shippedMigrations = map[int64]string{
 	215: "0215_session_harness_releases.sql",
 
 	// UTC timestamp IDs from npm run migration:create start here.
+	20261019142324385: "20261019142324385_allow_hermes_harness.sql",
 	20261019154945497: "20261019154945497_allow_zcode_harness.sql",
 	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
 	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
 	20261020131539535: "20261020131539535_provider_switching.sql",
+	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -232,7 +235,8 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	// 203 was used by the historical Hermes candidate and must not be reused.
+	return v == 22 || v == 203
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

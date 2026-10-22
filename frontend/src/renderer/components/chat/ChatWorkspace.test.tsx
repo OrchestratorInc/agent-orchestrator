@@ -1831,6 +1831,37 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it("shows a reconnect in progress while the daemon is still checking the session", () => {
+		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
+		const view = render(
+			<ChatWorkspace
+				snapshot={stopped}
+				session={{ ...chatSession, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("AO restarted. History is kept.")).toBeInTheDocument();
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Reconnecting to the agent…")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
+
+		// Once the check fails for good, the real recovery actions come back.
+		view.rerender(
+			<ChatWorkspace
+				snapshot={stopped}
+				session={{ ...chatSession, statusReadiness: "unavailable" }}
+				onResumeAgent={vi.fn()}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+	});
+
 	it("keeps a sleeping conversation usable without exposing wake controls", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();
@@ -2169,18 +2200,6 @@ describe("ChatWorkspace timeline", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByRole("separator")).toBe(before);
-	});
-
-	it("keeps the interface switch in the composer while the agent is stopped", () => {
-		render(
-			<ChatWorkspace
-				snapshot={{ ...chatFixtureEmpty, controller: { state: "stopped" } }}
-				session={chatSession}
-				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
-				composerAction={<button type="button">Switch to terminal UI</button>}
-			/>,
-		);
-		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
 	});
 
 	it("shows startup failure and retry for an orchestrator with no messages or turns", async () => {

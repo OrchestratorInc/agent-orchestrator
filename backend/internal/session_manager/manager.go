@@ -444,6 +444,7 @@ type Manager struct {
 	statusRecoveryRevision      uint64
 	statusRecoveries            map[domain.SessionID]statusRecovery
 	statusVerificationLimit     time.Duration
+	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
 	// launchStartWait bounds the wait to see a new supervised launch alive.
@@ -863,6 +864,7 @@ func New(d Deps) *Manager {
 	}
 	m.statusRecoveries = make(map[domain.SessionID]statusRecovery)
 	m.statusVerificationLimit = statusVerificationLimit
+	m.startupChatRetryDelays = defaultStartupChatRetryDelays
 	if m.reconcileWorkers < 1 {
 		m.reconcileWorkers = 1
 	}
@@ -1579,22 +1581,23 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, and command-code agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
 	}
-	if cfg.Harness == domain.HarnessCommandCode {
+	if cfg.Harness == domain.HarnessCommandCode || cfg.Harness == domain.HarnessHermes {
 		// Command Code's `cmd --list-models` catalog advertises no per-model
-		// effort levels, so there is nothing to validate against: forward the
-		// raw level (empty keeps the adapter default) and let `cmd --effort`
-		// reject unknown values at launch.
+		// effort levels, and Hermes accepts --reasoning for typed model IDs its
+		// configuration catalog never lists, so there is nothing to validate
+		// against: forward the raw level (empty keeps the adapter default) and
+		// let the CLI reject unknown values at launch.
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
@@ -4269,6 +4272,8 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	jobs := make(chan domain.SessionRecord)
 	var wg sync.WaitGroup
+	var retryMu sync.Mutex
+	var retryChats []domain.SessionID
 	wg.Add(workers)
 	for range workers {
 		go func() {
@@ -4281,9 +4286,19 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer cancel()
 					return m.checkSessionHealth(recoveryCtx, rec)
 				}()
-				m.finishStatusRecovery(ctx, rec, err)
+				retry := err != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+					retryableStartupChatCheck(err) && len(m.startupChatRetryDelays) > 0
+				if !retry {
+					// A scheduled reattach keeps the session checking; its last attempt settles it.
+					m.finishStatusRecovery(ctx, rec, err)
+				}
 				if err != nil {
-					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "error", err)
+					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "retrying", retry, "error", err)
+				}
+				if retry {
+					retryMu.Lock()
+					retryChats = append(retryChats, rec.ID)
+					retryMu.Unlock()
 				}
 			}
 		}()
@@ -4293,6 +4308,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	close(jobs)
 	wg.Wait()
+	if len(retryChats) > 0 && ctx.Err() == nil {
+		go m.retryStartupChatChecks(ctx, retryChats)
+	}
 }
 
 // RestoreAll relaunches every terminated session that was saved by the last

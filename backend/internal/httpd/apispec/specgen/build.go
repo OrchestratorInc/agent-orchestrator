@@ -2710,6 +2710,17 @@ func projectOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodDelete, path: "/api/v1/projects/{id}/permissions", id: "forgetProjectPermissions", tag: "projects",
+			summary:    "Forget remembered project permissions",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodDelete, path: "/api/v1/projects/{id}", id: "removeProject", tag: "projects",
 			summary:    "Remove a project; stops sessions, cleans workspaces, unregisters",
 			pathParams: []any{controllers.ProjectIDParam{}},

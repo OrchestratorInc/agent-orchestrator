@@ -8,6 +8,7 @@ import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentModelPicker, DismissButton, switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
+import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransition";
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
 import { TopbarButton } from "./TopbarButton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -15,13 +16,15 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
 
 /**
- * A terminal session tab's menu: the agent picker and the switch to chat. A picked agent
- * adds Switch and Cancel, since a terminal has no next message to wait on.
+ * A local session tab's menu: the switch to the other interface and, in a terminal, the
+ * agent picker. A picked agent adds Switch and Cancel, since a terminal has no next message
+ * to wait on; a chat picks its agent in the composer.
  */
-export function TerminalSessionMenu({
+export function SessionTabMenu({
 	session,
 	hostId,
 	blocked,
+	switchTarget,
 	switchAction,
 	switchControl,
 }: {
@@ -29,8 +32,9 @@ export function TerminalSessionMenu({
 	hostId?: string;
 	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
+	switchTarget: SessionInterfaceMode;
 	switchAction?: { disabled: boolean; reason?: string; run: () => void };
-	/** Shown in place of the menu while a switch to chat is running. */
+	/** Shown in place of the menu while an interface switch is running. */
 	switchControl?: ReactNode;
 }) {
 	const { t } = useTranslation();
@@ -39,7 +43,7 @@ export function TerminalSessionMenu({
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	// Agent switching ships behind Developer Mode for its first week.
-	const switching = useUiStore((state) => state.developerMode);
+	const switching = useUiStore((state) => state.developerMode) && switchTarget === "chat";
 	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
 	if (!switchAction && (switchControl || !switching)) return switchControl ? <div className="inline-flex shrink-0 items-center">{switchControl}</div> : null;
 	const switchNow = () => {
@@ -88,8 +92,8 @@ export function TerminalSessionMenu({
 				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}
 				{switchAction ? (
 					<DropdownMenuItem disabled={switchAction.disabled} title={switchAction.reason} onSelect={switchAction.run}>
-						<RoundedInterfaceIcon target="chat" className="size-icon-lg" />
-						{t("agentSwitch.switchToChat")}
+						<RoundedInterfaceIcon target={switchTarget} className="size-icon-lg" />
+						{switchTarget === "chat" ? t("agentSwitch.switchToChat") : t("agentSwitch.switchToTerminal")}
 					</DropdownMenuItem>
 				) : null}
 			</DropdownMenuContent>

@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
 func remainingRequestBudget(ctx context.Context) time.Duration {
@@ -171,6 +172,47 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
+	}
+}
+
+type timeoutProbeProjectManager struct {
+	projectsvc.Manager
+	budget chan time.Duration
+}
+
+func (m *timeoutProbeProjectManager) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return projectsvc.ClonePreparationResult{}, nil
+}
+
+func (m *timeoutProbeProjectManager) Clone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.Project, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return projectsvc.Project{}, errors.New("probe only")
+}
+
+// A clone downloads the whole repository inside the request; a ~500 MB
+// repository took longer than the one-minute REST budget and failed.
+func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
+	mgr := &timeoutProbeProjectManager{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Projects: mgr},
+		ControlDeps{},
+	)
+	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"remoteUrl":"https://github.com/acme/repo","destinationParent":"/tmp"}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+		select {
+		case budget := <-mgr.budget:
+			if budget < 29*time.Minute || budget > 30*time.Minute {
+				t.Fatalf("%s budget = %s, want about 30 minutes", path, budget)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the project manager", path)
+		}
 	}
 }
 

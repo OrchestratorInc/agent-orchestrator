@@ -21,8 +21,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
-import { agentModelDisplayLabel, splitClaudeModels } from "../../lib/agent-model-choices";
-import { collapseModelVariants, listsModelVariants } from "../../lib/model-variants";
+import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -347,17 +346,6 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 	);
 }
 
-/** A recorded model id by its name in the agent's list, however that agent's chat spells the id. */
-function handoffModelName(harness: string, model: string, models: Array<{ id: string; label: string }>): string {
-	const id = model.replace(/\[.*$/, "");
-	const label = models.find((entry) => entry.id === id)?.label
-		// Cursor's chat names a model once; its list has an entry per setting.
-		?? (listsModelVariants(harness) ? collapseModelVariants(models).find((family) => family.id === id)?.label : undefined)
-		// Claude Code's "opus" is the newest model of that family.
-		?? (harness === "claude-code" ? splitClaudeModels(models).current.find((entry) => entry.id.includes(`-${id}-`))?.label : undefined);
-	return agentModelDisplayLabel(harness, label ?? id);
-}
-
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
@@ -367,7 +355,7 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
 	const hostId = useContext(ChatHostId);
 	const catalog = useQuery({ ...agentModelsQueryOptions(harness, "", hostId), enabled: Boolean(model) }).data;
-	const name = model ? handoffModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
+	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
 			<ProviderMark provider={harness} />
