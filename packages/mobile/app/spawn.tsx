@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -23,7 +24,7 @@ import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
@@ -295,26 +296,13 @@ function SpawnModalContent() {
 			</Text>
 		</View>
 	) : null;
-	const pickAttachments = async () => {
+	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
 		if (pickingAttachments.current) return;
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
 		try {
-			const result = await DocumentPicker.getDocumentAsync({
-				multiple: true,
-				copyToCacheDirectory: true,
-				type: "*/*",
-			});
-			if (result.canceled) return;
-			const picked = result.assets.map((asset) => {
-				const file = new File(asset.uri);
-				return {
-					name: asset.name,
-					mimeType: asset.mimeType || "application/octet-stream",
-					bytes: asset.size ?? file.size,
-					readData: () => file.base64(),
-				};
-			});
+			const picked = await pick();
+			if (!picked) return;
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
@@ -322,12 +310,52 @@ function SpawnModalContent() {
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
+			setAttachmentError(userFacingError(cause, fallback));
 		} finally {
 			pickingAttachments.current = false;
-
 		}
 	};
+	const pickFiles = () => addAttachments(async () => {
+		const result = await DocumentPicker.getDocumentAsync({
+			multiple: true,
+			copyToCacheDirectory: true,
+			type: "*/*",
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset) => {
+			const file = new File(asset.uri);
+			return {
+				name: asset.name,
+				mimeType: asset.mimeType || "application/octet-stream",
+				bytes: asset.size ?? file.size,
+				readData: () => file.base64(),
+			};
+		});
+	}, "Couldn't read that file.");
+	const pickPhotos = () => addAttachments(async () => {
+		const remaining = MAX_SPAWN_ATTACHMENTS - attachmentsRef.current.length;
+		if (remaining <= 0) throw new Error(`You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.`);
+		// "compatible" asks iOS for a JPEG rather than the library's HEIC
+		// original, which most agents can't open.
+		const result = await ImagePicker.launchImageLibraryAsync({
+			mediaTypes: ["images"],
+			quality: 0.82,
+			allowsMultipleSelection: true,
+			selectionLimit: remaining,
+			preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset, index) => {
+			const file = new File(asset.uri);
+			const mimeType = asset.mimeType || "image/jpeg";
+			return {
+				name: asset.fileName || `photo-${index + 1}.${mimeType.split("/")[1] || "jpg"}`,
+				mimeType,
+				bytes: asset.fileSize ?? file.size,
+				readData: () => file.base64(),
+			};
+		});
+	}, "Couldn't open your photo library.");
 
 	const onSpawn = async () => {
 		if (!selectedHostId || !config) {
@@ -458,7 +486,8 @@ function SpawnModalContent() {
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
-					onAttach={() => { void pickAttachments(); }}
+					onChoosePhoto={() => { void pickPhotos(); }}
+					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}

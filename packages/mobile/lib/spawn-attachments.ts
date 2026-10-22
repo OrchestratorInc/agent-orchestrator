@@ -10,7 +10,7 @@ export type PickedSpawnAttachment = Omit<SpawnAttachment, "data" | "bytes"> & {
 	readData: () => Promise<string>;
 };
 
-const MAX_ATTACHMENTS = 8;
+export const MAX_SPAWN_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 
@@ -23,8 +23,8 @@ export function appendSpawnAttachments(
 	let error: string | undefined;
 
 	for (const item of incoming) {
-		if (attachments.length >= MAX_ATTACHMENTS) {
-			error ??= `You can attach up to ${MAX_ATTACHMENTS} files.`;
+		if (attachments.length >= MAX_SPAWN_ATTACHMENTS) {
+			error ??= `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.`;
 			break;
 		}
 		if (item.mimeType.trim().toLowerCase() === "image/svg+xml") {
