@@ -2794,7 +2794,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 
 // chatRetireStopBudget bounds the controller stop during a replacement, so an
 // unresponsive provider cannot use up the request.
-const chatRetireStopBudget = 15 * time.Second
+var chatRetireStopBudget = 15 * time.Second
 
 func (m *Manager) stopChatForRetirement(ctx context.Context, rec domain.SessionRecord) {
 	if m.chat == nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
