@@ -2699,6 +2699,7 @@
 	"settings.harness.tabAccount": "Conta",
 	"settings.harness.tabModels": "Modelos",
 	"settings.harness.tabHealth": "Saúde",
+	"settings.harness.tabImport": "Importar",
 	"settings.harness.installation": "Instalação",
 	"settings.harness.account": "Conta",
 	"settings.harness.installedWith": "Instalado com {{method}}",
@@ -3679,7 +3680,7 @@
 	"board.shared.working": "{{name}} trabalhando",
 	"sessionImport.trigger": "Importar sessões",
 	"sessionImport.title": "Traga suas conversas para o AO",
-	"sessionImport.description": "Importe históricos legíveis do Claude Code e Codex deste computador. Apenas pastas já registradas como projetos do AO e conversas independentes aparecem.",
+	"sessionImport.description": "Importe históricos legíveis do Claude Code e Codex deste computador. Apenas pastas já registradas como projetos do AO e conversas independentes aparecem."
 	"sessionImport.allProjects": "Todos os projetos e conversas independentes",
 	"sessionImport.selectionHelp": "Conversas ativas nos últimos 30 dias são pré-selecionadas. Você também pode selecionar conversas mais antigas. Todas as sessões permanecem ociosas após a importação.",
 	"sessionImport.reading": "Lendo históricos locais…",
@@ -3705,5 +3706,13 @@
 	"sessionImport.selectAll_many": "Selecionar todas · {{count}} conversas",
 	"sessionImport.result_many": "{{count}} conversas importadas.",
 	"sessionImport.import_many": "Importar {{count}} conversas",
-	"sessionImport.messages_many": "{{count}} mensagens"
+	"sessionImport.messages_many": "{{count}} mensagens",
+	"sessionImport.offerTitle": "Traga suas conversas anteriores para o AO",
+	"sessionImport.offerDescription": "Continue no AO as conversas dos agentes que você usa neste computador. Pastas Git que ainda não são projetos são adicionadas como projetos.",
+	"sessionImport.offerDismiss": "Agora não",
+	"sessionImport.offerAction": "Importar conversas do {{agent}}",
+	"sessionImport.newProject": "{{name}} (novo projeto)",
+	"sessionImport.addsProjects_one": "Adiciona {{count}} pasta como projeto: {{names}}",
+	"sessionImport.addsProjects_many": "Adiciona {{count}} pastas como projetos: {{names}}",
+	"sessionImport.addsProjects_other": "Adiciona {{count}} pastas como projetos: {{names}}"
 }

@@ -301,3 +301,37 @@ func TestScanSkipsHistoriesAOStarted(t *testing.T) {
 		t.Fatalf("candidates = %+v", preview.Candidates)
 	}
 }
+
+// A chat from a repository no project holds names that folder; once the folder
+// is a project, the next scan routes the chat there and it imports.
+func TestScanOffersFolderNoProjectHolds(t *testing.T) {
+	ctx := context.Background()
+	root, repo := t.TempDir(), filepath.Join(t.TempDir(), "widgets")
+	runGit(t, filepath.Dir(repo), "init", "-q", repo)
+	writeClaude(t, root, "11111111-1111-4111-8111-111111111111", filepath.Join(repo, "pkg"), "fix parser", time.Now())
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st := &importStore{}
+	svc := New(st, "")
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
+	preview, err := svc.Scan(ctx)
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan: %v %v", preview, err)
+	}
+	c := preview.Candidates[0]
+	if c.Folder != canonical(repo) || c.ProjectID != "" || !c.Suggested {
+		t.Fatalf("candidate = %+v", c)
+	}
+	if results, err := svc.Import(ctx, []string{c.ID}); err != nil || results[0].Status != "failed" || len(st.sessions) != 0 {
+		t.Fatalf("import before the folder is a project: %v %v", results, err)
+	}
+	st.projects = []domain.ProjectRecord{{ID: "widgets", Path: repo}}
+	preview, err = svc.Scan(ctx)
+	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].ID != c.ID || preview.Candidates[0].ProjectID != "widgets" || preview.Candidates[0].Folder != "" {
+		t.Fatalf("rescan: %v %v", preview, err)
+	}
+	if results, err := svc.Import(ctx, []string{c.ID}); err != nil || results[0].Status != "created" || st.sessions[0].ProjectID != "widgets" {
+		t.Fatalf("import: %v %v", results, err)
+	}
+}

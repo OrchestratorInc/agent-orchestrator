@@ -1764,6 +1764,29 @@ describe("HarnessSettingsSection", () => {
 		expect(calls.auth).toBe(1);
 	});
 
+	// Home's import offer lands on the agent's Import tab, which lists only that agent's chats.
+	it("opens the focused harness on its Import tab, listing only that harness's chats", async () => {
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/session-import"
+			? { data: { candidates: [
+				{ id: "c", title: "Codex chat", harness: "codex", suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 },
+				{ id: "k", title: "Claude chat", harness: "claude-code", suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 },
+			] } } as never
+			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TooltipProvider>
+					<HarnessSettingsSection focusAgentId="codex" harnessTab="import" />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("Codex chat")).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Import" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.queryByText("Claude chat")).not.toBeInTheDocument();
+		const cursor = await findAgentRow("cursor");
+		expect(within(cursor).queryByRole("tab", { name: "Import" })).not.toBeInTheDocument();
+	});
+
 	// A login fixed here must clear a stale model-discovery error in an open
 	// task composer without the user pressing refresh.
 	it("invalidates the harness's cached model catalogs after a login check", async () => {

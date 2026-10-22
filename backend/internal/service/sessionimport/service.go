@@ -44,6 +44,9 @@ type Candidate struct {
 	MessageCount int                 `json:"messageCount"`
 	// Shortened reports text too large to import; the rest of the history is kept.
 	Shortened bool `json:"shortened,omitempty"`
+	// Folder is the repository a chat came from when no AO project holds it.
+	// The chat can be imported once that folder is added as a project.
+	Folder string `json:"folder,omitempty"`
 }
 
 // Preview is a bounded, explicit scan of this host, independent of normal board reads.
@@ -214,6 +217,8 @@ type destinations struct {
 type destination struct {
 	id       domain.ProjectID
 	eligible bool
+	// folder is set for a repository that no project holds yet.
+	folder string
 }
 
 func (s *Service) destinations(ctx context.Context) (*destinations, error) {
@@ -254,27 +259,32 @@ func pathWithin(root, path string) bool {
 }
 
 func (d *destinations) resolve(cwd string) (domain.ProjectID, bool) {
+	dest := d.destination(cwd)
+	return dest.id, dest.eligible
+}
+
+func (d *destinations) destination(cwd string) destination {
 	if cwd == "" {
-		return "", true
+		return destination{eligible: true}
 	}
 	cwd = canonical(cwd)
 	if cached, ok := d.byCWD[cwd]; ok {
-		return cached.id, cached.eligible
+		return cached
 	}
-	id, eligible := d.lookup(cwd)
-	d.byCWD[cwd] = destination{id, eligible}
-	return id, eligible
+	dest := d.lookup(cwd)
+	d.byCWD[cwd] = dest
+	return dest
 }
 
-func (d *destinations) lookup(cwd string) (domain.ProjectID, bool) {
+func (d *destinations) lookup(cwd string) destination {
 	for _, excluded := range d.svc.excluded {
 		if pathWithin(excluded, cwd) {
-			return "", false // AO-managed worktrees already belong to AO sessions.
+			return destination{} // AO-managed worktrees already belong to AO sessions.
 		}
 	}
 	// A deleted folder has no files to continue from.
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
-		return "", false
+		return destination{}
 	}
 	var within *projectRoot
 	for i, p := range d.projects {
@@ -289,21 +299,37 @@ func (d *destinations) lookup(cwd string) (domain.ProjectID, bool) {
 	// A folder inside a project can hold an unrelated repository, such as an
 	// ignored clone; only the project's own repository belongs to the project.
 	if within != nil && (within.common == "" && within.remote == "" || same(*within)) {
-		return within.id, true
+		return destination{id: within.id, eligible: true}
 	}
 	if d.svc.standalone(cwd) {
-		return "", true
+		return destination{eligible: true}
 	}
 	best := domain.ProjectID("")
 	for _, p := range d.projects {
 		if same(p) {
 			if best != "" && best != p.id {
-				return "", false
+				return destination{}
 			} // Ambiguous destinations are not auto-adopted.
 			best = p.id
 		}
 	}
-	return best, best != ""
+	if best == "" {
+		return destination{folder: repositoryRoot(common)}
+	}
+	return destination{id: best, eligible: true}
+}
+
+// repositoryRoot is the main checkout that owns a Git directory, so chats from
+// its linked worktrees offer one folder. Bare repositories have none.
+func repositoryRoot(common string) string {
+	if filepath.Base(common) != ".git" {
+		return ""
+	}
+	root := filepath.Dir(common)
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return ""
+	}
+	return root
 }
 
 var errManagedByAO = errors.New("this conversation already belongs to an AO session")
@@ -404,6 +430,7 @@ func (f sourceFiles) cacheKey() string {
 }
 
 // Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
+// A chat from a repository that no project holds names that repository's folder.
 func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	// ponytail: serialize explicit scans/imports; add a persistent index only if host scans become too slow.
 	s.mu.Lock()
@@ -488,15 +515,15 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if prior, ok := selected[id]; ok && !source.last.After(prior.source.last) {
 				continue
 			}
-			project, eligible := dests.resolve(source.cwd)
-			if !eligible {
+			dest := dests.destination(source.cwd)
+			if !dest.eligible && dest.folder == "" {
 				continue
 			}
 			title := source.title
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
+			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
 			if sessionID, ok := imported[[2]string{root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if sessionID, ok := managed[source.nativeID]; ok {

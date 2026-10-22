@@ -19099,6 +19099,8 @@ components:
       type: object
     SessionImportCandidate:
       properties:
+        folder:
+          type: string
         harness:
           type: string
         id:

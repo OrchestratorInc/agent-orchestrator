@@ -2654,6 +2654,7 @@
 	"settings.harness.tabAccount": "계정",
 	"settings.harness.tabModels": "모델",
 	"settings.harness.tabHealth": "상태",
+	"settings.harness.tabImport": "가져오기",
 	"settings.harness.installation": "설치",
 	"settings.harness.account": "계정",
 	"settings.harness.installedWith": "{{method}}(으)로 설치됨",
@@ -3610,7 +3611,7 @@
 	"board.shared.working": "{{name}} 작업 중",
 	"sessionImport.trigger": "세션 가져오기",
 	"sessionImport.title": "대화를 AO로 가져오기",
-	"sessionImport.description": "이 컴퓨터에서 읽을 수 있는 Claude Code 및 Codex 기록을 가져옵니다. AO 프로젝트로 등록된 폴더와 독립 대화만 표시됩니다.",
+	"sessionImport.description": "이 컴퓨터에서 읽을 수 있는 Claude Code 및 Codex 기록을 가져옵니다. AO 프로젝트로 등록된 폴더와 독립 대화만 표시됩니다."
 	"sessionImport.allProjects": "모든 프로젝트 및 독립 대화",
 	"sessionImport.selectionHelp": "지난 30일 동안 활동한 대화가 미리 선택됩니다. 이전 대화도 선택할 수 있습니다. 가져온 모든 세션은 대기 상태로 유지됩니다.",
 	"sessionImport.reading": "로컬 기록 읽는 중…",
@@ -3632,5 +3633,12 @@
 	"sessionImport.messages_one": "메시지 {{count}}개",
 	"sessionImport.messages_other": "메시지 {{count}}개",
 	"sessionImport.alreadyImported": "이미 AO에 있음",
-	"sessionImport.failed": "가져오지 못했습니다. 다시 시도하세요."
+	"sessionImport.failed": "가져오지 못했습니다. 다시 시도하세요.",
+	"sessionImport.offerTitle": "이전 대화를 AO로 가져오기",
+	"sessionImport.offerDescription": "이 컴퓨터에서 사용하는 에이전트의 대화를 AO에서 이어서 진행하세요. 아직 프로젝트가 아닌 Git 폴더는 프로젝트로 추가됩니다.",
+	"sessionImport.offerDismiss": "나중에",
+	"sessionImport.offerAction": "{{agent}} 대화 가져오기",
+	"sessionImport.newProject": "{{name}} (새 프로젝트)",
+	"sessionImport.addsProjects_one": "폴더 {{count}}개를 프로젝트로 추가: {{names}}",
+	"sessionImport.addsProjects_other": "폴더 {{count}}개를 프로젝트로 추가: {{names}}"
 }

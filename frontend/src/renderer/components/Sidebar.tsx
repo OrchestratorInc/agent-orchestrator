@@ -136,7 +136,6 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { applyOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { SessionImportDialog } from "./SessionImportDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
@@ -635,7 +634,6 @@ export function Sidebar({
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
-	const developerMode = useUiStore((state) => state.developerMode);
 	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const artifactTotal = useMemo(
@@ -1259,10 +1257,7 @@ export function Sidebar({
 						status={updateStatus}
 						tabIndex={isCollapsed ? -1 : 0}
 					/>
-					{developerMode ? (
-						<SessionImportDialog projects={workspaces.filter(w => !w.hostId && w.kind !== CLOUD_PROJECT_KIND && w.id !== STANDALONE_WORKSPACE_ID).map(w => ({ id: w.id, name: w.name }))} className={FOOTER_NAV_BUTTON_CLASS} tabIndex={isCollapsed ? -1 : 0} />
-					) : null}
-                    <CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
+					<CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
 					<UpdateInstallSlide
 						availableDismissed={updateDismissal.dismissed}

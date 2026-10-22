@@ -60,6 +60,8 @@ export type SettingsModal =
 			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
 			focusSetting?: string;
+			/** Open this tab of focusAgentId's Harness page. */
+			harnessTab?: "import";
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -238,7 +240,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; harnessTab?: "import"; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -485,6 +487,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.focusSetting ? { focusSetting: options.focusSetting } : {}),
+			...(options?.harnessTab && options.focusAgentId ? { harnessTab: options.harnessTab } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo
