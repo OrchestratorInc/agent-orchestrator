@@ -3911,15 +3911,73 @@ func TestPRObservation_DedupSurvivesManagerRestart(t *testing.T) {
 		t.Fatalf("post-restart manager re-nudged on identical observation, got %d msgs: %v", len(second.msgs), second.msgs)
 	}
 
-	// And a genuinely new signature (different log tail) still fires — proving
-	// the persisted state is per-signature, not a blanket "this PR was nudged".
+	// And a genuinely new run (new commit) still fires — proving the persisted
+	// state is per-signature, not a blanket "this PR was nudged".
 	o2 := o
-	o2.Checks = []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, LogTail: "different boom"}}
+	o2.Checks = []ports.PRCheckObservation{{Name: "build", CommitHash: "c2", Status: domain.PRCheckFailed, LogTail: "different boom"}}
 	if err := m2.ApplyPRObservation(ctx, "mer-1", o2); err != nil {
 		t.Fatalf("third ApplyPRObservation: %v", err)
 	}
 	if len(second.msgs) != 1 {
 		t.Fatalf("new signature should send, got %d msgs", len(second.msgs))
+	}
+}
+
+// TestPRObservation_CINudgeDedupByIdentity pins the at-most-once behavior for
+// CI events: the same red run re-polled with a grown log tail or a reordered
+// check list is the same event and must not re-emit; a new failing check
+// notifies once.
+func TestPRObservation_CINudgeDedupByIdentity(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	o := ports.PRObservation{
+		Fetched: true,
+		URL:     "https://github.com/o/r/pull/1",
+		CI:      domain.CIFailing,
+		Checks:  []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, URL: "https://ci.example/run/39725960619", LogTail: "streaming boom"}},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatalf("first ApplyPRObservation: %v", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("first red run should notify once, got %d", len(msg.msgs))
+	}
+
+	// Log-tail churn on the same run: same identity, no re-emission.
+	o2 := o
+	o2.Checks = []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, URL: "https://ci.example/run/39725960619", LogTail: "more streaming boom"}}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o2); err != nil {
+		t.Fatalf("second ApplyPRObservation: %v", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("log-tail churn re-emitted the run: %d msgs", len(msg.msgs))
+	}
+
+	// A second failing run is a new identity and notifies once.
+	second := o
+	second.Checks = []ports.PRCheckObservation{
+		{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, URL: "https://ci.example/run/39725960619", LogTail: "boom"},
+		{Name: "test", CommitHash: "c1", Status: domain.PRCheckFailed, URL: "https://ci.example/run/39736628066", LogTail: "boom"},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", second); err != nil {
+		t.Fatalf("third ApplyPRObservation: %v", err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("new failing run should notify once, got %d", len(msg.msgs))
+	}
+
+	// Re-poll of both runs with churned tails and reversed order: silent.
+	reordered := second
+	reordered.Checks = []ports.PRCheckObservation{second.Checks[1], second.Checks[0]}
+	reordered.Checks[0].LogTail = "changed"
+	reordered.Checks[1].LogTail = "also changed"
+	if err := m.ApplyPRObservation(ctx, "mer-1", reordered); err != nil {
+		t.Fatalf("fourth ApplyPRObservation: %v", err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("reordered identical runs re-emitted: %d msgs", len(msg.msgs))
 	}
 }
 

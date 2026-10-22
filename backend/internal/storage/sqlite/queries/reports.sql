@@ -78,6 +78,12 @@ WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
 RETURNING *;
 
+-- name: MarkReportBatchEmitted :execrows
+UPDATE reports
+SET emitted_at = sqlc.arg(emitted_at)
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token);
+
 -- name: GetReportInterrupt :one
 SELECT last_interrupted_at FROM report_worker_interrupts WHERE session_id = ?;
 

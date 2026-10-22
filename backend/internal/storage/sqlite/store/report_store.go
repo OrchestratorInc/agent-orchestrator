@@ -191,6 +191,24 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 	return len(rows), nil
 }
 
+// MarkReportBatchEmitted stamps the claimed batch holding token with the
+// moment its content became visible to the client. The stamp fences like the
+// ack path and is refreshed on each re-emission past the emit TTL.
+func (s *Store) MarkReportBatchEmitted(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) (int, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkReportBatchEmitted(ctx, gen.MarkReportBatchEmittedParams{
+		ProjectID: string(projectID), ClaimToken: token, EmittedAt: nullTime(at),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark report batch emitted: %w", err)
+	}
+	return int(n), nil
+}
+
 // AcquireReportInterrupt durably enforces the per-worker interruption window.
 func (s *Store) AcquireReportInterrupt(ctx context.Context, sessionID domain.SessionID, at time.Time, window time.Duration) (bool, time.Time, error) {
 	if sessionID == "" || at.IsZero() || window <= 0 {
@@ -318,7 +336,8 @@ func reportFromGen(r gen.Report) domain.ReportRecord {
 		DeliveryState: domain.ReportDeliveryState(r.DeliveryState), AvailableAt: r.AvailableAt,
 		SettlementDeadline: timeFromNull(r.SettlementDeadline), RepeatCount: r.RepeatCount,
 		ClaimToken: r.ClaimToken, ClaimedAt: timeFromNull(r.ClaimedAt), DeliveryAttempts: r.DeliveryAttempts,
-		AcknowledgedAt: timeFromNull(r.AcknowledgedAt), LastError: r.LastError,
+		AcknowledgedAt: timeFromNull(r.AcknowledgedAt), EmittedAt: timeFromNull(r.EmittedAt),
+		LastError:       r.LastError,
 		DeliveryBatchID: r.DeliveryBatchID,
 	}
 }

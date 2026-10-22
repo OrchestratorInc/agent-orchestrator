@@ -605,6 +605,7 @@ type Report struct {
 	AcknowledgedAt     sql.NullTime
 	LastError          string
 	DeliveryBatchID    string
+	EmittedAt          sql.NullTime
 }
 
 type ReportOutput struct {

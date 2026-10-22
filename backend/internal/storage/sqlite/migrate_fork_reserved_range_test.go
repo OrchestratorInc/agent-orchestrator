@@ -54,6 +54,7 @@ var forkLocalMigrations = []string{
 	"gateway_entries",
 	"app_settings_process_inventory",
 	"preview_poll_sessions",
+	"report_emitted_at",
 	"review_run_current_head_lookup",
 	"orphan_workers_notification",
 	"app_settings_scm_proxy_url",

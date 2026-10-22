@@ -132,8 +132,11 @@ type ReportRecord struct {
 	ClaimedAt          time.Time
 	DeliveryAttempts   int64
 	AcknowledgedAt     time.Time
-	LastError          string
-	DeliveryBatchID    string
+	// EmittedAt is the durable at-most-once marker: the last moment the
+	// owning batch's content became visible on the recipient's channel.
+	EmittedAt       time.Time
+	LastError       string
+	DeliveryBatchID string
 }
 
 // ErrInvalidReport reports an invalid report or delivery transition input.

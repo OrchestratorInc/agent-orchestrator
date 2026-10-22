@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -317,6 +318,135 @@ func TestCoordinatorExpiredBatchWithoutOrchestratorStaysClaimable(t *testing.T) 
 	}
 }
 
+func TestCoordinatorSuppressesRepeatEmissionWithinEmitTTL(t *testing.T) {
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("dup", "worker", now, now, "context"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("prompt submission was not observed")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	// First attempt: the pane write already showed the batch before semantic
+	// acceptance failed, so the coordinator releases and schedules a retry.
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("first attempt should surface the submit error")
+	}
+	if len(delivery.submissions) != 1 {
+		t.Fatalf("submissions = %d, want 1", len(delivery.submissions))
+	}
+	// A retry minutes later, still unacked: the visible channel stays silent
+	// and the batch waits out the emit TTL instead of re-emitting.
+	now = now.Add(2 * time.Minute)
+	delivery.submitErr = nil
+	delay, err := c.RunDue(context.Background())
+	if err != nil || delay <= 0 {
+		t.Fatalf("silent retry delay = %v, err = %v", delay, err)
+	}
+	if len(delivery.submissions) != 1 {
+		t.Fatalf("submissions = %d, want 1: repeated attempt re-emitted the batch", len(delivery.submissions))
+	}
+	for _, rec := range store.reports {
+		if rec.DeliveryState != domain.ReportPending || !rec.AvailableAt.After(now) {
+			t.Fatalf("record = %+v, want pending deferred past the emit TTL", rec)
+		}
+	}
+}
+
+func TestCoordinatorReemitsOnceAfterEmitTTL(t *testing.T) {
+	now := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("noshow", "worker", now, now, "context"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("prompt submission was not observed")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("first attempt should surface the submit error")
+	}
+	// After the no-show TTL expires exactly one re-emission is allowed.
+	now = now.Add(20 * time.Minute)
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("re-emission should surface the submit error again")
+	}
+	if len(delivery.submissions) != 2 {
+		t.Fatalf("submissions = %d, want 2 after the emit TTL expired", len(delivery.submissions))
+	}
+	// The marker was refreshed by the re-emission: a retry inside the new
+	// window stays silent instead of emitting on every attempt.
+	now = now.Add(time.Minute)
+	delivery.submitErr = nil
+	if delay, err := c.RunDue(context.Background()); err != nil || delay <= 0 {
+		t.Fatalf("post-re-emission delay = %v, err = %v", delay, err)
+	}
+	if len(delivery.submissions) != 2 {
+		t.Fatalf("submissions = %d, want 2: refreshed marker did not suppress the repeat", len(delivery.submissions))
+	}
+}
+
+func TestCoordinatorFencedAckRequeueDoesNotReemit(t *testing.T) {
+	now := time.Date(2026, 10, 22, 11, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("fenced", "worker", now, now, "context"))
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 {
+		t.Fatalf("submissions = %d, want 1", len(delivery.submissions))
+	}
+	// #104 fencing loses the ack and a daemon restart requeues the claimed
+	// batch; the re-claim must not show the same content a second time.
+	store.fenceAcks = true
+	store.requeue()
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 {
+		t.Fatalf("submissions = %d, want 1: requeued batch was re-emitted", len(delivery.submissions))
+	}
+}
+
+func TestEmitVisibleAtMostOncePerTTL(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("piggy", "worker", now, now.Add(time.Hour), "context"))
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: &coordinatorDelivery{}, Now: func() time.Time { return now }, NewToken: func() string { return "tok" }})
+	ctx := context.Background()
+	batch, err := c.PreparePiggyback(ctx, "orch")
+	if err != nil || len(batch.Reports) != 1 {
+		t.Fatalf("prepare = %#v, err = %v", batch, err)
+	}
+	if visible, err := c.EmitVisible(ctx, batch); err != nil || !visible {
+		t.Fatalf("first emit visible = %v, err = %v", visible, err)
+	}
+	if store.reports[0].EmittedAt != now {
+		t.Fatalf("emitted marker = %v, want %v", store.reports[0].EmittedAt, now)
+	}
+	// A re-claim of the same batch inside the window must ride along silently.
+	if err := c.ReleasePiggyback(ctx, batch, errors.New("turn refused")); err != nil && !strings.Contains(err.Error(), "turn refused") {
+		t.Fatal(err)
+	}
+	batch, err = c.PreparePiggyback(ctx, "orch")
+	if err != nil || len(batch.Reports) != 1 {
+		t.Fatalf("re-prepare = %#v, err = %v", batch, err)
+	}
+	if visible, err := c.EmitVisible(ctx, batch); err != nil || visible {
+		t.Fatalf("repeat emit visible = %v, err = %v", visible, err)
+	}
+	if visible, err := c.EmitVisible(ctx, batch); err != nil || visible {
+		t.Fatalf("suppressed batch re-marked visible = %v, err = %v", visible, err)
+	}
+	// Past the TTL one re-emission is allowed and refreshes the marker.
+	now = now.Add(20 * time.Minute)
+	if visible, err := c.EmitVisible(ctx, batch); err != nil || !visible {
+		t.Fatalf("post-TTL emit visible = %v, err = %v", visible, err)
+	}
+	if got := store.reports[0].EmittedAt; !got.Equal(now) {
+		t.Fatalf("emitted marker = %v, want refreshed to %v", got, now)
+	}
+}
+
 type coordinatorStore struct {
 	mu         sync.Mutex
 	now        time.Time
@@ -324,6 +454,7 @@ type coordinatorStore struct {
 	sessions   []domain.SessionRecord
 	interrupts map[domain.SessionID]time.Time
 	acked      int
+	fenceAcks  bool
 }
 
 func newCoordinatorStore(now time.Time) *coordinatorStore {
@@ -407,6 +538,9 @@ func (s *coordinatorStore) requeue() {
 func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.fenceAcks {
+		return 0, nil
+	}
 	count := 0
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
@@ -443,6 +577,19 @@ func (s *coordinatorStore) DeferReportBatch(ctx context.Context, project domain.
 	}
 	return count, nil
 }
+func (s *coordinatorStore) MarkReportBatchEmitted(_ context.Context, project domain.ProjectID, token string, at time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for i := range s.reports {
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
+			s.reports[i].EmittedAt = at
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (s *coordinatorStore) AcquireReportInterrupt(_ context.Context, worker domain.SessionID, at time.Time, window time.Duration) (bool, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -473,11 +620,10 @@ type coordinatorDelivery struct {
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
-	if d.submitErr != nil {
-		return d.submitErr
-	}
+	// A failed submit still showed its content on the visible channel (the
+	// pane write precedes the acceptance wait), so it counts as an emission.
 	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
-	return nil
+	return d.submitErr
 }
 func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.SessionID) error {
 	d.interrupts = append(d.interrupts, target)

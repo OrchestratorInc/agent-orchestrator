@@ -1286,7 +1286,15 @@ func (s *Service) Send(
 		if err != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("prepare worker reports: %w", err)
 		}
-		msg.Text = reports.AppendToUserMessage(msg.Text)
+		visible, err := s.reports.EmitVisible(ctx, reports)
+		if err != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("gate worker reports: %w", err)
+		}
+		// At-most-once on the visible channel: a batch shown within the emit
+		// TTL rides along silently; its acceptance ack still settles it.
+		if visible {
+			msg.Text = reports.AppendToUserMessage(msg.Text)
+		}
 	}
 	var turn domain.ConversationTurn
 	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil {

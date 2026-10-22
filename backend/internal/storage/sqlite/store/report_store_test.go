@@ -114,6 +114,42 @@ func TestReportStoreClaimAcknowledgeAndTokenFence(t *testing.T) {
 	}
 }
 
+func TestReportStoreMarksBatchEmittedWithTokenFence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := domain.ReportRecord{ID: "rpt_emit", SessionID: sess.ID, ProjectID: sess.ProjectID, State: domain.ReportNeedsInput, Note: "need", CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1}
+	if _, err = s.CreateReport(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "emit-token", now)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claimed=%+v err=%v", claimed, err)
+	}
+	if n, err := s.MarkReportBatchEmitted(ctx, sess.ProjectID, "wrong", now.Add(time.Second)); err != nil || n != 0 {
+		t.Fatalf("wrong token marked %d rows, err=%v", n, err)
+	}
+	if n, err := s.MarkReportBatchEmitted(ctx, sess.ProjectID, "emit-token", now.Add(time.Second)); err != nil || n != 1 {
+		t.Fatalf("marked=%d err=%v", n, err)
+	}
+	got, ok, err := s.GetReport(ctx, rec.ID)
+	if err != nil || !ok || !got.EmittedAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("got=%+v ok=%v err=%v", got, ok, err)
+	}
+	// A re-emission past the emit TTL refreshes the marker under the same token.
+	if n, err := s.MarkReportBatchEmitted(ctx, sess.ProjectID, "emit-token", now.Add(2*time.Second)); err != nil || n != 1 {
+		t.Fatalf("re-marked=%d err=%v", n, err)
+	}
+	if got, _, err = s.GetReport(ctx, rec.ID); err != nil || !got.EmittedAt.Equal(now.Add(2*time.Second)) {
+		t.Fatalf("refreshed=%+v err=%v", got, err)
+	}
+}
+
 func TestReportStoreRequeuesInterruptedClaimOnRestartAndFencesOldToken(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

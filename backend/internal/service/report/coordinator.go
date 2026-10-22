@@ -25,6 +25,11 @@ const ReportInterruptWindow = 3 * time.Minute
 // active orchestrator, instead of retrying it every tick forever.
 const ReportOrchestratorBackoff = time.Minute
 
+// ReportEmitTTL bounds the at-most-once window on the visible channel: a batch
+// shown once stays silent until this TTL expires, then one re-emission (which
+// refreshes the marker) is allowed so a true no-show is not lost forever.
+const ReportEmitTTL = 15 * time.Minute
+
 // ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
 
@@ -37,6 +42,7 @@ type DeliveryStore interface {
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	DeferReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
+	MarkReportBatchEmitted(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	AcquireReportInterrupt(context.Context, domain.SessionID, time.Time, time.Duration) (bool, time.Time, error)
 }
 
@@ -53,6 +59,7 @@ type Coordinator struct {
 	now        func() time.Time
 	newToken   func() string
 	retryDelay time.Duration
+	emitTTL    time.Duration
 	wake       chan struct{}
 	mu         sync.Mutex
 	// Telemetry for the issue #101 replay cycle: claims that re-deliver a batch
@@ -67,6 +74,7 @@ type CoordinatorDeps struct {
 	Now        func() time.Time
 	NewToken   func() string
 	RetryDelay time.Duration
+	EmitTTL    time.Duration
 }
 
 // NewCoordinator constructs an idle report delivery coordinator.
@@ -80,7 +88,24 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.RetryDelay <= 0 {
 		d.RetryDelay = 5 * time.Second
 	}
-	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1)}
+	if d.EmitTTL <= 0 {
+		d.EmitTTL = ReportEmitTTL
+	}
+	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, emitTTL: d.EmitTTL, wake: make(chan struct{}, 1)}
+}
+
+// EmitVisible gates the batch's single visible emission inside the at-most-once
+// window: a batch already shown within the emit TTL stays silent, and the
+// marker is stamped before the emission attempt so every later failure keeps
+// the promise. Piggyback callers append context only when this returns true.
+func (c *Coordinator) EmitVisible(ctx context.Context, batch PreparedBatch) (bool, error) {
+	if at := batch.emittedAt(); !at.IsZero() && c.now().UTC().Sub(at) < c.emitTTL {
+		return false, nil
+	}
+	if _, err := c.store.MarkReportBatchEmitted(ctx, batch.ProjectID, batch.Token, c.now().UTC()); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Wake asks the coordinator to inspect durable scheduling state.
@@ -204,6 +229,17 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, nextInterrupt, "repeated stuck report coalesced inside interrupt window")
 			return deferErr
 		}
+	}
+	visible, emitErr := c.EmitVisible(ctx, batch)
+	if emitErr != nil {
+		return c.release(ctx, batch, emitErr)
+	}
+	if !visible {
+		// At-most-once on the visible channel: the batch was already shown
+		// inside the emit window, so retry silently and allow one re-emission
+		// once it expires. Ack fencing and its counters stay untouched.
+		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, batch.emittedAt().Add(c.emitTTL), "report batch already emitted; repeat suppressed until emit TTL")
+		return deferErr
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
 		return c.release(ctx, batch, err)
@@ -397,6 +433,17 @@ func reportSessionLink(r domain.ReportRecord) string {
 	label := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]", "\n", " ").Replace(reportDisplayNameOrID(r))
 	href := "ao://sessions/" + url.PathEscape(string(r.ProjectID)) + "/" + url.PathEscape(string(r.SessionID))
 	return "[" + label + "](" + href + ")"
+}
+
+// emittedAt is the durable visible-emission marker shared by the batch rows.
+func (b PreparedBatch) emittedAt() time.Time {
+	var latest time.Time
+	for _, report := range b.Reports {
+		if report.EmittedAt.After(latest) {
+			latest = report.EmittedAt
+		}
+	}
+	return latest
 }
 
 func (b PreparedBatch) hasState(state domain.ReportState) bool {

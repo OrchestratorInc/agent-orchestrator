@@ -840,11 +840,17 @@ func failedPRChecks(checks []ports.PRCheckObservation) []ports.PRCheckObservatio
 	return failed
 }
 
+// ciFailureSignature identifies a delivered CI event by check identity —
+// name, commit, and URL (which carries the run/job id) — never by streaming
+// log bytes. Re-polling the same red run with a grown log tail or a reordered
+// check list is the same event and must not re-emit the nudge; a new failing
+// check changes the identity set and still notifies once.
 func ciFailureSignature(checks []ports.PRCheckObservation) string {
 	parts := make([]string, 0, len(checks))
 	for _, ch := range checks {
-		parts = append(parts, strings.Join([]string{ch.Name, ch.CommitHash, string(ch.Status), ch.URL, ch.LogTail}, "\x00"))
+		parts = append(parts, strings.Join([]string{ch.Name, ch.CommitHash, ch.URL}, "\x00"))
 	}
+	sort.Strings(parts)
 	return strings.Join(parts, "\x01")
 }
 
