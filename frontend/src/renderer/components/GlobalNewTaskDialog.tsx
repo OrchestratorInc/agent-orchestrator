@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useUiStore } from "../stores/ui-store";
 import { NewTaskDialog } from "./NewTaskDialog";
@@ -16,9 +16,13 @@ export function GlobalNewTaskDialog() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const newTaskRequest = useUiStore((state) => state.newTaskRequest);
+	const [dialogKey, setDialogKey] = useState(0);
 	const [open, setOpen] = useState(false);
 	const [projectId, setProjectId] = useState<string | undefined>(undefined);
 	const [hostId, setHostId] = useState<string | undefined>(undefined);
+	const [prefill, setPrefill] = useState<{ initialPrompt?: string; displayName?: string }>({});
+	const onContentChange = useCallback((hasContent: boolean) => useUiStore.setState({ newTaskDialogHasContent: hasContent }), []);
+	useEffect(() => () => useUiStore.setState({ newTaskDialogHasContent: false }), []);
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 
 	useEffect(() => {
@@ -27,9 +31,11 @@ export function GlobalNewTaskDialog() {
 		// Consume requests that arrive while this dialog is already open. In
 		// particular, do not retarget a populated form to another project, and do
 		// not replay the ignored request when the user later closes the dialog.
-		if (open) return;
+		if (open && (!newTaskRequest.initialPrompt || useUiStore.getState().newTaskDialogHasContent)) return;
+		setDialogKey(newTaskRequest.nonce);
 		setProjectId(newTaskRequest.projectId);
 		setHostId(newTaskRequest.hostId);
+		setPrefill({ initialPrompt: newTaskRequest.initialPrompt, displayName: newTaskRequest.displayName });
 		setOpen(true);
 	}, [newTaskRequest, open]);
 
@@ -41,12 +47,15 @@ export function GlobalNewTaskDialog() {
 
 	return (
 		<NewTaskDialog
+			key={dialogKey}
+			{...prefill}
 			open={open}
 			projectId={projectId}
 			hostId={hostId}
 			onProjectChange={setProjectId}
 			onCreated={(sessionId) => void handleCreated(sessionId)}
-			onOpenChange={setOpen}
+			onContentChange={onContentChange}
+			onOpenChange={(value) => { setOpen(value); if (!value) onContentChange(false); }}
 		/>
 	);
 }

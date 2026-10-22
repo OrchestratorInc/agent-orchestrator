@@ -509,22 +509,11 @@ func Load() (Config, error) {
 		}
 	}
 
-	runFile, err := resolveRunFilePath()
+	stateDir, dataDir, runFile, err := ResolvePaths()
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.RunFilePath = runFile
-
-	dataDir, err := resolveDataDir()
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.DataDir = dataDir
-	if raw, ok := os.LookupEnv("AO_DATA_DIR"); ok && raw != "" {
-		cfg.StateDir = dataDir
-	} else {
-		cfg.StateDir = filepath.Dir(dataDir)
-	}
+	cfg.StateDir, cfg.DataDir, cfg.RunFilePath = stateDir, dataDir, runFile
 
 	return cfg, nil
 }
@@ -731,4 +720,21 @@ func absOverride(name, p string) (string, error) {
 		return "", fmt.Errorf("resolve %s %q: %w", name, p, err)
 	}
 	return abs, nil
+}
+
+// ResolvePaths resolves state paths without parsing unrelated daemon settings.
+func ResolvePaths() (stateDir, dataDir, runFile string, err error) {
+	dataDir, err = resolveDataDir()
+	if err != nil {
+		return
+	}
+	runFile, err = resolveRunFilePath()
+	if err != nil {
+		return
+	}
+	stateDir = filepath.Dir(dataDir)
+	if os.Getenv("AO_DATA_DIR") != "" {
+		stateDir = dataDir
+	}
+	return
 }

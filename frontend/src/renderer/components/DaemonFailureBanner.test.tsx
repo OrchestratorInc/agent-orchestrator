@@ -1,8 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
+import { captureRendererEvent } from "../lib/telemetry";
 import { appI18n } from "../i18n";
 import { DaemonFailureBanner } from "./DaemonFailureBanner";
+
+vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 
 describe("DaemonFailureBanner", () => {
 	afterEach(async () => {
@@ -119,5 +122,27 @@ describe("DaemonFailureBanner", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Restart daemon" }));
 
 		expect(await screen.findByText("Daemon did not stop")).toBeInTheDocument();
+	});
+});
+
+describe("Report a problem telemetry", () => {
+	beforeEach(() => vi.mocked(captureRendererEvent).mockClear());
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([true, false])("reports the terminal launch outcome when ok is %s", async (ok) => {
+		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue(ok ? { ok: true } : { ok: false, error: "report.terminalFailed" });
+		render(<DaemonFailureBanner status={{ state: "error", code: "not_ready" }} />);
+		fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+		expect(launch).toHaveBeenCalledWith();
+		await waitFor(() => expect(captureRendererEvent).toHaveBeenCalledExactlyOnceWith("ao.renderer.support_submitted", { destination: "terminal", outcome: ok ? "succeeded" : "failed" }));
+		if (!ok) expect(screen.getByText("Could not open a terminal. Try again.")).toBeInTheDocument();
+	});
+
+	it("reports a failed terminal launch when IPC rejects", async () => {
+		vi.spyOn(aoBridge.triage, "launch").mockRejectedValue(new Error("IPC unavailable"));
+		render(<DaemonFailureBanner status={{ state: "error", code: "not_ready" }} />);
+		fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+		expect(await screen.findByText("Could not start the report. Try again.")).toBeInTheDocument();
+		expect(captureRendererEvent).toHaveBeenCalledExactlyOnceWith("ao.renderer.support_submitted", { destination: "terminal", outcome: "failed" });
 	});
 });

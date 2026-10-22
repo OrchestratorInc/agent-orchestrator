@@ -37,7 +37,7 @@ func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
 				ReadSecret: func(io.Reader) ([]byte, error) {
 					return []byte(tt.secret), nil
 				},
-				RunInteractiveCommand: func(_ context.Context, name string, args []string, stdin io.Reader, _, _ io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, stdin io.Reader, _, _ io.Writer) error {
 					gotName = name
 					gotArgs = append([]string(nil), args...)
 					if stdin != nil {
@@ -87,7 +87,7 @@ func TestCodexLoginUsesExplicitResolvedExecutable(t *testing.T) {
 		LookPath: func(string) (string, error) {
 			return "", errors.New("not on PATH")
 		},
-		RunInteractiveCommand: func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
+		RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, _ io.Reader, _, _ io.Writer) error {
 			gotName = name
 			gotArgs = append([]string(nil), args...)
 			return nil
@@ -142,7 +142,7 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 			deps: Deps{
 				In:       strings.NewReader("1\n"),
 				LookPath: func(string) (string, error) { return "/codex", nil },
-				RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+				RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
 					return errors.New("exit status 1")
 				},
 			},

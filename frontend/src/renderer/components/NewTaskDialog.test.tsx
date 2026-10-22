@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
+import { useUiStore } from "../stores/ui-store";
 import { NewTaskDialog } from "./NewTaskDialog";
 
 const { deleteMock, getMock, postMock, ensureAgentReadinessMock } = vi.hoisted(() => ({
@@ -108,6 +109,7 @@ async function waitForAgentCatalog() {
 }
 
 beforeEach(() => {
+	useUiStore.setState({ settingsModal: null });
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
 	ensureAgentReadinessMock.mockReset();
 	deleteMock.mockReset().mockResolvedValue({ data: undefined, error: undefined });
@@ -517,4 +519,18 @@ describe("NewTaskDialog", () => {
 
 		expect(await screen.findByText(`${message} (${code})`)).toBeInTheDocument();
 	});
+});
+
+it("keeps the typed prompt and content signal while Settings hides the real dialog", async () => {
+ const onContentChange = vi.fn();
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+ render(<QueryClientProvider client={client}><NewTaskDialog open projectId="proj-1" onCreated={vi.fn()} onOpenChange={vi.fn()} onContentChange={onContentChange} /></QueryClientProvider>);
+ const prompt = await screen.findByLabelText("Task");
+ fireEvent.change(prompt, { target: { value: "keep my observation" } });
+ expect(onContentChange).toHaveBeenLastCalledWith(true);
+ act(() => useUiStore.setState({ settingsModal: { scope: "global", section: "help" } }));
+ await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+ expect(onContentChange).toHaveBeenLastCalledWith(true);
+ act(() => useUiStore.getState().closeSettings());
+ expect(await screen.findByLabelText("Task")).toHaveValue("keep my observation");
 });

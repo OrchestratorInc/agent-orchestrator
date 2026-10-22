@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
@@ -69,9 +71,10 @@ type Deps struct {
 	StartProcess          func(processStartConfig) error
 	ProcessAlive          func(pid int) bool
 	LookPath              func(file string) (string, error)
+	ResolveAgentBinary    func(context.Context, string) (string, error)
 	CommandOutput         func(ctx context.Context, name string, args ...string) ([]byte, error)
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
-	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
+	RunInteractiveCommand func(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
@@ -102,6 +105,13 @@ func DefaultDeps() Deps {
 		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
 		Now:                   time.Now,
 		Sleep:                 time.Sleep,
+
+		ResolveAgentBinary: func(ctx context.Context, name string) (string, error) {
+			if name == "claude" {
+				return claudecode.ResolveClaudeBinary(ctx)
+			}
+			return codex.ResolveCodexBinary(ctx)
+		},
 	}
 }
 
@@ -139,6 +149,9 @@ func (d Deps) withDefaults() Deps {
 		d.ProcessAlive = def.ProcessAlive
 	}
 	if d.LookPath == nil {
+		if d.ResolveAgentBinary == nil {
+			d.ResolveAgentBinary = def.ResolveAgentBinary
+		}
 		d.LookPath = def.LookPath
 	}
 	if d.CommandOutput == nil {
@@ -203,6 +216,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newStatusCommand(ctx))
 	root.AddCommand(newRemoteHostCommand(ctx))
 	root.AddCommand(newDoctorCommand(ctx))
+	root.AddCommand(newTriageCommand(ctx))
 	root.AddCommand(newAgentCommand(ctx))
 	root.AddCommand(newSpawnCommand(ctx))
 	root.AddCommand(newSendCommand(ctx))
@@ -248,7 +262,7 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao triage", "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true

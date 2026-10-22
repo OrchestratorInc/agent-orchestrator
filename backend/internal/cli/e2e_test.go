@@ -33,6 +33,9 @@ import (
 var aoBin string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("AO_CLI_BATCH_HELPER") == "1" {
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "ao-e2e-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: mktemp:", err)

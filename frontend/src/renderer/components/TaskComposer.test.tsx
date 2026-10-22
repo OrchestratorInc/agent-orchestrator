@@ -559,6 +559,22 @@ describe("TaskComposer", () => {
 		expect(h.get.mock.calls.some(([path]) => path === "/api/v1/projects/{id}")).toBe(false);
 	});
 
+	it("starts a prefilled report through the existing standalone creation path", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.post.mockResolvedValueOnce({ data: { session: { id: "report-session" } } });
+		const onCreated = vi.fn();
+		const onContentChange = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" initialPrompt="Read /home/me/.ao/triage/context.md" displayName="Report a problem" onCreated={onCreated} onContentChange={onContentChange} /></Wrap>);
+		expect(onContentChange).toHaveBeenLastCalledWith(true);
+		expect(task()).toHaveValue("Read /home/me/.ao/triage/context.md");
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("report-session"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({
+			prompt: "Read /home/me/.ao/triage/context.md", displayName: "Report a problem", harness: "codex",
+		}) }));
+	});
+
 	it("sends the visible default model when starting a standalone worker", async () => {
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
 		h.get.mockImplementation(async (path: string) => {

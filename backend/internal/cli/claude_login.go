@@ -53,7 +53,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, or 3")}
 	}
-	if err := c.deps.RunInteractiveCommand(ctx, claude, args, in, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, claude, "", args, in, out, stderr); err != nil {
 		return fmt.Errorf("claude login failed: %w", err)
 	}
 	_, err = fmt.Fprintf(out, "\n%s\n", style.success("Claude Code sign-in complete."))

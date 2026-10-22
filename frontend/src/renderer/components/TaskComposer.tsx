@@ -116,20 +116,28 @@ function hasErrorDetail(details: components["schemas"]["APIError"]["details"] | 
 }
 
 export type TaskComposerProps = {
+	initialPrompt?: string;
+	displayName?: string;
 	projectId?: string;
 	hostId?: string;
 	onCreated: (sessionId: string) => void;
 	onDirtyChange?: (dirty: boolean) => void;
+	onContentChange?: (hasContent: boolean) => void;
+	onPromptChange?: (prompt: string) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
 	createLabel?: string;
 };
 
 export function TaskComposer({
+	initialPrompt,
+	displayName,
 	projectId,
 	hostId,
 	onCreated,
 	onDirtyChange,
+	onContentChange,
+	onPromptChange,
 	onSubmittingChange,
 	autoFocusTitle,
 	createLabel,
@@ -144,7 +152,7 @@ export function TaskComposer({
 	const queryClient = useQueryClient();
 	const remoteConnections = useConnectedHosts();
 	const hostConnected = !hostId || remoteConnections.includes(hostId);
-	const [isPromptDirty, setIsPromptDirty] = useState(false);
+	const [isPromptDirty, setIsPromptDirty] = useState(!!initialPrompt?.trim());
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
@@ -271,7 +279,7 @@ export function TaskComposer({
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			void captureRendererEvent("ao.renderer.task_create_requested", { scope: "standalone" });
-			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
+			const sessionDisplayName = displayName ?? (input.brief.trim().slice(0, 100) || input.agent || "Standalone agent");
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
@@ -279,7 +287,7 @@ export function TaskComposer({
 					kind: "worker",
 					harness: input.agent as components["schemas"]["SpawnSessionRequest"]["harness"],
 					prompt: input.brief,
-					displayName,
+					displayName: sessionDisplayName,
 					model: input.model,
 					...(input.effort ? { effort: input.effort } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
@@ -294,7 +302,7 @@ export function TaskComposer({
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
 			return data.session.id;
 		},
-		[hostId, t],
+		[hostId, t, displayName],
 	);
 
 	const createTask = useCallback(
@@ -650,7 +658,10 @@ export function TaskComposer({
 	const handlePromptChange = useCallback((value: string) => {
 		const nextDirty = value.trim() !== "";
 		setIsPromptDirty((wasDirty) => (wasDirty === nextDirty ? wasDirty : nextDirty));
-	}, []);
+		onPromptChange?.(value);
+	}, [onPromptChange]);
+	const hasContent = isPromptDirty || attachments.length > 0;
+	useEffect(() => { onContentChange?.(hasContent); }, [hasContent, onContentChange]);
 	useEffect(() => {
 		onDirtyChange?.(isDirty);
 	}, [isDirty, onDirtyChange]);
@@ -743,6 +754,7 @@ export function TaskComposer({
 
 	return (
 		<TaskComposerView
+			initialPrompt={initialPrompt}
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
 			onPromptChange={handlePromptChange}

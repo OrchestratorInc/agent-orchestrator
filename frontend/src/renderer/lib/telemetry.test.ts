@@ -148,9 +148,9 @@ describe("telemetry sanitizers", () => {
 		})).toEqual({});
 	});
 
-	it("reports a support submission with only the destination and outcome", async () => {
+	it.each(["agent", "terminal", "github", "discord", "email"])("reports a support submission to %s with only the destination and outcome", async (destination) => {
 		const safe = await sanitizeRendererProperties("ao.renderer.support_submitted", {
-			destination: "discord",
+			destination,
 			outcome: "succeeded",
 			// Everything the dialog collects is passed in deliberately: the user's own
 			// bug report, and the diagnostics block that carries machine state.
@@ -158,7 +158,7 @@ describe("telemetry sanitizers", () => {
 			details: "stack trace from /Users/me/work/secret-client",
 			diagnostics: { platform: "darwin", appVersion: "0.11.2" },
 		});
-		expect(safe).toEqual({ destination: "discord", outcome: "succeeded" });
+		expect(safe).toEqual({ destination, outcome: "succeeded" });
 	});
 
 	it("drops an unrecognised support destination rather than forwarding it", async () => {
