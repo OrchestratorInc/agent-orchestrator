@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
+	workspaceQueryKeyForHost: () => ["workspaces"],
 	useWorkspaceQuery: () => ({ data: mocks.workspaces, isLoading: false, error: null }),
 }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
@@ -106,7 +108,19 @@ function renderView() {
 }
 
 describe("ArtifactsView", () => {
+	afterEach(() => vi.unstubAllGlobals());
 	beforeEach(() => {
+		window.localStorage.removeItem("ao.artifacts.view");
+		useArtifactsViewStore.setState({ view: "gallery", collapsedSections: [], pinnedArtifactIds: [] });
+		vi.stubGlobal("IntersectionObserver", class {
+			constructor(private callback: (entries: { isIntersecting: boolean }[]) => void) {}
+			observe() { this.callback([{ isIntersecting: true }]); }
+			disconnect() {}
+		});
+		vi.stubGlobal("ResizeObserver", class {
+			observe() {}
+			disconnect() {}
+		});
 		mocks.workspaces = withArtifacts;
 		mocks.agents = [codexReady];
 		mocks.hideShellTopbar = true;
@@ -118,19 +132,21 @@ describe("ArtifactsView", () => {
 		useUiStore.getState().clearGlobalToast();
 	});
 
-	it("lists artifacts grouped by project, newest group first, with counts", () => {
+	it("shows recent artifacts above project galleries with session and project details", () => {
 		renderView();
 
 		expect(screen.getByRole("heading", { level: 1, name: "Artifacts" })).not.toHaveClass("sr-only");
-		const sections = screen.getAllByRole("region");
-		expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["agent-orchestrator", "Scratchpad"]);
-		const project = within(sections[0]);
-		expect(project.getByRole("heading", { level: 2 })).toHaveTextContent("agent-orchestrator2");
-		expect(project.getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+		expect(screen.queryByRole("region", { name: "Pinned" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["Recent", "agent-orchestrator", "Scratchpad"]);
+		const gallery = within(screen.getByRole("region", { name: "Recent" }));
+		expect(gallery.getAllByRole("listitem").map((row) => row.textContent)).toEqual([
 			expect.stringContaining("artifacts-user-flow.html"),
 			expect.stringContaining("pricing.md"),
+			expect.stringContaining("caching-options.md"),
 		]);
-		expect(project.getByText("Design the Artifacts entry point")).toBeInTheDocument();
+		expect(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByText("Design the Artifacts entry point")).toBeInTheDocument();
+		expect(gallery.getByText("agent-orchestrator · Design the Artifacts entry point")).toBeInTheDocument();
+		expect(gallery.getByText("Scratchpad · Compare caching options")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /team/i })).not.toBeInTheDocument();
 	});
 
@@ -139,9 +155,9 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "pricing");
-		expect(screen.getByText("pricing.md")).toBeInTheDocument();
+		expect(screen.getAllByText("pricing.md")).toHaveLength(2);
 		expect(screen.queryByText("artifacts-user-flow.html")).not.toBeInTheDocument();
-		expect(screen.queryByRole("region", { name: "Scratchpad" })).not.toBeInTheDocument();
+		expect(screen.queryByText("Scratchpad")).not.toBeInTheDocument();
 
 		await user.clear(screen.getByRole("searchbox", { name: "Search artifacts" }));
 		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "no such thing");
@@ -149,24 +165,101 @@ describe("ArtifactsView", () => {
 
 		await user.click(screen.getByRole("button", { name: "Clear filters" }));
 		expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toHaveValue("");
-		expect(screen.getAllByRole("region")).toHaveLength(2);
+		expect(screen.getAllByRole("listitem")).toHaveLength(6);
 	});
 
-	it("filters to one project's group", async () => {
+	it("searches project names and the translated Scratchpad label", async () => {
 		const user = userEvent.setup();
 		renderView();
 
-		await user.click(screen.getByRole("button", { name: "Filter by project" }));
-		await user.click(await screen.findByRole("menuitem", { name: /Scratchpad/ }));
+		const search = screen.getByRole("searchbox", { name: "Search artifacts" });
+		await user.type(search, "agent-orchestrator");
+		expect(screen.getByRole("region", { name: "agent-orchestrator" })).toBeInTheDocument();
+		expect(screen.queryByRole("region", { name: "Scratchpad" })).not.toBeInTheDocument();
+		await user.clear(search);
+		await user.type(search, "Scratchpad");
 
-		expect(screen.getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["Scratchpad"]);
+		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+		expect(screen.getAllByText("caching-options.md")).toHaveLength(2);
+		expect(screen.queryByText("pricing.md")).not.toBeInTheDocument();
+	});
+
+	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
+		const user = userEvent.setup();
+		const { unmount } = renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		await user.click(project.getByRole("button", { name: "Pin artifact: pricing.md" }));
+		expect(within(screen.getByRole("region", { name: "Pinned" })).getByText("pricing.md")).toBeInTheDocument();
+		expect(project.getByRole("button", { name: "Unpin artifact: pricing.md" })).toHaveAttribute("aria-pressed", "true");
+		expect(JSON.parse(window.localStorage.getItem("ao.artifacts.view") ?? "{}").pinnedArtifactIds).toHaveLength(1);
+		unmount();
+		renderView();
+		await user.click(within(screen.getByRole("region", { name: "Pinned" })).getByRole("button", { name: "Unpin artifact: pricing.md" }));
+		expect(screen.queryByRole("region", { name: "Pinned" })).not.toBeInTheDocument();
+		expect(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByText("pricing.md")).toBeInTheDocument();
+	});
+
+	it("remembers list view and collapsed project sections when returning", async () => {
+		const user = userEvent.setup();
+		const { unmount } = renderView();
+		await user.click(screen.getByRole("button", { name: "List view" }));
+		await user.click(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: "agent-orchestrator" }));
+		unmount();
+		renderView();
+		expect(screen.getByRole("button", { name: "List view" })).toHaveAttribute("aria-pressed", "true");
+		expect(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: "agent-orchestrator" })).toHaveAttribute("aria-expanded", "false");
+		expect(JSON.parse(window.localStorage.getItem("ao.artifacts.view") ?? "{}")).toMatchObject({ view: "list", collapsedSections: ["project:ao"] });
+	});
+
+	it("shows a placeholder for text artifacts without a usable URL", () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		expect(within(project.getByRole("button", { name: /^pricing\.md/ })).getByTitle("No preview available")).toBeInTheDocument();
+	});
+
+	it("frames an HTML preview only on its dedicated inline origin", () => {
+		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
+		const { container, unmount } = renderView();
+		expect(container.querySelector("iframe")).toHaveAttribute("src", html.artifactFiles![0].inlineUrl);
+		expect(container.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+		expect(container.querySelector("iframe")).toHaveAttribute("tabindex", "-1");
+		unmount();
+		html.artifactFiles![0].inlineUrl = "http://127.0.0.1:3002/api/v1/settings";
+		const unsafe = renderView();
+		expect(unsafe.container.querySelector("iframe")).toBeNull();
+		expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument();
+	});
+
+	it("shows image previews and falls back to a placeholder when the image fails", () => {
+		const image = session("ao-image", "Cover image", [{ name: "cover.png", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
+		image.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/cover.png";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [image] }];
+		renderView();
+		const project = within(screen.getByRole("region", { name: "AO" }));
+		const preview = project.getByRole("button", { name: /^cover\.png/ }).querySelector("img")!;
+		expect(preview).toHaveAttribute("src", image.artifactFiles![0].rawUrl);
+		fireEvent.error(preview);
+		expect(project.getByRole("button", { name: /^cover\.png/ }).querySelector("img")).toBeNull();
+		expect(project.getByTitle("No preview available")).toBeInTheDocument();
+	});
+
+	it("renders Markdown content without interactive links or embedded HTML", async () => {
+		const markdown = session("ao-doc", "Research notes", [{ name: "research.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		markdown.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/research.md";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [markdown] }];
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("# Research findings\n\n[Read more](https://example.com)\n\n<script>alert(1)</script>")));
+		const { container } = renderView();
+		await waitFor(() => expect(container.textContent).toContain("Research findings"));
+		expect(container.querySelector("a, script")).toBeNull();
 	});
 
 	it("opens the source session and hands it the clicked artifact", async () => {
 		const user = userEvent.setup();
 		renderView();
 
-		await user.click(screen.getByRole("button", { name: /artifacts-user-flow\.html/ }));
+		await user.click(within(screen.getByRole("region", { name: "agent-orchestrator" })).getByRole("button", { name: /^artifacts-user-flow\.html/ }));
 
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "ao", sessionId: "ao-1" } });
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
@@ -180,7 +273,7 @@ describe("ArtifactsView", () => {
 		const user = userEvent.setup();
 		renderView();
 
-		await user.click(screen.getByRole("button", { name: /caching-options\.md/ }));
+		await user.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
 
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-1" } });
 	});
