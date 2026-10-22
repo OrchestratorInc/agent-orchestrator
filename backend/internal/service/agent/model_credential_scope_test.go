@@ -1,9 +1,6 @@
 package agent
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
 func TestCredentialTypeFromScope(t *testing.T) {
 	for _, tc := range []struct {
@@ -44,7 +41,7 @@ func TestModelDiscoveryRequestSetsCredentialType(t *testing.T) {
 	// A credential scope carries the credential type onto the request for the
 	// adapter to honor.
 	s := &Service{}
-	request, err := s.modelDiscoveryRequest(context.Background(), "opencode", "@cred:openai_api_key", "/bin/opencode")
+	request, err := s.modelDiscoveryRequest("opencode", "@cred:openai_api_key", "/bin/opencode")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -297,7 +297,7 @@ describe("cached model loading", () => {
 	});
 
 	it.each([
-		{ agent: "codex", project: "another-project", host: undefined },
+		{ agent: "codex", project: "@cred:openai_api_key", host: undefined },
 		{ agent: "codex", project: "", host: "box-a" },
 		{ agent: "claude-code", project: "", host: undefined },
 	])("does not borrow a catalog from a different scope: %j", async ({ agent, project, host }) => {

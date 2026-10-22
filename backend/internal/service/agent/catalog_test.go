@@ -1593,7 +1593,7 @@ func TestGlobalModelDiscoveryUsesAODirectoryWithoutProject(t *testing.T) {
 	discoveryDir := filepath.Join(t.TempDir(), "model-discovery")
 	svc := NewWithDeps(Deps{ModelDiscoveryDir: discoveryDir})
 
-	request, err := svc.modelDiscoveryRequest(context.Background(), "deepseek-harness", "", "/usr/local/bin/dsh")
+	request, err := svc.modelDiscoveryRequest("deepseek-harness", "", "/usr/local/bin/dsh")
 	if err != nil {
 		t.Fatal(err)
 	}

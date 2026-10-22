@@ -447,7 +447,7 @@ func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projec
 		}
 		binary = resolved
 	}
-	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
+	request, err := s.modelDiscoveryRequest(agentID, projectID, binary)
 	if err != nil {
 		return false
 	}
@@ -487,7 +487,7 @@ func activeModelCatalogScope(scope string) bool {
 	return modelCatalogScope(scope) == scope
 }
 
-func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
+func (s *Service) modelDiscoveryRequest(agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
 	// Credential-scoped discovery reflects a cloud session's pushed credential,
 	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
@@ -661,7 +661,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			binary = resolved
 		}
 	}
-	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
+	request, err := s.modelDiscoveryRequest(agentID, projectID, binary)
 	if err != nil {
 		return ports.AgentModelCatalog{}, err
 	}
