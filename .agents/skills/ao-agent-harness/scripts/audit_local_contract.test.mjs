@@ -47,3 +47,9 @@ test("restored ready cues match an empty composer only", async () => {
     }
   }
 });
+
+test("screen text keeps cursor-forward spacing and drops window-title sequences (live Codex restore frame)", async () => {
+  const { screenText } = await import("./audit_ao.mjs");
+  assert.equal(screenText("Conversation\x1b[1Cinterrupted"), "Conversation interrupted");
+  assert.equal(screenText("› Ask Codex to do anything\x1b]0;⠹ Create AO audit proof file | audit-proof\x07\n"), "› Ask Codex to do anything\n");
+});

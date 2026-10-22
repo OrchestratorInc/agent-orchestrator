@@ -740,6 +740,18 @@ async function cleanupCancelledAuditDraft({ baseURL, sessionId, dataDir, workspa
   }
 }
 
+// Terminal output as a ready-cue pattern sees it. TUIs such as Codex space
+// words with cursor-forward moves (CSI n C); plain ANSI stripping would glue
+// "Conversation interrupted" into one word, so those become real spaces first.
+// Window-title and other OSC sequences ("ESC ] 0 ; title BEL") are not on
+// screen and are dropped whole, so a spinner title cannot follow the composer.
+export function screenText(output) {
+  return stripVTControlCharacters(String(output)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[(\d*)C/g, (_, count) => " ".repeat(Math.min(Number(count || 1), 200))))
+    .replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+}
+
 async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, spec, timeoutMs = 30_000, cleanup = null }) {
   const phase = cleanup ? "post-cancel" : "restored";
   const target = restoredState?.response?.session;
@@ -813,7 +825,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
         socket.send(JSON.stringify({ ch: "terminal", type: "open", id: terminalId, role: "secondary" }));
         openSent = true;
       }
-      const visible = stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536);
+      const visible = screenText(output).slice(-65536);
       const emptyComposer = (!cleanup || (visible.trim().length > 0 && (!evidence.inputSent || evidence.outputFramesAfterInput > 0)))
         && patterns.every(pattern => pattern.test(visible));
       if (cleanup && evidence.opened && evidence.outputFrames && !evidence.inputSent
@@ -831,7 +843,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
         if (failure) throw new Error(failure);
         if (performance.now() >= deadline) throw new Error("post-cancel cleanup deadline elapsed before input");
         // Recheck the composer after the awaited metadata and API reads, before any input.
-        const latestVisible = stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536);
+        const latestVisible = screenText(output).slice(-65536);
         if (patterns.every(pattern => pattern.test(latestVisible)) || !cleanup.draftPattern.exec(latestVisible)?.[0].includes(cleanup.cancellationPrompt)) continue;
         evidence.draftCueSha256 = hash(latestVisible);
         evidence.draftMatchedAt = now();
@@ -860,7 +872,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
         }
         if (failure) throw new Error(failure);
         if (cleanup && performance.now() >= deadline) throw new Error("post-cancel cleanup deadline elapsed before confirmation");
-        if (cleanup && !patterns.every(pattern => pattern.test(stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536)))) continue;
+        if (cleanup && !patterns.every(pattern => pattern.test(screenText(output).slice(-65536)))) continue;
         evidence.matchedPatterns = patterns.length;
         evidence.matchedAt = now();
         evidence.visibleOutputSha256 = hash(visible);
@@ -878,7 +890,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
     evidence.error = redactOutput(error.message);
     // The last screen text (ANSI-stripped, redacted) is what a contract's
     // ready-cue pattern has to match; keep it so the pattern can be fixed.
-    evidence.screenTail = redactOutput(stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n")).slice(-1500);
+    evidence.screenTail = redactOutput(screenText(output)).slice(-1500);
     return { passed: false, reason: evidence.error, evidence };
   } finally {
     closing = true;
