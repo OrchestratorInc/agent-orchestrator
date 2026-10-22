@@ -82,6 +82,7 @@ export function toBoardSessionPresentation(
 		statusPresentation: provisioningStatus ?? failedStartStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
+		summary: session.summary,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};
