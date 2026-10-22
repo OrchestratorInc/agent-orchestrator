@@ -254,6 +254,11 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 	if err := flusher.Flush(); err != nil {
 		return
 	}
+	live := s.openLiveFeed(r, orgID, sessionID)
+	defer live.close()
+	if !live.write(w) {
+		return
+	}
 
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
@@ -326,6 +331,16 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !read() {
+				return
+			}
+		case <-live.wake():
+			if !live.write(w) {
+				return
+			}
+		case <-live.refresh():
+			// Also catches a viewer whose replica died without leaving.
+			live.touch()
+			if !live.write(w) {
 				return
 			}
 		case now := <-ticker.C:

@@ -2938,6 +2938,24 @@ export interface components {
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
         };
+        SessionViewer: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+            /**
+             * @description member is an organization member; editor and viewer are share-grant roles.
+             * @enum {string}
+             */
+            role: "member" | "editor" | "viewer";
+        };
+        /** @description Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log. */
+        SessionLiveState: {
+            /** @constant */
+            type: "session.live";
+            /** @description Everyone with the session open right now, once each, in the order they joined. */
+            viewers: components["schemas"]["SessionViewer"][];
+        };
         UserMessageEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -4599,6 +4617,12 @@ export interface operations {
                 after?: components["parameters"]["After"];
                 /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
                 types?: components["parameters"]["EventTypes"];
+                /** @description 1 opts this stream in to the session's live state. The caller is
+                 *     listed as a viewer while the stream stays open, and the stream also
+                 *     carries session.live frames (see SessionLiveState) whenever that
+                 *     state changes. Omitted, the stream carries only ClientEvents.
+                 *      */
+                live?: "1";
             };
             header?: never;
             path: {
@@ -4610,7 +4634,10 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Replay followed by live client-visible events. Each SSE data field
-             *     contains a ClientEvent; the SSE id is its sequence.
+             *     contains a ClientEvent; the SSE id is its sequence. With live=1 the
+             *     stream also carries `event: session.live` frames whose data is a
+             *     SessionLiveState. Those frames have no SSE id and never move the
+             *     replay cursor; each one replaces the previous state.
              *      */
             200: {
                 headers: {

@@ -1,6 +1,18 @@
 package httpapi
 
-import "time"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+)
 
 var (
 	// sessionEventFallbackPoll is how often a session event stream re-reads
@@ -42,4 +54,149 @@ func (s *Server) subscribeSessionEvents(sessionID string) (<-chan struct{}, time
 		return wake, sessionEventFallbackPoll, cancel
 	}
 	return wake, sessionEventPoll, cancel
+}
+
+// sessionLiveStore is the store surface behind a stream's live state. A store
+// without it serves streams with no live frames.
+type sessionLiveStore interface {
+	JoinSessionViewers(ctx context.Context, principal domain.Principal, orgID, sessionID, connectionID string) error
+	RefreshSessionViewer(ctx context.Context, orgID, connectionID string) error
+	LeaveSessionViewers(ctx context.Context, orgID, connectionID string) error
+	SessionLiveState(ctx context.Context, principal domain.Principal, orgID, sessionID string) (domain.SessionLiveState, error)
+}
+
+// HandleSessionLiveNotify is the Postgres NOTIFY callback for
+// ao_session_live; the payload is the session whose live state changed.
+func (s *Server) HandleSessionLiveNotify(sessionID string) {
+	if s.sessionLiveWaiters != nil {
+		s.sessionLiveWaiters.notify(sessionID)
+	}
+}
+
+type sessionViewerResponse struct {
+	UserID string `json:"userId"`
+	Name   string `json:"name"`
+	Role   string `json:"role"`
+}
+
+type sessionLiveResponse struct {
+	Type    string                  `json:"type"`
+	Viewers []sessionViewerResponse `json:"viewers"`
+}
+
+func toSessionLiveResponse(state domain.SessionLiveState) sessionLiveResponse {
+	response := sessionLiveResponse{Type: "session.live", Viewers: make([]sessionViewerResponse, 0, len(state.Viewers))}
+	for _, viewer := range state.Viewers {
+		response.Viewers = append(response.Viewers, sessionViewerResponse{UserID: viewer.UserID, Name: viewer.Name, Role: viewer.Role})
+	}
+	return response
+}
+
+// liveFeed is one event stream's opt-in live state: it counts the stream's
+// owner as present while it is open and writes a session.live frame whenever
+// that state changes. Live frames carry no id, so they never move the
+// stream's replay cursor. A nil feed is a stream that did not opt in.
+type liveFeed struct {
+	server       *Server
+	store        sessionLiveStore
+	request      *http.Request
+	orgID        string
+	sessionID    string
+	connectionID string
+	joined       bool
+	wakeCh       <-chan struct{}
+	unsubscribe  func()
+	refresher    *time.Ticker
+	last         []byte
+}
+
+// openLiveFeed starts the feed when the request asked for one (live=1) and
+// the store supports it. Failing to record presence only leaves this viewer
+// out of the list; the stream itself still serves events.
+func (s *Server) openLiveFeed(r *http.Request, orgID, sessionID string) *liveFeed {
+	if r.URL.Query().Get("live") != "1" {
+		return nil
+	}
+	store, ok := s.store.(sessionLiveStore)
+	if !ok {
+		return nil
+	}
+	feed := &liveFeed{
+		server: s, store: store, request: r, orgID: orgID, sessionID: sessionID,
+		connectionID: uuid.NewString(), unsubscribe: func() {},
+		refresher: time.NewTicker(postgres.SessionViewerRefresh),
+	}
+	if s.sessionLiveWaiters != nil {
+		feed.wakeCh, feed.unsubscribe = s.sessionLiveWaiters.subscribe(sessionID)
+	}
+	if err := store.JoinSessionViewers(r.Context(), principalFrom(r), orgID, sessionID, feed.connectionID); err != nil {
+		s.logger.Warn("join session viewers", "error", err, "request_id", requestID(r))
+	} else {
+		feed.joined = true
+	}
+	return feed
+}
+
+func (f *liveFeed) wake() <-chan struct{} {
+	if f == nil {
+		return nil
+	}
+	return f.wakeCh
+}
+
+func (f *liveFeed) refresh() <-chan time.Time {
+	if f == nil {
+		return nil
+	}
+	return f.refresher.C
+}
+
+// touch keeps this stream counted as present.
+func (f *liveFeed) touch() {
+	if f == nil || !f.joined {
+		return
+	}
+	if err := f.store.RefreshSessionViewer(f.request.Context(), f.orgID, f.connectionID); err != nil {
+		f.server.logger.Warn("refresh session viewer", "error", err, "request_id", requestID(f.request))
+	}
+}
+
+// write sends the current live state when it differs from the last frame
+// sent. It returns false only when the client connection failed.
+func (f *liveFeed) write(w http.ResponseWriter) bool {
+	if f == nil {
+		return true
+	}
+	state, err := f.store.SessionLiveState(f.request.Context(), principalFrom(f.request), f.orgID, f.sessionID)
+	if err != nil {
+		f.server.logger.Warn("read session live state", "error", err, "request_id", requestID(f.request))
+		return true
+	}
+	payload, err := json.Marshal(toSessionLiveResponse(state))
+	if err != nil || bytes.Equal(payload, f.last) {
+		return true
+	}
+	if _, err := fmt.Fprintf(w, "event: session.live\ndata: %s\n\n", payload); err != nil {
+		return false
+	}
+	f.last = payload
+	return http.NewResponseController(w).Flush() == nil
+}
+
+// close stops the feed and removes this stream from the viewer list. The
+// request context is already done, so the removal gets its own deadline.
+func (f *liveFeed) close() {
+	if f == nil {
+		return
+	}
+	f.refresher.Stop()
+	f.unsubscribe()
+	if !f.joined {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.store.LeaveSessionViewers(ctx, f.orgID, f.connectionID); err != nil {
+		f.server.logger.Warn("leave session viewers", "error", err, "request_id", requestID(f.request))
+	}
 }
