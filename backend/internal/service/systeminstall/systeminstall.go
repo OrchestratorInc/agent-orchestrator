@@ -934,13 +934,16 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 			Error: plan.Reason, Notice: plan.Notice, StartedAt: &now, FinishedAt: &now, UpdatedAt: &now,
 		}, nil
 	}
-	if !requiresHarnessGate && s.harnessChanging(target) {
-		// Another run holds this harness (e.g. OpenCode 2's Homebrew install
-		// has OpenCode 1 unlinked); installing it now would race that run.
-		return Job{}, ErrInstallActive
-	}
 	s.mu.Lock()
 	if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
+		s.mu.Unlock()
+		return Job{}, ErrInstallActive
+	}
+	if !requiresHarnessGate && s.changing[target] {
+		// Another run holds this harness (e.g. OpenCode 2's Homebrew install
+		// has OpenCode 1 unlinked); installing it now would race that run.
+		// Checked under the same lock that registers this job, and that
+		// holdOtherHarnesses reserves under, so exactly one of them proceeds.
 		s.mu.Unlock()
 		return Job{}, ErrInstallActive
 	}

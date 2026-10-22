@@ -94,6 +94,48 @@ func TestOpenCodeV1LaunchWaitsWhileV2HomebrewInstallHasItUnlinked(t *testing.T) 
 	}
 }
 
+// An OpenCode 1 install request and an OpenCode 2 run reserving OpenCode 1
+// that arrive together: exactly one is admitted, never both, whichever wins.
+func TestOpenCodeV1InstallAndV2HoldAreMutuallyExclusive(t *testing.T) {
+	for iteration := 0; iteration < 50; iteration++ {
+		s := newTestService("darwin", "brew")
+		unblock := make(chan struct{})
+		s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error {
+			<-unblock // keep an admitted OpenCode 1 install active
+			return nil
+		})
+		start := make(chan struct{})
+		var installErr, holdErr error
+		var release func()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, installErr = s.StartAgent(context.Background(), TargetOpencode, "")
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			release, holdErr = s.holdOtherHarnesses([]Target{TargetOpencode})
+		}()
+		close(start)
+		wg.Wait()
+
+		if (installErr == nil) == (holdErr == nil) {
+			t.Fatalf("iteration %d: install err=%v, hold err=%v; want exactly one admitted", iteration, installErr, holdErr)
+		}
+		for _, err := range []error{installErr, holdErr} {
+			if err != nil && !errors.Is(err, ErrInstallActive) {
+				t.Fatalf("iteration %d: refusal = %v, want ErrInstallActive", iteration, err)
+			}
+		}
+		release()
+		close(unblock)
+		s.workers.Wait()
+	}
+}
+
 // A cleanup step that runs until its deadline must not leave the next one,
 // which restores OpenCode 1, without time.
 func TestPlanCleanupStepsHaveIndependentDeadlines(t *testing.T) {
