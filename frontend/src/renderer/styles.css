@@ -1932,14 +1932,14 @@ textarea,
 }
 
 /* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
-   dots on a 4.5px pitch, 16px across and centred in the 20px slot, so every dot
+   dots on a 3.5px pitch, 13px across and centred in the 20px slot, so every dot
    lands on whole device pixels on a 2x display. The outer twelve share one beat,
    staggered inline. */
 .chat-lattice {
 	display: grid;
 	grid-template-columns: repeat(4, 2.5px);
 	grid-auto-rows: 2.5px;
-	gap: 2px;
+	gap: 1px;
 }
 
 .chat-lattice-dot {
