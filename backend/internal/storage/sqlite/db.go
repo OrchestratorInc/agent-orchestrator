@@ -2107,6 +2107,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		return fmt.Errorf("schema verification: inspect sessions harness constraint: %w", err)
 	}
 	needsNativeAssistant := !strings.Contains(schema, "'hermes'")
+	needsOpenJarvis := !strings.Contains(schema, "'openjarvis'")
 	needsMuse := !strings.Contains(schema, "'muse'")
 	needsKimchi := !strings.Contains(schema, "'kimchi'")
 	needsPrimeAgent := !strings.Contains(schema, "'prime-agent'")
@@ -2119,7 +2120,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	if !needsNativeAssistant && !needsOpenJarvis && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2133,6 +2134,13 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsOpenJarvis {
+		// Keep historical exact-match repairs independent of newer harnesses.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''openjarvis'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize OpenJarvis constraint: %w", err)
+		}
+		needsOpenJarvis = true
 	}
 	type replacement struct {
 		old string
@@ -2246,6 +2254,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsNativeAssistant {
 		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
 	}
+	if needsOpenJarvis {
+		repairs = append(repairs, replacement{"'fake'))", "'openjarvis', 'fake'))"})
+	}
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
@@ -2306,6 +2317,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'openjarvis'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing openjarvis")
 	}
 	return nil
 }

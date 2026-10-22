@@ -1,0 +1,13 @@
+---
+title: OpenJarvis
+---
+
+AO runs Stanford OpenJarvis **1.0.4** `jarvis chat --agent orchestrator`, using the native code-assistant preset and your configured provider. This package version is independent of the desktop release. Install the official Python package, run **Set up OpenJarvis** in Harness settings (native `jarvis quickstart`), set a cloud provider key such as `MINIMAX_API_KEY` or `DEEPSEEK_API_KEY` with a matching `[intelligence].default_model`, and refresh Harness settings. No local inference model download is required. The PyPI package ships no example presets, so `jarvis init --preset code-assistant` is unavailable; AO applies the code-assistant tools itself.
+
+AO appends its private instructions to `[system_prompt].prefix` in a private per-session config overlay. It preserves the native agent template, persona files, security settings and original config. It does not use `--system` or change native permissions. Only default permission mode is supported; native confirmation decisions are answered directly in the terminal.
+
+Initial tasks and user sends support **one plain UTF-8 line, at most 3000 bytes (native `You>` and `Confirm:` markers are reserved for programmatic input)**, with no surrounding whitespace, controls or slash command. Multiline tasks, attachments and automated coordination envelopes are refused. Every programmatic send requires the current rendered empty `You>` composer and unchanged owned runtime/generation. Active turns and confirmation prompts refuse sends. Concurrent programmatic writes are serialized. Human terminal input remains native and is not covered by this programmatic admission check.
+
+Native history exists only while the process runs. AO never fabricates a conversation ID or replays history: restore fails explicitly; start a new session after Kill. Chat mode, cross-interface handoff, reviewer mode and switching are unavailable. Native cancellation of running tools is not advertised; use AO Kill for termination. Activity reconciliation can lag the native composer by the normal 30-second interval.
+
+Models come from native `jarvis model list` and are passed as `--model`; that list can include models a provider has retired, which then fail with a native 404. Credentials are checked by listing models with the key for the default model's provider: a passed check reports connected, a rejected or missing key reports not connected, and an offline check stays configured.

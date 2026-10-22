@@ -41,6 +41,9 @@ const (
 type commandSpec struct {
 	args   []string
 	parser func([]byte) ([]ports.AgentModelInfo, error)
+	// env adds fixed variables to the listing command, for CLIs whose output
+	// depends on the terminal (OpenJarvis truncates names in narrow tables).
+	env map[string]string
 	// signIn is set for CLIs whose model-list command opens an interactive
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
@@ -135,6 +138,9 @@ var commandSpecs = map[string]commandSpec{
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
+	// `jarvis model list` prints a Rich table for every running engine; only
+	// the cloud engine's rows are launchable without a local model server.
+	"openjarvis": {args: []string{"model", "list"}, parser: parseOpenJarvisModels, env: map[string]string{"COLUMNS": "400", "NO_COLOR": "1"}},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -237,7 +243,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "openjarvis":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -473,6 +479,16 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
+	if len(spec.env) > 0 {
+		merged := make(map[string]string, len(env)+len(spec.env))
+		for k, v := range env {
+			merged[k] = v
+		}
+		for k, v := range spec.env {
+			merged[k] = v
+		}
+		env = merged
+	}
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
 	output, err := cmd.CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
@@ -1470,4 +1486,28 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// parseOpenJarvisModels reads the cloud engine's rows from `jarvis model list`.
+// Rows from local engines (Ollama, NIM, vLLM...) need a model server and are
+// left out.
+func parseOpenJarvisModels(output []byte) ([]ports.AgentModelInfo, error) {
+	text := ansiPattern.ReplaceAllString(string(output), "")
+	var models []ports.AgentModelInfo
+	seen := map[string]bool{}
+	for _, line := range strings.Split(text, "\n") {
+		cells := strings.Split(line, "│")
+		if len(cells) < 4 || strings.TrimSpace(cells[1]) != "cloud" {
+			continue
+		}
+		id := strings.TrimSpace(cells[2])
+		// OpenJarvis 1.0.4 still lists MiniMax M2.x, which MiniMax now rejects
+		// with "no longer available (2069)" even though /v1/models lists it.
+		if id == "" || strings.HasSuffix(id, "…") || seen[id] || strings.HasPrefix(strings.ToLower(id), "minimax-m2") {
+			continue
+		}
+		seen[id] = true
+		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
+	}
+	return models, nil
 }

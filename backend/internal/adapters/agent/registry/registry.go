@@ -40,6 +40,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openhands"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openjarvis"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
@@ -89,6 +90,7 @@ func Constructors() []adapters.Adapter {
 		fx.New(),
 		commandcode.New(),
 		hermes.New(),
+		openjarvis.New(),
 		unrealagent.New(),
 		mimocode.New(),
 		memcode.New(),

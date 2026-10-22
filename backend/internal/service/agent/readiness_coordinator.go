@@ -21,6 +21,10 @@ const (
 	defaultLaunchReadinessTTL   = 30 * time.Second
 	defaultInstallCheckTimeout  = 2 * time.Second
 	opencodeInstallCheckTimeout = 12 * time.Second
+	// openjarvisInstallCheckTimeout outlasts the adapter's 30s `jarvis
+	// --version` identity probe, which imports the whole Python dependency
+	// tree and takes 10s+ on a loaded host.
+	openjarvisInstallCheckTimeout = 35 * time.Second
 	// Hermes is a Python CLI: a warm --version identity probe takes about two
 	// seconds, and the first run after an install compiles its bytecode.
 	hermesInstallCheckTimeout = 60 * time.Second
@@ -546,6 +550,9 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 		case domain.HarnessHermes:
 			timeout = hermesInstallCheckTimeout
 		}
+	}
+	if timeout == defaultInstallCheckTimeout && item.Harness == domain.HarnessOpenJarvis {
+		timeout = openjarvisInstallCheckTimeout
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
