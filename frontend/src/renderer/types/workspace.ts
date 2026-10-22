@@ -423,6 +423,8 @@ export type { AttentionZone } from "../lib/session-presentation";
 export type WorkspaceSummary = {
 	id: string;
 	cloudOrgId?: string;
+	/** Set on a cloud project someone in another organization shared with this person. */
+	shared?: { role: "viewer" | "editor"; byName?: string };
 	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;

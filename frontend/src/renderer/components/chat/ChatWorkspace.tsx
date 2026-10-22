@@ -446,6 +446,14 @@ export interface ChatWorkspaceProps {
 	agentSwitch?: AgentSwitchProps;
 	/** A line above the chat box, such as a switch waiting for the next message. */
 	composerNotice?: ReactNode;
+	/**
+	 * Locks the chat box with this placeholder, as while someone else in a
+	 * shared session is writing to the agent. Decisions the current turn needs
+	 * stay available.
+	 */
+	composerLockedPlaceholder?: string;
+	/** Every edit of the chat box's draft text. */
+	onComposerInput?: (text: string) => void;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -707,6 +715,8 @@ function ChatWorkspaceContent({
 	models,
 	agentSwitch,
 	composerNotice,
+	composerLockedPlaceholder,
+	onComposerInput,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1889,6 +1899,7 @@ function ChatWorkspaceContent({
 										onCancelQueuedEdit={cancelQueuedEdit}
 										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
 										onDraftEmptyChange={setComposerEmpty}
+										onDraftInput={onComposerInput}
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
@@ -1918,9 +1929,11 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
-											arrivingInChat
+											composerLockedPlaceholder !== undefined
+												? composerLockedPlaceholder
+												: arrivingInChat
 												? arrivingPlaceholder
 												: orchestratorStarting
 												? setupPlaceholder

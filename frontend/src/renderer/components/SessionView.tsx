@@ -101,6 +101,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
+import { ShareSessionButton } from "./ShareSessionDialog";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useSideChatsAvailable } from "../lib/side-chats";
@@ -398,8 +399,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// The unscoped /sessions/:id route is local; Cloud sessions have project routes.
 	// Newly-created Cloud sessions can be routed before the list cache refreshes.
 	const cloudLookupEnabled = Boolean(cloudOrgId && projectId && !ambiguousRoute && (isCloudRoute || (!routedWorkspace && !listedSession)));
+	// A project shared from another organization is looked up in that one.
+	const routeCloudOrgId = routedWorkspace?.cloudOrgId ?? cloudOrgId;
 	const cloudRouteSession = useCloudSessionQuery(
-		cloudOrgId,
+		routeCloudOrgId,
 		sessionId,
 		cloudLookupEnabled,
 		!listedSession,
@@ -414,12 +417,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? workspaces.find((workspace) => workspace.kind === "cloud" && workspace.id === cloudRouteSession.data?.projectId)
 		: undefined;
 	const cloudSessionWorkspace = directCloudWorkspace ?? (isCloudRoute ? routedWorkspace : undefined);
-	const directCloudSession = cloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
+	const directCloudSession = routeCloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
 		projectId === cloudRouteSession.data.projectId
 		? toCloudWorkspaceSession(cloudRouteSession.data, {
 			id: cloudSessionWorkspace?.id ?? cloudRouteSession.data.projectId,
 			displayName: cloudSessionWorkspace?.name ?? "Cloud project",
-		}, cloudOrgId)
+		}, routeCloudOrgId)
 		: undefined;
 	const fallbackSession = !projectId || workspaceSessionQuery.data?.workspaceId === projectId
 		? workspaceSessionQuery.data : undefined;
@@ -1483,6 +1486,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			data-compact-session-chrome="false"
 		>
 			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
+			{/* Only the session's own organization can share it; a guest cannot re-share. */}
+			{session?.cloud && session.cloud.orgId === cloudOrgId && session.isTerminated !== true ? (
+				<ShareSessionButton orgId={session.cloud.orgId} projectId={session.workspaceId} sessionId={session.id} />
+			) : null}
 			<ShellTopbar embedded />
 		</div>
 	);

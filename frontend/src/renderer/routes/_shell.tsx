@@ -18,6 +18,7 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
+import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
@@ -141,6 +142,7 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 				{startingChat}
 			</div>
 			<SettingsPane />
+			<ShareLinkHost />
 		</>
 	);
 }
