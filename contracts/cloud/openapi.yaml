@@ -1076,6 +1076,116 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/acquire:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerAcquire
+      tags: [Sessions]
+      description: Take the composer lease when it is free and nobody is ahead in line, or renew it when already held. Viewers are refused with 403.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/renew:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerRenew
+      tags: [Sessions]
+      description: Extend a held grant. typing reports a keystroke since the last renewal; a holder who has not typed for 45 seconds loses the lease.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposerGrantInput"
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/release:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerRelease
+      tags: [Sessions]
+      description: Give up a held grant; the next person in line gets the lease. Releasing a grant no longer held does nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposerGrantInput"
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/queue:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerRequestTurn
+      tags: [Sessions]
+      description: Get in line for the composer lease. A free lease passes at once to the first person in line who has the session open.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: composerLeaveQueue
+      tags: [Sessions]
+      description: Leave the line for the composer lease.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/takeover:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerTakeOver
+      tags: [Sessions]
+      description: Take the composer lease from whoever holds it. Only the session's creator and the organization's owners and admins may; others get 403.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -4793,6 +4903,11 @@ components:
         approvalMode:
           type: string
           enum: [default, accept-edits, auto, bypass-permissions]
+        composerEpoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
     ChatApprovalDecisionInput:
       type: object
       additionalProperties: false
@@ -4848,6 +4963,11 @@ components:
           type: string
           minLength: 1
           maxLength: 65536
+        composerEpoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
     WorkerWorkspaceListPayload:
       type: object
       additionalProperties: false
@@ -6238,7 +6358,7 @@ components:
       type: object
       additionalProperties: false
       description: Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log.
-      required: [type, viewers]
+      required: [type, viewers, composer]
       properties:
         type:
           const: session.live
@@ -6247,6 +6367,69 @@ components:
           description: Everyone with the session open right now, once each, in the order they joined.
           items:
             $ref: "#/components/schemas/SessionViewer"
+        composer:
+          $ref: "#/components/schemas/ComposerLeaseState"
+    ComposerParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Display name. Never an email address.
+    ComposerLeaseState:
+      type: object
+      additionalProperties: false
+      description: The session's composer lease, its hard lock on talking to the agent. Only the holder may send or steer.
+      required: [holder, epoch, waitlist]
+      properties:
+        holder:
+          description: Who holds the lease, or null while it is free.
+          oneOf:
+            - $ref: "#/components/schemas/ComposerParticipant"
+            - type: "null"
+        epoch:
+          type: integer
+          format: int64
+          description: Increases with every grant. A holder presents it to send, steer, renew, or release.
+        waitlist:
+          type: array
+          description: Everyone waiting for the lease, first in line first.
+          items:
+            $ref: "#/components/schemas/ComposerParticipant"
+    ComposerLeaseAnswer:
+      type: object
+      additionalProperties: false
+      required: [composer, granted]
+      properties:
+        composer:
+          allOf:
+            - $ref: "#/components/schemas/ComposerLeaseState"
+            - type: object
+              required: [expiresInMs]
+              properties:
+                expiresInMs:
+                  type: integer
+                  format: int64
+                  description: How long the caller's grant has left; 0 unless granted.
+        granted:
+          type: boolean
+          description: Whether the caller holds the lease after the request.
+    ComposerGrantInput:
+      type: object
+      additionalProperties: false
+      required: [epoch]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+          minimum: 1
+        typing:
+          type: boolean
+          description: renew only. True when the holder typed since the last renewal.
     UserMessageEvent:
       type: object
       additionalProperties: false

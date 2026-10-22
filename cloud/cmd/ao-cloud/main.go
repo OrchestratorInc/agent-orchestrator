@@ -609,6 +609,7 @@ func run(logger *slog.Logger) error {
 	go notificationProcessor.Run(ctx)
 	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})
 	go feedbackDispatcher.Run(ctx)
+	go sweepComposerLeases(ctx, store, logger)
 	if cfg.TerminalRelayEnabled {
 		logger.Info("experimental terminal relay enabled",
 			"terminal_stream_enabled", cfg.TerminalStreamEnabled,
@@ -738,4 +739,22 @@ func posthogHost() string {
 		return host
 	}
 	return "https://us.i.posthog.com"
+}
+
+// sweepComposerLeases hands on shared-session composer leases whose grant
+// expired, so everyone sees the composer free, or passed to the next person
+// in line, within a couple of seconds of a holder going quiet.
+func sweepComposerLeases(ctx context.Context, store *postgres.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(postgres.ComposerSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := store.SweepComposerLeases(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("sweep composer leases", "error", err)
+			}
+		}
+	}
 }

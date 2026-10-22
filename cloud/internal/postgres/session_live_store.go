@@ -66,8 +66,8 @@ func (s *Store) LeaveSessionViewers(ctx context.Context, orgID, connectionID str
 }
 
 // SessionLiveState returns the session's live state as principal may see it:
-// one entry per person with a fresh live stream, ordered by when they first
-// joined.
+// one viewer per person with a fresh live stream, ordered by when they first
+// joined, and the composer lease.
 func (s *Store) SessionLiveState(
 	ctx context.Context,
 	principal domain.Principal,
@@ -76,7 +76,11 @@ func (s *Store) SessionLiveState(
 	state := domain.SessionLiveState{Viewers: []domain.SessionViewer{}}
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
 		viewers, err := listSessionViewersTx(ctx, tx, orgID, sessionID)
+		if err != nil {
+			return err
+		}
 		state.Viewers = viewers
+		state.Composer, err = composerStateTx(ctx, tx, orgID, sessionID)
 		return err
 	})
 	return state, err

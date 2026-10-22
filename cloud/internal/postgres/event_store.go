@@ -64,10 +64,39 @@ func (s *Store) SendMessage(
 	text string,
 	settings domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
+	return s.SendMessageWithLease(ctx, principal, orgID, sessionID, idempotencyKey, text, settings, 0)
+}
+
+// SendMessageWithLease sends a person's message under the session's composer
+// lease: composerEpoch is the grant the sender holds, or 0 for none. Without
+// the lease the message is refused with ErrComposerLocked unless the lease is
+// free and nobody is waiting for it. Sending releases the lease to the next
+// person in line.
+func (s *Store) SendMessageWithLease(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID string,
+	sessionID string,
+	idempotencyKey string,
+	text string,
+	settings domain.ChatTurnSettings,
+	composerEpoch int64,
+) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
 		if access.Role == "viewer" {
 			return ErrForbidden
+		}
+		// A retry of a message already sent returns that message; its send
+		// released the lease, so the retry must not need it again.
+		retry, err := commandExists(ctx, tx, orgID, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		if !retry {
+			if err := claimComposerForSendTx(ctx, tx, orgID, sessionID, principal.UserID, composerEpoch); err != nil {
+				return err
+			}
 		}
 		// A message wakes a paused session, which a billed session may do
 		// only within its plan: refuse it here so the sender sees why.
@@ -82,6 +111,16 @@ func (s *Store) SendMessage(
 		return err
 	})
 	return event, err
+}
+
+// commandExists reports whether idempotencyKey already names a command.
+func commandExists(ctx context.Context, tx pgx.Tx, orgID, idempotencyKey string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM ao_commands WHERE org_id = $1 AND idempotency_key = $2)`,
+		orgID, idempotencyKey,
+	).Scan(&exists)
+	return exists, err
 }
 
 func sendMessageTx(

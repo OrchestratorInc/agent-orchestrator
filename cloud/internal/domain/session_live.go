@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // SessionViewer is one person who has a session open right now.
 type SessionViewer struct {
 	UserID string
@@ -11,8 +13,29 @@ type SessionViewer struct {
 	Role string
 }
 
+// ComposerParticipant is a person named by the composer lease.
+type ComposerParticipant struct {
+	UserID string
+	Name   string
+}
+
+// ComposerLease is a shared session's hard lock on talking to its agent:
+// only the holder may send or steer.
+type ComposerLease struct {
+	// Holder is nil while nobody holds the lease.
+	Holder *ComposerParticipant
+	// Epoch increases with every grant. A send or renewal must present the
+	// epoch it was granted.
+	Epoch int64
+	// ExpiresIn is how long the holder's grant has left, zero when free.
+	ExpiresIn time.Duration
+	// Waitlist is everyone waiting for the lease, first in line first.
+	Waitlist []ComposerParticipant
+}
+
 // SessionLiveState is the ephemeral, non-durable state a shared session's
 // participants see change in real time. It is never part of the event log.
 type SessionLiveState struct {
-	Viewers []SessionViewer
+	Viewers  []SessionViewer
+	Composer ComposerLease
 }

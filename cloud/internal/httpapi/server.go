@@ -67,6 +67,9 @@ type Store interface {
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
+	// SendMessageWithLease sends a person's message under the session's
+	// composer lease, presenting the grant's epoch (0 for none).
+	SendMessageWithLease(ctx context.Context, principal domain.Principal, orgID, sessionID, idempotencyKey, text string, settings domain.ChatTurnSettings, composerEpoch int64) (domain.ClientEvent, error)
 	// ListClientEvents lists the session's client events after a sequence,
 	// only of the given types when any are given.
 	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
@@ -89,7 +92,7 @@ type Store interface {
 	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
 	ClaimWorkerTurn(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerTurn, bool, error)
 	RequestTurnCancellation(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID string) error
-	SteerTurn(context.Context, domain.Principal, string, string, string, string, string) (domain.ClientEvent, error)
+	SteerTurn(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID, idempotencyKey, text string, composerEpoch int64) (domain.ClientEvent, error)
 	CreateWorkerChatApproval(context.Context, string, string, string, int64, worker.ChatApproval) error
 	WorkerChatApprovalDecision(context.Context, string, string, string, int64, string, int, string) (string, error)
 	DecideChatApproval(context.Context, domain.Principal, string, string, string, string) error
@@ -667,6 +670,12 @@ func New(options Options) *Server {
 			router.Post("/sessions/wake", server.wakePausedSessions)
 			router.Post("/sessions/{sessionId}/resume", server.resumeSession)
 			router.Post("/sessions/{sessionId}/presence", server.touchSessionPresence)
+			router.Post("/sessions/{sessionId}/composer/acquire", server.acquireComposerLease)
+			router.Post("/sessions/{sessionId}/composer/renew", server.renewComposerLease)
+			router.Post("/sessions/{sessionId}/composer/release", server.releaseComposerLease)
+			router.Post("/sessions/{sessionId}/composer/queue", server.requestComposerTurn)
+			router.Delete("/sessions/{sessionId}/composer/queue", server.leaveComposerQueue)
+			router.Post("/sessions/{sessionId}/composer/takeover", server.takeOverComposerLease)
 			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
