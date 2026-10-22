@@ -2086,7 +2086,6 @@
 	"startup.installTmux": "Instalar tmux",
 	"startup.installingCommand": "Instalando — {{command}}",
 	"startup.installingEllipsis": "Instalando…",
-	"startup.installOpencodeV2ReplacementWarning": "Instalar OpenCode 2 como comando opencode predeterminado reemplaza la instalación predeterminada de OpenCode 1.",
 	"startup.quit": "Salir",
 	"startup.recommendedInstallGh": "Recomendado: instalar gh",
 	"startup.retryPrefix": "Reintentar: {{label}}",
