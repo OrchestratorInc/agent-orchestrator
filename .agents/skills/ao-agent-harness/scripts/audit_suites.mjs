@@ -763,7 +763,9 @@ const ROLE_FILE = "AO_ROLE.txt";
 const ROLE_PROMPT = [
   "Are you a worker or an orchestrator?",
   "Answer only from your AO system instructions, not from this message.",
-  `Write exactly one lowercase word, worker or orchestrator, into ${ROLE_FILE} in your current working directory (run pwd), not in the AO session artifacts folder, then stop.`,
+  // The artifacts folder is allowed for every role: orchestrator rules forbid
+  // writing non-PR files into the workspace, which the orchestrator obeyed.
+  `Save exactly one lowercase word, worker or orchestrator, as ${ROLE_FILE} in your AO session artifacts folder, then stop.`,
 ].join(" ");
 
 // Spawns one worker and one orchestrator and asks each which it is. A wrong
@@ -785,8 +787,8 @@ export async function auditRoles({ baseURL, agent, projectId, dataDir = "", mode
       await record(gate(`role_${kind}`, "FAIL", `AO did not create the ${kind === "worker" ? "standalone worker" : "orchestrator"} ${mode} session`, apiEvidence(spawn)));
       continue;
     }
-    // The answer is what matters for V1; AO's artifact guidance may route the
-    // file to <data>/artifacts/<session>/ instead of the worktree.
+    // The answer is what matters for V1: read it from the artifacts folder
+    // the prompt asks for, or from the worktree if the agent chose that.
     const artifactPath = dataDir ? join(resolve(expandHome(dataDir)), "artifacts", sessionId, ROLE_FILE) : "";
     const answer = await waitUntil(async () => {
       const file = await workspaceFile(baseURL, sessionId, ROLE_FILE, 30_000);
