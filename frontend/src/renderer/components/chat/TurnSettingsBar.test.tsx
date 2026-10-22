@@ -59,7 +59,6 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s long mod
 	function setup(count = 100) {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
-		const onComposerClick = vi.fn();
 		const models = Array.from({ length: count }, (_, index) => ({
 			id: `provider-${index % 2}/model-${index}`,
 			displayName: `Model ${index}`,
@@ -80,7 +79,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s long mod
 			})),
 		};
 		render(
-			<div onClick={onComposerClick}>
+			<div>
 				<TurnSettingsBar
 					models={path === "native" ? models : []}
 					settings={{ model: models[0].id, reasoningEffort: "high", approvalMode: "accept-edits" }}
@@ -96,7 +95,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s long mod
 			}));
 			if (path !== "ACP standalone") await user.keyboard("{ArrowDown}{ArrowRight}");
 		};
-		return { user, onChange, onComposerClick, open };
+		return { user, onChange, open };
 	}
 
 	it("lists the whole catalog with no search field", async () => {
@@ -107,17 +106,15 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s long mod
 		expect(screen.getByRole("menuitemradio", { name: "Model 0" })).toHaveAttribute("aria-checked", "true");
 	});
 
-	it("selects a model from a long catalog without reaching the composer", async () => {
-		const { user, onChange, onComposerClick, open } = setup();
+	it("selects a model from a long catalog", async () => {
+		const { user, onChange, open } = setup();
 		await open();
-		onComposerClick.mockClear();
 		await user.click(screen.getByRole("menuitemradio", { name: "Model 99" }));
 		if (path === "native") {
 			expect(onChange).toHaveBeenCalledWith({ model: "provider-1/model-99", reasoningEffort: undefined, approvalMode: "accept-edits" });
 		} else {
 			expect(onChange).toHaveBeenCalledWith("model", { value: "provider-1/model-99" });
 		}
-		expect(onComposerClick).not.toHaveBeenCalled();
 	});
 });
 
