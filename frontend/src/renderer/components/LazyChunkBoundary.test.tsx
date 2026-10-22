@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { lazy, Suspense } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LazyChunkBoundary } from "./LazyChunkBoundary";
+import { LazyChunkBoundary, LazyChunkErrorPanel } from "./LazyChunkBoundary";
 
 vi.mock("../lib/telemetry", () => ({ captureRendererException: vi.fn() }));
 
@@ -24,6 +24,20 @@ describe("LazyChunkBoundary", () => {
 		expect(await screen.findByRole("alert")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
 		expect(screen.getByText("sibling stays")).toBeInTheDocument();
+	});
+
+	it("offers to retry the panel before a full reload when it can reset", () => {
+		const reset = vi.fn();
+		render(<LazyChunkErrorPanel reset={reset} />);
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(reset).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+	});
+
+	it("does not offer a retry that cannot recover", () => {
+		render(<LazyChunkErrorPanel />);
+		expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
 	});
 
 	it("renders its children when nothing fails", () => {

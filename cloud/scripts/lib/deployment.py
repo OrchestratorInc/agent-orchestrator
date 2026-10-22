@@ -108,7 +108,12 @@ OFFERING_ENV = (
     "AO_CLOUD_PAYWALLED_FEATURES",
     "AO_CLOUD_IDLE_PAUSE_THRESHOLD",
     "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD",
+    "AO_CLOUD_CODER_READABLE_NAMES",
+    "AO_CLOUD_CODER_WORKER_WORKING_FOLDER",
 )
+# Coder rollout flags: true or false, never anything the control plane would
+# quietly read as its default (docs/deployment.md, "Coder rollout flags").
+CODER_ROLLOUT_FLAGS = ("AO_CLOUD_CODER_READABLE_NAMES", "AO_CLOUD_CODER_WORKER_WORKING_FOLDER")
 ORG_BILLING_MODES = ("self_serve", "contract")
 PROVIDER_AUTO_PAUSE_ENV = "AO_CLOUD_NODEOPS_AUTO_PAUSE_MINUTES"
 # Freestyle's own idle pause is not reported as an idle stop, so the reconciler
@@ -362,6 +367,8 @@ def validate_offering(
     paywalled_features: list[str],
     idle_pause_threshold: str,
     freestyle_idle_pause_threshold: str,
+    coder_readable_names: str,
+    coder_worker_working_folder: str,
     staging_providers: list[str] | None = None,
 ) -> list[str]:
     """Validate a deployment's offering settings; return the served providers.
@@ -400,7 +407,17 @@ def validate_offering(
     _threshold_seconds(
         "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", freestyle_idle_pause_threshold
     )
+    _rollout_flag("AO_CLOUD_CODER_READABLE_NAMES", coder_readable_names)
+    _rollout_flag("AO_CLOUD_CODER_WORKER_WORKING_FOLDER", coder_worker_working_folder)
     return served
+
+
+def _rollout_flag(name: str, value: str) -> bool:
+    """A Coder rollout flag's value: exactly true or false."""
+    value = value.strip()
+    if value not in ("true", "false"):
+        raise ValueError(f"{name} must be true or false")
+    return value == "true"
 
 
 def stripe_price_ids(stripe: dict[str, Any]) -> dict[str, str]:
@@ -680,6 +697,9 @@ def _validate_offering_task(values: dict[str, str], providers: list[str]) -> Non
     for name in ("AO_CLOUD_IDLE_PAUSE_THRESHOLD", "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"):
         if name in values:
             _threshold_seconds(name, values[name])
+    for name in CODER_ROLLOUT_FLAGS:
+        if name in values:
+            _rollout_flag(name, values[name])
 
 
 def validate_task_artifacts(

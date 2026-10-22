@@ -52,6 +52,8 @@ type Manager interface {
 	// and per-project config, returning the updated read-model.
 	UpdateSettings(ctx context.Context, id domain.ProjectID, in UpdateSettingsInput) (Project, error)
 	SetPermissions(ctx context.Context, id domain.ProjectID, in SetPermissionsInput) (Project, error)
+	// ForgetPermissions clears the remembered policy, so new sessions use the agent's own default.
+	ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error)
 
 	// SetConfig replaces a project's per-project config, returning the updated
 	// read-model.
@@ -1090,6 +1092,18 @@ func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in Se
 	if in.SourceHarness == domain.HarnessCodex && permissions == domain.PermissionModeDefault {
 		permissions = domain.PermissionModeBypassPermissions
 	}
+	return m.storePermissions(ctx, id, permissions)
+}
+
+// ForgetPermissions clears the remembered approval policy. Existing sessions keep theirs.
+func (m *Service) ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error) {
+	if err := validateProjectID(id); err != nil {
+		return Project{}, err
+	}
+	return m.storePermissions(ctx, id, "")
+}
+
+func (m *Service) storePermissions(ctx context.Context, id domain.ProjectID, permissions domain.PermissionMode) (Project, error) {
 	row, ok, err := m.store.SetProjectPermissions(ctx, string(id), permissions)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_PERMISSIONS_UPDATE_FAILED", "Failed to update project permissions")

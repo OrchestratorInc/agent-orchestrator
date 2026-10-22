@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,12 @@ type lifecycleStore struct {
 	failures      []string
 	startupErrors []startupErrorRecord
 	repairs       int
+	// providerFailures are the ProviderFailureID values written, in order.
+	providerFailures []string
+	// retryNames are the taken names UseSandboxCoderWorkspaceRetryName was
+	// called with; retryNameErr is what it returns.
+	retryNames   []string
+	retryNameErr error
 }
 
 type startupErrorRecord struct{ code, message string }
@@ -71,6 +78,14 @@ func (s *lifecycleStore) RecordSandboxStartupRepair(context.Context, string, str
 func (s *lifecycleStore) RecordSandboxStartupError(_ context.Context, _, _, _, code, message string) error {
 	s.startupErrors = append(s.startupErrors, startupErrorRecord{code: code, message: message})
 	return nil
+}
+func (s *lifecycleStore) RecordSandboxProviderFailure(_ context.Context, _, _, _, failureID string) error {
+	s.providerFailures = append(s.providerFailures, failureID)
+	return nil
+}
+func (s *lifecycleStore) UseSandboxCoderWorkspaceRetryName(_ context.Context, _, _, _, takenName string) (string, error) {
+	s.retryNames = append(s.retryNames, takenName)
+	return takenName + "-retry", s.retryNameErr
 }
 
 type lifecycleProvider struct {
@@ -910,5 +925,63 @@ func TestPausedSandboxFoundRunningRelaunchesWorker(t *testing.T) {
 	}
 	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedBootstrapping {
 		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedBootstrapping)
+	}
+}
+
+// nameTakenProvider is a Coder-like provider (it looks up before creating)
+// whose Create finds the session's workspace name held by another workspace.
+type nameTakenProvider struct {
+	lifecycleProvider
+	lookups, creates, deletes int
+}
+
+func (p *nameTakenProvider) Create(context.Context, sandbox.Spec) (sandbox.Environment, error) {
+	p.creates++
+	return sandbox.Environment{}, &sandbox.WorkspaceNameTakenError{
+		Name: "acme-w-fix-1a2b3c4d5e6f", Retry: "acme-w-fix-1a2b3c4d5e6f4a7b8c9", Err: errors.New("coder: API returned 409"),
+	}
+}
+
+func (p *nameTakenProvider) FindBySession(context.Context, string) (sandbox.Environment, bool, error) {
+	p.lookups++
+	return sandbox.Environment{}, false, nil
+}
+
+func (p *nameTakenProvider) Delete(context.Context, sandbox.ID) error {
+	p.deletes++
+	return nil
+}
+
+// A name conflict records the retry name before anything else and leaves the
+// session provisioning, so the next pass creates under the name it stored. The
+// workspace holding the name is never adopted or deleted.
+func TestProvisionRecordsTheRetryNameOnAWorkspaceNameConflict(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &nameTakenProvider{}
+	if err := testReconciler(store, provider).provision(context.Background(), provisionRecord(), provider); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if len(store.retryNames) != 1 || store.retryNames[0] != "acme-w-fix-1a2b3c4d5e6f" {
+		t.Fatalf("retry name calls = %v, want one for the taken name", store.retryNames)
+	}
+	if provider.lookups != 1 || provider.creates != 1 || provider.deletes != 0 {
+		t.Fatalf("lookups, creates, deletes = %d, %d, %d; want 1, 1, 0", provider.lookups, provider.creates, provider.deletes)
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedProvisioning {
+		t.Fatalf("observations = %v, want provisioning with no provider id", got)
+	}
+	if len(store.failures) != 0 {
+		t.Fatalf("failures = %v, want none", store.failures)
+	}
+}
+
+// When the retry name cannot be recorded (none left, or the lease moved) the
+// create fails instead of adopting anything.
+func TestProvisionFailsWhenTheRetryNameCannotBeRecorded(t *testing.T) {
+	store := &lifecycleStore{retryNameErr: errors.New("conflict")}
+	provider := &nameTakenProvider{}
+	_ = testReconciler(store, provider).provision(context.Background(), provisionRecord(), provider)
+	if len(store.retryNames) != 1 || len(store.failures) != 1 || provider.deletes != 0 {
+		t.Fatalf("retry calls = %v, failures = %v, deletes = %d; want one of each and no delete", store.retryNames, store.failures, provider.deletes)
 	}
 }

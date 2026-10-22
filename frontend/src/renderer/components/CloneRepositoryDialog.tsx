@@ -21,6 +21,7 @@ export type CloneRepositorySelection = CloneRepositoryDetails & {
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
+	cloning = false,
 	disabled,
 	error,
 	onBack,
@@ -35,6 +36,7 @@ export default function CloneRepositoryDialog({
 	existingProjectPaths = [],
 	value,
 }: {
+	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
 	onBack: () => void;
@@ -351,9 +353,11 @@ export default function CloneRepositoryDialog({
 									</button>
 								</div>
 								<p id="cloneDestinationHelp" className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-									{targetPath
-										? t("createProject.cloneDestinationTarget", { path: targetPath })
-										: t("createProject.cloneDestinationHelp")}
+									{cloning && targetPath
+										? t("createProject.cloneInProgress", { path: targetPath })
+										: targetPath
+											? t("createProject.cloneDestinationTarget", { path: targetPath })
+											: t("createProject.cloneDestinationHelp")}
 								</p>
 								{destinationError ? (
 									<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
@@ -367,7 +371,7 @@ export default function CloneRepositoryDialog({
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
 								<Button type="submit" variant="primary" disabled={!canContinue}>
-									{t("createProject.cloneContinue")}
+									{cloning ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t("createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>

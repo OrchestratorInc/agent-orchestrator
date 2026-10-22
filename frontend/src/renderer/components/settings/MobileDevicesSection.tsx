@@ -5,6 +5,8 @@ import { Bell, Loader2, Smartphone, Trash2 } from "lucide-react";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { Switch } from "../ui/switch";
+import { SettingsRow } from "./SettingsRow";
+import { SettingsSection } from "./SettingsSection";
 
 export const mobileDevicesQueryKey = ["mobile-devices"] as const;
 
@@ -207,102 +209,97 @@ export function MobileDevicesSection() {
 		null;
 
 	return (
-		<section className="mt-6">
-			<h3 className="text-sm font-medium text-settings-label">{t("mobile.devices.title")}</h3>
-
+		<SettingsSection title={t("mobile.devices.title")} grouped>
 			{query.isLoading ? (
-				<div className="mt-3 flex items-center gap-2 text-caption text-settings-muted">
-					<Loader2 className="size-3 animate-spin" /> {t("mobile.devices.loading")}
+				<div className="settings-row-bar text-caption text-settings-muted">
+					<span className="flex items-center gap-2">
+						<Loader2 className="size-3 animate-spin" /> {t("mobile.devices.loading")}
+					</span>
 				</div>
 			) : registryUnavailable ? (
-				<p className="mt-3 text-caption text-error">{t("mobile.devices.registryUnavailable")}</p>
+				<div className="settings-row-bar text-caption text-error">{t("mobile.devices.registryUnavailable")}</div>
 			) : queryError && !hasData ? (
-				<p className="mt-3 text-caption text-error">{queryError.message}</p>
+				<div className="settings-row-bar text-caption text-error">{queryError.message}</div>
 			) : devices.length === 0 ? (
-				<p className="mt-3 text-caption text-settings-muted">{t("mobile.devices.empty")}</p>
+				<div className="settings-row-bar text-caption text-settings-muted">{t("mobile.devices.empty")}</div>
 			) : (
 				<>
-					{queryError && <p className="mt-3 text-caption text-error">{queryError.message}</p>}
-					<ul className="mt-2 divide-y divide-[var(--color-border-settings-input)]">
-						{sortedDevices.map((device) => {
-							const name = device.deviceName || t("mobile.devices.unnamed");
-							if (pendingRemovals.has(device.installId)) {
-								return (
-									<li
-										key={device.installId}
-										className="relative flex min-h-12 items-center gap-3 py-2.5"
-									>
-										<Smartphone className="size-4 shrink-0 text-settings-muted opacity-50" aria-hidden="true" />
-										<div className="min-w-0 flex-1 truncate text-sm text-settings-muted" role="status">
-											{t("mobile.devices.removed", { name })}
-										</div>
-										<button
-											type="button"
-											// The trash button this replaces had focus; keep it on the row.
-											autoFocus
-											aria-label={t("mobile.devices.undoRemoveAria", { name })}
-											className="min-h-10 rounded-md px-2 text-sm font-medium text-primary transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-											disabled={deletingIds.has(device.installId)}
-											onClick={() => undoRemoval(device.installId)}
-										>
-											{t("mobile.devices.undo")}
-										</button>
-										<span
-											className="mobile-device-undo-countdown"
-											style={{ animationDuration: `${REMOVE_UNDO_MS}ms` }}
-											aria-hidden="true"
-										/>
-									</li>
-								);
-							}
-							const tokenless = !device.notificationsEnabled;
-							const notificationsTitle = tokenless
-								? t("mobile.devices.notificationsOffOnPhone", { name })
-								: t("mobile.devices.notificationsFor", { name });
+					{queryError && <div className="settings-row-bar text-caption text-error">{queryError.message}</div>}
+					<div role="list" className="divide-y divide-border">
+					{sortedDevices.map((device) => {
+						const name = device.deviceName || t("mobile.devices.unnamed");
+						if (pendingRemovals.has(device.installId)) {
 							return (
-								<li
+								<SettingsRow
 									key={device.installId}
-									className="flex min-h-12 items-center gap-3 py-2.5"
+									role="listitem"
+									className="relative"
+									icon={Smartphone}
+									label={
+										<span className="text-settings-muted" role="status">
+											{t("mobile.devices.removed", { name })}
+										</span>
+									}
 								>
-									<Smartphone className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />
-									<div className="min-w-0 flex-1">
-										<div className="truncate text-sm">{name}</div>
-									</div>
-
-									<div className="flex items-center gap-2" title={notificationsTitle}>
-										<Bell className="size-4 text-settings-muted" aria-hidden="true" data-testid="bell" />
-										<Switch
-											checked={device.notificationsEnabled && !device.muted}
-											disabled={tokenless || mutingIds.has(device.installId)}
-											aria-label={t("mobile.devices.notificationsFor", { name })}
-											onCheckedChange={(next) =>
-												mute.mutate({ installId: device.installId, muted: !next })
-											}
-										/>
-									</div>
-
 									<button
 										type="button"
-										ref={(el) => {
-											if (el) trashButtons.current.set(device.installId, el);
-											else trashButtons.current.delete(device.installId);
-										}}
-										aria-label={t("mobile.devices.removeAria", { name })}
-										title={t("mobile.devices.removeAria", { name })}
-										className="grid size-10 place-items-center rounded-md text-settings-muted transition-colors hover:bg-interactive-hover hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-										onClick={() => startRemoval(device.installId)}
+										// The trash button this replaces had focus; keep it on the row.
+										autoFocus
+										aria-label={t("mobile.devices.undoRemoveAria", { name })}
+										className="h-8 rounded-md px-2 text-sm font-medium text-primary transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										disabled={deletingIds.has(device.installId)}
+										onClick={() => undoRemoval(device.installId)}
 									>
-										<Trash2 className="size-4" />
+										{t("mobile.devices.undo")}
 									</button>
-								</li>
+									<span
+										className="mobile-device-undo-countdown"
+										style={{ animationDuration: `${REMOVE_UNDO_MS}ms` }}
+										aria-hidden="true"
+									/>
+								</SettingsRow>
 							);
-						})}
-					</ul>
+						}
+						const tokenless = !device.notificationsEnabled;
+						const notificationsTitle = tokenless
+							? t("mobile.devices.notificationsOffOnPhone", { name })
+							: t("mobile.devices.notificationsFor", { name });
+						return (
+							<SettingsRow key={device.installId} role="listitem" icon={Smartphone} label={name}>
+								<div className="flex items-center gap-2" title={notificationsTitle}>
+									<Bell className="size-4 text-settings-muted" aria-hidden="true" data-testid="bell" />
+									<Switch
+										checked={device.notificationsEnabled && !device.muted}
+										disabled={tokenless || mutingIds.has(device.installId)}
+										aria-label={t("mobile.devices.notificationsFor", { name })}
+										onCheckedChange={(next) =>
+											mute.mutate({ installId: device.installId, muted: !next })
+										}
+									/>
+								</div>
+
+								<button
+									type="button"
+									ref={(el) => {
+										if (el) trashButtons.current.set(device.installId, el);
+										else trashButtons.current.delete(device.installId);
+									}}
+									aria-label={t("mobile.devices.removeAria", { name })}
+									title={t("mobile.devices.removeAria", { name })}
+									className="ml-2 grid size-8 place-items-center rounded-md text-settings-muted transition-colors hover:bg-interactive-hover hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+									onClick={() => startRemoval(device.installId)}
+								>
+									<Trash2 className="size-4" />
+								</button>
+							</SettingsRow>
+						);
+					})}
+					</div>
 				</>
 			)}
 
-			{mutationError && <p className="mt-2 text-caption text-error">{mutationError}</p>}
-		</section>
+			{mutationError && <div className="settings-row-bar text-caption text-error">{mutationError}</div>}
+		</SettingsSection>
 	);
 }
 

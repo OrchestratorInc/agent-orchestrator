@@ -89,26 +89,9 @@ function isLoopbackHost(hostname: string): boolean {
 	return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
-function validateInit(init: unknown): CloudCpProxyRequestInit {
-	if (typeof init !== "object" || init === null) {
-		throw invalid("the request payload must be an object.");
-	}
-	const { baseUrl, path, method, headers, body } = init as Record<string, unknown>;
+/** A renderer-supplied CP base URL: https, or http on loopback only. */
+export function parseCloudBaseUrl(baseUrl: unknown): URL {
 	if (typeof baseUrl !== "string" || baseUrl === "") throw invalid("baseUrl must be a non-empty string.");
-	if (typeof path !== "string") throw invalid("path must be a string.");
-	if (typeof method !== "string" || !/^[A-Za-z]+$/.test(method)) {
-		throw invalid("method must be an HTTP method token.");
-	}
-	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
-	if (headers !== undefined) {
-		if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
-			throw invalid("headers must be a plain record of strings.");
-		}
-		for (const value of Object.values(headers)) {
-			if (typeof value !== "string") throw invalid("headers must be a plain record of strings.");
-		}
-	}
-
 	let base: URL;
 	try {
 		base = new URL(baseUrl);
@@ -123,6 +106,29 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 	if (base.username !== "" || base.password !== "" || base.search !== "" || base.hash !== "") {
 		throw invalid("baseUrl must not carry credentials, a query string, or a fragment.");
 	}
+	return base;
+}
+
+function validateInit(init: unknown): CloudCpProxyRequestInit {
+	if (typeof init !== "object" || init === null) {
+		throw invalid("the request payload must be an object.");
+	}
+	const { baseUrl, path, method, headers, body } = init as Record<string, unknown>;
+	parseCloudBaseUrl(baseUrl);
+	if (typeof path !== "string") throw invalid("path must be a string.");
+	if (typeof method !== "string" || !/^[A-Za-z]+$/.test(method)) {
+		throw invalid("method must be an HTTP method token.");
+	}
+	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
+	if (headers !== undefined) {
+		if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
+			throw invalid("headers must be a plain record of strings.");
+		}
+		for (const value of Object.values(headers)) {
+			if (typeof value !== "string") throw invalid("headers must be a plain record of strings.");
+		}
+	}
+
 	if (!path.startsWith(API_PREFIX)) {
 		throw invalid(`path must start with ${API_PREFIX}.`);
 	}
@@ -132,7 +138,7 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 	}
 
 	return {
-		baseUrl,
+		baseUrl: baseUrl as string,
 		path,
 		method,
 		headers: headers as Record<string, string> | undefined,

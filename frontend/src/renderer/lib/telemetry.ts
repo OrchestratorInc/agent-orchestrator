@@ -1,6 +1,7 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
+import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -161,7 +162,109 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 }
 
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
-	return { ...telemetryContext, ...cloudContext, ...properties, $process_person_profile: false };
+	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
+	// the flag is left to the SDK, which processes the identified person.
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }) };
+}
+
+// Who this install is. The GitHub login and AO Cloud user ID ride every event as
+// super properties; email is only ever a person property set at identify time.
+let cloudUser: { id: string; email: string } | null = null;
+let githubLogin: string | null = null;
+let identifiedId: string | null = null;
+let posthogReady = false;
+let analyticsOptedOut = false;
+
+function registerBaseProperties(): void {
+	posthog.register({
+		...telemetryContext,
+		surface: "renderer",
+		...(githubLogin ? { github_actor: githubLogin } : {}),
+		...(cloudUser ? { ao_cloud_user_id: cloudUser.id } : {}),
+	});
+}
+
+/**
+ * Identifies the signed-in AO Cloud user with the AO Cloud user ID. Email is a
+ * person property only. An unlinked install starts with its ins_ ID and can be
+ * merged into the Cloud person; a linked install starts with a fresh anon_ ID.
+ * The signed-in daemon sends events under the Cloud user ID directly.
+ */
+export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
+	cloudUser = user;
+	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
+	// A sign-out, a different account or an opt-out may have landed while init
+	// was pending; this continuation must not identify who is no longer current.
+	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
+	// Switching accounts without a sign-out: never layer B onto A's person.
+	if (identifiedId !== null) posthog.reset();
+	registerBaseProperties();
+	posthog.identify(user.id, {
+		email: user.email,
+		ao_cloud_user_id: user.id,
+		...(githubLogin ? { github_login: githubLogin } : {}),
+	});
+	identifiedId = user.id;
+}
+
+/**
+ * Sign-out: stop attributing renderer events to the user.
+ * ponytail: reset() mints a random anonymous ID that lasts until the next
+ * launch, when the bootstrap restores the ins_ install ID.
+ */
+export function clearCloudUser(): void {
+	cloudUser = null;
+	if (!posthogReady || identifiedId === null) return;
+	identifiedId = null;
+	posthog.reset();
+	registerBaseProperties();
+}
+
+/**
+ * Applies the in-app analytics opt-out. Opting out stops capture and calls
+ * posthog.reset() so no identity survives in the SDK. Opting back in resumes
+ * capture, initializing the client first if this launch started opted out.
+ * ponytail: after an in-session opt-in the SDK uses a fresh anonymous ID until
+ * the next launch chooses an install ID or a fresh anonymous ID from the
+ * durable binding state.
+ */
+export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
+	analyticsOptedOut = optedOut;
+	if (optedOut) {
+		if (posthogReady) {
+			posthog.opt_out_capturing();
+			posthog.reset();
+		}
+		identifiedId = null;
+		return;
+	}
+	if (posthogReady) {
+		posthog.opt_in_capturing({ captureEventName: false });
+		registerBaseProperties();
+	} else {
+		initPromise = null;
+		await initTelemetry();
+	}
+	if (cloudUser) await identifyCloudUser(cloudUser);
+}
+
+// A fresh install often has no GitHub token yet, so the daemon-resolved login is
+// polled on a short bounded schedule rather than read once.
+const GITHUB_LOGIN_RETRY_MS = [2_000, 30_000, 120_000, 600_000];
+
+async function syncGithubLogin(): Promise<void> {
+	for (const delay of GITHUB_LOGIN_RETRY_MS) {
+		await new Promise((resolve) => setTimeout(resolve, delay));
+		if (analyticsOptedOut) return;
+		const login = await Promise.resolve()
+			.then(() => aoBridge.telemetry.getGithubLogin())
+			.catch(() => null);
+		if (!login) continue;
+		githubLogin = login;
+		registerBaseProperties();
+		if (identifiedId) posthog.setPersonProperties({ github_login: login });
+		return;
+	}
 }
 
 // The signed-in cloud org, tagged on every event and exception once /me has
@@ -608,6 +711,11 @@ export async function sanitizeRendererProperties(
 				safe.surface = properties.surface;
 			}
 			break;
+		case "ao.onboarding.step_viewed":
+		case "ao.onboarding.step_completed":
+		case "ao.onboarding.step_abandoned":
+			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
+			break;
 		case "ao.renderer.project_add_requested":
 		case "ao.renderer.loaded":
 			break;
@@ -905,7 +1013,13 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 		// an upgrade; the AO-owned heartbeat and route reservations continue to
 		// use window.localStorage independently.
 		persistence: "memory",
-		person_profiles: "never",
+		// Anonymous (no profile) until identifyCloudUser() runs on an AO Cloud
+		// sign-in; only then does PostHog process a person.
+		person_profiles: "identified_only",
+		// The SDK flags a localhost page as an internal user, which turns person
+		// processing on for every event; a dev build driving the real export path
+		// would otherwise bill anonymous events as identified.
+		internal_or_test_user_hostname: null,
 		bootstrap: {
 			distinctID: distinctId,
 			isIdentifiedID: false,
@@ -932,13 +1046,21 @@ export async function initTelemetry(): Promise<boolean> {
 		if (!bootstrap) return false;
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
+		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
+		// could only set the flag then, so honor it before any client exists.
+		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
 		posthog = await loadPostHog();
+		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
+		// both SDK initialization and the unconditional opt-in below.
+		if (analyticsOptedOut) return false;
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
-		posthog.register({
-			...telemetryContext,
-			surface: "renderer",
-		});
+		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
+		// source of truth and the bootstrap is only handed out when it is absent.
+		posthog.opt_in_capturing({ captureEventName: false });
+		posthogReady = true;
+		registerBaseProperties();
+		void syncGithubLogin();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog
 		// product analytics are intentionally independent of that preference.
 		void initSentry({

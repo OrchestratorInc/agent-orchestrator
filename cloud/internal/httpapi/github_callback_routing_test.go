@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,5 +143,28 @@ func TestGitHubOAuthCallbackCompletionPath(t *testing.T) {
 	}
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (stub has no oauth attempt)", rec.Code)
+	}
+}
+
+// The installation callback page's Connect button posts a sealed grant; a
+// grant this server did not seal is refused with the callback error page, and
+// nothing about the response may be cached.
+func TestGitHubConnectOthersRefusesAnUnsealedGrant(t *testing.T) {
+	srv, _ := newGitHubCallbackTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/cloud/v1/github/oauth/connect-others",
+		strings.NewReader("grant=bm9uY2U.Y2lwaGVydGV4dA"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	srv.githubConnectOthers(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	if !strings.Contains(rec.Body.String(), "Not connected") {
+		t.Fatalf("body = %q, want the not-connected page", rec.Body.String())
 	}
 }

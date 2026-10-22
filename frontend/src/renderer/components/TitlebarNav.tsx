@@ -1,10 +1,13 @@
+import { motion, useReducedMotion } from "motion/react";
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
+import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -40,37 +43,6 @@ export function useCanGoForward(): boolean {
   return canGoForward;
 }
 
-// The brand replaces the arrows only once the sidebar has fully slid open, and
-// the arrows come back the moment it starts closing. The sidebar animates with
-// a spring (no transitionend), so watch its container reach x = 0.
-const SETTLE_TIMEOUT_MS = 1500;
-
-function useSidebarSettledOpen(isSidebarOpen: boolean): boolean {
-  const [settled, setSettled] = useState(false);
-  useEffect(() => {
-    if (!isSidebarOpen) {
-      setSettled(false);
-      return;
-    }
-    const started = performance.now();
-    let frame = 0;
-    const check = () => {
-      const el = document.querySelector<HTMLElement>(
-        '[data-slot="sidebar-container"]',
-      );
-      const open = el ? el.getBoundingClientRect().left >= -0.5 : false;
-      if (open || performance.now() - started > SETTLE_TIMEOUT_MS) {
-        setSettled(true);
-        return;
-      }
-      frame = requestAnimationFrame(check);
-    };
-    frame = requestAnimationFrame(check);
-    return () => cancelAnimationFrame(frame);
-  }, [isSidebarOpen]);
-  return isSidebarOpen && settled;
-}
-
 export function TitlebarNav({
   historyLocked = false,
   isFullScreen = false,
@@ -84,7 +56,8 @@ export function TitlebarNav({
   const router = useRouter();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
-  const showBrand = useSidebarSettledOpen(isSidebarOpen);
+  // The brand and the arrows swap instantly with the sidebar toggle.
+  const showBrand = isSidebarOpen;
   // The sidebar's minimum width is measured from the brand label, which only
   // exists once this mounts it. Nudge the sidebar's resize re-clamp so a stored
   // or default width narrower than the label grows to fit it.
@@ -102,14 +75,15 @@ export function TitlebarNav({
     : isFullScreen
       ? "left-titlebar-cluster-left-fullscreen"
       : "left-titlebar-cluster-left";
-  const topClass = isMac ? "top-px" : "top-0.75";
+  // macOS traffic lights centre at y = 18; top-0 puts this row on that centreline.
+  const topClass = isMac ? "top-0" : "top-0.75";
   const heightClass = "h-traffic-light-clearance";
 
-  // With the sidebar open the brand sits where the history arrows would be.
-  // Collapsed (or while the sidebar is still sliding open) there is no brand, so
-  // the arrows show instead. The two are never mounted together, so the arrows
-  // never leave an invisible no-drag hole in the window-drag region.
+  // With the sidebar open the brand sits where the history arrows would be;
+  // collapsed, the arrows take its place.
   const arrowsVisible = !showBrand;
+  const prefersReducedMotion = useReducedMotion();
+  const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
 
   // The brand sits in this fixed row, not inside the sidebar, so it does not
   // shrink when a small window caps the sidebar narrower than the label. Cap it
@@ -123,7 +97,9 @@ export function TitlebarNav({
     const fit = () => {
       const brand = brandRef.current;
       if (!brand) return;
-      const available = sidebar.getBoundingClientRect().right - brand.getBoundingClientRect().left - 12;
+      // Layout width, not its painted right edge: the sidebar may still be sliding
+      // in from off-canvas when this runs, and the slide leaves offsetWidth alone.
+      const available = sidebar.offsetWidth - brand.getBoundingClientRect().left - 12;
       setBrandMaxWidth(Math.max(24, Math.floor(available)));
     };
     fit();
@@ -154,21 +130,46 @@ export function TitlebarNav({
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
-      <div className="grid items-center">
-        {showBrand ? (
-          // Not a button on purpose: it stays part of the window-drag region.
+      {/* The brand and the history arrows trade places by animating width, on the
+          same spring as the sidebar, so the brand closes with the sidebar edge.
+          The hidden side collapses to width 0 and is inert, so it never leaves an
+          invisible no-drag hole in the window-drag region. */}
+      <div className="flex items-center">
+        <motion.div
+          animate={{ width: showBrand ? "auto" : 0, opacity: showBrand ? 1 : 0 }}
+          aria-hidden={showBrand ? undefined : true}
+          className="overflow-hidden"
+          data-slot="titlebar-brand"
+          initial={false}
+          inert={!showBrand}
+          transition={transition}
+        >
+          {/* Not a button on purpose. Only the label opts out of window drag (for
+              the build-info tooltip); the rest of the row stays draggable. */}
           <span
-            className="col-start-1 row-start-1 inline-flex select-none items-center gap-1.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
             ref={brandRef}
             style={{ maxWidth: brandMaxWidth }}
           >
-            <AOMascot className="h-5.5 w-5.5 shrink-0 -translate-y-px" />
-            <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
+            <BuildInfoTooltip>
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <AOMascot className="h-5.5 w-5.5 shrink-0" />
+                <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
+              </span>
+            </BuildInfoTooltip>
           </span>
-        ) : null}
-        {arrowsVisible ? (
-          <div className="col-start-1 row-start-1 flex items-center gap-1">
+        </motion.div>
+        <motion.div
+          animate={{ width: arrowsVisible ? "auto" : 0, opacity: arrowsVisible ? 1 : 0 }}
+          aria-hidden={arrowsVisible ? undefined : true}
+          className="overflow-hidden"
+          data-slot="titlebar-history"
+          initial={false}
+          inert={!arrowsVisible}
+          transition={transition}
+        >
+          <div className="flex items-center gap-1">
             <TitlebarButton
               disabled={historyLocked || !canGoBack}
               label={t("titlebar.goBack")}
@@ -186,7 +187,7 @@ export function TitlebarNav({
               <ArrowRight className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
           </div>
-        ) : null}
+        </motion.div>
       </div>
     </div>
   );

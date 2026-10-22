@@ -83,10 +83,15 @@ func (s *Server) orgHasFeature(ctx context.Context, orgID, feature string) bool 
 }
 
 // orgOffersBilledProvider reports whether the principal's organization may
-// run sessions on a billed provider (Freestyle). An organization offered only
-// Coder or Docker has nothing to buy, so plans do not apply to it.
+// run sessions on a billed provider: Freestyle, or Coder for an organization
+// without the coder capability (see postgres sandboxBilledTx). An organization
+// offered only unbilled providers has nothing to buy, so plans do not apply.
 func (s *Server) orgOffersBilledProvider(principal domain.Principal, orgID string) bool {
-	return slices.Contains(s.providersForOrg(principal, orgID), sandbox.ProviderFreestyle)
+	providers := s.providersForOrg(principal, orgID)
+	if slices.Contains(providers, sandbox.ProviderFreestyle) {
+		return true
+	}
+	return slices.Contains(providers, sandbox.ProviderCoder) && !s.orgHasCoderCapability(principal, orgID)
 }
 
 // planOffer is one plan the organization can choose, priced from Stripe.

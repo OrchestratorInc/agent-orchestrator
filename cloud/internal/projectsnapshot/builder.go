@@ -283,8 +283,9 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 		return "", fmt.Errorf("create builder VM: %w", err)
 	}
 	defer func() {
-		// The builder VM is disposable whatever happened; never leak it.
-		deleteCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		// The builder VM is disposable whatever happened; never leak it. No
+		// session's worker ran in it, so there is no project Cleanup to run.
+		deleteCtx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
 		defer cancel()
 		if err := b.config.VMs.Delete(deleteCtx, environment.ID); err != nil {
 			b.config.Logger.Warn("delete project snapshot builder VM", "provider_id", environment.ID, "error", err)

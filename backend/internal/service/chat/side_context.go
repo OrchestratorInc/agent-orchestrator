@@ -140,7 +140,14 @@ func (s *Service) lockCurrentSide(ctx context.Context, side domain.SideConversat
 		unlock()
 		return nil, nil, err
 	}
-	rows, err := s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
+	var rows ConversationRows
+	if reader, ok := s.store.(promptSuggestionTurnReader); ok {
+		var latest domain.ConversationTurn
+		latest, err = reader.LatestConversationTurn(ctx, source.conversation.ID)
+		rows.Turns = []domain.ConversationTurn{latest}
+	} else {
+		rows, err = s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
+	}
 	if err != nil {
 		unlock()
 		return nil, nil, err

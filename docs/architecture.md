@@ -353,6 +353,30 @@ flowchart TD
 
 ```
 
+New Git worker sessions from the desktop, CLI, or orchestrator with an initial
+prompt generate a title and task slug together
+through the selected agent's background-task driver during provisioning. This
+call overlaps worktree preparation and has a twenty-second deadline. Failure,
+invalid output, or a full four-call naming limit uses a local prompt slug;
+prompts without usable ASCII words fall back to the session ID. Git tasks use
+`ao/<slug>/root` and `worktrees/<project-id>/<slug>`, with the same numeric suffix
+on both when the folder or branch namespace is occupied. Generated slugs prefer
+two short words, allow at most three, and are capped at 24 characters. The daemon
+finalizes prepared worktrees and repairs every repository registration before setup or
+agent launch, then records the resulting paths and branches. Naming persists its
+provisioning checkpoint and a synced move journal before changing Git names.
+After an interrupted move, background reconciliation or retry verifies linked
+Git identities, finishes registration repair, and saves root and child paths
+before acknowledging the journal. Recovery refuses occupied destinations and
+sessions with a runtime or provider conversation identity. Retry resumes
+unfinished setup using the durable stages. Session IDs remain
+unchanged. Explicit CLI/API session titles are preserved while their workspaces
+receive task names. Restore uses the persisted names. Explicit branches, promptless
+sessions, Scratch sessions, and existing sessions keep their naming behavior.
+The desktop hides provisional branches until the worktree step completes and
+shows a text shimmer with a randomly selected naming label while provisioning
+is active. The label stays stable across updates while it is displayed.
+
 ### Session interface handoff
 
 An interface switch is a controller replacement inside the existing AO session,
@@ -411,6 +435,24 @@ replacement daemon retires interrupted loads, stops their hosts before deletion,
 and retains failed deletions for retry. Adopted sides from the current desktop
 launch retain Electron's recovery path; previous-launch forks are retired. A
 child whose ACP reply never returns still has an unknown identity.
+
+ChatUI next-message suggestions use the same isolated native fork contract when
+an active desktop launch and the live provider's fork capability are available.
+Exact-turn providers receive the resolved native turn ID; current-context
+providers revalidate and fence the latest completed turn while copying. The
+child uses a scratch workspace, background permissions, its parent's model and
+the lowest advertised reasoning effort. Codex forks omit turn history from the fork response, enforce read-only access,
+and have tool network access disabled. Temporary forks retain a provider rollout
+so the existing cleanup API can delete them after their host stops. ACP retains the existing no-tools
+instruction policy rather than an enforced read-only sandbox. Unsupported
+providers and standalone daemons retain the bounded transcript-copy fallback.
+Suggestions create no visible side chat or durable transcript. Child IDs enter
+the same cleanup journal before loading and remain unadopted, so a replacement
+daemon retires them even within the same desktop launch. Completion and
+cancellation stop the child host before provider deletion; unsupported deletion
+can leave provider-side history, and genuine deletion failures retain ownership
+for retry through an active parent of the same harness.
+
 
 ```mermaid
 sequenceDiagram

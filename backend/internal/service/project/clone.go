@@ -169,6 +169,9 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, resume bool) 
 		if errors.As(err, &executableError) {
 			return ClonePreparationResult{}, apierr.Invalid("GIT_NOT_FOUND", "Git is required to clone a repository.", nil)
 		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_TIMED_OUT", "Cloning this repository took too long and was stopped.", nil)
+		}
 		if ctx.Err() != nil {
 			return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_CANCELLED", "Repository cloning was cancelled.", nil)
 		}

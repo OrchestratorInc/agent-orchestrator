@@ -437,6 +437,17 @@ func TestManager_PrepareCloneCancellationLeavesNoCheckout(t *testing.T) {
 	}
 }
 
+func TestManager_PrepareCloneReportsRequestTimeout(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
+	defer cancel()
+
+	_, err := m.PrepareClone(ctx, project.CloneInput{RemoteURL: remoteURL, DestinationParent: t.TempDir()})
+	wantCode(t, err, "GIT_CLONE_TIMED_OUT")
+}
+
 func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()

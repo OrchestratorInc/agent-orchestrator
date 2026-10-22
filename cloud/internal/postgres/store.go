@@ -11,13 +11,20 @@ import (
 )
 
 var (
-	ErrNotFound             = errors.New("not found")
-	ErrForbidden            = errors.New("forbidden")
-	ErrConflict             = errors.New("conflict")
-	ErrInvalid              = errors.New("invalid")
+	ErrNotFound      = errors.New("not found")
+	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalid       = errors.New("invalid")
+	ErrInvalidBranch = errors.New("invalid session branch")
+	// ErrBranchInUse refuses a requested session branch a live session of the
+	// project already works on (BranchRefusedError carries which one).
+	ErrBranchInUse          = errors.New("session branch in use")
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")
+	// ErrSessionTerminated refuses to wake a deleted session; only a restore
+	// brings it back.
+	ErrSessionTerminated = errors.New("session is terminated")
 	// ErrTerminalSessionExited means an agent terminal finished and there is no
 	// live worker terminal to attach to. It is deliberately distinct from
 	// ErrWorkerUnavailable: the latter is expected while a sandbox is booting
@@ -26,6 +33,13 @@ var (
 	ErrTerminalSessionExited = errors.New("terminal session exited")
 	ErrTransportExpired      = errors.New("worker request expired")
 	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
+	// ErrProviderConnectionInUse refuses deleting a provider connection that a
+	// sandbox not yet fully deleted still runs on. It is a conflict.
+	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
+	// ErrNotOrchestratorChild refuses an orchestrator acting on a session it
+	// did not spawn. It is forbidden, but names the reason so `ao kill` and
+	// `ao send` can say so instead of reporting an organization access error.
+	ErrNotOrchestratorChild = fmt.Errorf("not a session this orchestrator started: %w", ErrForbidden)
 )
 
 type Store struct {
@@ -34,6 +48,17 @@ type Store struct {
 	// activityLog is told about activity rows the store writes itself, inside
 	// the transaction they describe (see commitWithActivity).
 	activityLog func(context.Context, domain.ActivityEvent)
+	// coderReadableNames stores a readable Coder workspace name on each new
+	// Coder session (SetCoderReadableWorkspaceNames).
+	coderReadableNames bool
+}
+
+// SetCoderReadableWorkspaceNames turns readable Coder workspace names on for
+// sessions created from now on (config.Config.CoderReadableWorkspaceNames).
+// Off, the default, a new session stores no name and keeps the <prefix>-<id>
+// name; a stored name is read either way. Call it before serving requests.
+func (s *Store) SetCoderReadableWorkspaceNames(enabled bool) {
+	s.coderReadableNames = enabled
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {

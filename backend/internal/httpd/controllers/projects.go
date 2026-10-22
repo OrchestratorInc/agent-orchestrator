@@ -34,6 +34,7 @@ func (c *ProjectsController) Register(r chi.Router) {
 	r.Put("/projects/{id}", c.updateSettings)
 	r.Put("/projects/{id}/config", c.setConfig)
 	r.Patch("/projects/{id}/permissions", c.setPermissions)
+	r.Delete("/projects/{id}/permissions", c.forgetPermissions)
 	r.Delete("/projects/{id}", c.remove)
 }
 
@@ -236,6 +237,19 @@ func (c *ProjectsController) setPermissions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	p, err := c.Mgr.SetPermissions(r.Context(), projectID(r), in)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ProjectResponse{Project: p})
+}
+
+func (c *ProjectsController) forgetPermissions(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "DELETE", "/api/v1/projects/{id}/permissions")
+		return
+	}
+	p, err := c.Mgr.ForgetPermissions(r.Context(), projectID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

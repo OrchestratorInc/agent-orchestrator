@@ -22,7 +22,7 @@ Output flags are repeatable:
 ```
 
 Use reports for meaningful transitions, decisions, blockers, required input,
-outputs, and terminal judgment. Do not narrate routine commands. Outputs do not
+outputs, and terminal judgment. Do not file a report for routine commands. Outputs do not
 imply completion, and `--done` does not terminate the session.
 
 Attach a reviewable deliverable as soon as it is ready, not only at `--done`:

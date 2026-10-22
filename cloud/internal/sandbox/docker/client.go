@@ -66,6 +66,11 @@ type Client struct {
 	network   string
 	namespace string
 	http      *http.Client
+	// cleanupWait and cleanupInline override the project Cleanup's budget
+	// and how long one Delete waits for it (tests only; zero means the
+	// defaults).
+	cleanupWait   time.Duration
+	cleanupInline time.Duration
 }
 
 var (
@@ -375,7 +380,10 @@ func (c *Client) Resume(ctx context.Context, id sandbox.ID) error {
 	return c.Start(ctx, id)
 }
 
-// Delete permanently removes a worker and its per-session workspace.
+// Delete permanently removes a worker and its per-session workspace, after
+// running the project's Cleanup in it (cleanupFinished). While Cleanup is
+// still running it returns nil without removing anything, and the reconciler
+// re-issues it.
 func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
 	view, err := c.ownedContainer(ctx, id)
 	if errors.Is(err, sandbox.ErrNotFound) {
@@ -383,6 +391,9 @@ func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
 	}
 	if err != nil {
 		return err
+	}
+	if !c.cleanupFinished(ctx, view) {
+		return nil
 	}
 	workspace := view.Config.Labels[labelWorkspace]
 	if workspace == "" {

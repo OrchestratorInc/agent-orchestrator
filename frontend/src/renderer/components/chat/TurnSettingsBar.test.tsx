@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
 import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
+// The agent picker is tested on its own; here only the permission control matters.
+vi.mock("./AgentSwitchPicker", async (original) => ({ ...await original<typeof import("./AgentSwitchPicker")>(), AgentModelPicker: () => null }));
+
 const OPTIONS: ChatConfigOption[] = [
 	{
 		id: "model",
@@ -344,6 +347,24 @@ describe("ACP session config options", () => {
 		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 	});
 
+	it("keeps an agent's own Default mode, with Plan as a toggle beside its permissions", () => {
+		render(<TurnSettingsBar harness="kimi" models={[]} settings={{}} onChangeConfigOption={vi.fn()}
+			configOptions={[
+				{ id: "model", name: "Model", category: "model", type: "select", currentValue: "k3", choices: [{ value: "k3", name: "K3" }, { value: "k3-256k", name: "K3-256k" }] },
+				{ id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: "high", choices: [{ value: "low", name: "Thinking Low" }, { value: "high", name: "Thinking High" }] },
+				{
+					id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "yolo",
+					choices: [
+						{ value: "default", name: "Default" }, { value: "plan", name: "Plan" },
+						{ value: "auto", name: "Auto" }, { value: "yolo", name: "YOLO" },
+					],
+				},
+			]} />);
+		// Plan pairs with the agent's Default, so it is the Plan Mode toggle, not a picker named "Mode".
+		expect(screen.queryByRole("button", { name: "Model mode for the next turn" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Mode" })).toHaveTextContent("YOLO");
+	});
+
 	it("keeps a mapped permission default selectable under its meaningful label", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
@@ -516,6 +537,22 @@ describe("ACP session config options", () => {
 			expect(onChange).toHaveBeenLastCalledWith("mode", { value: "build" });
 		},
 	);
+
+	it("shows Copilot's Agent and Plan as Plan Mode and keeps AO's approval control", async () => {
+		// The daemon removes Autopilot and allow_all from Copilot's catalog.
+		const uri = "https://agentclientprotocol.com/protocol/session-modes#";
+		const copilotModes: ChatConfigOption = {
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: `${uri}agent`,
+			choices: [{ value: `${uri}agent`, name: "Agent" }, { value: `${uri}plan`, name: "Plan" }],
+		};
+		expect(hasProviderPermissionMode([copilotModes])).toBe(false);
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[copilotModes]} />);
+		await user.click(screen.getByRole("button", { name: "Model mode for the next turn" }));
+		await user.click(screen.getByRole("switch", { name: "Plan Mode" }));
+		expect(onChange).toHaveBeenLastCalledWith("mode", { value: `${uri}plan` });
+	});
 
 	it("toggles a menu row from the keyboard with Enter and keeps the menu open", async () => {
 		const user = userEvent.setup();
@@ -794,7 +831,7 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: "Full access" })).toBeInTheDocument();
 
 		await user.click(screen.getByRole("menuitemradio", { name: "Approve for me" }));
-		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" });
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" }, "approvalMode");
 	});
 
 	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {
@@ -915,13 +952,35 @@ describe("remember project permissions", () => {
 			settings={{ approvalMode: "auto" }} onChange={onChange} onRememberPermissions={remember} />);
 		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
 		await user.click(screen.getByRole("menuitemradio", { name: "Full access" }));
-		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" }, "approvalMode");
 		expect(remember).not.toHaveBeenCalled();
 		rerender(<TurnSettingsBar models={[]} harness="codex"
 			settings={{ approvalMode: "default" }} onChange={onChange} onRememberPermissions={remember} />);
 		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("default");
+	});
+
+	it("shows remembering as a switch that forgets when turned off", async () => {
+		const user = userEvent.setup();
+		const remember = vi.fn();
+		const props = { models: [], settings: { approvalMode: "auto" as const }, onChange: vi.fn(), onRememberPermissions: remember };
+		const { rerender } = render(<TurnSettingsBar {...props} rememberedPermissionMode="default" />);
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByRole("switch", { name: "Remember for this project" })).not.toBeChecked();
+		rerender(<TurnSettingsBar {...props} rememberedPermissionMode="auto" />);
+		expect(screen.getByRole("switch", { name: "Remember for this project" })).toBeChecked();
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
+		expect(remember).toHaveBeenCalledWith(null);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("reads Codex Full access as remembered when the project stores it as bypass", async () => {
+		const user = userEvent.setup();
+		render(<TurnSettingsBar models={[]} harness="codex" settings={{ approvalMode: "default" }}
+			onChange={vi.fn()} onRememberPermissions={vi.fn()} rememberedPermissionMode="bypass-permissions" />);
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByRole("switch", { name: "Remember for this project" })).toBeChecked();
 	});
 
 	it("remembers a provider choice only through its daemon-supplied permission mapping", async () => {
@@ -932,7 +991,7 @@ describe("remember project permissions", () => {
 				{ value: "bypass", name: "Bypass Permissions", permissionMode: "bypass-permissions" },
 			] }]} onChangeConfigOption={vi.fn()} onRememberPermissions={remember} />);
 		await user.click(screen.getByRole("button", { name: "Permission mode" }));
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("bypass-permissions");
 	});
 
@@ -941,44 +1000,30 @@ describe("remember project permissions", () => {
 		render(<TurnSettingsBar models={[]} settings={{ approvalMode: "auto" }}
 			configOptions={[OPTIONS[2]]} onChangeConfigOption={vi.fn()} onRememberPermissions={vi.fn()} />);
 		await user.click(screen.getByRole("button", { name: "Permission mode" }));
-		expect(screen.queryByRole("menuitem", { name: "Remember for this project" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: "Remember for this project" })).not.toBeInTheDocument();
 	});
 
-	it("disables overlapping writes and shows save results", () => {
+	it("disables overlapping writes and shows save errors", () => {
 		const props = { models: [], settings: {}, onChange: vi.fn(), onRememberPermissions: vi.fn() };
 		const { rerender } = render(<TurnSettingsBar {...props} rememberPermissionsPending />);
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeDisabled();
-		expect(screen.getByRole("status")).toHaveTextContent("Saving project permissions");
 		rerender(<TurnSettingsBar {...props} rememberPermissionsError="Could not save project default" />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not save project default");
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
-		rerender(<TurnSettingsBar {...props} rememberedPermissionMode="default" />);
-		expect(screen.getByRole("status")).toHaveTextContent("saved for new sessions in this project");
 	});
 
-	it("shows success only for the exact saved native permission mode", () => {
-		const props = { models: [], onChange: vi.fn(), onRememberPermissions: vi.fn() };
-		const { rerender } = render(<TurnSettingsBar {...props} settings={{ approvalMode: "auto" }} rememberedPermissionMode="auto" />);
-		expect(screen.getByRole("status")).toHaveTextContent("saved for new sessions");
-		rerender(<TurnSettingsBar {...props} settings={{ approvalMode: "default" }} rememberedPermissionMode="auto" />);
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-	});
-
-	it("matches saved success against the provider mode instead of stale native settings", () => {
+	it("matches the remembered mode against the provider mode instead of stale native settings", async () => {
+		const user = userEvent.setup();
 		const props = { models: [], settings: { approvalMode: "auto" as const }, onChangeConfigOption: vi.fn(), onRememberPermissions: vi.fn() };
-		const option: ChatConfigOption = { ...OPTIONS[2], currentValue: "auto", choices: [
+		const option: ChatConfigOption = { ...OPTIONS[2], currentValue: "manual", choices: [
 			{ value: "auto", name: "Auto", permissionMode: "auto" },
 			{ value: "manual", name: "Manual", permissionMode: "default" },
-			{ value: "unknown", name: "Unknown" },
 		] };
 		const { rerender } = render(<TurnSettingsBar {...props} configOptions={[option]} rememberedPermissionMode="auto" />);
-		expect(screen.getByRole("status")).toHaveTextContent("saved for new sessions");
-		rerender(<TurnSettingsBar {...props} configOptions={[option]} rememberedPermissionMode="auto" configPending />);
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		for (const currentValue of ["manual", "unknown"]) {
-			rerender(<TurnSettingsBar {...props} configOptions={[{ ...option, currentValue }]} rememberedPermissionMode="auto" />);
-			expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		}
+		await user.click(screen.getByRole("button", { name: "Permission mode" }));
+		expect(screen.getByRole("switch", { name: "Remember for this project" })).not.toBeChecked();
+		rerender(<TurnSettingsBar {...props} configOptions={[{ ...option, currentValue: "auto" }]} rememberedPermissionMode="auto" />);
+		expect(screen.getByRole("switch", { name: "Remember for this project" })).toBeChecked();
 	});
 
 });
@@ -1197,7 +1242,7 @@ describe("Cursor Ask and Agent chat modes", () => {
 		expect(screen.getByRole("menuitemradio", { name: "Approve for me" })).toBeInTheDocument();
 	});
 
-	it("keeps the Plan/Agent switch and its Manual wire value unchanged", async () => {
+	it("keeps the Plan/Agent mode control and its Manual wire value unchanged", async () => {
 		const onChange = vi.fn();
 		const user = userEvent.setup();
 		render(
@@ -1217,7 +1262,7 @@ describe("Cursor Ask and Agent chat modes", () => {
 		expect(onChange).toHaveBeenCalledWith("mode", { value: "plan" });
 	});
 
-	it("does not confuse a provider-owned agent option with AO's Switch agent", async () => {
+	it("does not confuse a provider-owned agent option with AO's session controls", async () => {
 		const user = userEvent.setup();
 		render(
 			<TurnSettingsBar
@@ -1594,7 +1639,7 @@ describe("OpenCode-style execution modes", () => {
 		expect(approvals).toHaveTextContent("Accept edits");
 		await user.click(approvals);
 		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
-		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" }, "approvalMode");
 	});
 });
 
@@ -1691,5 +1736,120 @@ describe("effort default when the provider reports none", () => {
 		render(<TurnSettingsBar harness="claude-code" onChange={onChange} settings={{ model: "m1" }} autoSelectEffortOnOpen
 			models={[{ id: "m1", displayName: "Model", default: true, efforts: ["low", "medium", "high"], defaultEffort: "high" }]} />);
 		expect(onChange).not.toHaveBeenCalled();
+	});
+});
+
+it("presents Antigravity model variants as Codex-style model and effort choices with one approval picker", async () => {
+	const user = userEvent.setup();
+	const onChangeConfigOption = vi.fn();
+	const options: ChatConfigOption[] = [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.8-flash-high", choices: [
+			{ value: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+			{ value: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
+			{ value: "gemini-3.8-pro-low", name: "Gemini 3.8 Pro (Low)" },
+			{ value: "gemini-3.8-pro-high", name: "Gemini 3.8 Pro (High)" },
+		] },
+		{ id: "execution_mode", name: "Agent Mode", category: "mode", type: "select", currentValue: "agent", choices: [{ value: "agent", name: "Agent Mode" }] },
+		{ id: "session_mode", name: "Session Mode", type: "select", currentValue: "default", choices: [{ value: "default", name: "Session Mode" }] },
+		{ id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "auto_edit", choices: [
+			{ value: "default", name: "Use agent permissions", permissionMode: "default" },
+			{ value: "auto_edit", name: "Accept edits", permissionMode: "accept-edits" },
+			{ value: "yolo", name: "Auto-approve", permissionMode: "auto" },
+			{ value: "agent", name: "Agent Mode" },
+		] },
+	];
+	render(<TurnSettingsBar harness="agy" models={[]} settings={{ approvalMode: "accept-edits" }} configOptions={options} onChangeConfigOption={onChangeConfigOption} />);
+	expect(screen.queryByRole("button", { name: "Session Mode" })).not.toBeInTheDocument();
+	const model = screen.getByRole("button", { name: "Model and reasoning effort for the next turn" });
+	expect(screen.queryByRole("button", { name: "Model mode for the next turn" })).not.toBeInTheDocument();
+	expect(model).toHaveTextContent("Gemini 3.8 Flash High");
+	await user.click(model);
+	await user.keyboard("{ArrowDown}{ArrowRight}");
+	await user.click(await screen.findByRole("menuitemradio", { name: "Gemini 3.8 Pro" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("model", { value: "gemini-3.8-pro-high" });
+	await user.click(model);
+	await user.keyboard("{ArrowDown}{ArrowDown}{ArrowRight}");
+	await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("model", { value: "gemini-3.8-flash-low" });
+	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+	expect(screen.queryByRole("menuitemradio", { name: "Use agent permissions" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("menuitemradio", { name: "Agent Mode" })).not.toBeInTheDocument();
+	await user.click(screen.getByRole("menuitemradio", { name: "Ask for approval" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "default" });
+	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+	await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "yolo" });
+	expect(options[0].choices).toHaveLength(4);
+});
+
+describe("permissions for the agent picked for the next message", () => {
+	it("marks a mode the pending agent cannot run in and names the one it starts in", async () => {
+		const user = userEvent.setup();
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{ approvalMode: "auto" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "pi" }, pendingPermissionModes: ["bypass-permissions"], onPendingChange: vi.fn() }}
+			/>,
+		);
+		const note = "Pi can't run in Auto-approve. It will start in Bypass permissions.";
+		await user.click(screen.getByRole("button", { name: note }));
+		expect(screen.getByRole("note")).toHaveTextContent(note);
+		expect(screen.getByRole("menuitemradio", { name: /Auto-approve/ })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("menuitemradio", { name: /Bypass permissions/ })).not.toHaveAttribute("aria-disabled");
+	});
+
+	it("leaves the control as it is when the pending agent runs in the chat's mode", () => {
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "kimi" }, pendingPermissionModes: ["default"], onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Approval policy for Kimi" })).toHaveTextContent("Use agent permissions");
+	});
+
+	it("goes back to the chat's own mode when leaving an agent that needed another", () => {
+		render(
+			<TurnSettingsBar
+				harness="pi"
+				models={[]}
+				settings={{ approvalMode: "bypass-permissions" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "claude-code" }, chatPermissionMode: "accept-edits", onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Approval policy for Claude Code" })).toHaveTextContent("Accept edits");
+	});
+
+	it("shows the pending agent's modes in place of the running agent's own mode option", async () => {
+		const user = userEvent.setup();
+		const onPendingChange = vi.fn();
+		const pending = { harness: "kimi" };
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{}}
+				onChange={vi.fn()}
+				configOptions={[{
+					id: "mode", name: "Permission mode", category: "mode", type: "select", currentValue: "bypass",
+					choices: [{ value: "manual", name: "Manual", permissionMode: "default" }, { value: "bypass", name: "Bypass Permissions", permissionMode: "bypass-permissions" }],
+				}]}
+				onChangeConfigOption={vi.fn()}
+				agentSwitch={{ projectId: "p", pending, pendingPermissionModes: ["default"], onPendingChange }}
+			/>,
+		);
+		// Claude Code's own option is gone; the control is Kimi's, and Kimi cannot bypass.
+		expect(screen.queryByRole("button", { name: /Permission mode/ })).not.toBeInTheDocument();
+		const note = "Kimi can't run in Bypass permissions. It will start in Use agent permissions.";
+		await user.click(screen.getByRole("button", { name: note }));
+		await user.click(screen.getByRole("menuitemradio", { name: /Use agent permissions/ }));
+		expect(onPendingChange).toHaveBeenCalledWith({ harness: "kimi", approvalMode: "default" });
 	});
 });

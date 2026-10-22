@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -648,7 +649,7 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	case codexproto.MethodError:
 		var p codexproto.ErrorNotification
 		if err := json.Unmarshal(n.Params, &p); err == nil &&
-			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil) {
+			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil || p.Error.CodexErrorInfo != nil) {
 			failure := codexProviderFailure(p.Error)
 			if failure == nil {
 				return nil
@@ -694,21 +695,35 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	}
 }
 
-// codexErrorInfo is metadata, not display copy. Only an explicit unauthorized
-// reason invokes the existing authentication path; other errors remain readable.
+// Native reasons distinguish quota exhaustion from throttling and authentication
+// failures even when the provider's display copy does not name the limit.
 func codexProviderFailure(turnErr codexproto.TurnError) error {
 	detail := ""
 	if turnErr.AdditionalDetails != nil {
 		detail = *turnErr.AdditionalDetails
 	}
 	var cause error
-	if turnErr.CodexErrorInfo != nil && string(*turnErr.CodexErrorInfo) == `"unauthorized"` {
-		cause = ports.ErrChatAuthRequired
+	if turnErr.CodexErrorInfo != nil {
+		var reason string
+		_ = json.Unmarshal(*turnErr.CodexErrorInfo, &reason)
+		switch reason {
+		case "unauthorized":
+			cause = ports.ErrChatAuthRequired
+		case "usageLimitExceeded":
+			cause = errCodexUsageLimitExceeded
+		}
 	}
 	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && cause == nil {
 		return nil
 	}
-	return ports.NewChatProviderFailure(turnErr.Message, detail, cause)
+	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && errors.Is(cause, errCodexUsageLimitExceeded) {
+		return ports.NewChatProviderFailure("Usage limit exceeded", "", cause)
+	}
+	failure := ports.NewChatProviderFailure(turnErr.Message, detail, cause)
+	if errors.Is(cause, errCodexUsageLimitExceeded) && domain.ParseConversationUsageLimit(failure.Error(), nil) == nil {
+		return ports.NewChatProviderFailure("Usage limit exceeded", failure.Error(), cause)
+	}
+	return failure
 }
 
 // turnIDFallback reads a top-level turnId, which some builds send instead of

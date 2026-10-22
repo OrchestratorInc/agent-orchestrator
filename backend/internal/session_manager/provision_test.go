@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -420,6 +421,52 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}}}
+	for _, harness := range []domain.AgentHarness{domain.HarnessDroid, domain.HarnessAider, domain.HarnessAmp} {
+		// A flagged explicit effort override must fail loudly instead of being
+		// silently discarded: the caller asked for something the harness cannot
+		// honor.
+		_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro", Effort: "high"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, and command-code") {
+			t.Fatalf("harness %q error = %v, want support hint", harness, err)
+		}
+		// Unflagged request-carried effort still clears silently, matching the
+		// long-standing contract for harnesses without effort support.
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro", Effort: "high"},
+		}, domain.ProjectConfig{})
+		if err != nil {
+			t.Fatalf("harness %q unflagged error = %v, want silent clear", harness, err)
+		}
+		if resolved.Effort != "" {
+			t.Fatalf("harness %q unflagged effort = %q, want cleared", harness, resolved.Effort)
+		}
+	}
+
+	// Inherited project/role effort still clears silently: nothing explicit was
+	// requested, so there is nothing to reject.
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessDroid,
+		AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro"},
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+	if err != nil {
+		t.Fatalf("inherited effort error = %v, want silent clear", err)
+	}
+	if resolved.Effort != "" {
+		t.Fatalf("inherited effort = %q, want provider default", resolved.Effort)
+	}
+}
+
 func TestResolveClaudeModelWithoutEffortStillRequiresCatalog(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
 
@@ -454,6 +501,51 @@ func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testin
 	}}
 	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
 		t.Fatalf("stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	unvalidated := domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}
+	for name, catalog := range map[string]tuningCatalog{
+		"lookup failed":   {err: errors.New("not logged in")},
+		"stale":           {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"xhigh"}}}}},
+		"custom model":    {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"low"}}}}},
+		"unlisted effort": {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"low"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{modelCatalog: catalog, logger: slog.New(slog.DiscardHandler)}
+			got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, unvalidated)
+			if err != nil || got != unvalidated {
+				t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+			}
+		})
+	}
+}
+
+func TestResolveClaudeTUIAgentConfigStillRequiresCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("not logged in")}, logger: slog.New(slog.DiscardHandler)}
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Model: "opus", Effort: "high"}}
+	if _, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("err = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	m := &Manager{modelCatalog: tuningCatalog{err: fmt.Errorf("codex model/list: %w", context.DeadlineExceeded)}, logger: slog.New(slog.DiscardHandler)}
+	got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig)
+	if err != nil || got != cfg.AgentConfig {
+		t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.modelCatalog = tuningCatalog{err: context.Canceled}
+	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
+		t.Fatal("cancelled spawn launched")
 	}
 }
 
@@ -595,6 +687,18 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 	}
 }
 
+func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-only step")
+	}
+	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil)
+	want := "The project's Setup script failed at step 2 (exit status 3), so the agent did not start. " +
+		"Fix the script in Project settings > Scripts, then try again. Output: could not reach registry"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v\nwant    %s", err, want)
+	}
+}
+
 func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	workspace := t.TempDir()
 	command := "while :; do :; done"
@@ -604,7 +708,8 @@ func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "setup step 2 failed") {
+	var setupErr *SetupStepError
+	if !errors.As(err, &setupErr) || setupErr.Step != 2 || setupErr.TimedOut {
 		t.Fatalf("cancellation error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -656,5 +761,115 @@ func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
 				t.Errorf("model %q effort %q: error = %v, want ErrUnsupportedEffort", model, effort, err)
 			}
 		}
+	}
+}
+
+// A Setup step runs with the time limit its first line sets, which never
+// reaches the shell, and a step over it fails saying so.
+func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
+	previous := scriptStepMinute
+	scriptStepMinute = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute = previous })
+	workspace := t.TempDir()
+	write := "echo ran > out.txt"
+	slow := "sleep 2"
+	if runtime.GOOS == "windows" {
+		write = "echo ran> out.txt"
+		slow = "ping -n 3 127.0.0.1 > NUL"
+	}
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil); err != nil {
+		t.Fatalf("a timed step failed: %v", err)
+	}
+	if output, err := os.ReadFile(filepath.Join(workspace, "out.txt")); err != nil || strings.TrimSpace(string(output)) != "ran" {
+		t.Fatalf("the timed step did not run: %q %v", output, err)
+	}
+	// One "minute" is 100ms here: the step stops at its own limit.
+	started := time.Now()
+	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil)
+	if err == nil || !strings.Contains(err.Error(), "The project's Setup script stopped at step 1 after 1 minute, so the agent did not start.") || time.Since(started) > 1500*time.Millisecond {
+		t.Fatalf("err = %v after %s, want the step stopped at its limit", err, time.Since(started))
+	}
+	// A long limit leaves the step running past the default one.
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil); err != nil {
+		t.Fatalf("a step under its own limit failed: %v", err)
+	}
+}
+
+// A start that runs Setup also gets its steps' time limits.
+func TestPostCreateBudgetCoversTheSetupSteps(t *testing.T) {
+	if got := postCreateBudget(10*time.Minute, nil); got != 10*time.Minute {
+		t.Fatalf("no setup = %s", got)
+	}
+	// A step without its own limit adds Setup's 30-minute default.
+	if got := postCreateBudget(10*time.Minute, []string{"npm ci", " ", "# ao-timeout: 90m\nmake"}); got != 130*time.Minute {
+		t.Fatalf("setup budget = %s", got)
+	}
+	// A typed limit, shorter than the default too, is the step's own.
+	if got := postCreateBudget(10*time.Minute, []string{"# ao-timeout: 5m\nnpm ci", "make"}); got != 45*time.Minute {
+		t.Fatalf("setup budget with a short step = %s", got)
+	}
+}
+
+type deadlineProbeWorkspace struct {
+	ports.Workspace
+	budget time.Duration
+}
+
+func (w *deadlineProbeWorkspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		w.budget = time.Until(deadline)
+	}
+	return w.Workspace.Create(ctx, cfg)
+}
+
+// A REST spawn is not cut at the request's flat deadline: it runs under its
+// budget plus its project's Setup step limits.
+func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
+	m, st, _, _ := newManager()
+	probe := &deadlineProbeWorkspace{Workspace: m.workspace}
+	m.workspace = probe
+	project := st.projects["mer"]
+	project.Config.PostCreate = []string{"# ao-timeout: 90m\nmake", "npm ci"}
+	st.projects["mer"] = project
+	var extended time.Duration
+	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
+	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+	if want := 121 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
+		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 30m)", probe.budget, want)
+	}
+	if extended != 121*time.Minute+time.Second {
+		t.Fatalf("request deadline extended to %s, want just past the spawn's own", extended)
+	}
+}
+
+// A restore extends the request's budget by its Setup only when it recreates
+// the worktree and so runs Setup; an ordinary restore that hangs keeps the
+// request's ordinary budget.
+func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recreated bool
+		want      time.Duration
+	}{
+		{"worktree kept", false, 0},
+		{"worktree recreated", true, 91*time.Minute + time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.PostCreate = []string{"# ao-timeout: 90m\ntrue"}
+			st.projects["mer"] = project
+			workspace := t.TempDir()
+			if tc.recreated {
+				workspace = filepath.Join(workspace, "reclaimed")
+			}
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: workspace, Branch: "ao/mer-1", AgentSessionID: "agent-x"})
+			var extended time.Duration
+			ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
+			_, _ = m.RestoreWithMode(ctx, "mer-1")
+			if extended != tc.want {
+				t.Fatalf("request budget extended to %s, want %s", extended, tc.want)
+			}
+		})
 	}
 }
