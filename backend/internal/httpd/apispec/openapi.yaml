@@ -6690,6 +6690,52 @@ paths:
       summary: Choose one provider-advertised session configuration value
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/file-references/resolve:
+    post:
+      operationId: resolveFileReference
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationFileReferenceRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveFileReferenceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve the current source of a captured file annotation without modifying
+        it
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve:
     post:
       operationId: resolveSessionConversationInput
@@ -18600,6 +18646,27 @@ components:
           type: object
       required:
       - action
+      type: object
+    ResolveFileReferenceResponse:
+      properties:
+        endLine:
+          type: integer
+        line:
+          type: integer
+        path:
+          type: string
+        reason:
+          type: string
+        side:
+          type: string
+        state:
+          enum:
+          - unchanged
+          - changed
+          - unavailable
+          type: string
+      required:
+      - state
       type: object
     RestoreArtifactVersionRequest:
       properties:

@@ -3493,5 +3493,10 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "Mehr anzeigen",
 	"chat.fileAnnotationShowLess": "Weniger anzeigen",
-	"files.addToChatRejected": "Auswahl nicht hinzugefügt. Warte, bis das Senden abgeschlossen ist, oder prüfe den Entwurf und versuche es erneut."
+	"files.addToChatRejected": "Auswahl nicht hinzugefügt. Warte, bis das Senden abgeschlossen ist, oder prüfe den Entwurf und versuche es erneut.",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "Die Auswahl konnte nicht validiert werden. Entferne sie und füge sie erneut hinzu.",
+	"chat.fileAnnotationCheckFailed": "Die Quellenprüfung ist fehlgeschlagen. Versuche es später erneut."
 }

@@ -3475,5 +3475,10 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "展开",
 	"chat.fileAnnotationShowLess": "收起",
-	"files.addToChatRejected": "未添加所选内容。请等待当前发送完成，或检查草稿后重试。"
+	"files.addToChatRejected": "未添加所选内容。请等待当前发送完成，或检查草稿后重试。",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "无法验证所选内容。请移除后重新添加。",
+	"chat.fileAnnotationCheckFailed": "源文件检查失败。请稍后重试。"
 }

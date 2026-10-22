@@ -3493,5 +3493,10 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "もっと見る",
 	"chat.fileAnnotationShowLess": "表示を減らす",
-	"files.addToChatRejected": "選択範囲を追加できませんでした。送信の完了を待つか下書きを確認して、もう一度お試しください。"
+	"files.addToChatRejected": "選択範囲を追加できませんでした。送信の完了を待つか下書きを確認して、もう一度お試しください。",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "選択内容を検証できませんでした。削除して、もう一度追加してください。",
+	"chat.fileAnnotationCheckFailed": "ソースの確認に失敗しました。後でもう一度お試しください。"
 }

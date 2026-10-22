@@ -234,6 +234,7 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Post("/sessions/{sessionId}/conversation/file-references/resolve", c.resolveFileReference)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)

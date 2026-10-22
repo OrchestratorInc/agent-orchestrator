@@ -2734,6 +2734,9 @@ type SendConversationMessageRequest struct {
 	Continuation bool `json:"continuation,omitempty"`
 }
 
+// ResolveFileReferenceResponse describes the current availability of captured source.
+type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
+
 // ConversationFileReferenceRequest carries bounded, user-supplied captured code.
 type ConversationFileReferenceRequest ports.ChatFileReference
 

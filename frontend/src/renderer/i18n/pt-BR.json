@@ -3558,5 +3558,10 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "Mostrar mais",
 	"chat.fileAnnotationShowLess": "Mostrar menos",
-	"files.addToChatRejected": "A seleção não foi adicionada. Aguarde o envio terminar ou confira o rascunho e tente novamente."
+	"files.addToChatRejected": "A seleção não foi adicionada. Aguarde o envio terminar ou confira o rascunho e tente novamente.",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "Não foi possível validar a seleção. Remova-a e adicione-a novamente.",
+	"chat.fileAnnotationCheckFailed": "A verificação da origem falhou. Tente novamente mais tarde."
 }

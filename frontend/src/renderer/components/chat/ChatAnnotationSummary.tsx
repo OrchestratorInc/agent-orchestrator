@@ -1,5 +1,5 @@
+import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
-import { CapturedFileAnnotation } from "./CapturedFileAnnotation";
 import { MessageSquareQuote, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -102,7 +102,7 @@ export function ChatAnnotationSummary({
 					{annotations.map((annotation, index) => (
 						<div key={annotation.id ?? `${annotation.messageId ?? "annotation"}-${index}`} className="relative min-w-0 rounded bg-interactive-hover">
        {annotation.fileReference ? <div className={cn("px-2.5 py-1.5 text-xs", onRemove && "pr-7")}>
-        <CapturedFileAnnotation reference={annotation.fileReference} />
+<FileAnnotationPreview reference={annotation.fileReference} />
        </div> : <button
 								type="button"
 								disabled={disabled}

@@ -3474,5 +3474,10 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "Show more",
 	"chat.fileAnnotationShowLess": "Show less",
-	"files.addToChatRejected": "Selection not added. Wait for the current send to finish, or check the draft, then try again."
+	"files.addToChatRejected": "Selection not added. Wait for the current send to finish, or check the draft, then try again.",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "Selection could not be validated. Remove it and add the selection again.",
+	"chat.fileAnnotationCheckFailed": "Source check failed. Try again later."
 }
