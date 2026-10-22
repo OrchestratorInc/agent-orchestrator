@@ -8,6 +8,7 @@ import { useResolvedTheme } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { HarnessDetailGroup } from "./harness/harness-ui";
 import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
@@ -212,6 +213,24 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 		<div role="progressbar" aria-label={t("settings.codexAccounts.remainingForLimit", { label: window.label, value })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${fill}`} style={{ width: `${remaining}%` }} /></div>
 		<p className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{t("settings.codexAccounts.percentLeft", { value })}</p>
 	</>;
+}
+
+/** The sign-in terminal on its own, for signing a saved account in again from
+ * outside Settings, such as a chat whose agent was refused. Closing cancels. */
+export function AgentAccountLoginDialog({ login, note, pending, onCheck, onClose }: {
+	login: AgentAccountLogin;
+	note: string;
+	pending: boolean;
+	onCheck: (login: AgentAccountLogin) => void;
+	onClose: (login: AgentAccountLogin) => void;
+}) {
+	const { t } = useTranslation();
+	return <Dialog open onOpenChange={(open) => { if (!open) onClose(login); }}>
+		<DialogContent aria-describedby={undefined} showCloseButton={false} className="z-overlay w-[min(560px,calc(100vw-24px))] max-w-none p-0">
+			<DialogTitle className="sr-only">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</DialogTitle>
+			<LoginTerminal login={login} note={note} pending={pending} onCheck={onCheck} onClose={onClose} />
+		</DialogContent>
+	</Dialog>;
 }
 
 function LoginTerminal({ login, note, pending, onCheck, onClose }: {

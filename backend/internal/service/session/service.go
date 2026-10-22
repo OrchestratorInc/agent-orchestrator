@@ -1415,7 +1415,7 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		return apierr.Invalid("AGENT_ACCOUNT_PROVIDER_MISMATCH", "The account is for a different agent", nil)
 	case errors.Is(err, ports.ErrAgentAccountDefaultUnusable):
-		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login. Sign it in again, or make another account the default.", nil)
+		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login, and no other account is signed in. Sign one in again in Settings.", nil)
 	case errors.Is(err, ports.ErrAgentAccountSignedOut):
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):

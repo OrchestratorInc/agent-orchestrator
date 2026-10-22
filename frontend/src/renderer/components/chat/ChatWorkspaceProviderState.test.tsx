@@ -13,6 +13,15 @@ import {
 import type { ConversationSnapshot } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
+// The sign-in banner reads the session's account; these tests cover the chrome
+// without a daemon, so the account reads answer nothing.
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: () => ({ data: undefined }),
+	useAgentAccounts: () => ({ data: undefined }),
+	useAgentAccountActions: () => ({}),
+}));
+
 function render(ui: ReactElement) {
 	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 	return {

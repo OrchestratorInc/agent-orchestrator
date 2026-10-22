@@ -280,6 +280,7 @@ func Run(buildVersion string) error {
 	// resolver (AO_AGENT validated here for compatibility), and the agent
 	// messenger, then mount it on the API.
 	var agentSvc *agentsvc.Service
+	var agentAccountSvc *agentaccounts.Service
 	chatDrivers := chatdriverregistry.Build(log, func() {
 		if agentSvc == nil {
 			return
@@ -361,6 +362,11 @@ func Run(buildVersion string) error {
 		Log:      log,
 		NewID:    uuid.NewString,
 		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
+			// The session's own account (a saved one, or this computer's login) is
+			// read again off the chat path; the CLI probe can take seconds.
+			if accounts := agentAccountSvc; accounts != nil {
+				go accounts.RecheckSessionAccount(ctx, sessionID, harness)
+			}
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
 			}
@@ -519,7 +525,7 @@ func Run(buildVersion string) error {
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
-	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)

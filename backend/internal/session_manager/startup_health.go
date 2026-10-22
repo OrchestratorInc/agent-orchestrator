@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,29 +19,6 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return err
-	}
-	if interruptedClientSetup(rec) {
-		release := sync.OnceFunc(m.acquireWorkspaceGate(rec.ProjectID))
-		defer release()
-		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, release)
-		current, found, err := m.store.GetSession(ctx, rec.ID)
-		if err != nil || !found {
-			return err
-		}
-		// An initial spawn can finish while this pass waits for the project gate.
-		if current.CreatedAt.Equal(rec.CreatedAt) && interruptedClientSetup(current) {
-			var info *ports.WorkspaceProjectInfo
-			if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
-				rows, _, err := m.workspaceProjectRows(ctx, current)
-				if err != nil {
-					return err
-				}
-				info = &ports.WorkspaceProjectInfo{Root: workspaceInfo(current), Worktrees: rows}
-			}
-			m.rollbackSeedSpawnWorkspace(ctx, current, workspaceInfo(current), info, false, false)
-			return nil
-		}
-		rec = current
 	}
 	// Preserve cleanup of interrupted spawns that never committed a workspace.
 	// Their client request IDs must remain retryable after a daemon crash.
@@ -171,13 +146,4 @@ func (m *Manager) retryStartupChatCheck(ctx context.Context, id domain.SessionID
 	}
 	m.logger.Warn("reconcile: chat reattach retry failed", "sessionID", id, "retrying", retry, "error", err)
 	return retry
-}
-
-// Setup's durable completion is written before any controller may launch.
-func interruptedClientSetup(rec domain.SessionRecord) bool {
-	return rec.ClientRequestID != "" && !rec.ClientRequestCommitted && !rec.IsTerminated &&
-		rec.Metadata.RuntimeHandleID == "" && rec.Metadata.ProviderConversationID == "" &&
-		slices.ContainsFunc(rec.ProvisionSteps, func(step domain.SessionProvisionStep) bool {
-			return step.ID == domain.SessionProvisionStepSetup && step.Status == domain.SessionProvisionStepRunning
-		})
 }

@@ -43,6 +43,7 @@ type Manager interface {
 	// local repository as a project.
 	Clone(ctx context.Context, in CloneInput) (Project, error)
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
+	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
 	// InitializeRepository prepares a selected folder for project registration.
@@ -208,15 +209,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
-	if in.ClonePreparationID != "" {
-		markerID, exists, markerErr := readClonePreparationID(path)
-		if markerErr != nil {
-			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
-		}
-		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
-			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
-		}
-	}
 
 	activeProjects, err := m.store.ListProjects(ctx)
 	if err != nil {
@@ -263,6 +255,16 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 			"existingProjectId":  existing.ID,
 			"suggestedProjectId": string(m.suggestID(ctx, id)),
 		})
+	}
+
+	if in.ClonePreparationID != "" {
+		markerID, exists, markerErr := readClonePreparationID(path)
+		if markerErr != nil {
+			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
+		}
+		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
+			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
+		}
 	}
 
 	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {

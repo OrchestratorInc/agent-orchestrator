@@ -343,7 +343,7 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
-	SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -1178,14 +1178,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// synchronous workspace lifecycle as before. Async Chat acquires it in its
 	// background half so the API response never waits on Git.
 	var taskName func() generatedTaskName
-	var namingProgress *provisionProgress
-	if !asyncChat {
-		if cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != "" {
-			namingProgress = m.startProvisionProgress(ctx, id, []domain.SessionProvisionStepID{domain.SessionProvisionStepWorktree})
+	cancelNaming := context.CancelFunc(func() {})
+	namingHandedOff := false
+	defer func() {
+		if !namingHandedOff {
+			cancelNaming()
 		}
-		var cancelNaming context.CancelFunc
-		taskName, cancelNaming = m.startTaskNaming(ctx, cfg, rec, project.Config)
-		defer cancelNaming()
+	}()
+	if !asyncChat {
+		taskName, cancelNaming = m.startTaskNaming(cfg, rec, project.Config)
 		releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(cfg.ProjectID))
 		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 		defer releaseWorkspaceGate()
@@ -1256,41 +1257,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// A synchronous request is unacknowledged until launch. Record that setup
-	// has not completed before naming publishes its workspace path.
-	trackSetup := taskName != nil && cfg.ClientRequestID != ""
-	if trackSetup {
-		namingProgress.steps = append(namingProgress.steps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning})
-		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
-		}
-	}
-	if taskName != nil {
-		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, rec, ws, workspaceProject, taskName())
-		if err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
-		}
-	}
-	if namingProgress != nil {
-		namingProgress.complete(ctx, domain.SessionProvisionStepWorktree)
-	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
 	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
-	}
-
-	if namingProgress != nil {
-		namingProgress.complete(ctx, domain.SessionProvisionStepSetup)
-	}
-	if trackSetup {
-		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
-		}
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -1343,6 +1314,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 			}
 		}
+		namingHandedOff = true
+		m.nameTaskBranchLater(ctx, rec, ws, workspaceProject, taskName, cancelNaming)
 		return rec, promptBytes, systemPromptBytes, nil
 	}
 
@@ -1522,6 +1495,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, err
 	}
+	namingHandedOff = true
+	m.nameTaskBranchLater(ctx, rec, ws, workspaceProject, taskName, cancelNaming)
 	return rec, promptBytes, systemPromptBytes, nil
 }
 
@@ -2090,9 +2065,6 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		return false
 	}
 	_ = m.store.DeleteSessionWorktrees(ctx, ws.SessionID)
-	if err := m.completeTaskNaming(ctx, ports.WorkspaceProjectInfo{Root: ws}); err != nil {
-		m.logger.Warn("spawn rollback: clear task naming journal", "sessionID", ws.SessionID, "error", err)
-	}
 	return true
 }
 
@@ -2156,14 +2128,6 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 		if published {
 			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
 		} else {
-			cleanupCtx, cancel = spawnRollbackContext(ctx)
-			cleared, err := m.store.SetSessionNamedWorkspace(cleanupCtx, rec.ID, ws.Path, "", "", "", m.clock())
-			cancel()
-			if err != nil || !cleared {
-				m.logger.Warn("spawn rollback: retain session after workspace clear failed", "sessionID", rec.ID, "error", err)
-				m.markSpawnFailedTerminatedAfterFailure(ctx, rec.ID, false)
-				return
-			}
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
 			m.cleanupArtifactDir(rec.ID)
 		}
@@ -4182,29 +4146,6 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile: list sessions: %w", err)
-	}
-	for i, rec := range recs {
-		if rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" {
-			continue
-		}
-		// Fence controller launches before taking the project gate, matching resume.
-		if err := m.beginAgentResume(ctx, rec.ID); err != nil {
-			continue
-		}
-		release := m.acquireWorkspaceGate(rec.ProjectID)
-		current, ok, readErr := m.store.GetSession(ctx, rec.ID)
-		if readErr == nil && ok && current.CreatedAt.Equal(rec.CreatedAt) {
-			_, recovered, recoveryErr := m.recoverTaskNaming(ctx, current)
-			if recoveryErr != nil {
-				m.logger.Warn("reconcile: task naming recovery failed", "sessionID", rec.ID, "error", recoveryErr)
-			} else if recovered {
-				if updated, ok, err := m.store.GetSession(ctx, rec.ID); err == nil && ok {
-					recs[i] = updated
-				}
-			}
-		}
-		release()
-		m.endAgentResume(rec.ID)
 	}
 	m.reconcileLivePass(ctx, recs)
 	for _, rec := range recs {
