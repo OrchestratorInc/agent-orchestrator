@@ -9,9 +9,11 @@ import { CATALOGS } from "@/i18n/catalogs";
 import { DEFAULT_LOCALE, type SupportedLocale } from "@/i18n/locales";
 import { localePath } from "@/i18n/paths";
 import { visibleProductName } from "@/lib/branding";
+import { markdownPath, sourceUrl } from "@/lib/llms";
 import { source } from "@/lib/source";
 import { articleLocales, articlePath, localizeHref } from "@/lib/translations";
 import { Card, getMDXComponents } from "./mdx";
+import { PageActions } from "./page-actions";
 import { EnglishArticleNotice, LocalizedTitle } from "./page-locale";
 
 type Props = { params: Promise<{ slug?: string[] }> };
@@ -40,6 +42,8 @@ export function articleRoute(locale: SupportedLocale) {
         <DocsTitle lang={locale}>{page.data.title}</DocsTitle>
         <DocsDescription lang={locale}>{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
         {locale === DEFAULT_LOCALE && <EnglishArticleNotice />}
+        {/* The Markdown copy is English, also for translated articles. */}
+        <PageActions markdownPath={markdownPath(page.slugs)} sourceUrl={sourceUrl(page)} />
         <DocsBody lang={locale}>
           <MDX
             components={getMDXComponents({

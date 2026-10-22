@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "Đã sao chép"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "Đã sao chép"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "Sao chép mã"
@@ -55,6 +59,9 @@ msgstr "Sao chép mã"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "Sao chép liên kết đến mục này"
+
+msgid "Copy Markdown"
+msgstr "Sao chép Markdown"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "Trên trang này"
 
+msgid "Open in"
+msgstr "Mở trong"
+
+msgid "Open in {name}"
+msgstr "Mở trong {name}"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "Mở tìm kiếm"
@@ -109,6 +122,9 @@ msgstr "Không tìm thấy trang"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Trước"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "Hãy đọc {markdownUrl} và trả lời các câu hỏi của tôi về trang này."
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "Trình theo dõi"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Sử dụng Orchestrator"
+
+msgid "View on GitHub"
+msgstr "Xem trên GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

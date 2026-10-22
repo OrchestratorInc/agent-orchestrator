@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "Kopyalandı"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "Kopyalandı"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "Kodu kopyala"
@@ -55,6 +59,9 @@ msgstr "Kodu kopyala"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "Bu bölümün bağlantısını kopyala"
+
+msgid "Copy Markdown"
+msgstr "Markdown'ı kopyala"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "Bu sayfada"
 
+msgid "Open in"
+msgstr "Şurada aç"
+
+msgid "Open in {name}"
+msgstr "{name} ile aç"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "Aramayı aç"
@@ -109,6 +122,9 @@ msgstr "Sayfa bulunamadı"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Önceki"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "{markdownUrl} sayfasını oku ve onunla ilgili sorularımı yanıtla."
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "Takip araçları"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator'ı kullanma"
+
+msgid "View on GitHub"
+msgstr "GitHub'da görüntüle"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

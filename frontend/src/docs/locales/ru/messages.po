@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "Скопировано"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "Скопировано"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "Копировать код"
@@ -55,6 +59,9 @@ msgstr "Копировать код"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "Копировать ссылку на этот раздел"
+
+msgid "Copy Markdown"
+msgstr "Копировать Markdown"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "На этой странице"
 
+msgid "Open in"
+msgstr "Открыть в"
+
+msgid "Open in {name}"
+msgstr "Открыть в {name}"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "Открыть поиск"
@@ -109,6 +122,9 @@ msgstr "Страница не найдена"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Назад"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "Прочитай {markdownUrl} и ответь на мои вопросы по этой странице."
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "Трекеры"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Работа с Orchestrator"
+
+msgid "View on GitHub"
+msgstr "Открыть на GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

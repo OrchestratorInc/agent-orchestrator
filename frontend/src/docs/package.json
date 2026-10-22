@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npm run i18n:compile && next dev",
-    "build": "npm run i18n:compile && next build --webpack",
+    "build": "npm run i18n:compile && next build --webpack && node scripts/move-markdown.mjs",
     "start": "next start",
     "i18n:extract": "lingui extract --clean --overwrite",
     "i18n:compile": "lingui compile --strict --typescript",

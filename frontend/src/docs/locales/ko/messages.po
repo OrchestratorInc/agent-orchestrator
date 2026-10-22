@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "복사됨"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "복사됨"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "코드 복사"
@@ -55,6 +59,9 @@ msgstr "코드 복사"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "이 섹션 링크 복사"
+
+msgid "Copy Markdown"
+msgstr "Markdown 복사"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "이 페이지의 내용"
 
+msgid "Open in"
+msgstr "열기"
+
+msgid "Open in {name}"
+msgstr "{name}에서 열기"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "검색 열기"
@@ -109,6 +122,9 @@ msgstr "페이지를 찾을 수 없습니다"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "이전"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "{markdownUrl}을(를) 읽고 이 내용에 대한 질문에 답해 주세요."
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "트래커"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator 사용하기"
+
+msgid "View on GitHub"
+msgstr "GitHub에서 보기"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

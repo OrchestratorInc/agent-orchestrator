@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "已複製"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "已複製"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "複製程式碼"
@@ -55,6 +59,9 @@ msgstr "複製程式碼"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "複製此章節的連結"
+
+msgid "Copy Markdown"
+msgstr "複製 Markdown"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "本頁內容"
 
+msgid "Open in"
+msgstr "開啟方式"
+
+msgid "Open in {name}"
+msgstr "在 {name} 中開啟"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "開啟搜尋"
@@ -109,6 +122,9 @@ msgstr "找不到頁面"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "上一頁"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "閱讀 {markdownUrl}，並回答我關於它的問題。"
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "追蹤器"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "使用 Orchestrator"
+
+msgid "View on GitHub"
+msgstr "在 GitHub 上檢視"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

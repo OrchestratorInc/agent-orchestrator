@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "Zkopírováno"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "Zkopírováno"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "Kopírovat kód"
@@ -55,6 +59,9 @@ msgstr "Kopírovat kód"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "Kopírovat odkaz na tuto sekci"
+
+msgid "Copy Markdown"
+msgstr "Kopírovat Markdown"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "Na této stránce"
 
+msgid "Open in"
+msgstr "Otevřít v"
+
+msgid "Open in {name}"
+msgstr "Otevřít v {name}"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "Otevřít vyhledávání"
@@ -109,6 +122,9 @@ msgstr "Stránka nenalezena"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Předchozí"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "Přečti si {markdownUrl} a odpověz na mé otázky k této stránce."
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "Sledování úkolů"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Používání Orchestratoru"
+
+msgid "View on GitHub"
+msgstr "Zobrazit na GitHubu"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

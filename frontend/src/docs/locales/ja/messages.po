@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "コピーしました"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "コピーしました"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "コードをコピー"
@@ -55,6 +59,9 @@ msgstr "コードをコピー"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "このセクションへのリンクをコピー"
+
+msgid "Copy Markdown"
+msgstr "Markdown をコピー"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "このページの内容"
 
+msgid "Open in"
+msgstr "開く"
+
+msgid "Open in {name}"
+msgstr "{name} で開く"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "検索を開く"
@@ -109,6 +122,9 @@ msgstr "ページが見つかりません"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "前へ"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "{markdownUrl} を読んで、この内容についての質問に答えてください。"
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "トラッカー"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator の使い方"
+
+msgid "View on GitHub"
+msgstr "GitHub で見る"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

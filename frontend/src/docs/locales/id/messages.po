@@ -48,6 +48,10 @@ msgctxt "code block"
 msgid "Copied"
 msgstr "Disalin"
 
+msgctxt "page actions"
+msgid "Copied"
+msgstr "Disalin"
+
 msgctxt "code block"
 msgid "Copy code"
 msgstr "Salin kode"
@@ -55,6 +59,9 @@ msgstr "Salin kode"
 msgctxt "heading anchor"
 msgid "Copy link to this section"
 msgstr "Salin tautan ke bagian ini"
+
+msgid "Copy Markdown"
+msgstr "Salin Markdown"
 
 msgctxt "sidebar section"
 msgid "Getting Started"
@@ -95,6 +102,12 @@ msgctxt "table of contents"
 msgid "On this page"
 msgstr "Di halaman ini"
 
+msgid "Open in"
+msgstr "Buka di"
+
+msgid "Open in {name}"
+msgstr "Buka di {name}"
+
 msgctxt "search"
 msgid "Open search"
 msgstr "Buka pencarian"
@@ -109,6 +122,9 @@ msgstr "Halaman tidak ditemukan"
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Sebelumnya"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "Baca {markdownUrl} lalu jawab pertanyaan saya tentang halaman itu."
 
 msgctxt "sidebar section"
 msgid "Reference"
@@ -151,6 +167,9 @@ msgstr "Pelacak"
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Menggunakan Orchestrator"
+
+msgid "View on GitHub"
+msgstr "Lihat di GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"
