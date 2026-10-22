@@ -176,9 +176,14 @@ func newCuaDescribeCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newCuaCallCommand(ctx *commandContext) *cobra.Command {
-	return &cobra.Command{
+	var jsonOutput bool
+	cmd := &cobra.Command{
 		Use:   "call <tool> [json-arguments|-]",
-		Short: "Run one Cua Driver tool; prints JSON with screenshot file paths",
+		Short: "Run one Cua Driver tool; prints its result with screenshot file paths",
+		Long: "Runs one Cua Driver tool. Window reads, actions, and run_steps print the way Cua Driver's\n" +
+			"MCP server shows them: the window line, the tree or the diff since the last read, and the\n" +
+			"screenshot's file path where MCP shows the image. Other tools print JSON; --json prints\n" +
+			"the raw result for every tool.",
 		Example: "  ao cua call list_windows\n" +
 			"  ao cua call get_window_state '{\"pid\":123,\"window_id\":456}'\n" +
 			"  echo '{\"element_token\":\"s00000019:12\"}' | ao cua call click -",
@@ -193,6 +198,12 @@ func newCuaCallCommand(ctx *commandContext) *cobra.Command {
 			if err := ctx.postJSON(cmd.Context(), "computer-use/call", request, &response); err != nil {
 				return err
 			}
+			if !jsonOutput {
+				if text, ok := renderCuaCall(response); ok {
+					_, err := io.WriteString(cmd.OutOrStdout(), text)
+					return err
+				}
+			}
 			if err := writeJSON(cmd.OutOrStdout(), response); err != nil {
 				return err
 			}
@@ -205,6 +216,8 @@ func newCuaCallCommand(ctx *commandContext) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print the raw JSON result")
+	return cmd
 }
 
 // cuaArguments reads a call's JSON object from the argument, or stdin for "-".

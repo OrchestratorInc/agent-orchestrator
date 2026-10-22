@@ -37,7 +37,7 @@ func TestCuaCallSendsToolArgumentsAndSession(t *testing.T) {
 			}))
 			defer srv.Close()
 			writeRunFileFor(t, cfg, srv)
-			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, In: strings.NewReader(tc.stdin)}, tc.args...)
+			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, In: strings.NewReader(tc.stdin)}, append(tc.args, "--json")...)
 			if err != nil {
 				t.Fatal(err)
 			}

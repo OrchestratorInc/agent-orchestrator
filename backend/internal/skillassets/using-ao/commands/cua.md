@@ -17,11 +17,24 @@ ao cua call get_window_state '{"pid":123,"window_id":456}'
 echo '{"element_token":"s00000019:12"}' | ao cua call click -
 ```
 
-`ao cua call` prints one JSON document: `result` is the tool's output, and
-`images` lists the screenshots it saved. A saved screenshot also appears inside
-`result` as `screenshot_file_path` (or `<name>_file_path` for tools such as
-`zoom`). Open those files with your image viewer (for example, your file-read
-tool) to see the screen.
+Window reads, actions, and `run_steps` print the way Cua Driver's MCP server
+shows them, with `screenshot: <path>` where MCP shows the image:
+
+```text
+✅ Performed AXPress on [5] AXButton "".
+
+screenshot: ~/.ao/data/computer-use/<session>/…-click-1.png
+window_id=37589 pid=44788 size=460x816 elements=33 snapshot_id=s0000002f
+
+since s0000002e: 0 added, 1 changed, 0 removed. Use element_tokens s0000002f:N ...
+~ AXStaticText = "7" (Edit field)
+Invalidated snapshots s0000002e: their element_tokens are stale.
+```
+
+Open the screenshot with your image viewer (for example, your file-read tool)
+to see the screen. Other tools print JSON, with screenshots as
+`screenshot_file_path` (or `<name>_file_path` for tools such as `zoom`);
+`--json` prints the raw JSON for every tool.
 
 ## Workflow
 
@@ -44,15 +57,17 @@ guess argument names.
    the tree; they are in the screenshot's pixels, so pass that window's `pid`
    and `window_id` with them.
 4. Check the result before the next step. AO reads the window after every
-   action and adds it to the result as `observation`: `observation.state` has
-   `tree_diff` (the rows that changed), a new `snapshot_id`, and a screenshot
-   file of the window after the action. Open the screenshot; the driver often
-   reports an action's effect as `unverifiable`. The read makes earlier tokens
-   stale (`stale_element_token`), and live apps reorder their lists, so act
-   next with the new `snapshot_id`, as `tree_diff` says. If `observation`
-   says `skipped`, AO could not tell the window: snapshot it yourself.
+   action and prints it under the action's summary: the screenshot, the
+   window line with a new `snapshot_id`, and the rows that changed since your
+   last read (the full tree when there is no earlier read with the same
+   `query`). Open the screenshot; the driver often cannot confirm an action's
+   effect. The read makes earlier tokens stale (`stale_element_token`), and
+   live apps reorder their lists, so act next with the new `snapshot_id`, as
+   the diff says. If it prints `observation skipped`, AO could not tell the
+   window: snapshot it yourself.
 
-`run_steps` runs several actions in one call; AO has its `observe` read the
+`run_steps` runs several actions in one call and prints one line per step
+(`2. click failed (find): ...` names the step that stopped the batch), then the
 window after the last step with a screenshot. Pass
 `"observe":{"include_screenshot":false}` to get the tree diff only.
 
@@ -70,8 +85,9 @@ The same checks apply to every step of `run_steps`.
 Every `ao cua call` from one AO session runs in the same Cua Driver session
 (`ao-<session id>`; `ao-shared` outside an AO session), so a pixel `click` or
 `zoom` can use the screenshot an earlier `get_window_state` took. Pass your own
-`"session"` argument only to keep separate runs apart. A driver session expires
-after a few idle minutes; snapshot again if a pixel action reports
+`"session"` argument only to keep separate runs apart. A driver session ends
+after a few idle minutes; AO starts it again on the next call, but its
+screenshots are gone, so snapshot again if a pixel action reports
 `screenshot_context_missing`.
 
 Tips:

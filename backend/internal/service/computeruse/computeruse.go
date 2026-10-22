@@ -111,9 +111,13 @@ const (
 var (
 	toolNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	unknownSessionArg = regexp.MustCompile(`\bunknown argument session\b`)
-	terminalEscape    = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
-	errNotInstalled   = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Cua Driver is not installed. Install it in Settings > Computer use agents.", nil)
-	errDaemonStopped  = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it with `ao cua start` or from Settings > Computer use agents.", nil)
+	// endedSession is the driver's refusal, on stderr, of a call that names a
+	// session that ended: "session has ended; tool call 'click' was rejected.
+	// Call start_session with session 'ao-x' to start it again, ...".
+	endedSession     = regexp.MustCompile(`^session has ended; tool call '[a-z0-9_]+' was rejected\b`)
+	terminalEscape   = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+	errNotInstalled  = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Cua Driver is not installed. Install it in Settings > Computer use agents.", nil)
+	errDaemonStopped = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it with `ao cua start` or from Settings > Computer use agents.", nil)
 )
 
 // browserTool reports whether tool is one of Cua Driver's browser tools.
@@ -369,6 +373,18 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		delete(arguments, "session")
 		stdout, stderr, runErr = s.callWithDaemon(ctx, binary, tool, arguments)
 	}
+	if label, named := arguments["session"].(string); named && runErr != nil && sessionEnded(stderr) {
+		// A driver session ends after a few idle minutes, and the driver then
+		// refuses every call naming it until start_session revives the name.
+		if _, _, err := s.callWithDaemon(ctx, binary, "start_session", map[string]any{"session": label}); err == nil {
+			stdout, stderr, runErr = s.callWithDaemon(ctx, binary, tool, arguments)
+		}
+	}
+	if runErr != nil && tool == "run_steps" && batchReport(stdout) {
+		// A step failed after the batch ran: its per-step report and
+		// observation say which step and what the window shows now.
+		runErr = nil
+	}
 	if runErr != nil {
 		var apiErr *apierr.Error
 		if errors.As(runErr, &apiErr) {
@@ -418,6 +434,19 @@ func (s *Service) callWithDaemon(ctx context.Context, binary, tool string, argum
 		stdout, stderr, runErr = s.runCall(ctx, binary, tool, encoded)
 	}
 	return stdout, stderr, runErr
+}
+
+// batchReport reports whether run_steps output is its per-step report. A
+// batch the driver refused before running has none.
+func batchReport(stdout []byte) bool {
+	var report struct {
+		Steps []json.RawMessage `json:"steps"`
+	}
+	return json.Unmarshal(stdout, &report) == nil && len(report.Steps) > 0
+}
+
+func sessionEnded(stderr []byte) bool {
+	return endedSession.MatchString(cleanText(string(stderr)))
 }
 
 func (s *Service) isSessionless(tool string) bool {

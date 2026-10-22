@@ -720,3 +720,63 @@ func TestRunStepsObservesWithAScreenshot(t *testing.T) {
 		})
 	}
 }
+
+// An idle driver session ends, and the driver refuses calls naming it until
+// start_session revives the name.
+func TestCallRevivesAnEndedDriverSession(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	ended := true
+	var tools []string
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		tools = append(tools, args[1])
+		switch {
+		case args[1] == "start_session":
+			if !strings.Contains(args[2], `"session":"ao-worker-1"`) {
+				t.Errorf("start_session arguments = %s", args[2])
+			}
+			ended = false
+			return []byte(`{"active":true,"revived":true,"session":"ao-worker-1"}`), nil, nil
+		case ended:
+			return nil, []byte("session has ended; tool call 'list_windows' was rejected. Call start_session with session 'ao-worker-1' to start it again, or use a new session label.\n"), errors.New("exit status 1")
+		}
+		return []byte(`{"windows":[]}`), nil, nil
+	}
+	s := newTestService(t, driver, "darwin")
+	result, err := s.Call(context.Background(), CallRequest{Tool: "list_windows", SessionID: "worker-1"})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if fmt.Sprint(tools) != "[list_windows start_session list_windows]" {
+		t.Fatalf("driver tools = %v", tools)
+	}
+	if output, _ := result.Result.(map[string]any); output["windows"] == nil {
+		t.Fatalf("result = %v, want the retried call's output", result.Result)
+	}
+}
+
+// A batch whose step failed still reports every step and the window after it;
+// a batch refused before running is an error.
+func TestCallReturnsFailedRunStepsReport(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	report := `{"ok":false,"executed":1,"failed_step":0,"total":1,"steps":[{"index":0,"tool":"click","ok":false,"phase":"find","message":"no button"}]}`
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		if strings.Contains(args[2], "refuse") {
+			return []byte(`{"ok":false,"code":"invalid_batch","detail":"bad step"}`), nil, errors.New("exit status 1")
+		}
+		return []byte(report), nil, errors.New("exit status 1")
+	}
+	s := newTestService(t, driver, "darwin")
+	step := map[string]any{"click": map[string]any{"app": "Calculator", "role": "button", "name": "Nope"}}
+	result, err := s.Call(context.Background(), CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{step}}})
+	if err != nil {
+		t.Fatalf("Call() error = %v, want the step report", err)
+	}
+	if output, _ := result.Result.(map[string]any); output["ok"] != false || output["steps"] == nil {
+		t.Fatalf("result = %v", result.Result)
+	}
+	_, err = s.Call(context.Background(), CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{step}, "window": "refuse"}})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_CALL_FAILED" {
+		t.Fatalf("refused batch err = %v", err)
+	}
+}
