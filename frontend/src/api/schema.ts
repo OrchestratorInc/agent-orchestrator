@@ -6554,6 +6554,7 @@ export interface components {
             updatedAt: string;
         };
         SessionBranchState: {
+            branch?: string;
             commits: number;
             remoteBranch?: string;
             unpushed: number;
