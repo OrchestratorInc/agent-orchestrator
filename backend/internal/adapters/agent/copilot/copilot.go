@@ -185,6 +185,9 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if managed, ok := binaryutil.ManagedBinary("copilot"); ok {
+		if native := copilotManagedNativeBinary(managed); native != "" {
+			return native, nil
+		}
 		return managed, nil
 	}
 
@@ -260,6 +263,62 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
 }
 
+// copilotManagedNativeBinary is the native binary behind a managed npm copy's
+// loader launcher, reached through current so the path still follows updates.
+func copilotManagedNativeBinary(launcher string) string {
+	current, ok := binaryutil.ManagedCurrentDir(launcher, "copilot")
+	if !ok {
+		return ""
+	}
+	native := copilotNativeBinaryForLoader(launcher)
+	release, err := filepath.EvalSymlinks(current)
+	if native == "" || err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(release, native)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.Join(current, rel)
+}
+
+// vsCodeCopilotLauncherScript sits beside the `copilot` launcher VS Code's
+// Copilot Chat extension puts on its terminals' PATH.
+const vsCodeCopilotLauncherScript = "copilotCLIShim.js"
+
+// isVSCodeCopilotLauncher reports whether path is VS Code's launcher, which only
+// forwards to a `copilot` elsewhere on PATH and, with none, stops at "Install
+// GitHub Copilot CLI? [y/N]". It never shows that the CLI is installed.
+func isVSCodeCopilotLauncher(path string) bool {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	_, err := os.Stat(filepath.Join(filepath.Dir(path), vsCodeCopilotLauncherScript))
+	return err == nil
+}
+
+// lookCopilotOnPath is exec.LookPath that passes over VS Code's launcher and
+// keeps searching the rest of PATH for the CLI itself.
+func lookCopilotOnPath(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil || path == "" {
+		return ""
+	}
+	if !isVSCodeCopilotLauncher(path) {
+		return path
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate, err := exec.LookPath(filepath.Join(dir, name))
+		if err == nil && candidate != "" && !isVSCodeCopilotLauncher(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func copilotNativeBinaryForLoader(path string) string {
 	if path == "" || runtime.GOOS == "windows" {
 		return ""
@@ -268,15 +327,26 @@ func copilotNativeBinaryForLoader(path string) string {
 	if err != nil || filepath.Base(resolved) != "npm-loader.js" {
 		return ""
 	}
-	platform := runtime.GOOS
-	if platform == "darwin" {
-		platform = "darwin"
-	}
-	native := filepath.Join(filepath.Dir(resolved), "node_modules", ".bin", "copilot-"+platform+"-"+runtime.GOARCH)
-	if hookutil.IsExecutableFile(native) {
-		return native
+	for _, name := range copilotNativeNames(runtime.GOOS, runtime.GOARCH) {
+		native := filepath.Join(filepath.Dir(resolved), "node_modules", ".bin", name)
+		if hookutil.IsExecutableFile(native) {
+			return native
+		}
 	}
 	return ""
+}
+
+// copilotNativeNames are the npm platform binaries the loader may run on
+// goos/goarch. npm names amd64 x64, and musl Linux has its own packages.
+func copilotNativeNames(goos, goarch string) []string {
+	if goarch == "amd64" {
+		goarch = "x64"
+	}
+	names := []string{"copilot-" + goos + "-" + goarch}
+	if goos == "linux" {
+		names = append(names, "copilot-linuxmusl-"+goarch)
+	}
+	return names
 }
 
 func (p *Plugin) copilotBinary(ctx context.Context) (string, error) {
