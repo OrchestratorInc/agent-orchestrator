@@ -152,7 +152,8 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 			subtitle: isPage ? undefined : pageLabel(entry.section),
 			keywords: [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])],
 			searchOnly: true,
-			action: { kind: "open-settings-section", section: entry.section },
+			// A page entry opens the page; any other lands on its own row.
+			action: { kind: "open-settings-section", section: entry.section, ...(isPage ? {} : { focus: t(entry.label) }) },
 		};
 	});
 }

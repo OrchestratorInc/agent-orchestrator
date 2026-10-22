@@ -31,10 +31,16 @@ describe("palette registry", () => {
 		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false });
 		const addAccount = items.find((item) => item.id === "setting:add-account");
 		expect(addAccount?.subtitle).toBe(t("settings.agents"));
-		expect(addAccount?.action).toEqual({ kind: "open-settings-section", section: "agents" });
+		expect(addAccount?.action).toEqual({ kind: "open-settings-section", section: "agents", focus: t("settings.codexAccounts.add") });
 		expect(filterCommands(items, "add codex account")[0]?.id).toBe("setting:add-account");
 		// Any Mobile row is right: they all open the Mobile page.
-		expect(filterCommands(items, "pair phone")[0]?.action).toEqual({ kind: "open-settings-section", section: "mobile" });
+		expect(filterCommands(items, "pair phone")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "mobile" });
 		expect(filterCommands(items, "dark mode")[0]?.id).toBe("setting:theme");
+	});
+
+	it("lands a row on itself and a page on its top", () => {
+		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false });
+		expect(items.find((item) => item.id === "setting:theme")?.action).toEqual({ kind: "open-settings-section", section: "general", focus: t("settings.theme") });
+		expect(items.find((item) => item.id === "setting:updates")?.action).toEqual({ kind: "open-settings-section", section: "updates" });
 	});
 });

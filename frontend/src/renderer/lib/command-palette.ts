@@ -60,7 +60,7 @@ export type CommandAction =
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
 	| { kind: "open-chat-message"; sessionId?: string; projectId?: string; hostId?: string; messageId?: string; text: string }
-	| { kind: "open-settings-section"; section: GlobalSettingsSection }
+	| { kind: "open-settings-section"; section: GlobalSettingsSection; /** Visible label of the row to land on. */ focus?: string }
 	| { kind: "run-shortcut"; shortcut: AppShortcutId }
 	| { kind: "resume-session"; projectId: string; sessionId: string }
 	| { kind: "copy-branch"; branch: string }

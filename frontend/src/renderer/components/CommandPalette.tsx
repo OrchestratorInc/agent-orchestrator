@@ -614,7 +614,7 @@ export function CommandPalette() {
 				}
 				case "open-settings-section":
 					closePalette();
-					useUiStore.getState().openGlobalSettings(action.section);
+					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
 					break;
 				case "run-shortcut": {
 					closePalette();
