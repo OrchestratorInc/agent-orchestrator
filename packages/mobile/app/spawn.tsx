@@ -214,11 +214,12 @@ function SpawnModalContent() {
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
+		const polling = new AbortController();
+		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
 			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
-		return () => { cancelled = true; };
+		return () => { cancelled = true; polling.abort(); };
 	}, [config, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the

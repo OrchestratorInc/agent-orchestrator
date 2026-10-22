@@ -59,17 +59,39 @@ describe("mobile Chat API boundaries", () => {
 		expect(catalog.models[0]).toMatchObject({ id: "gpt-5", isDefault: true });
 	});
 
-	it("re-reads a catalog the daemon is still discovering until its models arrive", async () => {
+	it("keeps re-reading a catalog the daemon is still discovering until its models arrive", async () => {
 		vi.useFakeTimers();
 		try {
-			vi.mocked(fetch)
-				.mockResolvedValueOnce(response({ agentId: "opencode", models: [], refreshState: "refreshing" }))
-				.mockResolvedValueOnce(response({ agentId: "opencode", models: [{ id: "big-pickle", label: "Big Pickle" }], refreshState: "idle" }));
+			// A cold load can outlast the old 20-read window: readiness waits up to
+			// 30s before discovery gets its own budget.
+			const discovering = 40;
+			for (let read = 0; read < discovering; read++) {
+				vi.mocked(fetch).mockResolvedValueOnce(response({ agentId: "opencode", models: [], refreshState: "refreshing" }));
+			}
+			vi.mocked(fetch).mockResolvedValueOnce(response({ agentId: "opencode", models: [{ id: "big-pickle", label: "Big Pickle" }], refreshState: "idle" }));
 			const pending = getAgentModels(cfg, "opencode");
-			await vi.advanceTimersByTimeAsync(1_500);
+			await vi.advanceTimersByTimeAsync(discovering * 1_500);
 			const catalog = await pending;
-			expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+			expect(vi.mocked(fetch)).toHaveBeenCalledTimes(discovering + 1);
 			expect(catalog.models.map((model) => model.id)).toEqual(["big-pickle"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops re-reading a discovering catalog when the view closes", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(fetch).mockImplementation(async () => response({ agentId: "opencode", models: [], refreshState: "refreshing" }));
+			const polling = new AbortController();
+			const pending = getAgentModels(cfg, "opencode", undefined, polling.signal);
+			await vi.advanceTimersByTimeAsync(3_000);
+			polling.abort();
+			const catalog = await pending;
+			const reads = vi.mocked(fetch).mock.calls.length;
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(vi.mocked(fetch).mock.calls.length).toBe(reads);
+			expect(catalog.refreshState).toBe("refreshing");
 		} finally {
 			vi.useRealTimers();
 		}

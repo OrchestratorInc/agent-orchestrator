@@ -668,16 +668,30 @@ export async function refreshAgents(cfg: ServerConfig): Promise<AgentCatalog> {
 // marked refreshing while discovery runs in the background, rather than making
 // the picker wait. Re-read until the discovered list arrives.
 const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
-const MODEL_CATALOG_REFRESH_POLL_LIMIT = 20;
 
-export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
+function pollDelay(signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, MODEL_CATALOG_REFRESH_POLL_MS);
+		signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+	});
+}
+
+/**
+ * Loads an agent's model catalog, re-reading while the daemon is still
+ * discovering it. There is no attempt cap: the daemon bounds discovery (a
+ * readiness wait, then discovery's own timeout) and then saves a result, so a
+ * cold load ends with models or an error. `signal` stops polling when the view
+ * that asked closes.
+ */
+export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string, signal?: AbortSignal): Promise<AgentModelCatalog> {
 	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-	for (let attempt = 0; ; attempt++) {
+	for (;;) {
 		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
 		const catalog = await res.json() as AgentModelCatalog;
 		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
-		if (!discovering || attempt >= MODEL_CATALOG_REFRESH_POLL_LIMIT) return catalog;
-		await new Promise((resolve) => setTimeout(resolve, MODEL_CATALOG_REFRESH_POLL_MS));
+		if (!discovering || signal?.aborted) return catalog;
+		await pollDelay(signal);
+		if (signal?.aborted) return catalog;
 	}
 }
 
