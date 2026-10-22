@@ -346,16 +346,24 @@ func (s *Service) holdOtherHarnesses(targets []Target) (release func(), err erro
 			release()
 			return func() {}, &HarnessActiveError{Target: target, Starting: true, Level: UpdateWhileRunningBlocked}
 		}
+		// Check for the target's own job and mark it changing under one lock,
+		// the one StartAgentOperation registers jobs under: an install of
+		// target either registered first (and this fails) or sees changing.
 		s.mu.Lock()
 		job, ok := s.jobs[target]
 		busy := ok && activeStatus(job.Status)
+		if !busy {
+			if s.changing == nil {
+				s.changing = make(map[Target]bool)
+			}
+			s.changing[target] = true
+		}
 		s.mu.Unlock()
 		if busy {
 			gate.Unlock()
 			release()
 			return func() {}, fmt.Errorf("%w: %s is being installed or updated; retry once it finishes", ErrInstallActive, target)
 		}
-		s.setHarnessChanging(target, true)
 		releases = append(releases, func() {
 			s.setHarnessChanging(target, false)
 			gate.Unlock()
