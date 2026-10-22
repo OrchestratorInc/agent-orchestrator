@@ -463,7 +463,7 @@ func Run(buildVersion string) error {
 	}
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
-		Cache: store, Discoverer: modelDiscoverer, Projects: store, Sessions: store, Context: ctx, Logger: log,
+		Cache: store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
@@ -591,7 +591,7 @@ func Run(buildVersion string) error {
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")

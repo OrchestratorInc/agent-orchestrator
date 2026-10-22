@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,7 +76,6 @@ type Service struct {
 	cache              ports.AgentModelCatalogCache
 	discoverer         ports.AgentModelDiscoverer
 	modelDiscoveryDir  string
-	projects           ProjectLookup
 	sessions           SessionUsageLookup
 	resolverMu         map[string]*sync.Mutex
 	modelCallMu        sync.Mutex
@@ -100,7 +98,6 @@ type Deps struct {
 	Cache                  ports.AgentModelCatalogCache
 	Discoverer             ports.AgentModelDiscoverer
 	ModelDiscoveryDir      string
-	Projects               ProjectLookup
 	Sessions               SessionUsageLookup
 	Context                context.Context
 	Logger                 *slog.Logger
@@ -113,12 +110,6 @@ type Deps struct {
 	CodexOperationGate     ports.CodexOperationGate
 	// Clock overrides time.Now for deterministic account-bootstrap retry tests.
 	Clock func() time.Time
-}
-
-// ProjectLookup resolves the launch context used by project-scoped model
-// discovery.
-type ProjectLookup interface {
-	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
 // SessionUsageLookup provides durable session facts used to rank agent choices.
@@ -136,7 +127,7 @@ func New() *Service {
 // durable model-catalog cache.
 func NewWithDeps(deps Deps) *Service {
 	agents := agentregistry.Harnessed()
-	svc := newService(agents, deps.Cache, deps.Projects, deps.Discoverer)
+	svc := newService(agents, deps.Cache, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
@@ -179,17 +170,17 @@ func NewWithDeps(deps Deps) *Service {
 // NewWithAgents returns an agent service over a caller-provided adapter slice.
 // It is used by focused tests.
 func NewWithAgents(agents []agentregistry.HarnessAgent) *Service {
-	svc := newService(agents, nil, nil, nil)
+	svc := newService(agents, nil, nil)
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents})
 	return svc
 }
 
-func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatalogCache, projects ProjectLookup, discoverer ports.AgentModelDiscoverer) *Service {
+func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatalogCache, discoverer ports.AgentModelDiscoverer) *Service {
 	resolverMu := make(map[string]*sync.Mutex, len(agents))
 	for _, item := range agents {
 		resolverMu[string(item.Harness)] = &sync.Mutex{}
 	}
-	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, projects: projects, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
+	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
 }
 
 // WarmModelCatalogs starts the bounded cache scheduler. Readiness is never held
@@ -233,12 +224,13 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 			installed[item.ID] = struct{}{}
 		}
 	}
-	// Retain the newest row for every agent/project scope and seed one global job
-	// for installed adapters that have never been discovered.
+	// Retain the newest row for every device and credential scope and seed one
+	// device job for installed adapters that have never been discovered.
 	latest := make(map[string]ports.CachedAgentModelCatalog, len(records)+len(installed))
 	for _, record := range records {
-		// Older builds persisted a separate Settings catalog. It is no longer used.
-		if record.ProjectID == "@browse:all" {
+		// Older builds persisted per-project and Settings catalogs. They are no
+		// longer read.
+		if !activeModelCatalogScope(record.ProjectID) {
 			continue
 		}
 		key := record.AgentID + "\x00" + record.ProjectID
@@ -313,17 +305,19 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 }
 
 // Models returns one normalized model catalog, stamped with when this user last
-// ran each model. Cached values survive daemon restarts; refresh forces a new
-// documented CLI discovery attempt. Discovery failures degrade to the last
-// cached catalog or a custom model input.
-func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
+// ran each model. Catalogs are device-wide: a project ID is accepted for API
+// compatibility and ignored, so every project shares one catalog per agent and
+// a picker opened in a new project never waits on discovery. Only a cloud
+// credential scope (credentialScopePrefix) caches separately. Cached values
+// survive daemon restarts; refresh forces a new documented CLI discovery
+// attempt. Discovery failures degrade to the last cached catalog or a custom
+// model input.
+func (s *Service) Models(ctx context.Context, agentID, scope string, refresh bool) (ports.AgentModelCatalog, error) {
+	catalog, err := s.modelCatalog(ctx, agentID, scope, refresh)
 	if err != nil {
 		return catalog, err
 	}
-	// Usage is keyed by the caller's real project, not the credential scope the
-	// catalog lookup may substitute for it.
-	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
+	return s.withModelUsage(ctx, agentID, catalog), nil
 }
 
 // ModelCatalog returns the persisted catalog without session-history enrichment.
@@ -335,15 +329,11 @@ func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, r
 	return s.modelCatalog(ctx, agentID, projectID, refresh)
 }
 
-func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refresh bool) (ports.AgentModelCatalog, error) {
 	if s.discoverer == nil {
 		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
 	}
-	var err error
-	projectID, err = s.modelCatalogScope(ctx, projectID)
-	if err != nil {
-		return ports.AgentModelCatalog{}, err
-	}
+	projectID := modelCatalogScope(scope)
 	if !refresh {
 		if _, ok := s.agent(agentID); !ok {
 			return ports.AgentModelCatalog{}, apierr.NotFound("AGENT_NOT_FOUND", "Unknown agent adapter")
@@ -383,54 +373,6 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 		mode = modelLoadRefresh
 	}
 	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
-}
-
-// rediscoverDriftedProjectCatalogs rediscovers project catalogs whose models
-// differ from a device-global catalog whose models just changed. A provider
-// connected inside the harness need not change the discovery fingerprint, so
-// project pickers would otherwise keep the old list until the next day.
-func (s *Service) rediscoverDriftedProjectCatalogs(agentID string, global []ports.AgentModelInfo) {
-	if s.cache == nil || s.projects == nil {
-		return
-	}
-	want := modelIDSet(global)
-	go func() {
-		records, err := s.cache.ListAgentModelCatalogsByAgent(s.ctx, agentID)
-		if err != nil {
-			return
-		}
-		for _, record := range records {
-			if s.ctx.Err() != nil {
-				return
-			}
-			if record.ProjectID == "" || record.ProjectID == "@browse:all" {
-				continue
-			}
-			if _, ok := credentialTypeFromScope(record.ProjectID); ok {
-				continue
-			}
-			// A missing project's scope falls back to the global one, and an
-			// archived project has no picker to refresh.
-			project, ok, err := s.projects.GetProject(s.ctx, record.ProjectID)
-			if err != nil || !ok || !project.ArchivedAt.IsZero() {
-				continue
-			}
-			var catalog ports.AgentModelCatalog
-			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil || maps.Equal(modelIDSet(catalog.Models), want) {
-				continue
-			}
-			s.requeueCatalog(record.ProjectID, catalog)
-			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
-		}
-	}()
-}
-
-func modelIDSet(models []ports.AgentModelInfo) map[string]struct{} {
-	ids := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		ids[model.ID] = struct{}{}
-	}
-	return ids
 }
 
 // catalogInputCheckTTL is how long a matching input check stands for a cached
@@ -529,23 +471,20 @@ func credentialTypeFromScope(scope string) (string, bool) {
 	return rest, true
 }
 
-func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (string, error) {
-	// A credential scope has no backing project; keep it verbatim so its catalog
-	// caches under its own key instead of collapsing to the device-global scope.
-	if _, ok := credentialTypeFromScope(projectID); ok {
-		return projectID, nil
+// modelCatalogScope maps a caller's scope to the cache scope. A credential scope
+// has no backing project and caches under its own key; anything else, including
+// a project ID, is the single device scope.
+func modelCatalogScope(scope string) string {
+	if _, ok := credentialTypeFromScope(scope); ok {
+		return scope
 	}
-	if strings.TrimSpace(projectID) == "" || s.projects == nil {
-		return "", nil
-	}
-	_, ok, err := s.projects.GetProject(ctx, projectID)
-	if err != nil {
-		return "", fmt.Errorf("resolve model catalog project %s: %w", projectID, err)
-	}
-	if !ok {
-		return "", nil
-	}
-	return projectID, nil
+	return ""
+}
+
+// activeModelCatalogScope reports whether a persisted scope is still read: the
+// device scope or a credential scope. Older builds also wrote per-project rows.
+func activeModelCatalogScope(scope string) bool {
+	return modelCatalogScope(scope) == scope
 }
 
 func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
@@ -557,24 +496,7 @@ func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID,
 		request.CredentialType = credentialType
 		return request, nil
 	}
-	if strings.TrimSpace(projectID) == "" || s.projects == nil {
-		return s.globalModelDiscoveryRequest(request)
-	}
-	project, ok, err := s.projects.GetProject(ctx, projectID)
-	if err != nil {
-		return ports.AgentModelDiscoveryRequest{}, fmt.Errorf("resolve model discovery project %s: %w", projectID, err)
-	}
-	if !ok {
-		return s.globalModelDiscoveryRequest(request)
-	}
-	request.WorkingDir = project.Path
-	if len(project.Config.Env) > 0 {
-		request.Env = make(map[string]string, len(project.Config.Env))
-		for key, value := range project.Config.Env {
-			request.Env[key] = value
-		}
-	}
-	return request, nil
+	return s.globalModelDiscoveryRequest(request)
 }
 
 func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {
@@ -593,23 +515,18 @@ func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryR
 
 // RevalidateModels rediscovers a cache-first catalog after the normal read path
 // marks it old enough to refresh in the background.
-func (s *Service) RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
-	catalog, err := s.revalidateModels(ctx, agentID, projectID)
+func (s *Service) RevalidateModels(ctx context.Context, agentID, scope string) (ports.AgentModelCatalog, error) {
+	catalog, err := s.revalidateModels(ctx, agentID, scope)
 	if err != nil {
 		return catalog, err
 	}
-	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
+	return s.withModelUsage(ctx, agentID, catalog), nil
 }
 
 // revalidateModels is the unstamped variant for background callers that discard
 // the catalog and should not pay for a session-history scan.
-func (s *Service) revalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
-	var err error
-	projectID, err = s.modelCatalogScope(ctx, projectID)
-	if err != nil {
-		return ports.AgentModelCatalog{}, err
-	}
-	return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+func (s *Service) revalidateModels(ctx context.Context, agentID, scope string) (ports.AgentModelCatalog, error) {
+	return s.coalesceModelLoad(ctx, agentID, modelCatalogScope(scope), modelLoadRevalidate)
 }
 
 // InvalidateModelCatalogs marks existing scopes due and schedules cache-first
@@ -624,7 +541,7 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 			return
 		}
 		for _, record := range records {
-			if record.ProjectID == "@browse:all" {
+			if !activeModelCatalogScope(record.ProjectID) {
 				continue
 			}
 			if s.ctx.Err() != nil {
@@ -653,35 +570,6 @@ func (s *Service) requeueCatalog(projectID string, catalog ports.AgentModelCatal
 	catalog.LastSuccessAt = nil
 	catalog.RetryAt = nil
 	_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
-}
-
-// InvalidateProjectModelCatalogs marks every cached agent catalog for a changed
-// project due without disturbing device-global scopes.
-func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
-	if s.cache == nil || strings.TrimSpace(projectID) == "" {
-		return
-	}
-	go func() {
-		scopeCache, ok := s.cache.(ports.AgentModelCatalogScopeCache)
-		if !ok {
-			return
-		}
-		records, err := scopeCache.ListAgentModelCatalogs(s.ctx)
-		if err != nil {
-			return
-		}
-		for _, record := range records {
-			if record.ProjectID != projectID || s.ctx.Err() != nil {
-				continue
-			}
-			var catalog ports.AgentModelCatalog
-			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil {
-				continue
-			}
-			s.requeueCatalog(projectID, catalog)
-			_, _ = s.revalidateModels(s.ctx, record.AgentID, projectID)
-		}
-	}()
 }
 
 func (s *Service) coalesceModelLoad(
@@ -904,9 +792,6 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	discovered.RefreshRecommended = false
 	if err := s.saveCatalog(persistCtx, projectID, discovered, generation, 0); err != nil {
 		discovered.Warning = appendCacheWarning(discovered.Warning)
-	}
-	if projectID == "" && hasCached && !maps.Equal(modelIDSet(cached.Catalog.Models), modelIDSet(discovered.Models)) {
-		s.rediscoverDriftedProjectCatalogs(agentID, discovered.Models)
 	}
 	return discovered, nil
 }

@@ -286,12 +286,15 @@ paths:
           description: Return catalog facts without reading session history for model
             recency. Cached catalogs are served while discovery refreshes in the background.
           type: boolean
-      - description: Optional project identifier used as the model-catalog cache scope.
+      - description: 'Optional cloud credential scope. Any other value, including
+          a project identifier, is ignored: model catalogs are cached per device,
+          not per project.'
         in: query
         name: projectId
         schema:
-          description: Optional project identifier used as the model-catalog cache
-            scope.
+          description: 'Optional cloud credential scope. Any other value, including
+            a project identifier, is ignored: model catalogs are cached per device,
+            not per project.'
           type: string
       responses:
         "200":
@@ -347,12 +350,15 @@ paths:
           description: Refresh the Harness Settings browsing catalog without session-history
             enrichment; FX includes all connections in a separate cache.
           type: boolean
-      - description: Optional project identifier used as the model-catalog cache scope.
+      - description: 'Optional cloud credential scope. Any other value, including
+          a project identifier, is ignored: model catalogs are cached per device,
+          not per project.'
         in: query
         name: projectId
         schema:
-          description: Optional project identifier used as the model-catalog cache
-            scope.
+          description: 'Optional cloud credential scope. Any other value, including
+            a project identifier, is ignored: model catalogs are cached per device,
+            not per project.'
           type: string
       - description: When true, compare executable and config metadata before running
           discovery.
