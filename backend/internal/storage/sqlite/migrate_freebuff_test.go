@@ -50,7 +50,9 @@ func TestFreebuffSchemaRepairAddsMissingHarness(t *testing.T) {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(schema, "'memcode', 'freebuff', 'fake'))") {
-		t.Fatalf("repaired schema lacks freebuff: %s", schema)
+	for _, harness := range []string{"'memcode'", "'hermes'", "'freebuff'", "'fake'"} {
+		if strings.Count(schema, harness) != 1 {
+			t.Fatalf("repair lost or duplicated %s: %s", harness, schema)
+		}
 	}
 }
