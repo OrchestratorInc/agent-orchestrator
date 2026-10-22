@@ -200,6 +200,9 @@ func TestRepairRewritesEveryRow(t *testing.T) {
 		}
 		n++
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if n != 200 {
 		t.Fatalf("read %d rows, want 200", n)
 	}

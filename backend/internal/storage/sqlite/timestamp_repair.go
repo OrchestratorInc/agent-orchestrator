@@ -84,28 +84,35 @@ ORDER BY m.name, p.cid`)
 	return columns, rows.Err()
 }
 
-func repairOffsetOnlyColumn(tx *sql.Tx, c timestampColumn) error {
+// offsetOnlyCandidates returns the distinct values of the column that look like
+// offset-only timestamps. They are read completely before any is rewritten so
+// the update does not run while the result set is open.
+func offsetOnlyCandidates(tx *sql.Tx, c timestampColumn) ([]string, error) {
 	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
 	rows, err := tx.Query(fmt.Sprintf(
 		`SELECT DISTINCT CAST(%[2]s AS TEXT) FROM %[1]s WHERE typeof(%[2]s) = 'text'
 AND CAST(%[2]s AS TEXT) GLOB '*[+-][0-9][0-9][0-9][0-9] [+-][0-9][0-9][0-9][0-9]*'`, table, column))
 	if err != nil {
-		return fmt.Errorf("find offset-only timestamps in %s.%s: %w", c.table, c.column, err)
+		return nil, fmt.Errorf("find offset-only timestamps in %s.%s: %w", c.table, c.column, err)
 	}
+	defer func() { _ = rows.Close() }()
 	var values []string
 	for rows.Next() {
 		var value string
 		if err := rows.Scan(&value); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan %s.%s: %w", c.table, c.column, err)
+			return nil, fmt.Errorf("scan %s.%s: %w", c.table, c.column, err)
 		}
 		values = append(values, value)
 	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+	return values, rows.Err()
+}
+
+func repairOffsetOnlyColumn(tx *sql.Tx, c timestampColumn) error {
+	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
+	values, err := offsetOnlyCandidates(tx, c)
+	if err != nil {
 		return err
 	}
-	_ = rows.Close()
 	for _, value := range values {
 		match := offsetOnlyTimestamp.FindStringSubmatch(value)
 		if match == nil {
