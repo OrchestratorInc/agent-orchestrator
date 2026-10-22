@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -252,6 +253,13 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 		t.Fatalf("empty settings = %#v", got)
 	}
 	opt := func(id, value string) acpdriver.SessionOption {
+		if id == "thinking" || id == "fast" {
+			boolean, err := strconv.ParseBool(value)
+			if err != nil {
+				t.Fatalf("invalid expected boolean %q for %s", value, id)
+			}
+			return acpdriver.SessionOption{ID: id, Boolean: &boolean, Optional: id == "thinking"}
+		}
 		return acpdriver.SessionOption{ID: id, Value: value, Optional: id != "model"}
 	}
 	effort := func(value, reasoning string) []acpdriver.SessionOption {
@@ -280,8 +288,8 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("thinking", "false"), opt("fast", "true")}, effort("xhigh", "extra-high")...)},
 		{"grok drops the command-line prefix", ports.ChatTurnSettings{Model: "cursor-grok-4.6-high"},
 			append([]acpdriver.SessionOption{opt("model", "grok-4.6"), opt("thinking", "false"), opt("fast", "false")}, effort("high", "high")...)},
-		{"an older session's bracket id", ports.ChatTurnSettings{Model: "gpt-5.5[context=272k,reasoning=medium,fast=false]"},
-			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("fast", "false")}, effort("medium", "medium")...)},
+		{"configured Grok settings preserve explicit fast false", ports.ChatTurnSettings{Model: "grok-4.7[context=256k,reasoning_effort=high,fast=false]"},
+			append([]acpdriver.SessionOption{opt("model", "grok-4.7"), opt("fast", "false")}, effort("high", "high")...)},
 		{"a chosen effort wins", ports.ChatTurnSettings{Model: "gpt-5.5[reasoning=medium]", Effort: "high"},
 			append([]acpdriver.SessionOption{opt("model", "gpt-5.5")}, effort("high", "high")...)},
 		{"a model whose name ends in a number", ports.ChatTurnSettings{Model: "gpt-5-mini"},
@@ -293,6 +301,15 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 				t.Fatalf("options = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateTurnSettingsRejectsMalformedCursorBooleanParameter(t *testing.T) {
+	err := validateTurnSettings(ports.PermissionModeDefault, ports.ChatTurnSettings{
+		Model: "grok-4.7[context=256k,reasoning_effort=high,fast=disabled]",
+	})
+	if err == nil || !strings.Contains(err.Error(), `model parameter "fast" must be true or false`) {
+		t.Fatalf("validation error = %v, want invalid fast parameter error", err)
 	}
 }
 

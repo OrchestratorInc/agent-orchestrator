@@ -221,6 +221,21 @@ func (c *conversation) configOptionCurrent(id string) string {
 	return ""
 }
 
+// configOptionBooleanCurrent returns a boolean option's current value, or nil
+// when the session does not advertise that option as a boolean.
+func (c *conversation) configOptionBooleanCurrent(id string) *bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		option := &c.configOptions[i]
+		if option.ID == id && option.Type == ports.ChatConfigOptionBoolean && option.Current.Boolean != nil {
+			current := *option.Current.Boolean
+			return &current
+		}
+	}
+	return nil
+}
+
 func normalizeConfigOptions(options []acpsdk.SessionConfigOption) []ports.ChatConfigOption {
 	out := make([]ports.ChatConfigOption, 0, len(options))
 	for _, option := range options {

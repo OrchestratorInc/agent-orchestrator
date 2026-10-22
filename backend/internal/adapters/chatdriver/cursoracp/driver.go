@@ -45,6 +45,9 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {
+	if err := validateCursorModelBooleanParams(settings.Model); err != nil {
+		return err
+	}
 	if settings.Approval == "" {
 		return nil
 	}
@@ -58,6 +61,20 @@ func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnS
 			"cursor ACP permission mode change from %q to %q requires restarting Chat",
 			initial, requested,
 		)
+	}
+	return nil
+}
+
+func validateCursorModelBooleanParams(model string) error {
+	_, params := cursorModelParams(model)
+	for _, id := range []string{"thinking", "fast"} {
+		value, ok := params[id]
+		if !ok {
+			continue
+		}
+		if value != "true" && value != "false" {
+			return fmt.Errorf("cursor model parameter %q must be true or false, got %q", id, value)
+		}
 	}
 	return nil
 }
@@ -152,8 +169,11 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	}
 	options := []acpdriver.SessionOption{{ID: "model", Value: model}}
 	for _, id := range []string{"thinking", "fast"} {
-		if value := params[id]; value != "" {
-			options = append(options, acpdriver.SessionOption{ID: id, Value: value, Optional: true})
+		if value, ok := params[id]; ok {
+			boolean := value == "true"
+			options = append(options, acpdriver.SessionOption{
+				ID: id, Boolean: &boolean, Optional: id == "thinking",
+			})
 		}
 	}
 	// Each model names its effort setting its own way; only the one it offers applies.

@@ -164,6 +164,8 @@ type PermissionPolicy func(
 type SessionOption struct {
 	ID    string
 	Value string
+	// Boolean selects an ACP boolean config option. When set, Value is ignored.
+	Boolean *bool
 	// Optional settings are skipped when the session rejects them.
 	Optional bool
 	// Name finds the choice when the agent lists it under another value, such as

@@ -555,7 +555,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
 	applyOption := func(option SessionOption) error {
-		if option.ID == "" || option.Value == "" {
+		if option.ID == "" || (option.Value == "" && option.Boolean == nil) {
 			return nil
 		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
@@ -566,8 +566,14 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				option.Value = value
 			}
 		}
-		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
-			return nil
+		if !catalogStale {
+			if option.Boolean != nil {
+				if current := c.configOptionBooleanCurrent(option.ID); current != nil && *current == *option.Boolean {
+					return nil
+				}
+			} else if c.configOptionCurrent(option.ID) == option.Value {
+				return nil
+			}
 		}
 		// The models offered do not depend on the model chosen, so this is final.
 		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
@@ -645,7 +651,7 @@ func (c *conversation) applySessionOptions(ctx context.Context, options []Sessio
 // setSessionOption sends one session/set_config_option and adopts any catalog
 // the agent returns, preserving the current catalog when it omits one.
 func (c *conversation) setSessionOption(ctx context.Context, sessionID string, option SessionOption) error {
-	if option.ID == "" || option.Value == "" {
+	if option.ID == "" || (option.Value == "" && option.Boolean == nil) {
 		return nil
 	}
 	c.mu.Lock()
@@ -664,12 +670,19 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 				ports.ErrChatConfigOptionInvalid, option.ID, option.Value)
 		}
 	}
-	resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
-		ValueId: &acpsdk.SetSessionConfigOptionValueId{
+	request := acpsdk.SetSessionConfigOptionRequest{}
+	if option.Boolean != nil {
+		request.Boolean = &acpsdk.SetSessionConfigOptionBoolean{
+			SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
+			Value: *option.Boolean,
+		}
+	} else {
+		request.ValueId = &acpsdk.SetSessionConfigOptionValueId{
 			SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
 			Value: acpsdk.SessionConfigValueId(option.Value),
-		},
-	})
+		}
+	}
+	resp, err := c.conn.SetSessionConfigOption(ctx, request)
 	if err != nil {
 		// An optional setting the chosen model lacks is skipped; session/set_model
 		// does not return the new model's options to check in advance.
@@ -682,7 +695,12 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
 	}
 	if len(resp.ConfigOptions) == 0 {
-		c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+		accepted := ports.ChatConfigOptionValue{Select: option.Value}
+		if option.Boolean != nil {
+			value := *option.Boolean
+			accepted = ports.ChatConfigOptionValue{Boolean: &value}
+		}
+		c.applyAcceptedConfigOption(option.ID, accepted)
 	} else {
 		c.replaceConfigOptions(resp.ConfigOptions)
 	}
