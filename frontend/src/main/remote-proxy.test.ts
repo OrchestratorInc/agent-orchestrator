@@ -121,12 +121,15 @@ describe("startRemoteProxy", () => {
 		upstream!.on("upgrade", (req, socket) => { upgrades(req.url); socket.destroy(); });
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
 		const target = new URL(proxy.base);
-		const staticPreview = new URL(proxy.previewUrl("ao-1", "http://localhost:3001/api/v1/sessions/ao-1/preview/files/index.html"));
-		for (const [host, origin] of [[target.host, "http://ao-preview-attacker.localhost:3001"], [target.host, "null"], [staticPreview.host, staticPreview.origin]]) {
+		const staticPreview = new URL(proxy.previewUrl("ao-1", `http://ao-preview.mfxs2mi.localhost:${port}/index.html`));
+		for (const [destination, origin] of [[target, "http://ao-preview-attacker.localhost:3001"], [target, "null"], [staticPreview, staticPreview.origin]] as const) {
 			await new Promise<void>((resolve, reject) => {
-				const socket = netConnect(Number(target.port), "127.0.0.1", () => {
-					socket.write(`GET ${target.pathname}/mux HTTP/1.1\r\nHost: ${host}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
-				});
+				const onConnect = () => {
+					socket.write(`GET ${target.pathname}/mux HTTP/1.1\r\nHost: ${destination.host}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+				};
+				const socket = destination.protocol === "https:"
+					? tlsConnect({ host: "127.0.0.1", port: Number(destination.port), ...trustPreview(destination) }, onConnect)
+					: netConnect(Number(destination.port), "127.0.0.1", onConnect);
 				socket.setTimeout(2000, () => { socket.destroy(); reject(new Error("upgrade did not close")); });
 				socket.on("error", reject);
 				socket.on("close", () => resolve());
