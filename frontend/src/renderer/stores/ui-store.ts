@@ -57,6 +57,8 @@ export type SettingsModal =
 			startLogin?: boolean;
 			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
 			showDiagnostics?: HarnessDiagnosticsRequest;
+			/** Open this tab of focusAgentId's Harness page. */
+			harnessTab?: "import";
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -200,7 +202,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; harnessTab?: "import"; preserveProject?: boolean }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -428,6 +430,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
+			...(options?.harnessTab && options.focusAgentId ? { harnessTab: options.harnessTab } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo

@@ -407,7 +407,13 @@ func TestScanDestinations(t *testing.T) {
 	runGit(t, home, "init", "-q", clone)
 	runGit(t, clone, "remote", "add", "origin", "https://github.com/acme/widgets")
 	other := filepath.Join(home, "other")
-	runGit(t, home, "init", "-q", other)
+	runGit(t, home, "init", "-q", "-b", "main", other)
+	runGit(t, other, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "init")
+	otherLinked := filepath.Join(home, "other-linked")
+	runGit(t, other, "worktree", "add", "-q", "-b", "side", otherLinked)
+	bare := filepath.Join(home, "bare.git")
+	runGit(t, home, "init", "-q", "--bare", bare)
+	plain := filepath.Join(home, "plain")
 	// Inside the project folder: an agent worktree of it, and an unrelated clone.
 	agentWorktree := filepath.Join(repo, ".claude", "worktrees", "agent")
 	runGit(t, repo, "worktree", "add", "-q", "-b", "agent", agentWorktree)
@@ -416,7 +422,7 @@ func TestScanDestinations(t *testing.T) {
 	runGit(t, vendored, "remote", "add", "origin", "https://github.com/acme/foo")
 	codexChat := filepath.Join(home, "Documents", "Codex", "2026-10-07", "wh")
 	managed := filepath.Join(data, "worktrees", "repo", "repo-1")
-	for _, dir := range []string{codexChat, managed, filepath.Join(repo, "pkg")} {
+	for _, dir := range []string{codexChat, managed, plain, filepath.Join(repo, "pkg")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -427,26 +433,27 @@ func TestScanDestinations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for cwd, want := range map[string]struct {
-		id       domain.ProjectID
-		eligible bool
-	}{
-		"":                            {"", true},
-		repo:                          {"widgets", true},
-		filepath.Join(repo, "pkg"):    {"widgets", true},
-		linked:                        {"widgets", true},
-		agentWorktree:                 {"widgets", true},
-		vendored:                      {"", false},
-		clone:                         {"widgets", true},
-		other:                         {"", false},
-		home:                          {"", true},
-		codexChat:                     {"", true},
-		managed:                       {"", false},
-		filepath.Join(home, "gone"):   {"", false},
-		filepath.Join(repo, "absent"): {"", false},
+	// A repository no project holds names its main checkout, so it can be added.
+	for cwd, want := range map[string]destination{
+		"":                            {"", true, ""},
+		repo:                          {"widgets", true, ""},
+		filepath.Join(repo, "pkg"):    {"widgets", true, ""},
+		linked:                        {"widgets", true, ""},
+		agentWorktree:                 {"widgets", true, ""},
+		vendored:                      {"", false, canonical(vendored)},
+		clone:                         {"widgets", true, ""},
+		other:                         {"", false, canonical(other)},
+		otherLinked:                   {"", false, canonical(other)},
+		bare:                          {"", false, ""},
+		plain:                         {"", false, ""},
+		home:                          {"", true, ""},
+		codexChat:                     {"", true, ""},
+		managed:                       {"", false, ""},
+		filepath.Join(home, "gone"):   {"", false, ""},
+		filepath.Join(repo, "absent"): {"", false, ""},
 	} {
-		if id, eligible := dests.resolve(cwd); id != want.id || eligible != want.eligible {
-			t.Errorf("resolve(%q) = %q,%v want %q,%v", cwd, id, eligible, want.id, want.eligible)
+		if got := dests.destination(cwd); got != want {
+			t.Errorf("destination(%q) = %+v want %+v", cwd, got, want)
 		}
 	}
 	if !SameRepository(context.Background(), linked, repo) || !SameRepository(context.Background(), clone, repo) || SameRepository(context.Background(), other, repo) {

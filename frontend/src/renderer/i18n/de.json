@@ -2541,6 +2541,7 @@
 	"settings.harness.tabAccount": "Konto",
 	"settings.harness.tabModels": "Modelle",
 	"settings.harness.tabHealth": "Status",
+	"settings.harness.tabImport": "Import",
 	"settings.harness.installation": "Installation",
 	"settings.harness.account": "Konto",
 	"settings.harness.installedWith": "Installiert mit {{method}}",
@@ -3337,9 +3338,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
-	"sessionImport.trigger": "Sitzungen importieren",
-	"sessionImport.title": "Unterhaltungen in AO übernehmen",
-	"sessionImport.description": "Lesbare Verläufe von Claude Code und Codex von diesem Computer importieren. Angezeigt werden nur bereits als AO-Projekte registrierte Ordner und eigenständige Unterhaltungen.",
+	"sessionImport.description": "{{agent}}-Unterhaltungen von diesem Computer importieren. Eine Unterhaltung aus einem Git-Ordner, der noch kein Projekt ist, fügt diesen Ordner als Projekt hinzu.",
 	"sessionImport.allProjects": "Alle Projekte und eigenständigen Unterhaltungen",
 	"sessionImport.selectionHelp": "Unterhaltungen mit Aktivität in den letzten 30 Tagen sind vorausgewählt. Ältere Unterhaltungen können ebenfalls ausgewählt werden. Nach dem Import bleiben alle Sitzungen inaktiv.",
 	"sessionImport.reading": "Lokale Verläufe werden gelesen…",
@@ -3361,5 +3360,12 @@
 	"sessionImport.messages_one": "{{count}} Nachricht",
 	"sessionImport.messages_other": "{{count}} Nachrichten",
 	"sessionImport.alreadyImported": "Bereits in AO",
-	"sessionImport.failed": "Import fehlgeschlagen. Erneut versuchen."
+	"sessionImport.failed": "Import fehlgeschlagen. Erneut versuchen.",
+	"sessionImport.offerTitle": "Frühere Unterhaltungen in AO übernehmen",
+	"sessionImport.offerDescription": "Unterhaltungen der Agents auf diesem Computer in AO fortsetzen. Git-Ordner, die noch keine Projekte sind, werden als Projekte hinzugefügt.",
+	"sessionImport.offerDismiss": "Nicht jetzt",
+	"sessionImport.offerAction": "{{agent}}-Unterhaltungen importieren",
+	"sessionImport.newProject": "{{name}} (neues Projekt)",
+	"sessionImport.addsProjects_one": "Fügt {{count}} Ordner als Projekt hinzu: {{names}}",
+	"sessionImport.addsProjects_other": "Fügt {{count}} Ordner als Projekte hinzu: {{names}}"
 }

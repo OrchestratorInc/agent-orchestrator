@@ -42,6 +42,7 @@ type CatalogContext = {
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
 	showDiagnostics?: HarnessDiagnosticsRequest;
+	harnessTab?: "import";
 	/** One page is shown, under its own title: a first heading that only
 	 * rewords that title ("Keyboard shortcuts" on Shortcuts) is hidden. */
 	singlePage?: boolean;
@@ -70,7 +71,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics, harnessTab }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(harnessTab ? { harnessTab } : {})} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",

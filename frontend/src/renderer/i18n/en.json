@@ -1627,6 +1627,7 @@
 	"settings.harness.tabAccount": "Account",
 	"settings.harness.tabModels": "Models",
 	"settings.harness.tabHealth": "Health",
+	"settings.harness.tabImport": "Import",
 	"settings.harness.installation": "Installation",
 	"settings.harness.account": "Account",
 	"settings.harness.installedWith": "Installed with {{method}}",
@@ -3318,9 +3319,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
-	"sessionImport.trigger": "Import sessions",
-	"sessionImport.title": "Bring your conversations into AO",
-	"sessionImport.description": "Import readable Claude Code and Codex histories from this computer. Only folders already registered as AO projects and standalone conversations appear.",
+	"sessionImport.description": "Import {{agent}} chats from this computer. A chat from a Git folder that is not a project yet adds that folder as a project.",
 	"sessionImport.allProjects": "All projects and Standalone",
 	"sessionImport.selectionHelp": "Conversations active in the last 30 days are preselected. You can also select older conversations. Import leaves every session idle.",
 	"sessionImport.reading": "Reading local histories…",
@@ -3342,5 +3341,12 @@
 	"sessionImport.messages_one": "{{count}} message",
 	"sessionImport.messages_other": "{{count}} messages",
 	"sessionImport.alreadyImported": "Already in AO",
-	"sessionImport.failed": "Import failed. Try again."
+	"sessionImport.failed": "Import failed. Try again.",
+	"sessionImport.offerTitle": "Bring your earlier chats into AO",
+	"sessionImport.offerDescription": "Continue chats from the agents you use on this computer. Git folders that are not projects yet are added as projects.",
+	"sessionImport.offerDismiss": "Not now",
+	"sessionImport.offerAction": "Import {{agent}} chats",
+	"sessionImport.newProject": "{{name}} (new project)",
+	"sessionImport.addsProjects_one": "Adds {{count}} folder as a project: {{names}}",
+	"sessionImport.addsProjects_other": "Adds {{count}} folders as projects: {{names}}"
 }
