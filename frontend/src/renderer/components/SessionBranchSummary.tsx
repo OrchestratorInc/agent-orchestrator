@@ -7,6 +7,7 @@ import {
 	ArrowUpFromLine,
 	ChevronDown,
 	ChevronRight,
+	FileCog,
 	GitBranch,
 	GitCommitHorizontal,
 	GitPullRequest,
@@ -40,6 +41,8 @@ const SETTLE_MS: Record<SessionGitActionKind, number> = {
 type GitFacts = {
 	loaded: boolean;
 	uncommitted: WorkspaceFileSummary[];
+	/** AO's own files under `.ao/`, held apart when they are the only changes. */
+	aoConfig: WorkspaceFileSummary[];
 	committed: WorkspaceFileSummary[];
 	/** The daemon's commit and push facts; undefined until it has observed the branch. */
 	branch?: SessionBranchState;
@@ -48,18 +51,41 @@ type GitFacts = {
 
 type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind[] };
 
+/** An open or draft PR and the branches it merges. */
+export type OpenPRBranch = { number: number; sourceBranch?: string; targetBranch?: string };
+
+/**
+ * Where new commits go: the open PR whose head is checked out, the checked-out
+ * branch when the session's open PRs are for other branches, or a new PR.
+ */
+export type GitTarget =
+	| { kind: "pr"; number: number; base?: string }
+	| { kind: "branch"; branch: string }
+	| { kind: "new" };
+
+export function gitTarget(openPRs: OpenPRBranch[], branch: string | undefined): GitTarget {
+	if (openPRs.length === 0) return { kind: "new" };
+	if (!branch) {
+		// Nothing to compare yet; keep the session's first PR.
+		return { kind: "pr", number: openPRs[0].number, base: openPRs[0].targetBranch || undefined };
+	}
+	const pr = openPRs.find((candidate) => candidate.sourceBranch === branch);
+	if (pr) return { kind: "pr", number: pr.number, base: pr.targetBranch || undefined };
+	return { kind: "branch", branch };
+}
+
 export function SessionBranchSummary({
 	hostId,
 	onOpenFiles,
-	openPRNumber,
+	openPRs,
 	pullRequests,
 	session,
 	title,
 }: {
 	hostId?: string;
 	onOpenFiles: () => void;
-	/** The open or draft PR that new commits would update. */
-	openPRNumber?: number;
+	/** The session's open and draft PRs, in display order. */
+	openPRs: OpenPRBranch[];
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
 	title: string;
@@ -76,22 +102,29 @@ export function SessionBranchSummary({
 	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit });
 
 	const sections = manifest.data?.sections;
+	const changed = sections ? uniqueByPath([...sections.staged, ...sections.unstaged, ...sections.untracked]) : [];
+	// A launch config AO needed for a preview is not work for the PR. Mixed
+	// with project changes it stays in the commit, which may intend it.
+	const aoConfigOnly = changed.length > 0 && changed.every(isAOConfigFile);
 	const facts: GitFacts = {
 		loaded: manifest.data !== undefined,
-		uncommitted: sections ? uniqueByPath([...sections.staged, ...sections.unstaged, ...sections.untracked]) : [],
+		uncommitted: aoConfigOnly ? [] : changed,
+		aoConfig: aoConfigOnly ? changed : [],
 		committed: sections?.committed ?? [],
 		branch: session.branchState,
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber);
+	const { branch, naming } = sessionBranchPresentation(session);
+	const target = gitTarget(openPRs, branch);
+	const plan = gitActionPlan(facts, target);
 
 	const send = useMutation({
 		mutationFn: async (kind: SessionGitActionKind) => {
 			if (usePreviewData) return;
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
 				params: { path: { sessionId: session.id } },
-				body: { message: gitActionMessage(kind, facts.base, openPRNumber) },
+				body: { message: gitActionMessage(kind, facts.base, target) },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.git.actionFailed")));
 		},
@@ -99,7 +132,7 @@ export function SessionBranchSummary({
 		onError: () => clearPending(key),
 	});
 
-	const done = pending ? gitActionDone(pending.kind, facts, openPRNumber) : false;
+	const done = pending ? gitActionDone(pending.kind, facts, target) : false;
 	const activityState = session.activity?.state;
 	useEffect(() => {
 		if (!pending) return;
@@ -127,8 +160,7 @@ export function SessionBranchSummary({
 	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
 
 	const commitsRow = commitsRowView(facts, t);
-	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
-	const { branch, naming } = sessionBranchPresentation(session);
+	const hasWork = facts.uncommitted.length > 0 || facts.aoConfig.length > 0 || commitsRow !== null;
 	if (!branch && !naming && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
@@ -145,8 +177,8 @@ export function SessionBranchSummary({
 			<GitActionButton
 				menu={plan.menu.map((kind) => ({ kind, label: menuLabel(kind, t) }))}
 				onRun={(kind) => send.mutate(kind)}
-				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, facts, openPRNumber, t) }}
-				variant={openPRNumber === undefined ? "primary" : "secondary"}
+				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, facts, target, t) }}
+				variant={target.kind === "new" ? "primary" : "secondary"}
 			/>
 		);
 	}
@@ -154,7 +186,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
+				{branch || naming ? <BranchLine base={target.kind === "pr" && target.base ? target.base : facts.base} branch={branch} naming={naming} /> : null}
 				{cards}
 				{facts.uncommitted.length > 0 ? (
 					<GitStatusRow
@@ -162,6 +194,17 @@ export function SessionBranchSummary({
 						deletions={sum(facts.uncommitted, "deletions")}
 						icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
 						label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
+						onClick={onOpenFiles}
+					/>
+				) : null}
+				{facts.aoConfig.length > 0 ? (
+					<GitStatusRow
+						additions={sum(facts.aoConfig, "additions")}
+						deletions={sum(facts.aoConfig, "deletions")}
+						icon={<FileCog aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+						label={t("inspector.git.aoConfig")}
+						note={t("inspector.git.notInPR")}
+						noteTone="muted"
 						onClick={onOpenFiles}
 					/>
 				) : null}
@@ -194,7 +237,8 @@ function BranchLine({ base, branch, naming }: { base?: string; branch?: string; 
 			{naming ? <BranchNamingLabel /> : <span className="min-w-0 truncate" title={branch}>
 				{branch}
 			</span>}
-			{base && !naming ? <span className="shrink-0 text-passive">→ {base}</span> : null}
+			{/* A stacked PR's base is a long branch too; it yields space before the branch does. */}
+			{base && !naming ? <span className="min-w-0 shrink-[3] truncate text-passive" title={base}>→ {base}</span> : null}
 		</div>
 	);
 }
@@ -315,11 +359,12 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, target: GitTarget): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
-	if (openPRNumber !== undefined) {
+	// A branch beside the session's PRs pushes like a PR branch, without naming a PR.
+	if (target.kind !== "new") {
 		if (dirty) return { primary: "commitPush", menu: ["commit"] };
 		if (unpushed > 0) return { primary: "push", menu: [] };
 		return null;
@@ -330,11 +375,11 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined)
 	return null;
 }
 
-export function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, openPRNumber: number | undefined): boolean {
+export function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, target: GitTarget): boolean {
 	switch (kind) {
 		case "createPR":
 		case "createDraftPR":
-			return openPRNumber !== undefined;
+			return target.kind === "pr";
 		case "commit":
 			return facts.loaded && facts.uncommitted.length === 0;
 		case "commitPush":
@@ -345,9 +390,9 @@ export function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, openP
 }
 
 // Instructions for the session's agent, delivered through AO's automation relay.
-export function gitActionMessage(kind: SessionGitActionKind, base: string | undefined, openPRNumber: number | undefined): string {
+export function gitActionMessage(kind: SessionGitActionKind, base: string | undefined, gitTarget: GitTarget): string {
 	const target = base ? `\`${base}\`` : "the default branch";
-	const toPR = openPRNumber === undefined ? "" : ` to update PR #${openPRNumber}`;
+	const toPR = gitTarget.kind === "pr" ? ` to update PR #${gitTarget.number}` : "";
 	switch (kind) {
 		case "createPR":
 		case "createDraftPR":
@@ -361,9 +406,17 @@ export function gitActionMessage(kind: SessionGitActionKind, base: string | unde
 	}
 }
 
-function primaryLabel(kind: SessionGitActionKind, facts: GitFacts, openPRNumber: number | undefined, t: TFunction): string {
-	if (kind === "commitPush") return t("inspector.git.commitAndPushToPR", { number: openPRNumber });
-	if (kind === "push") return t("inspector.git.pushToPR", { number: openPRNumber });
+function primaryLabel(kind: SessionGitActionKind, facts: GitFacts, target: GitTarget, t: TFunction): string {
+	if (kind === "commitPush") {
+		return target.kind === "pr"
+			? t("inspector.git.commitAndPushToPR", { number: target.number })
+			: t("inspector.git.commitAndPushToBranch", { branch: target.kind === "branch" ? target.branch : "" });
+	}
+	if (kind === "push") {
+		return target.kind === "pr"
+			? t("inspector.git.pushToPR", { number: target.number })
+			: t("inspector.git.pushToBranch", { branch: target.kind === "branch" ? target.branch : "" });
+	}
 	if (facts.uncommitted.length > 0) return t("inspector.git.commitAndCreatePR");
 	if (!isPushed(facts.branch)) return t("inspector.git.pushAndCreatePR");
 	return t("inspector.git.createPR");
@@ -404,6 +457,11 @@ function pendingLabel(kind: SessionGitActionKind, t: TFunction): string {
 
 function displayBaseRef(ref: string | undefined): string | undefined {
 	return ref?.replace(/^refs\/(heads|remotes)\//, "").replace(/^origin\//, "") || undefined;
+}
+
+/** True for AO's own files under the workspace's `.ao/` directory. */
+export function isAOConfigFile(file: { path: string }): boolean {
+	return file.path.startsWith(".ao/");
 }
 
 function uniqueByPath(files: WorkspaceFileSummary[]): WorkspaceFileSummary[] {

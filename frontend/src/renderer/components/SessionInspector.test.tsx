@@ -4711,9 +4711,13 @@ describe("SessionInspector branch summary", () => {
   function mockGitState({
     uncommitted = [],
     committed = [],
-  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[] }) {
+    prs,
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; prs?: SessionPRSummary[] }) {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {
+      if (prs && path === "/api/v1/sessions/{sessionId}/pr") {
+        return { data: { sessionId: "sess-1", prs, linkedPrs: [] }, error: undefined };
+      }
       if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
         return {
           data: {
@@ -4865,6 +4869,64 @@ describe("SessionInspector branch summary", () => {
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
     expect(sendCalls()[0][1].body.message).toContain("push this branch to update PR #7");
     expect(await screen.findByRole("button", { name: "Committing and pushing…" })).toBeDisabled();
+  });
+
+  // Session ao-landing-4: PR #52 (stripe) → main, draft #66 (legal) stacked on #52.
+  const stackedPRs = [
+    prSummary(52, "open", { sourceBranch: "ao/s/stripe", targetBranch: "main" }),
+    prSummary(66, "draft", { sourceBranch: "ao/s/legal", targetBranch: "ao/s/stripe" }),
+  ];
+  const checkedOut = (name: string) => session([], {
+    branch: "ao/s/root",
+    branchState: { branch: name, commits: 2, remoteBranch: `origin/${name}`, unpushed: 0 },
+  });
+
+  it("commits to the PR whose head is checked out, not the first open PR", async () => {
+    mockGitState({ uncommitted: [changedFile("src/terms.tsx", 4, 0)], prs: stackedPRs });
+    renderWithQuery(<SessionInspector session={checkedOut("ao/s/legal")} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Commit & push to #66" }));
+    expect(screen.queryByRole("button", { name: "Commit & push to #52" })).not.toBeInTheDocument();
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toContain("to update PR #66");
+  });
+
+  it("heads the panel with the checked-out branch and its PR's base, not the session root", async () => {
+    mockGitState({ prs: stackedPRs });
+    renderWithQuery(<SessionInspector session={checkedOut("ao/s/legal")} />);
+
+    expect(await branch().findByText("→ ao/s/stripe")).toBeInTheDocument();
+    expect(branch().getByText("ao/s/legal")).toBeInTheDocument();
+    expect(branch().queryByText("ao/s/root")).not.toBeInTheDocument();
+  });
+
+  it("names the checked-out branch, not a PR, when no open PR is for it", async () => {
+    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)], prs: stackedPRs });
+    renderWithQuery(<SessionInspector session={checkedOut("ao/s/new")} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Commit & push to ao/s/new" }));
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).not.toContain("PR #");
+  });
+
+  it("keeps AO-only changes apart from the PR instead of offering to commit them", async () => {
+    mockGitState({ uncommitted: [changedFile(".ao/launch.json", 15, 0)], prs: stackedPRs });
+    renderWithQuery(<SessionInspector session={checkedOut("ao/s/stripe")} />);
+
+    expect(await screen.findByText("AO config")).toBeInTheDocument();
+    expect(await branch().findByText("→ main")).toBeInTheDocument();
+    expect(screen.getByText("not part of the PR")).toBeInTheDocument();
+    expect(screen.queryByText(/uncommitted file/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Commit & push/ })).not.toBeInTheDocument();
+  });
+
+  it("commits AO files with project changes, which may intend them", async () => {
+    mockGitState({ uncommitted: [changedFile(".ao/launch.json", 15, 0), changedFile("src/a.ts", 1, 0)], prs: stackedPRs });
+    renderWithQuery(<SessionInspector session={checkedOut("ao/s/stripe")} />);
+
+    expect(await screen.findByRole("button", { name: "Commit & push to #52" })).toBeInTheDocument();
+    expect(screen.getByText("2 uncommitted files")).toBeInTheDocument();
+    expect(screen.queryByText("AO config")).not.toBeInTheDocument();
   });
 
   it("shows no git action when the PR already has every commit", async () => {
