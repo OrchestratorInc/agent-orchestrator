@@ -25,7 +25,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
-	Awake              controllers.AwakeService
+	Awake controllers.AwakeService
 	// ReadyCheck is called by /readyz to verify durable dependencies.
 	ReadyCheck         func(context.Context) error
 	Agents             controllers.AgentCatalog
@@ -82,7 +82,6 @@ type APIDeps struct {
 	AgentAuth controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
 	GitHub controllers.GitHubPATService
-	AgentSwitchPolicy AgentSwitchPolicyControl
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService

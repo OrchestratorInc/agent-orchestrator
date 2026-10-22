@@ -385,8 +385,8 @@ func Run(buildVersion string) error {
 			}
 			agentSvc.ObserveActiveCodexAccountCapacity(observation)
 		},
-		// Sync ChatUI's model choice, including clearing its override, into session
-		// metadata before the next prompt routes or a later TUI rebuild resumes.
+		// Sync ChatUI's model choice, including clearing its override, before a
+		// later TUI rebuild reads the session metadata.
 		OnModelChanged: func(sessionID domain.SessionID, model string) {
 			if sessMgr == nil {
 				return
@@ -988,7 +988,6 @@ func Run(buildVersion string) error {
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
-		AgentSwitchPolicy:        policyCoordinator,
 	})
 	if err != nil {
 		stop()
