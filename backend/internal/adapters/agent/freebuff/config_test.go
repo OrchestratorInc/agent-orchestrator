@@ -254,6 +254,7 @@ func TestStartupGuardCancellationAndSeedFailureRelease(t *testing.T) {
 func TestConfigDirHonorsExplicitClearedOverride(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("HOME", base)
+	t.Setenv("USERPROFILE", base)
 	t.Setenv(configDirEnv, t.TempDir())
 	if got, want := configDir(map[string]string{configDirEnv: ""}), filepath.Join(base, ".config", "manicode"); got != want {
 		t.Fatalf("configDir=%q want=%q", got, want)
