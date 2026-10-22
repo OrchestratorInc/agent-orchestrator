@@ -15,7 +15,7 @@ export function finishUpdateQuit(
 			else actions.quit();
 			resolve();
 		};
-		const timer = setTimeout(() => finish(true, new Error("Update shutdown cleanup exceeded 15 seconds; exiting AO so the prepared installer can continue.")), timeoutMs);
+		const timer = setTimeout(() => finish(true, new Error("Quit cleanup exceeded 15 seconds; forcing AO to exit.")), timeoutMs);
 		cleanup.then(() => finish(false), (error) => finish(false, error));
 	});
 }

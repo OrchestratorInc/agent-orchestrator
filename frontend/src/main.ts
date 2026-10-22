@@ -1,6 +1,5 @@
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
-import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
 import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
 import {
@@ -32,7 +31,6 @@ import {
 	checkForUpdatesNow,
 	downloadUpdateNow,
 	quitAndInstallUpdate,
-	isUpdateRestartRequested,
 	setUpdateRestartFailureHandler,
 	getUpdateStatus,
 	setUpdateSettings,
@@ -357,29 +355,35 @@ let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
 const browserCleanupPromises = new Set<Promise<void>>();
-let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
 let createWindowPromise: Promise<void> | null = null;
+async function retireSides(): Promise<void> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
+	try {
+		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/side-chats/launch/retire`, {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ appRunId }), signal: AbortSignal.timeout(3000),
+		});
+		if (!response.ok) console.warn("AO: side chat cleanup on quit failed", response.status);
+	} catch (error) { console.warn("AO: side chat cleanup on quit failed", error); }
+	sideLaunchState = undefined;
+}
+
 const desktopQuit = createDesktopQuitController({
-	platform: process.platform,
-	hasTray: () => trayController !== null && !browserQuitRequested,
-	isUpdateRestartRequested,
-	hasWindow: () => mainWindow !== null || createWindowPromise !== null,
-	closeWindow: () => {
-		if (mainWindow) mainWindow.close();
-		else if (createWindowPromise) {
-			void createWindowPromise
-				.catch((error) => console.error("failed to close pending main window:", error))
-				.then(() => {
-					// No window came of it: nothing will emit "closed", so settle now.
-					if (mainWindow) mainWindow.close();
-					else desktopQuit.windowClosed();
-				});
-		}
+	cleanup: () => Promise.all([
+		disposeAllBrowserViewHosts(),
+		remoteRegistry.closeAll(),
+		cloudAgentProxy.close(),
+		telemetryPolicyController?.close() ?? Promise.resolve(),
+		retireSides(),
+	]),
+	finish: () => {
+		browserCleanupComplete = true;
+		app.quit();
 	},
-	hideDock: () => app.dock?.hide(),
-	quit: () => app.quit(),
+	exit: () => app.exit(0),
+	log: (error) => console.error("quit cleanup:", error),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -970,9 +974,6 @@ async function createWindowInternal(): Promise<void> {
 			event.preventDefault();
 			return;
 		}
-		// Doing nothing honors the renderer's request to stay, so a quit's close
-		// did not happen and AO keeps its Dock icon.
-		desktopQuit.windowCloseCanceled();
 	});
 
 	mainWindow.on("close", (event) => {
@@ -983,7 +984,6 @@ async function createWindowInternal(): Promise<void> {
 			chatDraftDialog,
 		);
 		if (preventClose) {
-			desktopQuit.windowCloseCanceled();
 			event.preventDefault();
 			return;
 		}
@@ -1166,7 +1166,6 @@ async function createWindowInternal(): Promise<void> {
 		// the next bounce skip attaching one to the replacement window.
 		cancelDockBounce();
 		trayLifecycle.clearPendingTarget();
-		desktopQuit.windowClosed();
 	});
 }
 
@@ -2965,7 +2964,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	app.relaunch();
-	desktopQuit.quitCompletely();
+	app.quit();
 });
 
 // Whether THIS boot is a post-update relaunch, so the startup loader can show
@@ -3478,12 +3477,12 @@ app.whenReady().then(async () => {
 		trayController = createTrayController({
 			focusWindow: focusMainWindow,
 			openSession: trayLifecycle.openSession,
-			quitCompletely: desktopQuit.quitCompletely,
+			quitCompletely: () => app.quit(),
 			locale: initialUiSettings.locale,
 		});
 	}
 	if (process.platform === "darwin") {
-		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
+		powerMonitor.on("shutdown", () => app.quit());
 	}
 	// Boot the daemon BEFORE the window: the board cannot show until the daemon
 	// answers, so give the start a bounded wait instead of racing the first
@@ -3518,18 +3517,16 @@ app.whenReady().then(async () => {
 	});
 });
 
-// Daemon teardown is now handled via the OS-native supervisor socket: the daemon
+// Daemon teardown is handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
-// Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period. Sessions survive.
+// Quit is never swallowed: desktopQuit runs the browser-quit cleanup once
+// under a deadline, then the app really exits and the dropped socket stops
+// the app-owned daemon after its grace period. Sessions survive.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
 
-let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
-	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -3539,8 +3536,6 @@ app.on("before-quit", (event) => {
 		)) {
 			chatDraftQuitConfirmed = true;
 			app.quit();
-		} else {
-			desktopQuit.cancelQuit();
 		}
 		return;
 	}
@@ -3548,45 +3543,7 @@ app.on("before-quit", (event) => {
 	disposeBrowserRuntimeLink();
 	trayLifecycle.dispose();
 	trayController = null;
-	if (!browserCleanupComplete) {
-		event.preventDefault();
-		if (!browserQuitCleanupPromise) {
-			const retireSides = async () => {
-				if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
-				try {
-					const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/side-chats/launch/retire`, {
-						method: "POST", headers: { "content-type": "application/json" },
-						body: JSON.stringify({ appRunId }), signal: AbortSignal.timeout(3000),
-					});
-					if (!response.ok) console.warn("AO: side chat cleanup on quit failed", response.status);
-				} catch (error) { console.warn("AO: side chat cleanup on quit failed", error); }
-				sideLaunchState = undefined;
-			};
-			const cleanup = Promise.all([
-				disposeAllBrowserViewHosts(),
-				remoteRegistry.closeAll(),
-				cloudAgentProxy.close(),
-				telemetryPolicyController?.close() ?? Promise.resolve(),
-				retireSides(),
-			]);
-			const finishQuit = () => {
-				browserCleanupComplete = true;
-				browserQuitCleanupPromise = null;
-				app.quit();
-			};
-			browserQuitCleanupPromise = cleanup.then(() => undefined).finally(finishQuit);
-		}
-		if (isUpdateRestartRequested() && !updateQuitDeadlineArmed) {
-			updateQuitDeadlineArmed = true;
-			// Also cover a normal quit already waiting on the same cleanup.
-			void finishUpdateQuit(browserQuitCleanupPromise, {
-				quit: () => undefined, // The existing cleanup continuation owns normal quit.
-				exit: () => { if (isUpdateRestartRequested()) app.exit(0); },
-				log: (error) => console.error("update shutdown:", error),
-			});
-		}
-		return;
-	}
+	if (!browserCleanupComplete) desktopQuit.handleBeforeQuit(event);
 });
 
 // Last resort: if the OS-native supervisor link is not actually connected
