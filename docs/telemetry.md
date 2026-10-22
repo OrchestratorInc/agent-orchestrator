@@ -181,16 +181,20 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
-- Remote HTTP 5xx and CLI usage errors are sampled at one percent before
-  minute rollup. The rollup carries `sample_rate` and a count of sampled
-  occurrences. The local diagnostic stream keeps every occurrence.
-- Renderer API error analytics are sampled at one percent. API error handling
-  and separately configured Sentry reporting still run for every failure.
-- Repeated updater failures with the same phase, category, and target version
-  are reported once per day until a successful download clears that version.
-- The session management summary reports at most once per UTC day per desktop
-  installation. Its counters and active time stay local until capture accepts
-  them, including across a desktop restart.
+- Remote HTTP 5xx events are sampled at one percent before minute rollup.
+  The rollup carries `sample_rate` and a count of sampled occurrences. Real
+  HTTP 500 responses also go to the existing gated Sentry capture once. The
+  local diagnostic stream keeps every occurrence. CLI usage errors are one
+  durable daily summary per install, with command-path counts and no raw
+  arguments.
+- Renderer API error analytics are sampled at one percent. Expected Codex
+  account-management unavailability, an already-closed shell terminal, and an
+  invalid GitHub token are not analytics events. API error handling still runs
+  for every failure.
+- An updater failure streak emits one event until a successful download of
+  that target clears it. Retries in the streak do not emit again. Each
+  install also emits one daily count after the UTC day ends. A rejected
+  capture leaves the streak unsent. A restart keeps the open streak.
 - Session recording is disabled in the desktop and mobile apps. Orchestrator.inc does not
   automatically record screens, clicks, or touches.
 - Person profiles are off for anonymous events. A profile is created when a

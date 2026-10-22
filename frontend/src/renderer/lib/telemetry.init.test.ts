@@ -145,6 +145,23 @@ describe("initTelemetry recovery", () => {
 		}
 	});
 
+	it("emits one update failure per streak and one daily count after the UTC day ends", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const failure = { phase: "check", error_category: "network", to_version: "2.0.0" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toMatchObject({ report: "daily", failure_count: 2 });
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("allows retry after PostHog rejects or throws while capturing an update failure", async () => {
 		const captureRendererEvent = await initializedUpdateCapture();
 		const rejected = { phase: "download", error_category: "network", to_version: "2.0.0" };

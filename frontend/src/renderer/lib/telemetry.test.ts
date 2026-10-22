@@ -10,7 +10,7 @@ import {
 	postHogEventName,
 	reserveCapture,
 	reserveDailyActiveCapture,
-	reserveUpdateFailure,
+	claimUpdateFailure,
 	reserveRouteViewCapture,
 	routeSurface,
 	sanitizePostHogEvent,
@@ -44,6 +44,11 @@ describe("telemetry sanitizers", () => {
 		}
 		expect(isProductionRendererEvent("ao.renderer.task_create_succeeded")).toBe(true);
 		expect(isProductionRendererEvent("ao.v2.renderer.api_error")).toBe(true);
+		expect(isProductionRendererEvent("ao.renderer.session_management_summary")).toBe(true);
+		expect(isProductionRendererEvent("ao.renderer.cloud_offering_resolved")).toBe(true);
+		expect(isProductionRendererEvent("ao.onboarding.first_project_added")).toBe(true);
+		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
+		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");
 	});
 
 	it("samples only one percent of analytics API errors with injectable decisions", () => {
@@ -54,15 +59,19 @@ describe("telemetry sanitizers", () => {
 		expect(sampleApiError(() => Number.NaN)).toBe(false);
 	});
 
-	it("deduplicates updater failures for a day and resets after expiry", () => {
+	it("keeps one updater streak until download and reports the previous UTC day once", () => {
 		const storage = memoryStorage();
 		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
-		expect(reserveUpdateFailure(storage, failure, 100)).toBe(true);
-		expect(reserveUpdateFailure(storage, failure, 101)).toBe(false);
-		expect(reserveUpdateFailure(storage, { ...failure, error_category: "signature" }, 102)).toBe(true);
+		const day = Date.parse("2026-10-20T00:00:00.000Z");
+		expect(claimUpdateFailure(storage, failure, day).emit).toBe(true);
+		expect(claimUpdateFailure(storage, failure, day + 60_000).emit).toBe(false);
+		expect(claimUpdateFailure(storage, { ...failure, error_category: "signature" }, day + 120_000).emit).toBe(true);
 		clearUpdateFailures(storage, "2.0.0");
-		expect(reserveUpdateFailure(storage, failure, 103)).toBe(true);
-		expect(reserveUpdateFailure(storage, failure, 103 + 86_400_000)).toBe(true);
+		expect(claimUpdateFailure(storage, failure, day + 180_000).emit).toBe(true);
+		const nextDay = claimUpdateFailure(storage, failure, day + 86_400_000);
+		expect(nextDay.emit).toBe(true);
+		expect(nextDay.extra).toMatchObject({ report: "daily" });
+		expect(claimUpdateFailure(storage, failure, day + 86_400_000 + 60_000).emit).toBe(false);
 	});
 	it("allows only the fixed session management summary schema", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {

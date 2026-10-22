@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -41,6 +42,8 @@ type fakeCodexAccounts struct {
 	switchReadID        string
 	switchReadResult    domain.CodexAccountSwitch
 	switchReadErr       error
+	subscribeErr        error
+	subscribeAttempts   int
 }
 
 func (f *fakeCodexAccounts) CachedCodexAccounts(context.Context) (agentsvc.CodexAccounts, error) {
@@ -55,6 +58,10 @@ func (f *fakeCodexAccounts) ConsumeCodexAccountResetCredit(_ context.Context, ac
 	return f.result, nil
 }
 func (f *fakeCodexAccounts) SubscribeCodexAccounts(ctx context.Context) (<-chan agentsvc.CodexAccounts, error) {
+	f.subscribeAttempts++
+	if f.subscribeErr != nil && f.subscribeAttempts == 1 {
+		return nil, f.subscribeErr
+	}
 	if f.events != nil {
 		return f.events, nil
 	}
@@ -285,6 +292,40 @@ func TestCodexAccountCachedAndEventResponsesExposeSafeActiveLogin(t *testing.T) 
 		t.Fatal(err)
 	}
 	assertSafeActiveLogin(t, string(eventBody))
+}
+
+func TestCodexAccountEventStreamStaysOpenWhileManagementIsUnavailable(t *testing.T) {
+	events := make(chan agentsvc.CodexAccounts)
+	fake := &fakeCodexAccounts{
+		subscribeErr: apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable"),
+		events:       events,
+	}
+	srv := newCodexAccountServer(t, fake)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/agents/codex/accounts/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 while account management is unavailable", resp.StatusCode)
+	}
+	buf := make([]byte, 128)
+	n, err := resp.Body.Read(buf)
+	if err != nil && n == 0 {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(buf[:n]), "codex-account-management-unavailable") {
+		t.Fatalf("body = %q, want an open unavailable stream", buf[:n])
+	}
+	cancel()
 }
 
 func TestCodexAccountReauthenticationAndLogoutRoutesTargetAnExistingAccount(t *testing.T) {

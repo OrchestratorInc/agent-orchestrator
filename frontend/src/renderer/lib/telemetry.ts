@@ -16,7 +16,6 @@ const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
-const UPDATE_FAILURE_TTL_MS = 24 * 60 * 60_000;
 const EMBEDDED_LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -89,26 +88,75 @@ export function sampleApiError(random: () => number = Math.random): boolean {
 	return Number.isFinite(value) && value >= 0 && value < API_ERROR_SAMPLE_RATE;
 }
 
-// Only bounded update dimensions enter this key. A failure is reported once
-// per day until a successful download of the same version clears it.
-export function reserveUpdateFailure(
+type UpdateFailureState = {
+	streaks?: Record<string, number>;
+	day?: string;
+	dayCount?: number;
+	pendingDay?: string;
+	pendingCount?: number;
+};
+
+function utcDay(now: number): string {
+	return new Date(now).toISOString().slice(0, 10);
+}
+
+function readUpdateFailureState(storage: DailyActiveStorage): UpdateFailureState {
+	try {
+		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		if (parsed && typeof parsed.streaks === "object" && parsed.streaks !== null) return parsed as UpdateFailureState;
+		const streaks: Record<string, number> = {};
+		for (const [key, value] of Object.entries(parsed)) {
+			if (typeof value === "number" && Number.isFinite(value)) streaks[key] = value;
+		}
+		return { streaks };
+	} catch {
+		return { streaks: {} };
+	}
+}
+
+// One streak event until a successful download of that target clears it, plus
+// one daily count after the UTC day that accumulated the retries has ended.
+export function claimUpdateFailure(
 	storage: DailyActiveStorage,
 	properties: TelemetryProperties,
 	now = Date.now(),
-): boolean {
-	const key = updateFailureKey(properties);
+): { emit: boolean; extra: TelemetryProperties; rollback: () => void } {
+	const none = { emit: false, extra: {}, rollback: () => undefined };
+	const snapshot = storage.getItem(UPDATE_FAILURE_STORAGE_KEY);
+	const rollback = () => {
+		if (snapshot === null) storage.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		else storage.setItem(UPDATE_FAILURE_STORAGE_KEY, snapshot);
+	};
 	try {
-		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-		const recent = Object.entries(parsed)
-			.filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]) &&
-				entry[1] <= now && now - entry[1] < UPDATE_FAILURE_TTL_MS)
-			.sort((a, b) => b[1] - a[1])
-			.slice(0, 31);
-		if (recent.some(([existing]) => existing === key)) return false;
-		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(Object.fromEntries([[key, now], ...recent])));
-		return true;
+		const state = readUpdateFailureState(storage);
+		state.streaks ??= {};
+		const day = utcDay(now);
+		if (state.day && state.day !== day) {
+			if ((state.dayCount ?? 0) > 0) {
+				state.pendingDay = state.day;
+				state.pendingCount = state.dayCount;
+			}
+			state.day = day;
+			state.dayCount = 0;
+		}
+		if (!state.day) state.day = day;
+		const key = updateFailureKey(properties);
+		const streakOpen = state.streaks[key] !== undefined;
+		state.dayCount = (state.dayCount ?? 0) + 1;
+		if (!streakOpen) state.streaks[key] = now;
+		const pendingDay = state.pendingDay;
+		const pendingCount = state.pendingCount ?? 0;
+		const emitDaily = streakOpen && pendingDay !== undefined;
+		if (emitDaily) {
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+		if (!streakOpen) return { emit: true, extra: {}, rollback };
+		if (emitDaily) return { emit: true, extra: { report: "daily", failure_count: pendingCount }, rollback };
+		return none;
 	} catch {
-		return true;
+		return { emit: true, extra: {}, rollback: () => undefined };
 	}
 }
 
@@ -116,32 +164,23 @@ function updateFailureKey(properties: TelemetryProperties): string {
 	return [properties.phase, properties.error_category, properties.to_version ?? ""].join("|");
 }
 
-function releaseUpdateFailure(storage: DailyActiveStorage, properties: TelemetryProperties, reservedAt: number): void {
-	try {
-		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-		const key = updateFailureKey(properties);
-		if (parsed[key] !== reservedAt) return;
-		delete parsed[key];
-		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(parsed));
-	} catch {
-		// A storage failure cannot affect the updater.
-	}
-}
+
 
 export function clearUpdateFailures(storage: DailyActiveStorage, version: unknown): void {
 	try {
-		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-		for (const key of Object.keys(parsed)) {
-			if (key.endsWith(`|${version ?? ""}`)) delete parsed[key];
+		const state = readUpdateFailureState(storage);
+		const suffix = `|${version ?? ""}`;
+		for (const key of Object.keys(state.streaks ?? {})) {
+			if (key.endsWith(suffix)) delete state.streaks?.[key];
 		}
-		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(parsed));
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
 	} catch {
 		// A storage failure cannot affect the updater.
 	}
 }
 
 type TelemetryProperties = Record<string, unknown>;
-type DailyActiveStorage = Pick<Storage, "getItem" | "setItem">;
+type DailyActiveStorage = Pick<Storage, "getItem" | "setItem"> & { removeItem?: Storage["removeItem"] };
 type DailyActiveEventTarget = {
 	addEventListener: (type: string, listener: EventListener, options?: AddEventListenerOptions) => void;
 	removeEventListener: (type: string, listener: EventListener, options?: EventListenerOptions) => void;
@@ -913,6 +952,10 @@ export async function sanitizeRendererProperties(
 			// Version strings are release identifiers, not user data. The updater's
 			// raw error message is deliberately absent: it can carry feed URLs and
 			// local paths, so update-telemetry.ts maps it to error_category first.
+			if (properties?.report === "daily") safe.report = "daily";
+			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
+				safe.failure_count = properties.failure_count;
+			}
 			if (typeof properties?.to_version === "string") safe.to_version = properties.to_version;
 			if (typeof properties?.error_category === "string") safe.error_category = properties.error_category;
 			if (properties?.phase === "check" || properties?.phase === "download") safe.phase = properties.phase;
@@ -1192,13 +1235,14 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	}
 	if (!(await initTelemetry())) return false;
 	const storage = telemetryStorage();
-	let updateFailureReservedAt: number | undefined;
+	let releaseUpdateFailureClaim: (() => void) | undefined;
 	if (event === "ao.renderer.update_failed") {
 		if (!reserveCapture(event)) return false;
 		if (storage) {
-			const now = Date.now();
-			if (!reserveUpdateFailure(storage, sanitizedProperties, now)) return false;
-			updateFailureReservedAt = now;
+			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
+			if (!decision.emit) return false;
+			Object.assign(sanitizedProperties, decision.extra);
+			releaseUpdateFailureClaim = decision.rollback;
 		}
 	}
 	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
@@ -1209,9 +1253,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
 		return captured;
 	} finally {
-		if (!captured && storage && updateFailureReservedAt !== undefined) {
-			releaseUpdateFailure(storage, sanitizedProperties, updateFailureReservedAt);
-		}
+		if (!captured && releaseUpdateFailureClaim) releaseUpdateFailureClaim();
 	}
 }
 

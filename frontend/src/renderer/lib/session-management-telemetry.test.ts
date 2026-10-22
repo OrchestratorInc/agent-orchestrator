@@ -3,13 +3,13 @@ import { SessionManagementAccumulator } from "./session-management-telemetry";
 
 describe("SessionManagementAccumulator", () => {
 	let now = 0;
-	let capture: ReturnType<typeof vi.fn<(event: string, properties: Record<string, unknown>) => Promise<boolean | void>>>;
+	let capture: ReturnType<typeof vi.fn<(event: string, properties: Record<string, unknown>) => Promise<void>>>;
 	let accumulator: SessionManagementAccumulator;
 
 	beforeEach(() => {
 		localStorage.clear();
 		now = 1_000;
-		capture = vi.fn<(event: string, properties: Record<string, unknown>) => Promise<boolean | void>>().mockResolvedValue(undefined);
+		capture = vi.fn<(event: string, properties: Record<string, unknown>) => Promise<void>>().mockResolvedValue(undefined);
 		accumulator = new SessionManagementAccumulator(localStorage, () => now, capture);
 	});
 
@@ -125,49 +125,5 @@ describe("SessionManagementAccumulator", () => {
 		expect(restored.isFlushOverdue()).toBe(false);
 		now += 2 * 60_000;
 		expect(restored.isFlushOverdue()).toBe(true);
-	});
-
-	it("rolls over at UTC midnight and keeps checkpointed counters", async () => {
-		accumulator.setSurface({ kind: "worker", sessionId: "w1" });
-		accumulator.recordInteraction("w1", "chat", "worker");
-		now = 86_400_001;
-		const restored = new SessionManagementAccumulator(localStorage, () => now, capture);
-		expect(restored.isFlushOverdue()).toBe(true);
-		await restored.flush("startup");
-		expect(capture).toHaveBeenCalledTimes(1);
-		expect(capture.mock.calls[0][1].direct_worker_chat_steer_count).toBe(1);
-		expect(restored.isFlushOverdue()).toBe(false);
-	});
-
-	it("keeps unsent summary through opt out and restart", async () => {
-		accumulator.recordInteraction("w1", "chat", "worker");
-		capture.mockResolvedValueOnce(false);
-		await accumulator.flush();
-		const restored = new SessionManagementAccumulator(localStorage, () => now, capture);
-		await restored.flush();
-		expect(capture.mock.calls[1][1].direct_worker_chat_steer_count).toBe(1);
-	});
-
-	it("keeps counters and delays retry after a capture rejection", async () => {
-		accumulator.recordInteraction("w1", "chat", "worker");
-		capture.mockRejectedValueOnce(new Error("offline"));
-		await accumulator.flush();
-		expect(accumulator.flushDelayMs()).toBe(60 * 60_000);
-		const restored = new SessionManagementAccumulator(localStorage, () => now, capture);
-		await restored.flush();
-		expect(capture.mock.calls[1][1].direct_worker_chat_steer_count).toBe(1);
-	});
-
-	it("preserves interactions recorded while capture is pending", async () => {
-		let release!: (value: void) => void;
-		capture.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
-		accumulator.recordInteraction("w1", "chat", "worker");
-		const pending = accumulator.flush();
-		accumulator.recordInteraction("w1", "chat", "worker");
-		release();
-		await pending;
-		await accumulator.flush();
-		expect(capture.mock.calls[0][1].direct_worker_chat_steer_count).toBe(1);
-		expect(capture.mock.calls[1][1].direct_worker_chat_steer_count).toBe(1);
 	});
 });

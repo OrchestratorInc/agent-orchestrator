@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
@@ -29,7 +30,6 @@ import (
 var aggregatedEventNames = []string{
 	"ao.http.5xx",
 	"ao.daemon.panic",
-	"ao.cli.usage_errors",
 }
 
 // newTelemetrySink also returns the live telemetry identity (nil when the data
@@ -58,15 +58,16 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// job for every event name that isn't aggregated.
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Keep the full local error stream. One percent of remote HTTP and CLI
+	// Keep the full local error stream. One percent of remote HTTP 5xx
 	// occurrences enter the minute rollup, which carries the sampling rate.
+	// CLI usage errors are one durable daily summary per install instead.
 	sampled := telemetryadapter.NewSamplingSink(aggregated, map[string]float64{
-		"ao.http.5xx":         0.01,
-		"ao.cli.usage_errors": 0.01,
+		"ao.http.5xx": 0.01,
 	})
+	daily := telemetryadapter.NewDailySummarySink(sampled, filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
 	// Opt-out is enforced ahead of sampling and aggregation: events folded
 	// into a rollup while opted out could flush after an opt back in.
-	gated := telemetryadapter.NewOptOutSink(sampled, remote.Identity().ExportSuppressed)
+	gated := telemetryadapter.NewOptOutSink(daily, remote.Identity().ExportSuppressed)
 	// The kill switch sits outermost on the remote chain so a silenced stream
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.

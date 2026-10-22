@@ -7,9 +7,12 @@ const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: () => "request failed",
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
+	getApiBaseUrl: () => "http://127.0.0.1:1",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
-import { codexAccountsQueryKey, useCodexAccountsQuery, useEnsureCodexAccounts, type CodexAccountsResponse } from "./useCodexAccountsQuery";
+import { codexAccountsQueryKey, noteCodexAccountsAvailable, useCodexAccountsQuery, useEnsureCodexAccounts, type CodexAccountsResponse } from "./useCodexAccountsQuery";
 import { writeCodexAccounts } from "./codex-accounts-state";
 
 const response: CodexAccountsResponse = {
@@ -34,6 +37,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+	noteCodexAccountsAvailable();
 	getMock.mockReset().mockResolvedValue({ data: response });
 	postMock.mockReset().mockResolvedValue({ data: response });
 });
@@ -84,6 +88,24 @@ describe("Codex account query", () => {
 		expect(postMock).toHaveBeenCalledTimes(2);
 		expect(setIntervalSpy).not.toHaveBeenCalled();
 		setIntervalSpy.mockRestore();
+	});
+
+	it("backs off automatic ensure while Codex account management is unavailable", async () => {
+		postMock.mockResolvedValue({ error: { code: "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", message: "unavailable" } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(codexAccountsQueryKey, response);
+		renderHook(() => useEnsureCodexAccounts(), { wrapper: wrapper(queryClient) });
+		await act(async () => {
+			window.dispatchEvent(new Event("focus"));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		expect(postMock).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			window.dispatchEvent(new Event("focus"));
+			await Promise.resolve();
+		});
+		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not let a delayed ensure replace a newer account SSE snapshot", async () => {

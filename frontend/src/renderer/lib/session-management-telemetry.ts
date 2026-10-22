@@ -4,7 +4,8 @@ import { sessionUiKey } from "./hosts";
 const STORAGE_KEY = "ao.telemetry.sessionManagement.v1";
 const CHECKPOINT_MS = 5 * 60_000;
 const IDLE_MS = 5 * 60_000;
-const FLUSH_RETRY_MS = 60 * 60_000;
+const FLUSH_MIN_MS = 45 * 60_000;
+const FLUSH_JITTER_MS = 15 * 60_000;
 const TERMINAL_BURST_MS = 30_000;
 
 export type SessionSurface = { kind: "orchestrator" | "worker"; sessionId: string } | null;
@@ -58,11 +59,7 @@ const zeroSummary = (): Summary => ({
 	worker_switch: 0,
 });
 
-function nextUtcDay(now: number): number {
-	return Math.floor(now / 86_400_000) * 86_400_000 + 86_400_000;
-}
-
-function freshState(now: number, windowFlushAt = nextUtcDay(now)): PersistedState {
+function freshState(now: number, windowFlushAt = now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS): PersistedState {
 	return {
 		version: 1,
 		windowId: crypto.randomUUID(),
@@ -80,7 +77,7 @@ function loadState(storage: Storage, now: number): PersistedState {
 		const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as Partial<PersistedState> | null;
 		if (isValidPersistedState(parsed)) {
 			return {
-				...freshState(now, parsed.windowFlushAt ?? nextUtcDay(parsed.windowStartedAt)),
+				...freshState(now, parsed.windowFlushAt ?? parsed.windowStartedAt + FLUSH_MIN_MS),
 				...parsed,
 				summary: { ...zeroSummary(), ...parsed.summary },
 			};
@@ -132,7 +129,6 @@ function transitionKey(from: NonNullable<SessionSurface>, to: NonNullable<Sessio
 
 export class SessionManagementAccumulator {
 	private state: PersistedState;
-	private flushing = false;
 	private surface: SessionSurface = null;
 	private segmentStartedAt: number | null = null;
 	private lastActivityAt: number;
@@ -141,7 +137,9 @@ export class SessionManagementAccumulator {
 	constructor(
 		private readonly storage: Storage,
 		private readonly now: () => number = Date.now,
-		private readonly capture: (event: string, properties: Record<string, unknown>) => Promise<boolean | void> = captureRendererEvent,
+		private readonly capture: (event: string, properties: Record<string, unknown>) => Promise<void> = async (event, properties) => {
+			await captureRendererEvent(event, properties);
+		},
 	) {
 		const current = now();
 		this.state = loadState(storage, current);
@@ -226,56 +224,35 @@ export class SessionManagementAccumulator {
 	}
 
 	async flush(reason = "interval"): Promise<void> {
-		if (this.flushing) return;
-		this.flushing = true;
-		try {
-			const now = this.now();
-			this.checkpoint(now, false);
-			const summary = { ...this.state.summary };
-			const sent = await this.capture("ao.renderer.session_management_summary", {
-				measurement_schema_version: 1,
-				window_id: this.state.windowId,
-				window_duration_seconds: Math.round(Math.max(0, now - this.state.windowStartedAt) / 1000),
-				flush_reason: reason,
-				orchestrator_active_seconds: Math.round(summary.orchestratorActiveMs / 1000),
-				worker_active_seconds: Math.round(summary.workerActiveMs / 1000),
-				transition_orchestrator_to_worker_count: summary.orchestrator_to_worker,
-				transition_orchestrator_same_count: summary.orchestrator_same,
-				transition_orchestrator_switch_count: summary.orchestrator_switch,
-				transition_worker_to_orchestrator_count: summary.worker_to_orchestrator,
-				transition_worker_same_count: summary.worker_same,
-				transition_worker_switch_count: summary.worker_switch,
-				manual_worker_open_count: summary.manualWorkerOpens,
-				direct_worker_chat_steer_count: summary.directWorkerChatSteer,
-				direct_worker_terminal_input_burst_count: summary.directWorkerTerminalBursts,
-				direct_worker_lifecycle_action_count: summary.directWorkerLifecycleActions,
-				pattern_orchestrator_worker_orchestrator_count: summary.patternOrchestratorWorkerOrchestrator,
-				pattern_orchestrator_multiple_workers_count: summary.patternOrchestratorMultipleWorkers,
-			});
-			if (sent === false) {
-				this.state.windowFlushAt = now + FLUSH_RETRY_MS;
-				this.persist();
-				return;
-			}
-			const current = this.state;
-			this.state = {
-				...freshState(this.now()),
-				summary: Object.fromEntries(Object.keys(summary).map((key) => [key,
-					Math.max(0, current.summary[key as keyof Summary] - summary[key as keyof Summary]),
-				])) as Summary,
-				previousSurface: current.previousSurface,
-				path: current.path,
-				lastTerminalBurstAt: current.lastTerminalBurstAt,
-				pendingManualWorkerId: current.pendingManualWorkerId,
-				pendingManualWorkerAt: current.pendingManualWorkerAt,
-			};
-			this.persist();
-		} catch {
-			this.state.windowFlushAt = this.now() + FLUSH_RETRY_MS;
-			this.persist();
-		} finally {
-			this.flushing = false;
-		}
+		const now = this.now();
+		this.checkpoint(now, false);
+		const { summary } = this.state;
+		await this.capture("ao.renderer.session_management_summary", {
+			measurement_schema_version: 1,
+			window_id: this.state.windowId,
+			window_duration_seconds: Math.round((now - this.state.windowStartedAt) / 1000),
+			flush_reason: reason,
+			orchestrator_active_seconds: Math.round(summary.orchestratorActiveMs / 1000),
+			worker_active_seconds: Math.round(summary.workerActiveMs / 1000),
+			transition_orchestrator_to_worker_count: summary.orchestrator_to_worker,
+			transition_orchestrator_same_count: summary.orchestrator_same,
+			transition_orchestrator_switch_count: summary.orchestrator_switch,
+			transition_worker_to_orchestrator_count: summary.worker_to_orchestrator,
+			transition_worker_same_count: summary.worker_same,
+			transition_worker_switch_count: summary.worker_switch,
+			manual_worker_open_count: summary.manualWorkerOpens,
+			direct_worker_chat_steer_count: summary.directWorkerChatSteer,
+			direct_worker_terminal_input_burst_count: summary.directWorkerTerminalBursts,
+			direct_worker_lifecycle_action_count: summary.directWorkerLifecycleActions,
+			pattern_orchestrator_worker_orchestrator_count: summary.patternOrchestratorWorkerOrchestrator,
+			pattern_orchestrator_multiple_workers_count: summary.patternOrchestratorMultipleWorkers,
+		});
+		const currentSurface = this.surface;
+		const openPath = this.state.path;
+		this.state = freshState(now);
+		this.state.previousSurface = currentSurface;
+		this.state.path = openPath;
+		this.persist();
 	}
 
 	isFlushOverdue(): boolean {
@@ -341,7 +318,7 @@ export function startSessionManagementTelemetry(): () => void {
 	const scheduleFlush = () => {
 		flushTimer = window.setTimeout(() => {
 			void runtime?.flush().finally(scheduleFlush);
-		}, runtime?.flushDelayMs() ?? FLUSH_RETRY_MS);
+		}, runtime?.flushDelayMs() ?? FLUSH_MIN_MS);
 	};
 	if (runtime.isFlushOverdue()) void runtime.flush("startup").finally(scheduleFlush);
 	else scheduleFlush();

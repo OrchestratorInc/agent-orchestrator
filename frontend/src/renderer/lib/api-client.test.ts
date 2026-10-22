@@ -333,6 +333,26 @@ describe("api error telemetry", () => {
 		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
 	});
 
+	it("drops expected Codex, shell, and GitHub auth outcomes and still reports other 401 and 404 responses", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch");
+		setApiBaseUrl("http://127.0.0.1:3037");
+		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND", "GITHUB_AUTH_INVALID"]) {
+			fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code, message: "expected" }), {
+				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : code === "GITHUB_AUTH_INVALID" ? 401 : 404,
+				headers: { "Content-Type": "application/json" },
+			}));
+			await apiClient.GET("/api/v1/agents");
+		}
+		expect(captureMock).not.toHaveBeenCalled();
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: "SESSION_GONE", message: "missing" }), {
+			status: 404,
+			headers: { "Content-Type": "application/json" },
+		}));
+		await apiClient.GET("/api/v1/agents");
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
+	});
+
 	it("reports http_4xx with ids stripped from the operation", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 404 }));
 		setApiBaseUrl("http://127.0.0.1:3037");

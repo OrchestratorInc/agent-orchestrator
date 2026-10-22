@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
 import { codexAccountsQueryKey, mergeCodexAccounts, writeCodexAccounts } from "./codex-accounts-state";
 
 export { codexAccountsQueryKey } from "./codex-accounts-state";
@@ -13,9 +13,37 @@ export type CodexAccountLoginTerminalStart = components["schemas"]["OpenCodexAcc
 export type CodexActiveLogin = components["schemas"]["CodexActiveLoginResponse"];
 export type CodexAccountSwitch = components["schemas"]["CodexAccountSwitchResponse"];
 
+const CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE = "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE";
+const CODEX_UNAVAILABLE_BACKOFF_MS = [30_000, 120_000, 600_000];
+let codexAccountsPausedUntil = 0;
+let codexBackoffStep = 0;
+
+export function codexAccountsPollPaused(now = Date.now()): boolean {
+	return now < codexAccountsPausedUntil;
+}
+
+export function noteCodexAccountsAvailable(): void {
+	codexAccountsPausedUntil = 0;
+	codexBackoffStep = 0;
+}
+
+function noteCodexAccountsUnavailable(now = Date.now()): void {
+	const delay = CODEX_UNAVAILABLE_BACKOFF_MS[Math.min(codexBackoffStep, CODEX_UNAVAILABLE_BACKOFF_MS.length - 1)];
+	codexBackoffStep += 1;
+	codexAccountsPausedUntil = now + delay;
+}
+
+function throwCodexRequest(error: unknown): never {
+	const err = new Error(apiErrorMessage(error)) as Error & { code?: string };
+	const code = apiErrorCode(error);
+	if (code) err.code = code;
+	throw err;
+}
+
 export async function fetchCodexAccounts(): Promise<CodexAccountsResponse> {
 	const { data, error } = await apiClient.GET("/api/v1/agents/codex/accounts");
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throwCodexRequest(error);
+	noteCodexAccountsAvailable();
 	return data as CodexAccountsResponse;
 }
 
@@ -33,7 +61,8 @@ export async function ensureCodexAccounts(accountIds: string[] = [], options: En
 		...(options.forceDeviceReconciliation ? { forceDeviceReconciliation: true } : {}),
 	};
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/accounts/ensure", { body });
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throwCodexRequest(error);
+	noteCodexAccountsAvailable();
 	return data as CodexAccountsResponse;
 }
 
@@ -108,7 +137,7 @@ export const codexAccountsQueryOptions = {
 		const incoming = await fetchCodexAccounts();
 		return mergeCodexAccounts(client.getQueryData<CodexAccountsResponse>(codexAccountsQueryKey), incoming, "replace");
 	},
-	retry: 1,
+	retry: (failureCount: number, error: unknown) => failureCount < 1 && apiErrorCode(error) !== CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE,
 	staleTime: Number.POSITIVE_INFINITY,
 };
 export function useCodexAccountsQuery(enabled = true) { return useQuery({ ...codexAccountsQueryOptions, enabled }); }
@@ -118,13 +147,19 @@ export function useEnsureCodexAccounts(): void {
 	useEffect(() => {
 		let active = true;
 		const ensure = () => {
+			if (codexAccountsPollPaused()) return;
 			const cached = queryClient.getQueryData(codexAccountsQueryKey);
 			const ready = cached ? Promise.resolve() : queryClient.fetchQuery(codexAccountsQueryOptions).then(() => undefined).catch(() => undefined);
-			void ready.then(() => ensureCodexAccounts()).then((next) => { if (active) writeCodexAccounts(queryClient, next, "replace"); }).catch(() => undefined);
+			void ready.then(() => ensureCodexAccounts()).then((next) => { if (active) writeCodexAccounts(queryClient, next, "replace"); }).catch((error: unknown) => {
+				if (apiErrorCode(error) === CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE) noteCodexAccountsUnavailable();
+			});
 		};
+		const stopBaseUrl = subscribeApiBaseUrl(() => {
+			if (getApiBaseUrl()) noteCodexAccountsAvailable();
+		});
 		const onFocus = () => ensure();
 		const onVisibility = () => { if (document.visibilityState === "visible") ensure(); };
 		window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onVisibility);
-		return () => { active = false; window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
+		return () => { active = false; stopBaseUrl(); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
 	}, [queryClient]);
 }
