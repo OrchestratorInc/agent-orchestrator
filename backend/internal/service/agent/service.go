@@ -91,6 +91,10 @@ type Service struct {
 	codexAccounts *codexAccountManager
 	codexSwitches *codexAccountSwitchCoordinator
 	logger        *slog.Logger
+	// readinessWarm closes once the startup readiness pass finishes. Catalog
+	// updates wait for it; reads of the saved catalog never do.
+	readinessWarm     chan struct{}
+	readinessWarmOnce sync.Once
 }
 
 // Deps contains optional durable dependencies for the agent catalog service.
@@ -129,6 +133,7 @@ func NewWithDeps(deps Deps) *Service {
 	agents := agentregistry.Harnessed()
 	svc := newService(agents, deps.Cache, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
+	svc.readinessWarm = make(chan struct{})
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
 	}
@@ -370,6 +375,38 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 		return s.firstModelCatalog(ctx, agentID, projectID)
 	}
 	return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRefresh)
+}
+
+// modelUpdateReadinessWait bounds how long a catalog update waits for the
+// startup readiness pass, so a daemon that never warms readiness still updates.
+var modelUpdateReadinessWait = 30 * time.Second
+
+// readyForModelUpdate runs a catalog update only after readiness: it waits for
+// the startup readiness pass, then reports whether the agent may be discovered.
+// Reads of the saved catalog never come here, so the UI lists models without
+// waiting on readiness. Only an agent readiness found not installed skips the
+// update; an unknown installation still discovers, and sign-in is left to
+// discovery, which keeps the saved catalog while an agent is signed out.
+func (s *Service) readyForModelUpdate(ctx context.Context, agentID string) bool {
+	if s.readinessWarm != nil {
+		timer := time.NewTimer(modelUpdateReadinessWait)
+		defer timer.Stop()
+		select {
+		case <-s.readinessWarm:
+		case <-timer.C:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	if s.readiness == nil {
+		return true
+	}
+	for _, snapshot := range s.readiness.Snapshot() {
+		if snapshot.ID == agentID {
+			return snapshot.Installation.State != domain.AgentInstallationNotInstalled
+		}
+	}
+	return true
 }
 
 // modelCatalogFirstLoadWait bounds how long a read with no persisted catalog
@@ -720,6 +757,16 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		cached.Catalog.RetryAt = modelCatalogRetryAt(cached.RetryAt)
 		cached.Catalog.RefreshRecommended = true
 		return cached.Catalog, nil
+	}
+	if !s.readyForModelUpdate(ctx, agentID) {
+		// Readiness found nothing to discover with: keep serving the saved catalog
+		// rather than recording a failure over it.
+		if hasCached {
+			return cached.Catalog, nil
+		}
+		fallback := policy
+		fallback.BinaryVersion = version
+		return fallback, nil
 	}
 	if mode == modelLoadRefresh || inputsChanged || explicitlyInvalidated {
 		cached.RetryCount = 0

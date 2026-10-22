@@ -1573,6 +1573,66 @@ func TestModelsLeaderCancellationDoesNotCancelCoalescedLoad(t *testing.T) {
 // A picker opened for an agent that has never been discovered must not wait on
 // a slow CLI: it gets the capability fallback at once, marked refreshing, and
 // the discovered catalog is persisted in the background for the next read.
+// The saved catalog is listed without readiness; an update waits for the
+// startup readiness pass before it discovers.
+func TestModelUpdateWaitsForStartupReadiness(t *testing.T) {
+	now := time.Now().UTC()
+	record := cachedModelRecord(t, "codex", "", now, false)
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"codex\x00": record}}
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, discoverer)
+	svc.readinessWarm = make(chan struct{})
+
+	saved, err := svc.Models(context.Background(), "codex", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Models) != 1 || saved.Models[0].ID != "cached-model" {
+		t.Fatalf("saved read = %#v, want the cached catalog before readiness", saved)
+	}
+
+	done := make(chan ports.AgentModelCatalog, 1)
+	go func() {
+		refreshed, _ := svc.Models(context.Background(), "codex", "", true)
+		done <- refreshed
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if got := discoverer.discoverCalls.Load(); got != 0 {
+		t.Fatalf("discoveries before readiness = %d, want 0", got)
+	}
+	close(svc.readinessWarm)
+	select {
+	case refreshed := <-done:
+		if len(refreshed.Models) != 1 || refreshed.Models[0].ID != "model-one" {
+			t.Fatalf("update after readiness = %#v, want the discovered catalog", refreshed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("update did not run after readiness finished")
+	}
+}
+
+func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
+	now := time.Now().UTC()
+	record := cachedModelRecord(t, "gemini", "", now, false)
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"gemini\x00": record}}
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("gemini", "Gemini", ports.ErrAgentBinaryNotFound)}, cache, discoverer)
+	if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"gemini"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.Models(context.Background(), "gemini", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discoverer.discoverCalls.Load() != 0 {
+		t.Fatal("discovered an agent readiness found not installed")
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+		t.Fatalf("catalog = %#v, want the saved catalog kept", got)
+	}
+}
+
 func TestFirstModelsReadDoesNotWaitForSlowDiscovery(t *testing.T) {
 	previousWait := modelCatalogFirstLoadWait
 	modelCatalogFirstLoadWait = 20 * time.Millisecond
