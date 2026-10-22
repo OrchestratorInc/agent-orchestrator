@@ -622,6 +622,7 @@ func run(logger *slog.Logger) error {
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
 		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
 		notifyListener.Handle("ao_session_event", api.HandleSessionEventNotify)
+		notifyListener.Handle("ao_session_live", api.HandleSessionLiveNotify)
 		api.EnableSessionEventNotify()
 		// Any path that asks a sandbox to run again (resume, a message to a
 		// paused session, a restore) starts provisioning now, not at the next tick.

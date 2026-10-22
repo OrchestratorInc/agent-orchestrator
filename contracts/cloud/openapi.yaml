@@ -1163,11 +1163,25 @@ paths:
       parameters:
         - $ref: "#/components/parameters/After"
         - $ref: "#/components/parameters/EventTypes"
+        - name: live
+          in: query
+          required: false
+          description: |
+            1 opts this stream in to the session's live state. The caller is
+            listed as a viewer while the stream stays open, and the stream also
+            carries session.live frames (see SessionLiveState) whenever that
+            state changes. Omitted, the stream carries only ClientEvents.
+          schema:
+            type: string
+            enum: ["1"]
       responses:
         "200":
           description: |
             Replay followed by live client-visible events. Each SSE data field
-            contains a ClientEvent; the SSE id is its sequence.
+            contains a ClientEvent; the SSE id is its sequence. With live=1 the
+            stream also carries `event: session.live` frames whose data is a
+            SessionLiveState. Those frames have no SSE id and never move the
+            replay cursor; each one replaces the previous state.
           content:
             text/event-stream:
               schema:
@@ -6205,6 +6219,34 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AOReviewRun"
+    SessionViewer:
+      type: object
+      additionalProperties: false
+      required: [userId, name, role]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Display name. Never an email address.
+        role:
+          type: string
+          enum: [member, editor, viewer]
+          description: member is an organization member; editor and viewer are share-grant roles.
+    SessionLiveState:
+      type: object
+      additionalProperties: false
+      description: Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log.
+      required: [type, viewers]
+      properties:
+        type:
+          const: session.live
+        viewers:
+          type: array
+          description: Everyone with the session open right now, once each, in the order they joined.
+          items:
+            $ref: "#/components/schemas/SessionViewer"
     UserMessageEvent:
       type: object
       additionalProperties: false

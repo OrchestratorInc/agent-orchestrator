@@ -224,6 +224,8 @@ type Server struct {
 	// sessionEventNotify is set once that listener runs.
 	sessionEventWaiters *workWaiters
 	sessionEventNotify  atomic.Bool
+	// sessionLiveWaiters wakes a session's live streams on ao_session_live.
+	sessionLiveWaiters  *workWaiters
 	notificationWake    func()
 	analytics           analytics.Sink
 	sandboxWake         func()
@@ -419,6 +421,7 @@ func New(options Options) *Server {
 		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		sessionEventWaiters:       newWorkWaiters(),
+		sessionLiveWaiters:        newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
 		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
