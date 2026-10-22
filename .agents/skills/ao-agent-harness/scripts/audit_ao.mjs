@@ -1825,6 +1825,57 @@ export async function auditAgent({
   return result;
 }
 
+// Archive (Kill) the session while a witnessed command runs in its turn.
+// Returns the cancellation verdict plus whether the session terminated, so a
+// refused or missing command still ends in a Kill for the restore checks.
+export async function archiveDuringCommand({ baseURL, sessionId, workspacePath, timeoutMs }) {
+  const spec = CANCELLATION_WITNESS;
+  const bounded = Math.min(timeoutMs, 120_000);
+  const preflight = await cancellationWitnessPreflight({ baseURL, sessionId, spec, timeoutMs: Math.min(timeoutMs, 30_000) });
+  const start = preflight.passed ? await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/send`, body: { message: CANCELLATION_PROMPT }, timeoutMs }) : null;
+  const active = start?.ok ? await waitUntil(async () => {
+    const [stateResponse, startWitness] = await Promise.all([
+      sessionState(baseURL, sessionId, 30_000),
+      workspaceFile(baseURL, sessionId, spec.startPath, 30_000),
+    ]);
+    const witness = parseCancellationStart(startWitness, spec);
+    return { done: Boolean(witness) && stateResponse.response?.session?.activity?.state === "active", witness, stateResponse };
+  }, bounded, 250) : { done: false };
+  const before = active.witness ? await cancellationProcessState(active.witness.pid, active.witness.processIdentitySha256) : null;
+
+  const kill = await request({ baseURL, method: "POST", path: `sessions/${encodeURIComponent(sessionId)}/kill`, body: {}, timeoutMs });
+  const killed = kill.ok ? await waitUntil(async () => {
+    const stateResponse = await sessionState(baseURL, sessionId, 30_000);
+    return { done: stateResponse.response?.session?.isTerminated === true, stateResponse };
+  }, Math.min(timeoutMs, 30_000)) : { done: false };
+  const terminationEvidence = { kill: apiEvidence(kill), state: killed.stateResponse ? apiEvidence(killed.stateResponse) : undefined };
+
+  let cancellation;
+  if (!preflight.passed || !start?.ok || !active.done || !before?.running || !before.sameIdentity) {
+    cancellation = { status: "FAIL", reason: !preflight.passed ? preflight.reason
+      : !start?.ok ? "the long-running test command was not accepted"
+      : !active.witness ? "the agent never started the witnessed foreground command (no start witness file); see its session log for a refusal"
+      : "the witnessed command was not running in an active turn when the session was archived",
+      evidence: { preflight, start: start ? apiEvidence(start) : undefined, witness: active.witness, process: before } };
+  } else {
+    const stopped = await waitUntil(async () => {
+      const state = await cancellationProcessState(active.witness.pid, active.witness.processIdentitySha256);
+      return { done: !state.running || !state.sameIdentity, state };
+    }, 10_000, 250);
+    await sleep(spec.lateSideEffectDelayMs + 1_500);
+    const lateFile = workspacePath ? join(workspacePath, spec.latePath) : "";
+    const lateAppeared = lateFile ? await access(lateFile).then(() => true, () => false) : false;
+    const passed = killed.done && stopped.done && !lateAppeared;
+    cancellation = { status: passed ? "PASS" : "FAIL",
+      reason: passed ? "archiving the session stopped the running command and its delayed side effect never happened"
+        : !killed.done ? "archive did not terminate the session"
+        : !stopped.done ? `the command (pid ${active.witness.pid}) kept running after the session was archived: its process was not reaped`
+        : "the command's delayed file appeared after archive: it kept running in the background",
+      evidence: { kill: apiEvidence(kill), witness: active.witness, processAfter: stopped.state, lateFile, lateAppeared } };
+  }
+  return { cancellation, terminated: kill.ok && killed.done, terminationEvidence };
+}
+
 async function completeLifecycle({
   interruptSpec,
   restoredReadySpec,
@@ -1851,71 +1902,95 @@ async function completeLifecycle({
     nativeBefore.native ? { sha256: nativeBefore.native.sha256, database: nativeBefore.native.db } : undefined,
   ));
 
-  const witnessPreflight = interruptSpec ? await cancellationWitnessPreflight({
-    baseURL, sessionId, spec: CANCELLATION_WITNESS, timeoutMs: Math.min(timeoutMs, 30_000),
-  }) : null;
-  const cancellationStart = interruptSpec && witnessPreflight.passed ? await request({
-    baseURL,
-    method: "POST",
-    path: `sessions/${encodeURIComponent(sessionId)}/send`,
-    body: { message: CANCELLATION_PROMPT },
-    timeoutMs,
-  }) : null;
-  const cancellation = interruptSpec && !witnessPreflight.passed
-    ? { passed: false, observedActive: false, reason: witnessPreflight.reason, witnessPreflight }
-    : await interruptActiveTurn({ baseURL, sessionId, startResponse: cancellationStart, timeoutMs, interruptSpec,
-      witnessSpec: CANCELLATION_WITNESS });
-  await record(gate(
-    "cancellation",
-    cancellation.passed ? "PASS" : cancellation.status || "FAIL",
-    cancellation.reason,
-    {
-      start: cancellationStart ? apiEvidence(cancellationStart) : undefined,
-      active: cancellation.activeState ? apiEvidence(cancellation.activeState) : undefined,
-      interrupt: cancellation.interrupt ? apiEvidence(cancellation.interrupt) : undefined,
-      settled: cancellation.settledState ? apiEvidence(cancellation.settledState) : undefined,
-      confirmationWindowMs: cancellation.confirmationWindowMs,
-      witnessPreflight,
-      ...(cancellation.witness ? { witness: cancellation.witness } : {}),
-      ...(cancellation.websocket ? { websocket: cancellation.websocket } : {}),
-    },
-  ));
-
-  if (interruptSpec && Object.hasOwn(interruptSpec, "postCancelCleanup")) {
-    const cleanup = await cleanupCancelledAuditDraft({
-      baseURL, sessionId, dataDir, workspacePath, nativeSessionId: nativeBefore.done ? nativeBefore.native.value : "",
-      cancellation, startResponse: cancellationStart,
-      spec: interruptSpec.postCancelCleanup, readySpec: restoredReadySpec, timeoutMs,
-    });
-    await record(gate("post_cancel_draft_cleanup", cleanup.passed ? "PASS" : "BLOCKED", cleanup.reason, cleanup.evidence));
-    if (!cleanup.passed) {
-      markNotRun(gates, "post-cancel draft cleanup was not safe or the composer was not confirmed empty");
+  if (!interruptSpec) {
+    // In AO a running TUI agent is stopped by archiving its session (Kill), not
+    // by keystrokes. Start a witnessed foreground command, archive while it
+    // runs, and prove the session ended, the command's process is gone and its
+    // delayed side effect never happens. This archive is also the Kill before
+    // the restore checks.
+    const archive = await archiveDuringCommand({ baseURL, sessionId, workspacePath, timeoutMs });
+    await record(gate("cancellation", archive.cancellation.status, archive.cancellation.reason, archive.cancellation.evidence));
+    await record(gate(
+      "termination",
+      archive.terminated ? "PASS" : "FAIL",
+      archive.terminated ? "archive (kill) was acknowledged and termination was confirmed" : "termination was not confirmed after archive",
+      archive.terminationEvidence,
+    ));
+    if (!archive.terminated) {
+      for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+        await record(gate(name, "NOT_RUN", "termination prerequisite failed"));
+      }
       return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
     }
-  }
+  } else {
+    // Optional keystroke interrupt over the terminal mux, for a harness whose
+    // contract declares `interrupt`; the AO user path is archive (above).
+    const witnessPreflight = interruptSpec ? await cancellationWitnessPreflight({
+      baseURL, sessionId, spec: CANCELLATION_WITNESS, timeoutMs: Math.min(timeoutMs, 30_000),
+    }) : null;
+    const cancellationStart = interruptSpec && witnessPreflight.passed ? await request({
+      baseURL,
+      method: "POST",
+      path: `sessions/${encodeURIComponent(sessionId)}/send`,
+      body: { message: CANCELLATION_PROMPT },
+      timeoutMs,
+    }) : null;
+    const cancellation = interruptSpec && !witnessPreflight.passed
+      ? { passed: false, observedActive: false, reason: witnessPreflight.reason, witnessPreflight }
+      : await interruptActiveTurn({ baseURL, sessionId, startResponse: cancellationStart, timeoutMs, interruptSpec,
+        witnessSpec: CANCELLATION_WITNESS });
+    await record(gate(
+      "cancellation",
+      cancellation.passed ? "PASS" : cancellation.status || "FAIL",
+      cancellation.reason,
+      {
+        start: cancellationStart ? apiEvidence(cancellationStart) : undefined,
+        active: cancellation.activeState ? apiEvidence(cancellation.activeState) : undefined,
+        interrupt: cancellation.interrupt ? apiEvidence(cancellation.interrupt) : undefined,
+        settled: cancellation.settledState ? apiEvidence(cancellation.settledState) : undefined,
+        confirmationWindowMs: cancellation.confirmationWindowMs,
+        witnessPreflight,
+        ...(cancellation.witness ? { witness: cancellation.witness } : {}),
+        ...(cancellation.websocket ? { websocket: cancellation.websocket } : {}),
+      },
+    ));
 
-  const killResponse = await request({
-    baseURL,
-    method: "POST",
-    path: `sessions/${encodeURIComponent(sessionId)}/kill`,
-    body: {},
-    timeoutMs,
-  });
-  const killed = killResponse.ok ? await waitUntil(async () => {
-    const stateResponse = await sessionState(baseURL, sessionId, Math.min(timeoutMs, 30_000));
-    return { done: stateResponse.response?.session?.isTerminated === true, stateResponse };
-  }, Math.min(timeoutMs, 30_000)) : { done: false };
-  await record(gate(
-    "termination",
-    killResponse.ok && killed.done ? "PASS" : "FAIL",
-    killResponse.ok && killed.done ? "kill was acknowledged and termination was confirmed" : "termination was not confirmed",
-    { kill: apiEvidence(killResponse), state: killed.stateResponse ? apiEvidence(killed.stateResponse) : undefined },
-  ));
-  if (!killResponse.ok || !killed.done) {
-    for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
-      await record(gate(name, "NOT_RUN", "termination prerequisite failed"));
+    if (interruptSpec && Object.hasOwn(interruptSpec, "postCancelCleanup")) {
+      const cleanup = await cleanupCancelledAuditDraft({
+        baseURL, sessionId, dataDir, workspacePath, nativeSessionId: nativeBefore.done ? nativeBefore.native.value : "",
+        cancellation, startResponse: cancellationStart,
+        spec: interruptSpec.postCancelCleanup, readySpec: restoredReadySpec, timeoutMs,
+      });
+      await record(gate("post_cancel_draft_cleanup", cleanup.passed ? "PASS" : "BLOCKED", cleanup.reason, cleanup.evidence));
+      if (!cleanup.passed) {
+        markNotRun(gates, "post-cancel draft cleanup was not safe or the composer was not confirmed empty");
+        return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
+      }
     }
-    return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
+
+    const killResponse = await request({
+      baseURL,
+      method: "POST",
+      path: `sessions/${encodeURIComponent(sessionId)}/kill`,
+      body: {},
+      timeoutMs,
+    });
+    const killed = killResponse.ok ? await waitUntil(async () => {
+      const stateResponse = await sessionState(baseURL, sessionId, Math.min(timeoutMs, 30_000));
+      return { done: stateResponse.response?.session?.isTerminated === true, stateResponse };
+    }, Math.min(timeoutMs, 30_000)) : { done: false };
+    await record(gate(
+      "termination",
+      killResponse.ok && killed.done ? "PASS" : "FAIL",
+      killResponse.ok && killed.done ? "kill was acknowledged and termination was confirmed" : "termination was not confirmed",
+      { kill: apiEvidence(killResponse), state: killed.stateResponse ? apiEvidence(killed.stateResponse) : undefined },
+    ));
+    if (!killResponse.ok || !killed.done) {
+      for (const name of ["native_restore", "same_ao_session_workspace", "post_restore_terminal_ready", "post_restore_message", "history_file_continuity", "system_prompt_restore"]) {
+        await record(gate(name, "NOT_RUN", "termination prerequisite failed"));
+      }
+      return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
+    }
   }
 
   // Do not disclose this token to the initial process/history. Only a fresh

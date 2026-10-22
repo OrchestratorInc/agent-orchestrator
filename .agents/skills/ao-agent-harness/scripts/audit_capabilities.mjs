@@ -132,14 +132,14 @@ export const CAPABILITIES = Object.freeze([
   },
   {
     id: "tui_cancel",
-    title: "TUI cancellation of an active command",
+    title: "Stop a running TUI agent (archive the session)",
     surface: "tui",
     support: { "claude-code": "yes", codex: "yes" },
     gates: ["cancellation", "post_cancel_draft_cleanup"],
     inspect: [
-      "backend/internal/httpd/terminal_mux.go",
-      "backend/internal/adapters/agent/{tui}/terminal_activity.go",
-      ".agents/skills/ao-agent-harness/references/local-cli-contract.md",
+      "backend/internal/session_manager/manager.go",
+      "backend/internal/cli/agent_process.go",
+      "backend/internal/cli/ptyhost.go",
     ],
   },
   {
@@ -380,7 +380,7 @@ const GATE_HINTS = Object.freeze({
   tui_hooks_installed: { expected: "AO hook commands are installed for the session", causes: ["hook installer skipped the worktree", "hook file written outside the worktree", "launch argv missing hook -c flags"] },
   activity_status: { expected: "activity went active then settled with statusReadiness=ready", causes: ["hooks not reporting to POST /sessions/{id}/activity", "`ao` binary not on the hook PATH", "terminal-surface fallback misclassified"] },
   native_session_id: { expected: "sessions.agent_session_id persisted from hooks", causes: ["SessionStart hook payload lacks the id", "hook could not reach the daemon"] },
-  cancellation: { expected: "interrupt input stops the witnessed command and no late side effect appears", causes: ["contract interrupt input wrong for this CLI", "provider detaches the command", "process tree not reaped"] },
+  cancellation: { expected: "archiving the session (Kill) while a command runs stops that command and its delayed side effect never happens", causes: ["Kill stops the CLI but not its child process group", "the command was detached into the background", "agent refused or skipped the test command (see its session log)"] },
   termination: { expected: "kill sets isTerminated=true", causes: ["runtime pane did not exit", "kill blocked by an in-flight provision"] },
   native_restore: { expected: "restore relaunches with the same native session id", causes: ["restore fell back to a fresh/saved-prompt launch", "native transcript missing for that id"] },
   post_restore_message: { expected: "continuation after restore mutates the proof", causes: ["restored CLI not ready for input", "resume opened a different conversation"] },

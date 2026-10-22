@@ -31,7 +31,7 @@ test("bundled contract loads and declares every field the live audit needs", asy
   for (const id of ["codex", "claude-code"]) {
     const contract = agents[id];
     assert.ok(contract.binary && contract.versionArgs && contract.session?.args?.includes("{prompt}"), id);
-    assert.equal(contract.interrupt.input, "\u001b", `${id} interrupts with Escape`);
+    assert.equal(contract.interrupt, undefined, `${id} is stopped the AO way, by archiving the session`);
     assert.ok(contract.restoredReady.patterns.every((pattern) => pattern.length <= 4096), id);
     assert.equal(contract.instructions.tui.channel, "flag");
   }

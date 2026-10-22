@@ -134,6 +134,22 @@ fix:
 
 ## Cancellation and restored input
 
+**Default: stop by archiving.** In AO, a user stops a running TUI agent by
+archiving the session (Kill). Without an `interrupt` entry, the runner does the
+same:
+
+1. It starts the witnessed foreground command.
+2. It archives the session while that command runs.
+3. It requires three things: the session terminated, the command's own process
+   is gone, and the command's delayed file never appears.
+
+That archive is also the Kill before the restore checks. The bundled Codex and
+Claude contract uses this path. Chat is checked separately through its own
+**Stop turn** (`chat_interrupt`).
+
+The keystroke interrupt below is optional. It applies only to a harness whose
+contract declares `interrupt`.
+
 These optional fields configure native behavior; they are required to execute
 the corresponding lifecycle gates. Derive values from the pinned native CLI,
 not this illustrative `example-agent` contract.

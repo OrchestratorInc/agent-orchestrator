@@ -55,7 +55,7 @@ const DELIVERY_GATES = new Set([
 ]);
 
 const ENVIRONMENT_GATES = new Set(["host_preflight", "startup", "startup_cleanup", "discovery", "configuration", "project_registration", "cleanup_termination", "evidence_write", "local_version"]);
-const CONTRACT_GATES = new Set(["local_integration", "local_session_spawn", "local_models_list", "cancellation", "post_cancel_draft_cleanup", "post_restore_terminal_ready"]);
+const CONTRACT_GATES = new Set(["local_integration", "local_session_spawn", "local_models_list", "post_cancel_draft_cleanup", "post_restore_terminal_ready"]);
 
 function text(item) {
   return [item.reason, ...(item.diagnosis?.observed ?? [])].filter(Boolean).join(" \n ");
@@ -77,6 +77,13 @@ export function classifyFailure(item, { previous = null, knownUpstream = null } 
   if (item.name === "local_binary" || item.name === "installed") return "needs_user";
   if (item.name === "runner_error" && RUNNER_TEXT.test(body)) return "runner_bug";
   if (ENVIRONMENT_GATES.has(item.name) || item.name === "runner_error" || ENVIRONMENT_TEXT.test(body)) return "environment";
+  if (item.name === "cancellation") {
+    // Archive path: a command that outlives the archived session is AO's to
+    // fix; an agent that never started the command is retried once.
+    if (/after the session was archived|appeared after archive|archive did not terminate/.test(body)) return "ao_bug";
+    if (/never started the witnessed/.test(body)) return "flaky_provider";
+    return "contract";
+  }
   if (CONTRACT_GATES.has(item.name) || (item.status === "BLOCKED" && CONTRACT_TEXT.test(body))) return "contract";
   if (DELIVERY_GATES.has(item.name)) return "ao_bug";
   if (TOKEN_GATES.has(item.name) && acceptedRequest(item)) {
