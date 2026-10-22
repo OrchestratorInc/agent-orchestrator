@@ -2,20 +2,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { agentsQueryKey } from "./useAgentsQuery";
+import { agentsQueryKey, useAgentsQuery } from "./useAgentsQuery";
 import { agentAuthPlansQueryKey } from "./useAgentAuth";
 import { agentInstallJobsQueryKey, useHarnessSetup } from "./useHarnessSetup";
 
 const apiMocks = vi.hoisted(() => ({
 	GET: vi.fn(),
 	POST: vi.fn(),
+	DELETE: vi.fn(),
 }));
 
 vi.mock("../lib/api-client", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/api-client")>();
 	return {
 		...actual,
-		apiClient: { ...actual.apiClient, GET: apiMocks.GET, POST: apiMocks.POST },
+		apiClient: { ...actual.apiClient, GET: apiMocks.GET, POST: apiMocks.POST, DELETE: apiMocks.DELETE },
 	};
 });
 
@@ -28,6 +29,7 @@ let queryClient: QueryClient;
 beforeEach(() => {
 	apiMocks.GET.mockReset();
 	apiMocks.POST.mockReset();
+	apiMocks.DELETE.mockReset().mockResolvedValue({});
 	queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	apiMocks.GET.mockImplementation(async (path: string) => {
 		if (path === "/api/v1/agents/installers") return { data: { agents: [] } };
@@ -38,6 +40,31 @@ beforeEach(() => {
 });
 
 describe("useHarnessSetup", () => {
+	it.each([undefined, { code: "SHELL_TERMINAL_NOT_FOUND" }])("refreshes readiness after closing an attached login terminal (cleanup error: %j)", async (cleanupError) => {
+		const agent = { id: "qwen", label: "Qwen" };
+		let authorized = false;
+		const defaultGet = apiMocks.GET.getMockImplementation()!;
+		apiMocks.GET.mockImplementation(async (path: string) => path === "/api/v1/agents"
+			? { data: { supported: [agent], installed: [agent], authorized: authorized ? [agent] : [] } }
+			: defaultGet(path));
+		apiMocks.DELETE.mockResolvedValue({ error: cleanupError });
+		apiMocks.POST.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/{agent}/probe") {
+				authorized = true;
+				return { data: { agent: { ...agent, authStatus: "authorized" }, installed: true, supported: true } };
+			}
+			return { data: { agentId: "qwen", action: "login", terminal: { handleId: "auth-qwen", title: "Qwen login", createdAt: "2026-10-22T00:00:00Z" } } };
+		});
+		const { result } = renderHook(() => ({ setup: useHarnessSetup(), agents: useAgentsQuery() }), { wrapper });
+		await waitFor(() => expect(result.current.agents.data?.authorized).toEqual([]));
+		await act(async () => { await result.current.setup.startAuth("qwen"); });
+		act(() => result.current.setup.handleTerminalState("attached"));
+		await act(async () => { await result.current.setup.closeAuth(); });
+		await waitFor(() => expect(result.current.agents.data?.authorized).toEqual([agent]));
+		expect(result.current.setup.authWorkflow).toBeNull();
+		expect(result.current.setup.actionErrors.qwen).toBeUndefined();
+	});
+
 	it("starts the installed agent's terminal login flow", async () => {
 		apiMocks.GET.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents/installers") return { data: { agents: [] } };

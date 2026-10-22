@@ -135,7 +135,7 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 		}
 	}, [installers.data, queryClient, t]);
 
-	const closeAuth = useCallback(async () => {
+	const closeAuth = useCallback(async (recheck = true) => {
 		const workflow = authWorkflowRef.current;
 		authWorkflowRef.current = null;
 		setAuthWorkflow(null);
@@ -149,7 +149,17 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 				setActionErrors((current) => ({ ...current, [workflow.agentId]: t("onboarding.closeTerminalFailed") }));
 			}
 		} finally {
-			await queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+			if (recheck) {
+				try {
+					await probeAgentAuth(workflow.agentId);
+				} catch {
+					// A failed probe must still allow cleanup and a catalog refresh.
+				}
+			}
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey }),
+				queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+			]);
 		}
 	}, [queryClient, t]);
 
@@ -161,10 +171,8 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 			try {
 				const result = await probeAgentAuth(workflow.agentId);
 				if (result.agent.authStatus === "authorized") {
-					// The targeted probe updates daemon readiness. Refetch the active
-					// catalog before closing so the onboarding CTA enables immediately.
-					await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
-					await closeAuth();
+					// Closing refreshes the catalog; this probe already checked auth.
+					await closeAuth(false);
 					return;
 				}
 			} catch {
