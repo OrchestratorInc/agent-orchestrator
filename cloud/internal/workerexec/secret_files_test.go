@@ -36,10 +36,10 @@ func TestApplySecretFileProtectionMergesWithExistingRules(t *testing.T) {
 		"defaultMode": "auto",
 		"deny":        []any{"Bash(rm -rf *)", "Read(.env.*)"},
 	}}
-	if err := applySecretFileProtection(settings, true); err != nil {
+	if err := applySecretFileProtection(settings, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := applySecretFileProtection(settings, true); err != nil {
+	if err := applySecretFileProtection(settings, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	permissions := settings["permissions"].(map[string]any)
@@ -53,7 +53,7 @@ func TestApplySecretFileProtectionMergesWithExistingRules(t *testing.T) {
 			t.Fatalf("deny[%d] = %v, want %s", 1+index, deny[1+index], rule)
 		}
 	}
-	if err := applySecretFileProtection(settings, false); err != nil {
+	if err := applySecretFileProtection(settings, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if deny := permissions["deny"].([]any); len(deny) != 1 || deny[0] != "Bash(rm -rf *)" {
@@ -61,10 +61,10 @@ func TestApplySecretFileProtectionMergesWithExistingRules(t *testing.T) {
 	}
 
 	untouched := map[string]any{}
-	if err := applySecretFileProtection(untouched, false); err != nil || len(untouched) != 0 {
+	if err := applySecretFileProtection(untouched, false, nil); err != nil || len(untouched) != 0 {
 		t.Fatalf("an unprotected session gained settings: %v, %v", untouched, err)
 	}
-	if err := applySecretFileProtection(map[string]any{"permissions": map[string]any{"deny": "Read(x)"}}, true); err == nil {
+	if err := applySecretFileProtection(map[string]any{"permissions": map[string]any{"deny": "Read(x)"}}, true, nil); err == nil {
 		t.Fatal("a malformed deny list was overwritten")
 	}
 }
@@ -124,5 +124,33 @@ func TestSystemPromptNamesTheResolvedWorkspace(t *testing.T) {
 	prompt := HarnessBuilder{DataDir: t.TempDir()}.systemPrompt(launch, "/home/ubuntu/work/alice")
 	if !slices.Contains(strings.Split(prompt, "\n"), "- Workspace: /home/ubuntu/work/alice") {
 		t.Fatalf("prompt does not name the workspace:\n%s", prompt)
+	}
+}
+
+// A deny rule of the checkout shape that the user wrote is theirs: AO only
+// removes the checkout rules it recorded adding.
+func TestApplySecretFileProtectionKeepsTheUsersCheckoutShapedRules(t *testing.T) {
+	user := "Read(//home/dev/private/**/.env.*)"
+	settings := map[string]any{"permissions": map[string]any{"deny": []any{user}}}
+	if err := applySecretFileProtection(settings, true, []string{"/home/dev/work/voice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySecretFileProtection(settings, true, []string{"/home/dev/work/julian"}); err != nil {
+		t.Fatal(err)
+	}
+	deny := settings["permissions"].(map[string]any)["deny"].([]any)
+	has := func(rule string) bool { return slices.Contains(deny, any(rule)) }
+	if !has(user) {
+		t.Fatalf("the user's rule was removed: %v", deny)
+	}
+	if has("Read(//home/dev/work/voice/**/.env.*)") || !has("Read(//home/dev/work/julian/**/.env.*)") {
+		t.Fatalf("checkout rules were not replaced: %v", deny)
+	}
+	if err := applySecretFileProtection(settings, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	deny = settings["permissions"].(map[string]any)["deny"].([]any)
+	if len(deny) != 1 || deny[0] != user {
+		t.Fatalf("turning protection off left %v, want only the user's rule", deny)
 	}
 }

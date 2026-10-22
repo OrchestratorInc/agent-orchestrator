@@ -451,6 +451,7 @@ func setConfigEnv(t *testing.T) testConfig {
 	// Claude hooks forward this ambient marker; a suite run from inside Claude
 	// Code must not leak it into exact hook-body assertions.
 	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
+	t.Setenv("CLAUDE_PID", "")
 	return cfg
 }
 

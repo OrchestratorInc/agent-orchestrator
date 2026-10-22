@@ -170,6 +170,11 @@ describe("cloud control-plane session lifecycle", () => {
 			expect.objectContaining({ method: "GET" }),
 		);
 		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
+		await client.listChatEvents("org/1", "session/1", { after: 0, limit: 500, types: ["workspace.script.step", "agent.ready"] });
+		expect(fetchMock).toHaveBeenLastCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?after=0&limit=500&types=workspace.script.step%2Cagent.ready",
+			expect.objectContaining({ method: "GET" }),
+		);
 	});
 
 	it("reads a Cloud project and patches only supplied settings", async () => {

@@ -95,6 +95,40 @@ func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
 	}
 }
 
+func TestClaudeHookReportsItsProcess(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tc := range []struct {
+		agent, env string
+		want       int
+	}{
+		{"claude-code", "4242", 4242},
+		{"claude-code", "", 0},
+		{"claude-code", "not-a-pid", 0},
+		{"claude-code", "1", 0},
+		// Only Claude names the process running a hook.
+		{"codex", "4242", 0},
+	} {
+		t.Setenv("CLAUDE_PID", tc.env)
+		if _, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", tc.agent, "stop"); err != nil {
+			t.Fatal(err)
+		}
+		var request setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.ProcessID != tc.want {
+			t.Fatalf("%s CLAUDE_PID %q forwarded as %d, want %d", tc.agent, tc.env, request.ProcessID, tc.want)
+		}
+	}
+}
+
 func TestClaudeSubmissionRetryReusesContextNonce(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "qa-1")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
@@ -195,6 +229,11 @@ func assertActivityRequest(t *testing.T, got, want setActivityAPIRequest) {
 	}
 	// The exact timestamp has a separate deterministic wire-contract test.
 	got.ObservedAt = time.Time{}
+	// Every hook names the agent that sent it; the value has its own test.
+	if got.Harness == "" {
+		t.Fatal("hook omitted the agent that sent it")
+	}
+	got.Harness = ""
 	if got != want {
 		t.Fatalf("body = %+v, want %+v", got, want)
 	}
@@ -364,6 +403,44 @@ func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	}
 	if _, ok := req["toolUseId"]; ok {
 		t.Fatalf("reviewer activity included toolUseId: body=%s", capture.body)
+	}
+}
+
+func TestHooks_MemcodeReportsSessionChangesAfterRestore(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_MEMCODE_INTERACTIVE_RESTORE", "1")
+	t.Setenv("AO_MEMCODE_RESTORE_TARGET", "sess_a0a0a0a0")
+	t.Setenv("AO_MEMCODE_SESSION", "ao-7")
+	t.Setenv("AO_MEMCODE_GENERATION", "launch-1")
+	data := t.TempDir()
+	t.Setenv("AO_MEMCODE_DATA_DIR", data)
+	instructions := filepath.Join(data, "agent-launches", "memcode", "ao-7")
+	if err := os.MkdirAll(instructions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instructions, "instructions.json"), []byte(`["Y29udGV4dA=="]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for i, nativeID := range []string{"sess_b1b1b1b1", "sess_a0a0a0a0", "sess_c2c2c2c2"} {
+		t.Setenv("MEMCODE_SESSION_ID", nativeID)
+		_, stderr, err := executeCLI(t, Deps{In: strings.NewReader(`{}`), ProcessAlive: func(int) bool { return true }}, "hooks", "memcode", "session-start")
+		if err != nil {
+			t.Fatalf("hook %d: %v: %s", i, err, stderr)
+		}
+		if want := 0; i == 2 {
+			want = 1
+			if !strings.Contains(capture.body, nativeID) {
+				t.Fatalf("session change was not reported: %s", capture.body)
+			}
+			if capture.hits != want {
+				t.Fatalf("hook %d posted %d times, want %d", i, capture.hits, want)
+			}
+		} else if capture.hits != want {
+			t.Fatalf("handshake hook %d posted %d times", i, capture.hits)
+		}
 	}
 }
 
@@ -574,6 +651,36 @@ func TestHooks_StopReportsIdle(t *testing.T) {
 	}
 	if got := capturedState(t, capture); got != "idle" {
 		t.Errorf("state = %q, want idle", got)
+	}
+}
+
+// Claude fires StopFailure instead of Stop when an API error (usage limit,
+// unknown model, expired login) ends the turn. It must report idle, tagged so
+// lifecycle treats it as a turn boundary, and must not certify the error text
+// as the turn's assistant answer.
+func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"session_id":"native-1","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 usage limit","last_assistant_message":"API Error: usage limit reached"}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for native-1", req)
+	}
+	if req.LatestAssistantUpdate != "" || req.LatestUserPrompt != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
 	}
 }
 
@@ -1051,6 +1158,34 @@ func TestHookPayloadHelpersTolerateUTF8BOM(t *testing.T) {
 	facts := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
 	if facts.LatestUserPrompt != "do it" || facts.TranscriptPath != "/tmp/t.jsonl" {
 		t.Fatalf("hookConversationFacts = %+v", facts)
+	}
+}
+
+func TestHookAgentSessionIDPrefersClineDurableRootSession(t *testing.T) {
+	payload := []byte(`{"taskId":"conv_internal","conversationId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`)
+	if got := hookAgentSessionID(payload); got != "1792275014518_yyjbm" {
+		t.Fatalf("native resume ID = %q, want durable Cline CLI root session, not internal task ID", got)
+	}
+}
+
+func TestHooksClineReportsDurableRootSession(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.AgentSessionID != "1792275014518_yyjbm" {
+		t.Fatalf("reported native ID = %q", req.AgentSessionID)
 	}
 }
 

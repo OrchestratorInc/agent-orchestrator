@@ -64,7 +64,7 @@ function CliLinkSettingsRow() {
 	const linked = status?.current.kind === "linked";
 	const canLink = Boolean(status && !foreign && !linked && !status.pathIssue && status.proposedTarget);
 	const canUnlink = status?.current.kind === "linked" || status?.current.kind === "stale";
-	const detail = describeStatus((key, options) => String(t(key as never, options as never)), view, error);
+	const detail = linked && !status?.message && !status?.pathIssue && !error ? t("settings.cliLink.linked") : describeStatus((key, options) => String(t(key as never, options as never)), view, error);
 
 	return (
 		<div className="flex w-full flex-col">

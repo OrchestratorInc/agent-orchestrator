@@ -8,7 +8,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvide
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -23,6 +23,7 @@ import { glassHeaderControl } from "../lib/native-header-items";
 import { LayoutGrid } from "../lib/layoutGrid";
 import { AppProvider } from "../lib/store";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
+import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 
 // Sheet routes, and how tall each is allowed to be.
 //
@@ -32,18 +33,26 @@ import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 //
 // Input sheets are registered separately below so their heights can respond to
 // the keyboard.
-const SHEET_ROUTES = [
+//
+// `androidDetents` pins an action sheet to one height on Android. With two
+// detents Material's BottomSheetBehavior treats the lower one as "collapsed",
+// and from there it only hides once the sheet has been dragged past half of
+// that height or flung hard; a normal swipe snaps back. With one detent it
+// skips the collapsed state and closes on any decisive swipe down, which is
+// what an action sheet needs. iOS keeps both detents: UIKit's sheet dismisses
+// from the lower one with an ordinary swipe.
+const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitToContents"; androidDetents?: readonly [number] }[] = [
 	{ name: "sheets/project", detents: [0.5, 0.95] },
 	{ name: "sheets/agent", detents: [0.5, 0.95] },
 	{ name: "sheets/model", detents: [0.5, 0.95] },
 	{ name: "sheets/chat-settings", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-map", detents: [0.5, 0.95] },
-	{ name: "sheets/conversation-actions", detents: [0.6, 0.95] },
+	{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "sheets/conversation-rename", detents: [0.35, 0.65] },
 	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
-	{ name: "sheets/review-actions", detents: [0.6, 0.95] },
+	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "sheets/store-update", detents: "fitToContents" },
-] as const;
+];
 
 // The manual-connect form — the only sheet with text inputs, and the only one
 // that has to move for the keyboard.
@@ -82,10 +91,25 @@ export default function RootLayout() {
 	// losing to a system fallback; it is not worth losing the app to.
 	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular });
 	const fontsSettled = fontsReady || fontError != null;
+	// The stored theme is read under the splash too, for the same reason as the
+	// fonts: the first frame should already be the user's palette, not the default
+	// one swapped out a tick later. The read never rejects (each half falls back
+	// to its default), so it cannot hold the splash forever.
+	const [themeSettings, setThemeSettings] = useState<ThemeSettings | null>(null);
 	useEffect(() => {
-		if (fontsSettled) void SplashScreen.hideAsync().catch(() => {});
-	}, [fontsSettled]);
-	if (!fontsSettled) return null;
+		let active = true;
+		void loadThemeSettings().then((settings) => {
+			if (active) setThemeSettings(settings);
+		});
+		return () => {
+			active = false;
+		};
+	}, []);
+	const ready = fontsSettled && themeSettings !== null;
+	useEffect(() => {
+		if (ready) void SplashScreen.hideAsync().catch(() => {});
+	}, [ready]);
+	if (!ready) return null;
 
 	// ThemeProvider sits outside everything that reads a colour, including the
 	// Stack's own screenOptions below — hence the inner component: a hook cannot
@@ -98,7 +122,7 @@ export default function RootLayout() {
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
 				<SafeAreaProvider>
-					<ThemeProvider>
+					<ThemeProvider initial={themeSettings}>
 						<AppProvider>
 							<Shell />
 						</AppProvider>
@@ -196,6 +220,8 @@ function Shell() {
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen
 					name="spawn"
 					options={{
@@ -235,21 +261,13 @@ function Shell() {
 				    being re-implemented on top of RN's `Modal` (which has no gesture
 				    support at all — that's why the hand-rolled version never felt
 				    right). Heights come from SHEET_ROUTES. */}
-				{SHEET_ROUTES.map(({ name, detents }) => (
+				{SHEET_ROUTES.map(({ name, detents, androidDetents }) => (
 					<Stack.Screen
 						key={name}
 						name={name}
-						options={name === "sheets/conversation-actions" && Platform.OS === "android" ? {
+						options={{
 							presentation: "formSheet",
-							sheetAllowedDetents: [0.6],
-							sheetInitialDetentIndex: 0,
-							sheetGrabberVisible: true,
-							sheetCornerRadius: 20,
-							headerShown: false,
-							contentStyle: { backgroundColor: t.bgSurface },
-						} : {
-							presentation: "formSheet",
-							sheetAllowedDetents: detents === "fitToContents" ? "fitToContents" : [...detents],
+							sheetAllowedDetents: Platform.OS === "android" && androidDetents ? [...androidDetents] : detents === "fitToContents" ? "fitToContents" : [...detents],
 							sheetInitialDetentIndex: 0,
 							sheetGrabberVisible: true,
 							sheetCornerRadius: 20,

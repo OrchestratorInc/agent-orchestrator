@@ -2346,6 +2346,18 @@ func TestNormalizeACPLoadErrorKeepsOtherCodes(t *testing.T) {
 	}
 }
 
+func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
+	standing := StandingInstructionsBlock("AO standing instructions")
+	// Cursor replays the first prompt's text blocks joined into one.
+	joined := acpsdk.TextBlock(standing.Text.Text + "\nFix the failing test")
+	if got := historicalUserContent(joined); got != "Fix the failing test" {
+		t.Fatalf("replayed first message = %q, want only what the user typed", got)
+	}
+	if got := historicalUserContent(acpsdk.TextBlock("Fix the failing test")); got != "Fix the failing test" {
+		t.Fatalf("ordinary message = %q", got)
+	}
+}
+
 func TestHistoricalUserContentSuppressesOnlyMarkedInternalReplayResources(t *testing.T) {
 	resource := acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
 		TextResourceContents: &acpsdk.TextResourceContents{
@@ -3490,7 +3502,8 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	model, modelCalls := agent.model, agent.modelCalls
 	mode, modeCalls, configCalls := agent.mode, agent.modeCalls, agent.configCalls
 	agent.mu.Unlock()
-	if model != "kimi-code/kimi-for-coding" || modelCalls != 2 ||
+	// Start finds the session already on the model and sends nothing; the explicit set does.
+	if model != "kimi-code/kimi-for-coding" || modelCalls != 1 ||
 		mode != "default" || modeCalls != 1 || configCalls != 0 {
 		t.Fatalf("legacy setters: model=%q/%d mode=%q/%d config=%d",
 			model, modelCalls, mode, modeCalls, configCalls)

@@ -2,17 +2,16 @@ import { Feather } from "../icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, BackHandler, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
 import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
-import { authHeaders, isConfigured, type ServerConfig } from "../config";
-import { previewForConfig } from "../hostRoute";
+import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { MinimalBackButton } from "../MinimalBackButton";
 import { MuxClient, type MuxStatus } from "../mux";
+import { filesRoute } from "../files/navigation";
 import { glassHeaderControl } from "../native-header-items";
 import { Composer } from "./Composer";
 import { dockInset, rootKeyboardPad } from "./keyboardInset";
@@ -43,24 +42,10 @@ import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
-import { archiveSessionMessage } from "../worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
-
-/**
- * Touch padding for the two icon-only controls in the preview bar.
- *
- * The glyph sits in a box of roughly 23x19pt, well under the 44pt touch target.
- * Growing the box itself would grow the bar, so the padding goes outside it: 12pt
- * on every side except the one facing the other control, where the 8pt gap leaves
- * room for 4. Asymmetric on purpose — symmetric padding of 8 swapped this pair's
- * targets for the path text between them, and padding wide enough to reach 44 on
- * both sides would make the reload and close targets overlap, which is worse than
- * either being slightly small.
- */
-const PREVIEW_RELOAD_SLOP = { top: 12, bottom: 12, left: 12, right: 4 } as const;
-const PREVIEW_CLOSE_SLOP = { top: 12, bottom: 12, left: 4, right: 12 } as const;
 
 // Injected into the xterm WebView after load. xterm has its own touch handlers
 // that scroll by discrete lines (the janky "1 line per swipe"). We intercept in
@@ -575,7 +560,7 @@ function terminalInterfacePhaseLabel(phase?: string): string {
  */
 export default function TerminalScreen({ session: resolved }: { session?: RouteSession }) {
 	const t = useTheme();
-	const { scheme } = useThemeState();
+	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string; hostId?: string }>();
 	const shellOnly = Boolean(params.handleId);
@@ -630,19 +615,10 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
 	const [restoring, setRestoring] = useState(false);
-	// In-app browser: shows the static preview file the agent generated (an
-	// index.html). We poll the daemon's on-demand detector while the terminal is
-	// open, but we deliberately DO NOT auto-open the overlay: the detector falls back
-	// to any previewable file (e.g. a repo's README.md), so auto-popping would steal
-	// the screen with an unbuilt/blank page. Instead the globe button lights up with a
-	// green dot when the agent has produced something to view (any previewable file
-	// except the repo README); the user taps it to open.
-	const [browserOpen, setBrowserOpen] = useState(false);
-	const [loadedPreview, setLoadedPreview] = useState<{ config: ServerConfig; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
-	const previewWebRef = useRef<WebView>(null);
+	// Poll generated previews so the globe can advertise the optional App preview tab.
+	const [preview, setPreview] = useState<{ entry: string; url: string } | null>(null);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
-	const preview = loadedPreview?.id === id ? previewForConfig(loadedPreview, activeConfig, params.hostId) : null;
 	const known =
 		sessions.find((s) => s.id === sessionId) ??
 		orchestrators.find((o) => o.id === sessionId) ??
@@ -865,7 +841,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
-	}, [scheme]);
+	}, [scheme, style]);
 
 	// Poll the daemon's on-demand preview detector while the terminal is open, just
 	// to keep `preview` current for the globe button. We never auto-open the overlay
@@ -880,7 +856,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			try {
 				const p = await getPreview(activeConfig, id);
 				if (cancelled) return;
-				setLoadedPreview({ config: activeConfig, id, value: p });
+				setPreview(p ? { entry: p.entry, url: p.url } : null);
 			} catch {
 				/* transient - keep polling */
 			}
@@ -1047,36 +1023,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		if (voice.error) setBanner(voice.error);
 	}, [voice.error]);
 
-	// Toggle the in-app browser. The poll above keeps `preview` current, so a tap
-	// just shows/hides the overlay. A bare README (the detector's markdown fallback)
-	// reports "no preview yet" instead of surfacing an unbuilt repo doc.
+	// Preview is one session-level destination: the live desktop browser first,
+	// with the generated app/document preview available as a second tab.
 	const toggleBrowser = useCallback(() => {
 		haptics.tap();
-		if (browserOpen) {
-			setBrowserOpen(false);
-			return;
-		}
-		if (!hasPreview) {
-			setBanner("No preview yet. Waiting for the agent to generate a page or document…");
-			return;
-		}
-		setBrowserOpen(true);
-	}, [browserOpen, hasPreview]);
-
-	// Android's back gesture closes what is on top. The preview is a full-screen
-	// overlay drawn inside this route, so without this it answered back by leaving
-	// the session — the whole terminal, not the panel the user was looking at —
-	// while the same gesture closed the drawer correctly. Registered only while the
-	// overlay is up, so it never competes with the drawer's handler for the back
-	// press on a route where only one of the two can be on screen.
-	useEffect(() => {
-		if (Platform.OS !== "android" || !browserOpen) return;
-		const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-			setBrowserOpen(false);
-			return true;
+		router.push({
+			pathname: "/preview/[id]",
+			params: {
+				id: sessionId,
+				hostId: params.hostId,
+				previewUrl: known && "previewUrl" in known ? known.previewUrl ?? undefined : undefined,
+			},
 		});
-		return () => subscription.remove();
-	}, [browserOpen]);
+	}, [known, params.hostId, router, sessionId]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
@@ -1217,21 +1176,30 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					</Pressable>
 					<Pressable
 						hitSlop={12}
-						accessibilityLabel={browserOpen ? "Close preview" : "Open preview"}
+						accessibilityLabel="Open preview"
 						onPress={toggleBrowser}
 						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
 					>
 						<Feather
 							name="globe"
 							size={iconSize.lg}
-							color={browserOpen ? t.accent : hasPreview ? t.green : t.textSecondary}
+							color={hasPreview ? t.green : t.textSecondary}
 						/>
-						{hasPreview && !browserOpen && <View style={styles.browserReadyDot} />}
+						{hasPreview && <View style={styles.browserReadyDot} />}
+					</Pressable>
+					<Pressable
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel="Session files and changes"
+						onPress={() => { haptics.tap(); router.push(filesRoute(sessionId, params.hostId, params.title)); }}
+						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
+					>
+						<Feather name="file-diff" size={iconSize.lg} color={t.textSecondary} />
 					</Pressable>
 				</View>
 			),
 		});
-	}, [headerRightReady, navigation, browserOpen, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch]);
+	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch, router, sessionId, params.hostId, params.title]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
@@ -1260,9 +1228,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			return;
 		}
 		haptics.warning();
-		Alert.alert(shellOnly ? "Close shell?" : "Archive session?", shellOnly ? "This stops the worktree shell." : archiveSessionMessage(id), [
-			{ text: "Cancel", style: "cancel" },
-			{ text: shellOnly ? "Close" : "Archive session", style: "destructive", onPress: doKill },
+		Alert.alert(shellOnly ? "Close shell?" : ARCHIVE_SESSION_CONFIRM.title, shellOnly ? "This stops the worktree shell." : ARCHIVE_SESSION_CONFIRM.message, [
+			{ text: shellOnly ? "Cancel" : ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+			{ text: shellOnly ? "Close" : ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: doKill },
 		]);
 	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly]);
 
@@ -1300,7 +1268,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			fastScrollSensitivity: 8,
 			// The terminal's own palette, not the product one: agent TUIs own the
 			// meaning of the ANSI slots.
-			theme: terminalTheme(scheme),
+			theme: terminalTheme(scheme, style),
 			// Agent TUIs pick their colours assuming a dark canvas, so on the light
 			// theme they can land white-on-white — the prompt row is exactly that
 			// once its background band is collapsed away. xterm nudges any pair that
@@ -1308,9 +1276,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			// more reliable than trying to anticipate every colour a TUI might emit.
 			minimumContrastRatio: 4.5,
 		}),
-		// `scheme` matters: without it the terminal keeps the palette it was built
-		// with and stays dark after a theme switch.
-		[scheme],
+		// `scheme` and `style` matter: without them the terminal keeps the palette
+		// it was built with and stays dark after a theme switch.
+		[scheme, style],
 	);
 
 	// Adjust only the phone's CSS viewport. The xterm renderer, mux attachment,
@@ -1461,7 +1429,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				<XtermJsWebView
 					// Remount only on theme changes: xterm applies its palette at
 					// construction, so already-painted rows otherwise keep old colours.
-					key={`term-${scheme}`}
+					key={`term-${style}-${scheme}`}
 					ref={xtermRef}
 					autoFit={false}
 					xtermOptions={xtermOptions}
@@ -1514,48 +1482,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 							<Feather name="rotate-ccw" size={iconSize.sm} color={t.onAccent} />
 							<Text style={styles.restoreCtaText}>{restoring ? "Restoring…" : "Restore session"}</Text>
 						</Pressable> : null}
-					</View>
-				)}
-
-				{/* In-app browser overlay: the agent's generated preview file. Sits over
-				    the terminal (which keeps running underneath) with its own bar. */}
-				{browserOpen && preview && (
-					<View style={styles.browserOverlay}>
-						<View style={styles.browserBar}>
-							<Feather name="globe" size={iconSize.xs} color={t.textTertiary} />
-							<Text style={styles.browserPath} numberOfLines={1}>
-								{preview.entry}
-							</Text>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Reload preview"
-								hitSlop={PREVIEW_RELOAD_SLOP}
-								onPress={() => { haptics.tap(); previewWebRef.current?.reload(); }}
-								style={styles.browserAction}
-							>
-								<Feather name="rotate-cw" size={iconSize.sm} color={t.accent} />
-							</Pressable>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Close preview"
-								hitSlop={PREVIEW_CLOSE_SLOP}
-								onPress={() => { haptics.tap(); setBrowserOpen(false); }}
-								style={styles.browserAction}
-							>
-								<Feather name="x" size={iconSize.md} color={t.textSecondary} />
-							</Pressable>
-						</View>
-						<WebView
-							ref={previewWebRef}
-							// The preview route lives behind the daemon's connection-password
-							// auth (Bearer). Without this header the WebView's request 401s and
-							// renders the JSON error body instead of the page. The active
-							// machine's credential is the only one this screen may send.
-							source={{ uri: preview.url, headers: preview.authenticated && activeConfig ? authHeaders(activeConfig) : undefined }}
-							originWhitelist={["*"]}
-							style={styles.browserWeb}
-							onError={() => setBanner("Couldn't load the preview.")}
-						/>
 					</View>
 				)}
 			</View>
@@ -1723,20 +1649,6 @@ const makeStyles = (t: Theme) =>
 		borderWidth: 1,
 		borderColor: t.bgSurface,
 	},
-	browserOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
-	browserBar: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.sm,
-		paddingHorizontal: space.md,
-		paddingVertical: space.sm,
-		backgroundColor: t.bgSurface,
-		borderBottomWidth: 1,
-		borderBottomColor: t.borderSubtle,
-	},
-	browserPath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption1.fontSize },
-	browserAction: { paddingHorizontal: space.xxs, paddingVertical: space.hair },
-	browserWeb: { flex: 1, backgroundColor: "#ffffff" },
 	restoreBtn: {
 		flexDirection: "row",
 		alignItems: "center",

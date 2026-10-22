@@ -11,8 +11,6 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
-	DropdownMenuLabel,
-	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -211,26 +209,16 @@ export function TopbarOpenEditorButton({
 						<TooltipContent side="bottom">{t("editor.openOptionsAria")}</TooltipContent>
 					</Tooltip>
 					<DropdownMenuContent align="end" className="min-w-52">
+						{[...openInTargets, ...editors].map((target) => (
+							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
+								<TargetIcon target={target} className="size-icon-sm" />
+								{target.name}
+							</DropdownMenuItem>
+						))}
 						<DropdownMenuItem onSelect={() => void copyPath()}>
 							<Copy className="size-icon-sm" aria-hidden="true" />
 							{t("editor.copyPath")}
 						</DropdownMenuItem>
-						{openInTargets.length > 0 ? <DropdownMenuSeparator /> : null}
-						{openInTargets.length > 0 ? <DropdownMenuLabel>{t("editor.openIn")}</DropdownMenuLabel> : null}
-						{openInTargets.map((target) => (
-							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
-								<TargetIcon target={target} className="size-icon-sm" />
-								{target.name}
-							</DropdownMenuItem>
-						))}
-						{editors.length > 0 ? <DropdownMenuSeparator /> : null}
-						{editors.length > 0 ? <DropdownMenuLabel>{t("editor.openWith")}</DropdownMenuLabel> : null}
-						{editors.map((target) => (
-							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
-								<TargetIcon target={target} className="size-icon-sm" />
-								{target.name}
-							</DropdownMenuItem>
-						))}
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>

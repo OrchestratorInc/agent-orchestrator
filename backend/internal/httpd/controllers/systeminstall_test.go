@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -33,6 +34,8 @@ type fakeInstaller struct {
 	advisory        systeminstall.UpdateAdvisory
 	refreshAdvisory bool
 	expectedVersion string
+	cancelJob       systeminstall.Job
+	cancelErr       error
 }
 
 func (f *fakeInstaller) Start(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
@@ -57,6 +60,11 @@ func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminst
 	f.lastOperation = operation
 	f.expectedVersion = expectedVersion
 	return f.startJob, f.startErr
+}
+
+func (f *fakeInstaller) CancelAgentOperation(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
+	f.lastTarget = target
+	return f.cancelJob, f.cancelErr
 }
 
 func (f *fakeInstaller) AgentJobs(context.Context) ([]systeminstall.Job, error) {
@@ -186,6 +194,41 @@ func TestAgentInstallMapsMethodAndActiveHarnessErrors(t *testing.T) {
 			body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/droid/install", `{"method":"homebrew"}`)
 			if status != tt.wantStatus || !strings.Contains(string(body), `"code":"`+tt.wantCode+`"`) || !strings.Contains(string(body), `"requestId":"`) {
 				t.Fatalf("status = %d body=%s", status, body)
+			}
+		})
+	}
+}
+
+func TestAgentInstallHarnessActiveDetails(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tt := range []struct {
+		name     string
+		err      error
+		wantBody []string
+	}{
+		{
+			name:     "sessions must end first",
+			err:      &systeminstall.HarnessActiveError{Target: systeminstall.TargetAuggie, SessionIDs: []domain.SessionID{"s1"}, ReviewerIDs: []domain.SessionID{"s2"}, Level: systeminstall.UpdateWhileRunningBlocked},
+			wantBody: []string{`"count":2`, `"sessionIds":["s1"]`, `"reviewerSessionIds":["s2"]`, `"level":"blocked"`, `"starting":false`},
+		},
+		{
+			name:     "starting",
+			err:      &systeminstall.HarnessActiveError{Target: systeminstall.TargetCodex, Starting: true, Level: systeminstall.UpdateWhileRunningBlocked},
+			wantBody: []string{`"starting":true`, `"count":0`},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			installer := &fakeInstaller{startErr: tt.err}
+			srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
+			defer srv.Close()
+			body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/claude-code/install", `{"operation":"update"}`)
+			if status != http.StatusConflict || !strings.Contains(string(body), `"code":"HARNESS_ACTIVE"`) {
+				t.Fatalf("status = %d body=%s", status, body)
+			}
+			for _, want := range tt.wantBody {
+				if !strings.Contains(string(body), want) {
+					t.Fatalf("body missing %s: %s", want, body)
+				}
 			}
 		})
 	}

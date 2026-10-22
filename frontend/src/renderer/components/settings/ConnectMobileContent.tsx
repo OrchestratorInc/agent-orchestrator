@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -47,7 +49,7 @@ import {
 	type PairingEndpoint,
 } from "../../lib/pairing-payload";
 
-export const mobileStatusQueryKey = ["mobile-status"] as const;
+export { mobileStatusQueryKey };
 
 // One scan gives the mobile app every value required to connect. Keep the
 // secure key absent for plaintext payloads so older mobile builds can decode
@@ -152,6 +154,27 @@ export function qrIsReady(status: PairingReadinessStatus): boolean {
 	return true;
 }
 
+/**
+ * Why the code on screen has no public tunnel, or null when it has one (or
+ * when there is no code to judge). Without the tunnel the code reaches this
+ * machine from elsewhere only over Tailscale, if it carries a tailnet address.
+ *
+ * qrIsReady shows a LAN code while the tunnel is still starting, and the
+ * phone races only what the code carries. A code scanned or photographed in
+ * that window looks identical to a complete one, then fails away from home
+ * with "is your phone on the same Wi-Fi?" — so the panel has to say so.
+ * cloudflared being absent is stated separately (remoteAccessUnavailable), and
+ * opting out of the tunnel is the user's own choice, so neither is reported.
+ */
+export function localOnlyReason(status: PairingReadinessStatus): "starting" | "failed" | null {
+	if (!status.enabled || !status.endpoints || status.endpoints.length === 0) return null;
+	if (status.endpoints.some((e) => e.kind === "tunnel")) return null;
+	if (status.noPublicTunnel === true || status.tunnel?.supported === false) return null;
+	if (pairingIsPending(status)) return "starting";
+	if (status.tunnel?.lastError) return "failed";
+	return null;
+}
+
 /** The app's registered scheme (app.json `expo.scheme`), not a universal link:
  * it works today, with no association files to host and no store listing
  * required. Universal links can be added later without changing the payload. */
@@ -197,6 +220,7 @@ interface MobileStatus {
 	enabled: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
+	browserRemoteAccess?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -397,26 +421,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	const setKeepAwake = useMutation({
-		mutationFn: async (keepAwake: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake, lidClosed: false } });
+	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	const stayAwake = useStayAwake(active);
+
+
+	const setBrowserRemoteAccess = useMutation({
+		mutationFn: async (browserRemoteAccess: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
 			if (error) throw new Error(apiErrorMessage(error));
 			return data;
 		},
-		// Flip the cached status up front so the switch never falls back to the
-		// old value between the POST finishing and the refetch landing.
-		onMutate: async (keepAwake) => {
+		onMutate: async (browserRemoteAccess) => {
 			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
 			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
-			if (previous?.keepAwake) {
-				queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, {
-					...previous,
-					keepAwake: { ...previous.keepAwake, enabled: keepAwake, lidClosed: false, lidActive: false },
-				});
-			}
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, browserRemoteAccess });
 			return { previous };
 		},
-		onError: (_error, _keepAwake, context) => {
+		onError: (_error, _enabled, context) => {
 			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
 		},
 		onSettled: invalidate,
@@ -463,17 +484,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// installs it. Pairing still works on the local network, so this is a
 	// caveat to state rather than a failure to block on.
 	const remoteAccessUnavailable = status?.tunnel ? status.tunnel.supported === false : false;
+	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
+	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
-	const setLidAwake = useMutation({
-		mutationFn: async (lidClosed: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", {
-				body: { enabled: lidClosed || (status?.keepAwake?.enabled ?? false), lidClosed },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		onSettled: invalidate,
-	});
 
 	const busy =
 		enable.isPending ||
@@ -481,8 +494,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
-		setKeepAwake.isPending ||
-		setLidAwake.isPending;
+		setBrowserRemoteAccess.isPending ||
+		stayAwake.busy;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -490,8 +503,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
-		setKeepAwake.reset();
-		setLidAwake.reset();
+		setBrowserRemoteAccess.reset();
 	};
 
 	const copyPassword = async () => {
@@ -527,8 +539,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
-		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
-		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
+		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		stayAwake.error ||
 		null;
 
 	const turnOff = () => {
@@ -693,6 +705,39 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
+				{qrValue && localOnly && (
+					// The code refreshes itself once the tunnel is advertised; until
+					// then it is a LAN-only code that looks exactly like a full one.
+					<p
+						className="mt-4 flex items-start gap-1.5 text-xs leading-5 text-settings-muted"
+						data-testid="mobile-local-only"
+						role="status"
+					>
+						{localOnly === "starting" && <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
+						{/* A tailnet address does reach this machine from elsewhere, once
+						    both devices are on the tailnet; only the public tunnel is missing. */}
+						{localOnly === "starting"
+							? viaTailscale
+								? t(
+										"mobile.remoteAccessStartingTailscale",
+										"No public tunnel yet — away from this network the code works only over Tailscale. Remote access is still starting; wait for the code to update.",
+									)
+								: t(
+										"mobile.remoteAccessStarting",
+										"Works on this network only for now — remote access is still starting. Wait for the code to update before using it away from here.",
+									)
+							: viaTailscale
+								? t(
+										"mobile.remoteAccessFailedTailscale",
+										"No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
+									)
+								: t(
+										"mobile.remoteAccessFailed",
+										"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
+									)}
+					</p>
+				)}
+
 				{remoteAccessUnavailable && (
 					// Stated rather than hidden: pairing still works on this network,
 					// so this is a limitation of what the code can reach, not an
@@ -740,18 +785,34 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={status.keepAwake}
-					disabled={busy}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
+					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						setKeepAwake.mutate(next);
+						stayAwake.set(next, true);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
-						setLidAwake.mutate(next);
+						stayAwake.setLid(next);
 					}}
 				/>
 			)}
+			<SettingsRow
+				icon={MonitorSmartphone}
+				label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+				description={t("mobile.browserRemote.help", "Streams browser content and allows touch control from paired phones. This is separate from the mobile connection and is off by default.")}
+				data-testid="mobile-browser-remote-access"
+			>
+				<Switch
+					aria-label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+					disabled={busy}
+					checked={status.browserRemoteAccess ?? false}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setBrowserRemoteAccess.mutate(next);
+					}}
+				/>
+			</SettingsRow>
 		</>
 	);
 }

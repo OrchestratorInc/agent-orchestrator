@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
@@ -102,6 +103,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// Scripts are project settings on local and Cloud projects alike (a Cloud
 	// session's worker runs them). Environment and cues are local-daemon
 	// features; remote hosts expose none of these.
+	// A Cloud project's repositories, where its agent starts, and the
+	// instructions added to its agents' prompts live on the control plane.
+	if (isCloudProjectSettings) {
+		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
+	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 	if (!remoteHostId && !isCloudProjectSettings) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
@@ -269,6 +276,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
 				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
 			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
+				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
+				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
 			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
 				return isCloudProjectSettings && cloudOrgId !== undefined
 					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
@@ -414,7 +427,7 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
-						<h1 className="mb-8 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
+						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
 							{entry.title}
 							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
 						</h1>
@@ -463,9 +476,20 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 	// while recovery settings cover the dialog, then is re-attached when it returns.
 	const [bodyHost] = useState(() => document.createElement("div"));
 	useEffect(() => { bodyHost.className = "flex min-h-0 flex-1 flex-col"; }, [bodyHost]);
+	// That portal puts the body outside the Dialog's React tree, so Radix cannot
+	// tell that a popover, menu, or picker a page opens (portalled to <body>)
+	// belongs to the dialog: a press in one reads as outside and would dismiss
+	// the dialog, dropping the pick. React still routes events through portals
+	// along the React tree, so remember each press that starts anywhere in the
+	// body's tree (the page or anything it portals) and keep the dialog open
+	// for exactly that press. A press on the backdrop never passes through here.
+	const bodyPointerDown = useRef<Event | null>(null);
 	return (
 		<>
-		{createPortal(layer.body(), bodyHost)}
+		{createPortal(
+			<div className="contents" onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
+			bodyHost,
+		)}
 		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>
 			<Dialog.Portal>
 				<Dialog.Overlay
@@ -489,6 +513,21 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						target.focus({ preventScroll: true });
 					}}
 					onCloseAutoFocus={restoreFocusOnClose}
+					onPointerDownOutside={(event) => {
+						if (event.detail.originalEvent === bodyPointerDown.current) {
+							event.preventDefault();
+							return;
+						}
+						// An open picker or menu takes the first outside click to close
+						// itself, as Escape does; the dialog closes on the next one. A
+						// tooltip is not a popup that holds the click, and neither is a
+						// picker still playing its exit animation.
+						const openPopup = Array.from(document.querySelectorAll("[data-radix-popper-content-wrapper]")).some((wrapper) =>
+							!contentRef.current?.contains(wrapper)
+							&& wrapper.firstElementChild?.getAttribute("data-state") !== "closed"
+							&& wrapper.querySelector('[role="dialog"], [role="menu"], [role="listbox"]'));
+						if (openPopup) event.preventDefault();
+					}}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;
 						// In-place edits and login flows take Escape themselves.

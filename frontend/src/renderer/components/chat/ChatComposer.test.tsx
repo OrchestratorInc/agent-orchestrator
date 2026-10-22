@@ -236,7 +236,7 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("bg-foreground", "text-background");
+		expect(send).toHaveClass("bg-foreground", "text-on-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {
@@ -1696,6 +1696,26 @@ describe("steering", () => {
 		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent(""));
 		expect(onSteer).toHaveBeenCalledTimes(1);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
+	});
+
+	it("clears a restored send the chat already holds, without the restart notice", async () => {
+		const sessionId = "send-snapshot-reconciliation";
+		// The answer is lost, as when the app restarts mid-send.
+		const onSend = vi.fn().mockRejectedValue(new Error("response lost"));
+		const first = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "sent before the restart");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery?.state).toBe("dispatching"));
+		const clientMessageId = onSend.mock.calls[0]?.[2] as unknown as string;
+		first.unmount();
+
+		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} acceptedClientMessageIds={new Set([clientMessageId])} />);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("");
+		expect(screen.queryByText(/wasn.t confirmed before Chat restarted/)).not.toBeInTheDocument();
+		expect(onSend).toHaveBeenCalledTimes(1);
 	});
 });
 

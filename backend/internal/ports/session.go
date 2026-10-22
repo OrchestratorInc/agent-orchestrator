@@ -50,6 +50,9 @@ type SpawnConfig struct {
 	// AgentConfigResolved means AgentConfig already contains the fully merged
 	// project/role/task settings and may intentionally clear inherited values.
 	AgentConfigResolved bool
+	// AgentAccountID is the provider account the agent runs under. Empty uses
+	// the provider's default account.
+	AgentAccountID string
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any

@@ -115,6 +115,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
 	humanVisibleText,
@@ -124,10 +125,12 @@ import {
 	TurnOutcome,
 	LiveResponseStatus,
 	type TurnOutcomeRetryControl,
+	ChatHostId,
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
@@ -137,9 +140,10 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
-import { TurnSettingsBar } from "./TurnSettingsBar";
-import { ElicitationDock } from "./ElicitationDock";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
+import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
+import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
 	activityPlan,
@@ -163,6 +167,7 @@ import {
 	type ConversationItem,
 	type ConversationMessage,
 	type ConversationTurn,
+	type ConversationUsageLimit,
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
@@ -220,6 +225,10 @@ export interface ChatRetryControl {
 	pending?: boolean;
 	error?: string;
 	turnId?: string;
+	setAutoResume?: (turnId: string, enabled: boolean) => void | Promise<unknown>;
+	autoResumePending?: boolean;
+	autoResumeError?: string;
+	autoResumeTurnId?: string;
 }
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
@@ -365,6 +374,8 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
+	/** The handoff is an account move: the chat stays as it is, with no arrival chrome. */
+	accountMoving?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
 	/**
@@ -374,6 +385,10 @@ export interface ChatWorkspaceProps {
 	agentResuming?: boolean;
 	startingSteps?: readonly SessionProvisionStep[];
 	settingsReady?: boolean;
+	/** The agent's own settings have not arrived; the bar shows the saved ones, disabled. */
+	settingsLoading?: boolean;
+	/** The model this chat's agent last reported running, named while its settings load. */
+	lastModel?: string;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -427,6 +442,10 @@ export interface ChatWorkspaceProps {
 	busy?: boolean;
 	/** The provider's model catalog. Empty hides the model control. */
 	models?: ChatModel[];
+	/** Makes the model control one picker for agent, model and effort. */
+	agentSwitch?: AgentSwitchProps;
+	/** A line above the chat box, such as a switch waiting for the next message. */
+	composerNotice?: ReactNode;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -446,8 +465,10 @@ export interface ChatWorkspaceProps {
 	daemonReady?: boolean;
 	/** Resolved color theme for the reviewer terminal pane. */
 	theme?: "light" | "dark";
-	onChooseSettings?: (settings: TurnSettings) => void;
-	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
+	/** `picked` names the setting the user chose from its own menu; other changes echo the shown settings. */
+	onChooseSettings?: (settings: TurnSettings, picked?: keyof TurnSettings) => void;
+	/** `null` forgets the project's remembered mode. */
+	onRememberPermissions?: (mode: ApprovalMode | null) => Promise<unknown> | void;
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
 	rememberPermissionsPending?: boolean;
@@ -637,10 +658,13 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	accountMoving = false,
 	loadingQuietly,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
+	settingsLoading = false,
+	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -681,6 +705,8 @@ function ChatWorkspaceContent({
 	onSessionLinkOpen,
 	busy,
 	models,
+	agentSwitch,
+	composerNotice,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -742,6 +768,14 @@ function ChatWorkspaceContent({
 	);
 	const turn = activeTurn(snapshot);
 	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
+	const latestSettledTurn = snapshot.turns.findLast((entry) =>
+		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
+	);
+	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
+		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
+		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
+		latestSettledTurn.hasHumanPrompt
+		? latestSettledTurn : undefined;
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -750,6 +784,10 @@ function ChatWorkspaceContent({
 	if (snapshot.controller.state === "ready" || snapshot.controller.state === "busy") wakingFromHibernate.current = false;
 	if (snapshot.controller.state === "stopped" && !resumingAgent) wakingFromHibernate.current = false;
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
+	// After a restart the daemon is still verifying this session and reconnects
+	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
+	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent &&
+		session?.statusReadiness === "checking";
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -829,6 +867,8 @@ function ChatWorkspaceContent({
 	const handleChatSurfaceClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
 		const target = event.target;
 		if (!(target instanceof Element)) return;
+		// Portal menus (the agent picker) still bubble clicks here; focusing the composer would close them.
+		if (!event.currentTarget.contains(target)) return;
 		// A click fires after a drag selection ends. Focusing the composer here would
 		// collapse the range the user just selected in the transcript.
 		if (window.getSelection()?.isCollapsed === false) return;
@@ -1126,6 +1166,10 @@ function ChatWorkspaceContent({
 		() =>
 			new Set(
 				snapshot.items.flatMap((item) => {
+					// A sent message's own row proves it arrived, as a steer's activity does.
+					if (item.kind === "message") {
+						return item.role === "user" && item.origin === "human" && item.clientMessageId ? [item.clientMessageId] : [];
+					}
 					if (
 						item.kind !== "activity" ||
 						item.detail?.event !== "steer" ||
@@ -1338,6 +1382,9 @@ function ChatWorkspaceContent({
 		[snapshot.items, turn],
 	);
 	const stableSettings = useStableValue(snapshot.settings);
+	// Claude Code compacts at the window picked for it, well before its model's full context.
+	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
+	const stableUsage = useStableValue(snapshot.usage);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
@@ -1345,6 +1392,11 @@ function ChatWorkspaceContent({
 		() =>
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
+					agentSwitch={agentSwitch}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					// While the agent wakes or starts; a chat reads "hibernated" until ready.
+					modelsLoading={settingsLoading}
+					lastModel={lastModel}
 					models={models ?? []}
 					settings={stableSettings}
 					onRememberPermissions={onRememberPermissions}
@@ -1368,6 +1420,7 @@ function ChatWorkspaceContent({
 								snapshot.controller.state === "connecting" ||
 								snapshot.controller.state === "stopped"
 							)) ||
+							settingsLoading ||
 							session?.provisionState === "provisioning" ||
 							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
@@ -1375,11 +1428,15 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			settingsReady,
+			settingsLoading,
+			lastModel,
 			configOptionError,
 			configOptionPending,
 			configOptions,
 			controllerTransitioning,
 			models,
+			agentSwitch,
+			stableUsage,
 			newWorkDisabled,
 			session?.provisionState,
 			onChooseConfigOption,
@@ -1396,6 +1453,7 @@ function ChatWorkspaceContent({
 			turn,
 			stableModelReroute,
 			stableSettings,
+			compactsAt,
 		],
 	);
 	const composerApproval = useMemo(
@@ -1413,7 +1471,7 @@ function ChatWorkspaceContent({
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
-				<ElicitationDock activity={stablePendingUserInput} onResolve={onResolveInput} />
+				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} onResolve={onResolveInput} />
 			) : undefined,
 		[onResolveInput, stablePendingUserInput],
 	);
@@ -1480,7 +1538,7 @@ function ChatWorkspaceContent({
 	// Arriving from the terminal reuses the startup composer: the shimmer plus a
 	// placeholder that follows the controller. Leaving for the terminal
 	// (newWorkDisabled) stays quiet, since that screen is about to go away.
-	const arrivingInChat = Boolean(controllerTransitioning) && !newWorkDisabled && startupState !== "provisioning";
+	const arrivingInChat = Boolean(controllerTransitioning) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
 	const arrivingPlaceholder = snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
@@ -1680,7 +1738,7 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
@@ -1693,6 +1751,7 @@ function ChatWorkspaceContent({
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
+						reconnecting={startupReconnecting}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
@@ -1701,6 +1760,7 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
+					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -1715,6 +1775,7 @@ function ChatWorkspaceContent({
 							workspacePaths={filePaths}
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
+							<ChatHostId.Provider value={activeRemoteHostId}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -1735,6 +1796,7 @@ function ChatWorkspaceContent({
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
 									retryControl={retryControl}
+									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
 									editBusy={Boolean(turn)}
@@ -1748,6 +1810,7 @@ function ChatWorkspaceContent({
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									arriving={arrivingInChat}
 								/>
+							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
 
@@ -1758,6 +1821,20 @@ function ChatWorkspaceContent({
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
+								{limitedTurn?.usageLimit && retryControl ? (
+									<UsageLimitNotice
+										key={limitedTurn.id}
+										usageLimit={limitedTurn.usageLimit}
+										onResume={() => { void Promise.resolve(retryControl.retry(limitedTurn.id)).catch(() => undefined); }}
+										onAutoResumeChange={retryControl.setAutoResume
+											? (enabled) => { void Promise.resolve(retryControl.setAutoResume?.(limitedTurn.id, enabled)).catch(() => undefined); }
+											: undefined}
+										pending={retryControl.pending || retryControl.autoResumePending}
+										disabled={Boolean(turn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
+										error={(retryControl.turnId === limitedTurn.id ? retryControl.error : undefined) ??
+											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
+									/>
+								) : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
@@ -1785,7 +1862,9 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
+									{composerNotice}
 									<ChatComposer
+										attachedTop={Boolean(composerNotice)}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -1816,7 +1895,21 @@ function ChatWorkspaceContent({
 										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
 										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
+										settings={<>
+											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{composerSettings}
+										</>}
+										addMenuItems={agentSwitch ? (
+											<ComposerModeItems
+												configOptions={configOptions ?? []}
+												settings={stableSettings}
+												models={models}
+												nativePlan={can(snapshot, "plan_mode")}
+												onChange={newWorkDisabled ? undefined : onChooseSettings}
+												onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
+												disabled={configOptionPending || controllerTransitioning}
+											/>
+										) : undefined}
 										busy={busy}
 										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
 										queuePlaceholder={
@@ -1835,7 +1928,9 @@ function ChatWorkspaceContent({
 												? ""
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
-													: undefined
+													: startupReconnecting
+														? "Reconnecting to the agent…"
+														: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -2020,11 +2115,24 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 	const plannedTurns = new Set(
 		snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id),
 	);
+	const pendingQuestionTurns = new Set(
+		snapshot.items
+			.filter((item) => item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending")
+			.map((item) => item.turnId),
+	);
 	return snapshot.items.filter((item) => {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "reasoning") return false;
+		// Claude emits both a tool call and an elicitation for the same question.
+		// The pending form already presents it above the composer.
+		if (
+			item.activityKind === "mcp_tool" &&
+			item.detail?.providerToolName === "AskUserQuestion" &&
+			(item.status === "pending" || item.status === "running") &&
+			item.turnId && pendingQuestionTurns.has(item.turnId)
+		) return false;
 		return true;
 	});
 }
@@ -2248,6 +2356,7 @@ function ControllerBanner({
 	provisionState,
 	transitioning,
 	automaticWakePending,
+	reconnecting,
 	onResume,
 	resuming,
 	resumeError,
@@ -2259,6 +2368,8 @@ function ControllerBanner({
 	provisionState?: WorkspaceSession["provisionState"];
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
+	/** The daemon is still reconnecting this session after a restart. */
+	reconnecting?: boolean;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -2269,6 +2380,9 @@ function ControllerBanner({
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
+	// Nothing to act on yet: offering Resume here invites a click the daemon is
+	// about to make unnecessary.
+	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
 	const resumeClick = () => {
 		void Promise.resolve().then(() => onResume?.()).catch(() => {});
 	};
@@ -2289,17 +2403,18 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking ? "Waking agent…" : "The agent controller stopped",
-			tone: waking ? "text-muted-foreground" : "text-destructive",
+			title: waking ? "Waking agent…" : restarting ? "Reconnecting to the agent…" : "The agent controller stopped",
+			tone: waking || restarting ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
-	const loading = controller.state === "connecting" || waking;
+	const loading = controller.state === "connecting" || waking || restarting;
+	const actionable = controller.state === "stopped" && !waking && !restarting;
 
 	return (
 		<div
-			role={controller.state === "stopped" && !waking ? "alert" : "status"}
+			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -2315,10 +2430,12 @@ function ControllerBanner({
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
 				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
+				) : restarting ? (
+					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
 				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{controller.state === "stopped" && !waking ? (
+				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
@@ -2413,6 +2530,7 @@ export function Timeline({
 	onOpenFiles,
 	onOpenFile,
 	retryControl,
+	composerRecoveryTurnId,
 	onEditHumanMessage,
 	editPending,
 	editBusy,
@@ -2448,6 +2566,7 @@ export function Timeline({
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
 	retryControl?: ChatRetryControl;
+	composerRecoveryTurnId?: string;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
 	editBusy?: boolean;
@@ -2881,7 +3000,7 @@ export function Timeline({
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
 	const retryableTurns = useMemo(
 		() =>
-			new Set(
+			new Map(
 				snapshot.turns
 					.filter(
 						(turn) =>
@@ -2889,7 +3008,7 @@ export function Timeline({
 							Boolean(turn.providerTurnId) &&
 							!consumedRetrySources.has(turn.id),
 					)
-					.map((turn) => turn.id),
+					.map((turn) => [turn.id, turn]),
 			),
 		[snapshot.turns, consumedRetrySources],
 	);
@@ -3197,7 +3316,7 @@ export function Timeline({
 							echoMatchesItem(echo, item, backgroundQueuedTurnIds),
 					),
 			)
-			.map((echo, index): ConversationMessage => ({
+			.flatMap((echo, index) => withLocalSwitchMarker(echo, items, {
 				kind: "message",
 				id: `local:${echo.clientMessageId}`,
 				turnId: `local:${echo.clientMessageId}`,
@@ -3231,9 +3350,13 @@ export function Timeline({
 	);
 	const timelineItems = useStableList(
 		[
-			...items.filter(
-				(item) => !(item.kind === "message" && item.role === "user" && item.turnId && backgroundQueuedTurnIds.has(item.turnId)),
-			),
+			...withSwitchMarkerKeys(items.filter(
+				(item) => !(item.kind === "message" && item.role === "user" && (
+					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
+					// A terminal switch hands the note over as the first prompt; it is not the user's.
+					item.text.trimStart().startsWith("<ao-handoff-request")
+				)),
+			), localEchos),
 			...localItems,
 		],
 		itemKey,
@@ -3859,11 +3982,13 @@ export function Timeline({
 						style={virtualized ? { height: virtualHeight } : undefined}>
 					{renderedGroups.map(({ group, row, index }) => {
 						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
+						const retryableTurn = group.turnId ? retryableTurns.get(group.turnId) : undefined;
 						const retry =
 							group.turnId &&
 							retryControl &&
-							retryableTurns.has(group.turnId) &&
-							groupHasHumanPrompt(group)
+							retryableTurn &&
+							group.turnId !== composerRecoveryTurnId &&
+							(groupHasHumanPrompt(group) || Boolean(retryableTurn.usageLimit && retryableTurn.hasHumanPrompt))
 								? {
 										onRetry: () => {
 											void Promise.resolve(retryTurn(group.turnId as string)).catch(
@@ -4218,8 +4343,7 @@ const TurnGroup = memo(function TurnGroup({
 		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
 	);
 	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
-	// Errors and system warnings stay readable after the turn settles instead of
-	// folding away with the routine work.
+	// Questions, errors, and system warnings stay readable after the turn settles.
 	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
@@ -4358,10 +4482,11 @@ const TurnGroup = memo(function TurnGroup({
 					) : null}
 				</div>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
+					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
 				/>
 			) : null}
@@ -4540,11 +4665,14 @@ function TimelineItem({
 		if (item.status === "pending") return null;
 		return <ApprovalCard activity={item} onDecide={onDecide} busy={busy} />;
 	}
-	// A question is answered on the composer, never in the transcript: pending, it
-	// owns the dock above the input, and once answered it leaves nothing behind.
-	if (item.activityKind === "user_input") return null;
+	if (item.activityKind === "user_input") {
+		return item.status === "pending" ? null : <ElicitationHistory activity={item} />;
+	}
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
+	}
+	if (item.detail?.event === "provider_switch") {
+		return <ProviderSwitchMarker activity={item} />;
 	}
 	// Read by the event, not the kind: a steer is stored as a `system` activity
 	// because that is AO's only durable write that can attach to a turn in flight,
@@ -4574,6 +4702,62 @@ const itemKey = (item: ConversationItem): string =>
 	item.kind === "message" && item.role === "user" && item.clientMessageId
 		? `client:${item.clientMessageId}`
 		: item.id;
+
+/**
+ * The daemon's "Switched" line takes the id of the optimistic one above the same message,
+ * so React keeps the node and its label morphs from "Switching…" to "Switched". The line
+ * can arrive before its message does; it then takes the id of the echo still showing.
+ */
+function withSwitchMarkerKeys(items: ConversationItem[], echoes: readonly ConversationLocalEcho[]): ConversationItem[] {
+	const nextMessageId = (marker: ConversationItem) => {
+		let next: ConversationMessage | undefined;
+		for (const candidate of items) {
+			if (candidate.kind !== "message" || candidate.role !== "user" || !candidate.clientMessageId) continue;
+			if (candidate.sequence > marker.sequence && (!next || candidate.sequence < next.sequence)) next = candidate;
+		}
+		if (next?.clientMessageId || marker.kind !== "activity") return next?.clientMessageId;
+		return echoes.find(({ providerSwitch: sent }) =>
+			sent !== undefined && sent.targetHarness === marker.detail?.targetHarness && marker.sequence > sent.afterSequence,
+		)?.clientMessageId;
+	};
+	const isMarker = (item: ConversationItem) => item.kind === "activity" && item.detail?.event === "provider_switch";
+	// Only the marker nearest before a message was drawn with it (a failed switch, then another, leaves two).
+	const nearest = new Map<string, number>();
+	for (const item of items) {
+		const id = isMarker(item) ? nextMessageId(item) : undefined;
+		if (id && item.sequence > (nearest.get(id) ?? -Infinity)) nearest.set(id, item.sequence);
+	}
+	return items.map((item) => {
+		const id = isMarker(item) ? nextMessageId(item) : undefined;
+		return id && nearest.get(id) === item.sequence ? { ...item, id: `local-switch:${id}` } : item;
+	});
+}
+
+/** A message sent with a switch shows the "Switched" line above it at once, until the daemon's arrives. */
+function withLocalSwitchMarker(echo: ConversationLocalEcho, items: ConversationItem[], message: ConversationMessage): ConversationItem[] {
+	const sent = echo.providerSwitch;
+	const switchArrived = sent && items.some(
+		(item) =>
+			item.kind === "activity" &&
+			item.detail?.event === "provider_switch" &&
+			item.detail.targetHarness === sent.targetHarness &&
+			item.sequence > sent.afterSequence,
+	);
+	if (!sent || switchArrived) return [message];
+	const { afterSequence: _afterSequence, ...display } = sent;
+	const marker: ConversationActivity = {
+		kind: "activity",
+		id: `local-switch:${echo.clientMessageId}`,
+		sequence: message.sequence - 0.005,
+		revision: 0,
+		activityKind: "system",
+		status: "completed",
+		summary: "Switched agent",
+		createdAt: echo.createdAt,
+		detail: { event: "provider_switch", ...display, switching: true },
+	};
+	return [marker, message];
+}
 
 /** Whether a durable row is the one a local echo stands in for. */
 function echoMatchesItem(
@@ -4694,6 +4878,7 @@ type TimelineGroup = {
 		state: "completed" | "recovered" | "interrupted" | "failed";
 		durationMs?: number;
 		error?: string;
+		usageLimit?: ConversationUsageLimit;
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -4707,6 +4892,8 @@ type TimelineGroup = {
 	liveProviderFailure?: ConversationActivity;
 	/** The provider accepted this turn, so there is history it can be asked to drop. */
 	rollbackable?: boolean;
+	/** An account switch stopped this turn; its notice replaces the outcome. */
+	accountSwitched?: boolean;
 };
 
 type GroupPreview = { title: string; detail?: string };
@@ -4839,7 +5026,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 				continue;
 			}
 			groups.push({
-				key: `loose-${item.sequence}`,
+				// A "Switched" line keeps its key from echo to the daemon's row, as its position changes.
+				key: item.id.startsWith("local-switch:") ? item.id : `loose-${item.sequence}`,
 				anchor: item.sequence,
 				items: [item],
 			});
@@ -4890,8 +5078,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 			);
 		if (turn.state === "running" || turn.state === "queued" || turn.state === "cancelled") continue;
 		group.rollbackable = Boolean(turn.providerTurnId);
+		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
 			state: turn.state,
+			usageLimit: turn.usageLimit,
 			durationMs: settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
@@ -4908,11 +5098,12 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 	return (item?.kind === "message" && item.role === "user") || (item?.kind === "activity" && isSteer(item));
 }
 
-/** An error or stamped system warning, which a settled turn keeps outside its folded work. */
+/** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
 	const item = run.items[0];
 	if (run.kind !== "single" || item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
+	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
 
@@ -4921,7 +5112,7 @@ function rendersNothing(run: TimelineRun): boolean {
 	const item = run.items[0];
 	if (run.kind !== "single" || !item) return false;
 	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
-	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
+	return (item.activityKind === "user_input" || item.activityKind === "approval") && item.status === "pending";
 }
 
 const ARTIFACT_PROMPT_KEYS = [

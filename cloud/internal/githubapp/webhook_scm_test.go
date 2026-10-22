@@ -102,7 +102,7 @@ func TestOpenedPRWebhookClaimsSessionBranchAndCreatesCard(t *testing.T) {
 		return store.byNumber[ref.Number], nil
 	}}
 	delivery := domain.GitHubWebhookDelivery{DeliveryID: "opened-7", Event: "pull_request", Action: "opened", GitHubRepositoryID: 99,
-		Payload: []byte(`{"action":"opened","pull_request":{"number":7,"html_url":"https://github.com/acme/widgets/pull/7","title":"Add docs","state":"open","head":{"ref":"ao/session-1","sha":"abc123"},"base":{"ref":"main"},"user":{"login":"octocat"}},"repository":{"full_name":"acme/widgets"}}`)}
+		Payload: []byte(`{"action":"opened","pull_request":{"number":7,"html_url":"https://github.com/acme/widgets/pull/7","title":"Add docs","state":"open","head":{"ref":"ao/session-1","sha":"abc123","repo":{"id":99}},"base":{"ref":"main"},"user":{"login":"octocat"}},"repository":{"full_name":"acme/widgets"}}`)}
 	if err := service.processSCMWebhook(context.Background(), "org-1", delivery); err != nil {
 		t.Fatal(err)
 	}
@@ -114,9 +114,26 @@ func TestOpenedPRWebhookClaimsSessionBranchAndCreatesCard(t *testing.T) {
 	}
 }
 
+// A fork's pull request is never claimed for a session, even when its branch
+// name matches the session branch.
+func TestOpenedForkPRWebhookIsNotClaimed(t *testing.T) {
+	store := &scmRefreshStore{byNumber: map[int]domain.PullRequest{}, matchingSessionID: "session-1"}
+	service := &Service{store: store, logger: slog.Default(), refreshPullRequestStatus: func(_ context.Context, ref domain.PullRequestRef, _ domain.PullRequestRefreshContext) (domain.PullRequest, error) {
+		return store.byNumber[ref.Number], nil
+	}}
+	delivery := domain.GitHubWebhookDelivery{DeliveryID: "opened-fork", Event: "pull_request", Action: "opened", GitHubRepositoryID: 99,
+		Payload: []byte(`{"action":"opened","pull_request":{"number":9,"html_url":"https://github.com/acme/widgets/pull/9","title":"Fork","state":"open","head":{"ref":"develop","sha":"abc123","repo":{"id":4242}},"base":{"ref":"main"},"user":{"login":"stranger"}},"repository":{"full_name":"acme/widgets"}}`)}
+	if err := service.processSCMWebhook(context.Background(), "org-1", delivery); err != nil {
+		t.Fatal(err)
+	}
+	if store.claimed != nil {
+		t.Fatalf("fork PR claimed for %+v", store.claimed)
+	}
+}
+
 func TestWorkerRefReportReplaysEarlierOpenedWebhook(t *testing.T) {
 	delivery := domain.GitHubWebhookDelivery{DeliveryID: "earlier-opened", Event: "pull_request", Action: "opened", GitHubRepositoryID: 99,
-		Payload: []byte(`{"pull_request":{"number":8,"html_url":"https://github.com/acme/widgets/pull/8","title":"Add docs","state":"open","head":{"ref":"docs/custom","sha":"abc123"},"base":{"ref":"main"}},"repository":{"full_name":"acme/widgets"}}`)}
+		Payload: []byte(`{"pull_request":{"number":8,"html_url":"https://github.com/acme/widgets/pull/8","title":"Add docs","state":"open","head":{"ref":"docs/custom","sha":"abc123","repo":{"id":99}},"base":{"ref":"main"}},"repository":{"full_name":"acme/widgets"}}`)}
 	store := &scmRefreshStore{byNumber: map[int]domain.PullRequest{}, matchingSessionID: "session-1", recentOpen: []domain.GitHubWebhookDelivery{delivery}}
 	service := &Service{store: store, logger: slog.Default(), refreshPullRequestStatus: func(_ context.Context, ref domain.PullRequestRef, _ domain.PullRequestRefreshContext) (domain.PullRequest, error) {
 		return store.byNumber[ref.Number], nil

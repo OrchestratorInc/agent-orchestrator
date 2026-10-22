@@ -69,6 +69,14 @@ function cpUrl({ base, orgId, sessionId }: Target, tail: string, search = ""): U
 	return new URL(`${base.origin}${basePath}/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/agent-browser/${tail}${search}`);
 }
 
+// How long to leave a session whose agent browser is not connected before
+// asking the CP again: its Retry-After in seconds, kept within reason.
+export function retryAfterMs(header: string | null): number {
+	const seconds = Number(header);
+	if (!header || !Number.isFinite(seconds)) return 30_000;
+	return Math.min(Math.max(seconds, 5), 300) * 1_000;
+}
+
 export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy {
 	const bearer = async (): Promise<string | null> => (await getCloudAccessToken(getDataDir()).catch(() => null)) || null;
 	let secret: Promise<Buffer> | undefined;
@@ -79,6 +87,9 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 		}));
 	let current: Promise<Running> | undefined;
 	let live: Running | undefined;
+	// Sessions whose agent browser the CP said is not connected, until when
+	// not to ask it again (its Retry-After).
+	const notConnectedUntil = new Map<string, number>();
 
 	const start = async (key: Buffer): Promise<Running> => {
 		const hosts = new Map<string, Target>();
@@ -238,12 +249,23 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 			}
 			const target: Target = { base, orgId, sessionId };
 			// Only a sandbox whose agent browser runs has an agent tab: the CP answers
-			// 502 for one without, or asleep; one the agent has not used yet answers
-			// that it is not running. A CP this cannot reach gets none either.
+			// 409 for one without, or asleep, saying when to ask again (older CPs
+			// answer 502); one the agent has not used yet answers that it is not
+			// running. A CP this cannot reach gets none either.
+			const sessionKey = `${base.href}\n${orgId}\n${sessionId}`;
+			const now = Date.now();
+			// Forget sessions whose wait is over, so closed ones do not pile up.
+			for (const [key, until] of notConnectedUntil) if (until <= now) notConnectedUntil.delete(key);
+			if (notConnectedUntil.has(sessionKey)) return "";
 			const token = await bearer();
 			if (!token) return "";
 			const probe = await fetch(cpUrl(target, "stats"), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) })
 				.catch(() => null);
+			if (probe?.status === 409) {
+				notConnectedUntil.set(sessionKey, Date.now() + retryAfterMs(probe.headers.get("retry-after")));
+			} else {
+				notConnectedUntil.delete(sessionKey);
+			}
 			if (!(await agentBrowserRunning(probe))) return "";
 			const key = await loadKey();
 			const { port, hosts } = await running(key);

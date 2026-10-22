@@ -41,13 +41,10 @@ type startInterfaceTransitionRequest struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
-func (s *Server) interfaceTransitionSupported(harness string) bool {
-	switch harness {
-	case "claude-code", "codex", "cursor":
-		return true
-	default:
-		return false
-	}
+// chatControllerSupported reports whether a session of harness can start in
+// Chat or switch to it (domain.ChatHarnesses, the list /me publishes).
+func chatControllerSupported(harness string) bool {
+	return domain.HarnessHasChat(harness)
 }
 
 // getSessionInterfaceTransition reports whether the session's harness can
@@ -66,7 +63,7 @@ func (s *Server) getSessionInterfaceTransition(w http.ResponseWriter, r *http.Re
 		return
 	}
 	status := interfaceTransitionStatusResponse{
-		Supported:  s.interfaceTransitionSupported(session.Harness),
+		Supported:  chatControllerSupported(session.Harness),
 		TargetMode: string(session.Interface.Opposite()),
 	}
 	if session.IsTerminated {
@@ -124,7 +121,7 @@ func (s *Server) startSessionInterfaceTransition(w http.ResponseWriter, r *http.
 			"Terminated sessions must be restored before switching interfaces.")
 		return
 	}
-	if !s.interfaceTransitionSupported(session.Harness) {
+	if !chatControllerSupported(session.Harness) {
 		writeError(w, r, http.StatusUnprocessableEntity, "INTERFACE_HANDOFF_UNSUPPORTED",
 			session.Harness+" does not support interface handoff.")
 		return

@@ -37,7 +37,8 @@ func readLocalOAuthToken(dataDir string) string {
 // The whole method is inert unless the user opted into the unified flow: no
 // captured token on disk -> immediate return, zero change for existing users.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
-	if strings.TrimSpace(dataDir) == "" {
+	// An account launch signs in through its own config folder only.
+	if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(env[claudeConfigDirEnv]) != "" {
 		return
 	}
 	token := readLocalOAuthToken(dataDir)

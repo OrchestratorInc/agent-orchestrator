@@ -233,19 +233,6 @@ const exitedOrchestrator: WorkspaceSession = {
 	isTerminated: false,
 };
 
-function activeAgentSwitch(
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: "switch-1",
-		state: "starting_target",
-		targetHarness: "codex",
-		...overrides,
-	};
-}
-
 function sidebarPR(overrides: Partial<WorkspaceSession["prs"][number]> = {}): WorkspaceSession["prs"][number] {
 	return {
 		url: "https://github.com/acme/project-one/pull/7",
@@ -515,7 +502,10 @@ beforeEach(() => {
 		error: undefined,
 	});
 	postMock.mockReset();
-	postMock.mockImplementation(async (path: string, options?: { body?: { importKind?: string; path?: string } }) => {
+	postMock.mockImplementation(async (path: string, options?: { body?: { importKind?: string; path?: string; remoteUrl?: string } }) => {
+		if (path === "/api/v1/projects/clone/check") {
+			return { data: { remoteUrl: options?.body?.remoteUrl ?? "", path: "/repo/web-app", exists: false, canUseExisting: false } };
+		}
 		if (path === "/api/v1/projects/clone/prepare") {
 			return {
 				data: { path: "/repo/web-app", remoteUrl: "git@github.com:acme/web-app.git", preparationId: "prep-web-app" },
@@ -740,6 +730,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
+		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "0");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "0");
 		expect(expandedButton?.parentElement).not.toHaveAttribute("aria-hidden");
@@ -754,6 +745,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
+		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "-1");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
@@ -821,23 +813,6 @@ describe("Sidebar", () => {
 			title: "Resume agent",
 			body: "resume request failed",
 			tone: "error",
-		});
-	});
-
-	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
-		const user = userEvent.setup();
-		const switchingOrchestrator: WorkspaceSession = {
-			...exitedOrchestrator,
-			activeAgentSwitch: activeAgentSwitch(),
-		};
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [switchingOrchestrator] }] });
-
-		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
-
-		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
-		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
 		});
 	});
 
@@ -1038,7 +1013,7 @@ describe("Sidebar", () => {
 		expect(document.querySelector(`li[data-project-id="${STANDALONE_WORKSPACE_ID}"]`)).toBeNull();
 		const section = document.querySelector("[data-scratchpad-section]")!;
 		expect(section).toContainElement(screen.getByText("baby"));
-		expect(section).toHaveClass("mb-2", "shrink-0");
+		expect(section).toHaveClass("mb-2", "min-h-0");
 		expect(screen.queryByRole("button", { name: /show (more|fewer) agents/i })).not.toBeInTheDocument();
 		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("baby"));
 	});
@@ -1136,7 +1111,7 @@ describe("Sidebar", () => {
 		expect(scroller).toHaveClass("overflow-y-auto");
 		expect(scroller.style.height).toBe("");
 		expect(scroller.style.maxHeight).toBe("");
-		expect(document.querySelector("[data-scratchpad-section]")).toHaveStyle({ maxHeight: "calc(50cqh - var(--space-2))" });
+		expect(document.querySelector<HTMLElement>("[data-scratchpad-section]")!.style.maxHeight).toBe("");
 
 		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 
@@ -1583,7 +1558,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Clone" }));
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({
 			path: "/repo/web-app",
 			clonePreparationId: "prep-web-app",
@@ -2522,14 +2497,14 @@ describe("Sidebar", () => {
 		expect(section).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Scratchpad" })).toBeVisible();
 		expect(section).toContainElement(screen.getByText("adhoc one"));
-		// Scratchpad keeps a bounded, non-shrinking slot; Projects flexes into the rest
-		// and scrolls itself, so neither section can hide the other.
-		expect(section).toHaveClass("shrink-0");
-		expect(section.style.maxHeight).toBe("calc(50cqh - var(--space-2))");
+		// Both sections sit in auto-sized grid rows: each takes its content height,
+		// spare space goes to whichever needs it, and a tie splits the column evenly.
+		expect(section).not.toHaveClass("shrink-0");
+		expect(section.style.maxHeight).toBe("");
 		const projects = screen.getByTestId("sidebar-projects-scroller");
 		expect(projects).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
 		expect(projects.style.maxHeight).toBe("");
-		expect(section.parentElement).toHaveClass("flex", "flex-col", "min-h-0");
+		expect(section.parentElement).toHaveClass("grid", "min-h-0", "auto-rows-[minmax(0,auto)]");
 		expect(section.parentElement?.style.getPropertyValue("--sidebar-scratchpad-reserved-height")).toBe("");
 	});
 
@@ -2783,27 +2758,6 @@ describe("Sidebar", () => {
 		expect(idleDraftDot).toHaveClass("bg-status-in-review");
 		expect(idleActivityDot).not.toHaveClass("animate-status-pulse");
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
-	});
-
-	it("keeps a stopped agent dot neutral while showing switch progress separately", () => {
-		renderSidebar({
-			workspaces: [{
-				...workspace,
-				sessions: [{
-					...session,
-					status: "exited",
-					activity: { state: "exited", lastActivityAt: "2026-06-30T00:00:00Z" },
-					activeAgentSwitch: activeAgentSwitch(),
-				}],
-			}],
-		});
-
-		const row = screen.getByLabelText("Open fix login");
-		expect(row).toHaveAccessibleDescription("Switching to Codex");
-		expect(within(row).getByText("Switching to Codex")).toBeInTheDocument();
-		const dot = row.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-passive");
-		expect(dot).not.toHaveClass("animate-status-pulse");
 	});
 
 	it("shows sessions on load and hides them once collapsed", async () => {

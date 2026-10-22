@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,12 +36,21 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
+	switchRequest     domain.ProviderSwitchRequest
+	switchErr         error
+	history           []domain.HandoffTurn
+	historyTotal      int
+	historyOffset     int
+	historyLimit      int
+	historyErr        error
 	viewID            string
 	viewActive        bool
 	viewSessionID     domain.SessionID
 	viewCalls         int
 	snapshot          chatsvc.Snapshot
 	sendErr           error
+	sendCtxErr        error
+	switchCtxErr      error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -145,8 +155,9 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 	return f.snapshot, nil
 }
 
-func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
+func (f *fakeConversationService) Send(ctx context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
+	f.sendCtxErr = ctx.Err()
 	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 
@@ -241,6 +252,26 @@ func (f *fakeConversationService) ReloadMCPServers(
 	return f.mcpServers, f.reloadErr
 }
 
+func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
+	f.switchRequest = request
+	f.switchCtxErr = ctx.Err()
+	return f.switchErr
+}
+
+// SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
+func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	if err := f.SwitchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		return domain.ConversationTurn{}, false, err
+	}
+	turn, err := f.Send(ctx, id, message)
+	return turn, true, err
+}
+
+func (f *fakeConversationService) SessionHistory(_ context.Context, _ domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {
+	f.historyOffset, f.historyLimit = offset, limit
+	return f.history, f.historyTotal, f.historyErr
+}
+
 func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {
 	return f.skills, f.skillErr
 }
@@ -290,6 +321,25 @@ func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
 	}
 	if _, exists := messages[1].(map[string]any)["clientMessageId"]; exists {
 		t.Fatalf("a message with no sender key must omit clientMessageId, got %#v", messages[1])
+	}
+}
+
+func TestConversationSnapshotCarriesHumanPromptFactWithoutPagedMessage(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Turns: []domain.ConversationTurn{
+			{ID: "human", State: domain.TurnStateFailed, HasHumanPrompt: true, RequestedAt: now},
+			{ID: "automation", State: domain.TurnStateFailed, RequestedAt: now},
+		},
+	})
+	turns := body["turns"].([]any)
+	if got := turns[0].(map[string]any)["hasHumanPrompt"]; got != true {
+		t.Errorf("human prompt fact = %#v, want true despite absent paged messages", got)
+	}
+	if got := turns[1].(map[string]any)["hasHumanPrompt"]; got != nil && got != false {
+		t.Errorf("automation prompt fact = %#v, want absent or false", got)
 	}
 }
 

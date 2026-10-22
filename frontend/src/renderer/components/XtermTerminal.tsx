@@ -659,9 +659,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			callbacksRef.current.onChangeFontSize?.(delta);
 		});
 		const activateLink = (event: MouseEvent, uri: string) => {
+			// Open on a plain click even while the pane tracks the mouse, like web
+			// links: tmux (mouse on) and fullscreen TUIs keep tracking on, so a
+			// modifier gate here made plain clicks do nothing.
 			if (uri.startsWith("ao:")) {
-				const modifierPressed = isMacPlatform() ? event.metaKey : event.ctrlKey;
-				if (term.modes.mouseTrackingMode !== "none" && !modifierPressed) return;
 				callbacksRef.current.onSessionLinkOpen?.(uri);
 				return;
 			}
@@ -1475,7 +1476,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			emitUserInput(report, "protocol");
 		});
 		const protocolInput = term.onData((data) => {
-			oscColorForwarder.push(data);
+			// xterm answers old colour queries in a replayed scrollback, and the agent, no longer
+			// waiting, takes the answer as typed text ("11;rgb:…" in Droid's prompt).
+			if (pendingReplayWrites === 0) oscColorForwarder.push(data);
 			cursorPositionForwarder.push(data);
 		});
 		const keyInput = term.onKey(({ key }) => emitUserInput(key, "keyboard"));

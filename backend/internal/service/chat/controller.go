@@ -57,6 +57,8 @@ type Store interface {
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
 	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
+	CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error
+	ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]domain.HandoffTurn, error)
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
@@ -272,12 +274,17 @@ type Controller struct {
 	// Interface drain keeps dispatching accepted rows; interface interrupt and an
 	// idle branch mutation stop dispatch entirely. The target controller is not
 	// started until this controller reports quiescent and is closed.
-	handoff           controllerHandoff
-	branchHandoffDone chan struct{}
+	handoff controllerHandoff
+	// handoffInterrupted is the provider turn an interrupt-policy handoff
+	// stopped, so the move can say on that exact turn why it ended.
+	handoffInterrupted string
+	branchHandoffDone  chan struct{}
 	// preserveProviderOnStop is set before deliberate daemon detach. It prevents
 	// the closing controller from projecting a false provider exit or failing work
 	// that the detached host continues to run.
 	preserveProviderOnStop bool
+	transportInterrupted   bool
+	explicitClose          bool
 
 	// account, threadState and mcpServers are merged here before being written,
 	// because the provider reports each of them in pieces: account/updated carries
@@ -755,7 +762,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 			if completedTurns[turnID] && boundary.UserMessageID != "" &&
 				text.user.NativeUserMessageID == boundary.UserMessageID &&
 				nativeHistoryTextMatches(boundary.UserText, text.user.Text) &&
-				nativeHistoryTextMatches(boundary.AssistantText, text.assistant.Text) {
+				(boundary.Interrupted || nativeHistoryTextMatches(boundary.AssistantText, text.assistant.Text)) {
 				matched = true
 				break
 			}
@@ -1553,6 +1560,10 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.retryTurnLocked(ctx, turnID, false)
+}
+
+func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoResume bool) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
@@ -1569,8 +1580,11 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	}
 
 	prompt, err := c.store.RetryPrompt(ctx, c.conversation.ID, turnID)
-	if err != nil {
+	if errors.Is(err, domain.ErrNoConversationTurn) {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("read retry prompt %s: %w", turnID, err)
 	}
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
@@ -1620,7 +1634,13 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 		Continuation:        prompt.Continuation,
 	}
 	var created bool
-	if c.reviewID == "" {
+	if autoResume {
+		store, ok := c.store.(usageLimitStore)
+		if !ok {
+			return domain.ConversationTurn{}, ErrUsageLimitAutoResumeInvalid
+		}
+		created, err = store.AppendAutoResumeRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
+	} else if c.reviewID == "" {
 		created, err = c.store.AppendRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
 	} else {
 		created, err = c.store.AppendReviewRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, retryMessage, newTurnID, turnID, now)
@@ -1728,6 +1748,8 @@ func (c *Controller) turnSettings() ports.ChatTurnSettings {
 		Model:    current.Model,
 		Effort:   current.ReasoningEffort,
 		Approval: current.ApprovalMode,
+		Fast:     current.FastMode,
+		Plan:     current.PlanMode,
 	}
 }
 
@@ -2371,7 +2393,18 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 		}
 		return fmt.Errorf("interrupt turn %s for handoff: %w", turn, err)
 	}
+	c.mu.Lock()
+	c.handoffInterrupted = turn
+	c.mu.Unlock()
 	return nil
+}
+
+// HandoffInterruptedTurn is the provider turn the handoff's interrupt stopped,
+// or "" when it stopped none.
+func (c *Controller) HandoffInterruptedTurn() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.handoffInterrupted
 }
 
 // Interrupt cancels the in-flight turn, and with it anything queued behind it.
@@ -2652,6 +2685,9 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 // their historical process-close behavior. The persistent host replays detached
 // output and unresolved provider requests to the replacement controller.
 func (c *Controller) Close(ctx context.Context) error {
+	c.mu.Lock()
+	c.explicitClose = true
+	c.mu.Unlock()
 	c.once.Do(func() {
 		if preserver, ok := c.conv.(ports.ChatProviderPreserver); ok && preserver.PreservesProviderOnClose() {
 			c.mu.Lock()
@@ -2676,6 +2712,7 @@ func (c *Controller) Close(ctx context.Context) error {
 // and controller replacement use Terminate.
 func (c *Controller) Terminate(ctx context.Context) error {
 	c.mu.Lock()
+	c.explicitClose = true
 	if c.forkCancel != nil {
 		c.forkCancel()
 	}
@@ -2748,6 +2785,8 @@ func (c *Controller) project() {
 			// A lost attachment is not proof the persistent provider stopped. Keep
 			// its turn/request correlation and queued intake for a replacement.
 			c.mu.Lock()
+			preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
+			c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
 			c.preserveProviderOnStop = true
 			c.state = ports.ChatControllerStopped
 			suppressStoppedActivity := c.suppressStoppedActivity
@@ -2895,6 +2934,7 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 		}
 	}
 	record["diff"] = event.Diff
+	dropEmptyArchiveFields(record)
 	if event.Input != nil {
 		record["input"] = event.Input
 	}

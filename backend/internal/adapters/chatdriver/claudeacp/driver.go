@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,6 +31,44 @@ import (
 )
 
 const minimumNodeMajor = 22
+
+// claudeTodoToolsEnv switches on Claude Code's to-do tools in SDK sessions.
+const claudeTodoToolsEnv = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+
+// claudePlanGuidance asks Claude to plan multi-step work with its to-do tools.
+// Claude Code defers TaskCreate and TaskUpdate until ToolSearch loads them and
+// does not look for them on an ordinary request, so without this line the chat's
+// plan panel stays empty unless the user names the tools.
+const claudePlanGuidance = "When you make a to-do list or plan, or do work with several steps, track it with " +
+	"the TaskCreate and TaskUpdate tools (load them with ToolSearch if needed) and keep the tasks updated as " +
+	"you go. Do not write the list only as text."
+
+// claudeTodoToolsChoice returns the value the user chose for the to-do tools in
+// the project env or the daemon's own environment. A blank value is no choice.
+func claudeTodoToolsChoice(input map[string]string) (string, bool) {
+	if value := strings.TrimSpace(input[claudeTodoToolsEnv]); value != "" {
+		return value, true
+	}
+	if value := strings.TrimSpace(os.Getenv(claudeTodoToolsEnv)); value != "" {
+		return value, true
+	}
+	return "", false
+}
+
+// claudeTodoToolsEnabled reports whether a Claude launch with this env has the
+// to-do tools: AO turns them on unless the user chose to turn them off.
+func claudeTodoToolsEnabled(input map[string]string) bool {
+	value, chosen := claudeTodoToolsChoice(input)
+	if !chosen {
+		return true
+	}
+	switch strings.ToLower(value) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
 
 type claudePlugin interface {
 	ResolveBinary(context.Context) (string, error)
@@ -216,6 +255,13 @@ func claudeACPLaunchEnv(
 	// This prevents the adapter's optional native Claude package from becoming
 	// a second installation managed by AO.
 	env["CLAUDE_CODE_EXECUTABLE"] = binary
+	// Claude Code withholds its to-do tools (TaskCreate, TaskUpdate, ...) from
+	// SDK-driven sessions unless this is set, so the agent has nothing to call
+	// and AO never receives the plan updates behind the chat's plan panel. A
+	// value the user already chose, in the project env or the daemon's own, wins.
+	if _, chosen := claudeTodoToolsChoice(input); !chosen {
+		env[claudeTodoToolsEnv] = "1"
+	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
 		!isClaudeNativeModelAlias(selected) && !configured &&
@@ -318,18 +364,32 @@ func validateClaudeACPExecutable(binary, goos string) error {
 }
 
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
+	meta := map[string]any{}
 	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if standing == "" {
+	if claudeTodoToolsEnabled(cfg.Env) {
+		if standing != "" {
+			standing += "\n\n"
+		}
+		standing += claudePlanGuidance
+	}
+	if standing != "" {
+		// Append AO's standing instructions to Claude Code's own prompt. Replacing
+		// the preset would discard Claude's native coding/tool instructions.
+		meta["systemPrompt"] = map[string]any{
+			"type": "preset", "preset": "claude_code", "append": standing,
+		}
+	}
+	// Also per session, so a choice made after the adapter started still applies.
+	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
+		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
+	}
+	if len(meta) == 0 {
 		return nil
 	}
-	// Append AO's standing instructions to Claude Code's own prompt. Replacing
-	// the preset would discard Claude's native coding/tool instructions.
-	return map[string]any{
-		"systemPrompt": map[string]any{
-			"type": "preset", "preset": "claude_code", "append": standing,
-		},
-	}
+	return meta
 }
+
+const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 func claudeSessionMode(permission ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permission) {
@@ -344,9 +404,31 @@ func claudeSessionMode(permission ports.PermissionMode) string {
 	}
 }
 
+// claudeModelFamily matches a full Claude model id such as "claude-haiku-5-5"
+// or "claude-opus-4-5-20251101", capturing its family and version.
+var claudeModelFamily = regexp.MustCompile(`^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$`)
+
+// claudeModelName is the name Claude Code shows a model under: "Opus 5.5".
+func claudeModelName(id string) string {
+	match := claudeModelFamily.FindStringSubmatch(id)
+	if match == nil {
+		return ""
+	}
+	name := strings.ToUpper(match[1][:1]) + match[1][1:] + " " + match[2]
+	if match[3] != "" {
+		name += "." + match[3]
+	}
+	return name
+}
+
 func claudeSessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
-	options := make([]acpdriver.SessionOption, 0, 2)
-	if settings.Model != "" {
+	options := make([]acpdriver.SessionOption, 0, 3)
+	if claudeModelFamily.MatchString(settings.Model) {
+		// Claude Code's chat lists a family's newest model by alias, so a full id
+		// (as a terminal switch saves) is matched by name, never by family alias
+		// ("haiku" is Haiku 4.5). One not offered keeps Claude Code's own model.
+		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model, Optional: true, Name: claudeModelName(settings.Model)})
+	} else if settings.Model != "" {
 		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model})
 	}
 	if settings.Effort != "" {

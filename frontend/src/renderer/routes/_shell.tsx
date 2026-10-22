@@ -5,7 +5,9 @@ import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNav
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
+import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
@@ -321,6 +323,7 @@ function ShellLayout() {
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
+	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
@@ -772,6 +775,15 @@ function ShellLayout() {
 						}
 					}
 					if (registeredWorkspace) {
+						if (input.clonePreparationId) {
+							setOrchestratorStartupError(registeredWorkspace.id, null);
+							setProjectProvisioning(registeredWorkspace.id, true);
+							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
+							// Registration may have committed before its response was lost.
+							// The daemon reuses an active orchestrator under its project lock.
+							void provisionOrchestrator(registeredWorkspace, input, "project_add");
+							return;
+						}
 						showGlobalToast("Project already added", "Opened the registered project for this folder.");
 						void navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
 						return;
@@ -787,7 +799,7 @@ function ShellLayout() {
 			if (!data?.project) throw new Error("Project creation returned no project");
 			await completeProjectCreation(data.project, input, "project_add");
 		},
-		[completeProjectCreation, navigate, queryClient, showGlobalToast],
+		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
 
 	const cloneProject = useCallback(
@@ -859,8 +871,15 @@ function ShellLayout() {
 			clonePreparationId: input.clonePreparationId,
 			config: createProjectConfig(input),
 		} });
-		if (error || !data?.project) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
-		const projectId = data.project.id;
+		let projectId = error ? undefined : data?.project.id;
+		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {
+			const existingProjectId = apiErrorDetails(error)?.existingProjectId;
+			if (typeof existingProjectId === "string" && existingProjectId !== "") {
+				const existing = await client.GET("/api/v1/projects/{id}", { params: { path: { id: existingProjectId } } });
+				if (!existing.error && existing.data?.status === "ok" && existing.data.project.id === existingProjectId) projectId = existingProjectId;
+			}
+		}
+		if (!projectId) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));
@@ -1457,10 +1476,11 @@ function ShellLayout() {
 							aria-hidden="true"
 							data-slot="titlebar-drag-region"
 							className={cn(
-								// Own opaque fill: the shell root goes transparent while a live native
-								// browser page shows, so this strip would otherwise reveal the darker
-								// native window background.
-								"fixed top-0 left-0 z-chrome bg-sidebar transition-[height] duration-200 ease-out motion-reduce:transition-none",
+								// The strip itself only carries the drag region and its sizing; the
+								// opaque fills are the two child layers below. The shell root goes
+								// transparent while a live native browser page shows, so the fills
+								// must stay opaque rather than reveal the darker native window.
+								"fixed top-0 left-0 z-chrome transition-[height] duration-200 ease-out motion-reduce:transition-none",
 								sidebarHasLayout ? "w-(--ao-sidebar-w,var(--size-sidebar-default))" : "w-titlebar-content-offset",
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}
@@ -1469,7 +1489,20 @@ function ShellLayout() {
 								...(sidebarHasLayout && sidebarWidthPx ? { width: sidebarWidthPx } : null),
 								...(trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : null),
 							}}
-						/>
+						>
+							{/* Closed-sidebar band: the page's topbar color behind the traffic
+							    lights and history arrows. Always present; the sidebar-colored
+							    layer slides over it. */}
+							<div className="pointer-events-none absolute inset-y-0 left-0 w-titlebar-content-offset bg-background" />
+							{/* Sidebar-colored top of the sidebar. Rides the sidebar's own spring,
+							    so the fake top and the real sidebar slide in and out together. */}
+							<motion.div
+								animate={{ x: sidebarHasLayout ? "0%" : "-100%" }}
+								className="pointer-events-none absolute inset-y-0 left-0 w-(--ao-sidebar-w,var(--size-sidebar-default)) bg-sidebar"
+								initial={false}
+								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
+							/>
+						</div>
 					) : null}
 					{/* Fixed macOS titlebar cluster beside the traffic lights — rendered
               once here so the toggle/history buttons never move when the

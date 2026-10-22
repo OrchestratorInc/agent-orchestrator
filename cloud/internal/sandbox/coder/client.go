@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/cleanuphook"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -66,6 +68,10 @@ const (
 	maxWorkspaceNameLength = 32
 	// workspaceNameIDLength is the session-id suffix length of a prefixed name.
 	workspaceNameIDLength = 12
+	// workspaceNameClockSkew is how far a Coder workspace's created_at may
+	// precede the moment AO chose its name and still be the session's own
+	// (clock skew between the control plane and the Coder server).
+	workspaceNameClockSkew = 5 * time.Minute
 )
 
 // errTerminalNotReady marks a failure to obtain a usable workspace terminal
@@ -110,7 +116,16 @@ type Client struct {
 	parameters            map[string]string
 	workspaceNamePrefix   string
 	expectedWorkspaceName string
-	http                  *http.Client
+	// sessionID is the session a ForSandbox client is bound to, and
+	// workspaceNameIssuedAt when its stored workspace name was chosen (zero
+	// for a session whose name is computed, see sandbox.CoderSessionProfile).
+	sessionID             string
+	workspaceNameIssuedAt time.Time
+	// retryWorkspaceName is the stored name a create retries with when Coder
+	// reports expectedWorkspaceName as taken; empty once used, and for
+	// sessions whose name is computed.
+	retryWorkspaceName string
+	http               *http.Client
 	// Dev-environment options a bring-your-own connection stamps on the
 	// session profile (see sandbox.CoderSessionProfile). The zero values are
 	// the historical behavior: a dedicated ao-worker user, no ready check and
@@ -131,12 +146,23 @@ type Client struct {
 	workingDirectory   string
 	protectSecretFiles bool
 	durableRoot        string
+	// checkoutDirectory and checkoutSiblings are a dedicated-worker-user
+	// session's working-folder checkout (sandbox.CoderSessionProfile), for
+	// example ~/work/alice; empty keeps the durable root's repository folder.
+	// checkoutDirectoryUnusable is why the project's working folder could not
+	// be the checkout (the session stops with it as a startup error).
+	checkoutDirectory         string
+	checkoutSiblings          []string
+	checkoutDirectoryUnusable string
 	// cleanupWait bounds how long one Delete waits for the project's Cleanup
-	// commands; zero uses cleanupBudget.
+	// commands; zero uses the plan's budget (cleanuphook.Plan.Budget).
 	cleanupWait time.Duration
 	// cleanupInline bounds how long one Delete waits for a Cleanup run before
 	// returning to the reconciler; zero uses cleanupInlineWait.
 	cleanupInline time.Duration
+	// cleanupTracker overrides the process's Cleanup bookkeeping (cleanupRuns)
+	// in tests, whose fakes share one workspace ID.
+	cleanupTracker *cleanuphook.Tracker
 }
 
 var (
@@ -259,14 +285,27 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.agentName = profile.AgentName
 	sessionClient.parameters = parameters
 	sessionClient.workspaceNamePrefix = profile.WorkspaceNamePrefix
-	sessionClient.expectedWorkspaceName = WorkspaceNameWithPrefix(profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.sessionID = strings.TrimSpace(record.SessionID)
+	sessionClient.expectedWorkspaceName = SessionWorkspaceName(profile.WorkspaceName, profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.workspaceNameIssuedAt = time.Time{}
+	if profile.WorkspaceName != "" && profile.WorkspaceNameIssuedAt != nil {
+		sessionClient.workspaceNameIssuedAt = *profile.WorkspaceNameIssuedAt
+	}
+	sessionClient.retryWorkspaceName = profile.WorkspaceNameRetry
 	sessionClient.runAsWorkspaceUser = profile.RunsAsWorkspaceUser()
 	sessionClient.reuseCheckout = profile.RunsAsWorkspaceUser() && profile.ReuseExistingCheckout
 	sessionClient.durableRoot = profile.DurableRoot
 	sessionClient.workingDirectory = ""
 	sessionClient.protectSecretFiles = profile.ProtectsSecretFiles()
+	sessionClient.checkoutDirectory = ""
+	sessionClient.checkoutSiblings = nil
+	sessionClient.checkoutDirectoryUnusable = ""
 	if profile.RunsAsWorkspaceUser() {
 		sessionClient.workingDirectory = profile.WorkingDirectory
+	} else {
+		sessionClient.checkoutDirectory = profile.CheckoutDirectory
+		sessionClient.checkoutSiblings = slices.Clone(profile.CheckoutSiblings)
+		sessionClient.checkoutDirectoryUnusable = profile.CheckoutDirectoryUnusable
 	}
 	sessionClient.readyProbe = profile.ReadyProbe
 	sessionClient.readyProbeTimeout = 0
@@ -467,6 +506,7 @@ func (c *Client) TemplateParameters(ctx context.Context, templateID string) ([]T
 type workspace struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
+	CreatedAt   time.Time       `json:"created_at"`
 	OwnerName   string          `json:"owner_name"`
 	TemplateID  string          `json:"template_id"`
 	LatestBuild workspaceBuild  `json:"latest_build"`
@@ -478,12 +518,13 @@ type workspaceHealth struct {
 }
 
 type workspaceBuild struct {
-	ID        string              `json:"id"`
-	Status    string              `json:"status"`
-	Job       workspaceBuildJob   `json:"job"`
-	Reason    string              `json:"reason"`
-	Deadline  *time.Time          `json:"deadline"`
-	Resources []workspaceResource `json:"resources"`
+	ID         string              `json:"id"`
+	Status     string              `json:"status"`
+	Transition string              `json:"transition"`
+	Job        workspaceBuildJob   `json:"job"`
+	Reason     string              `json:"reason"`
+	Deadline   *time.Time          `json:"deadline"`
+	Resources  []workspaceResource `json:"resources"`
 }
 
 // workspaceBuildJob is the provisioner job behind a build; its error explains
@@ -576,27 +617,65 @@ func WorkspaceNameWithPrefix(prefix, sessionID string) string {
 	return prefix + "-" + id[:idLength]
 }
 
-// WorkspaceURL is the Coder dashboard page of one AO session's workspace,
-// <baseURL>/@<owner>/<workspace name>, naming the workspace exactly as
-// WorkspaceNameWithPrefix does when AO creates it. It returns "" unless
-// baseURL is an absolute http(s) origin and owner is set, so a malformed
-// record never yields a link.
-func WorkspaceURL(baseURL, owner, prefix, sessionID string) string {
+// SessionWorkspaceName is the Coder workspace name of one AO session: the
+// name stored on its sandbox profile when the session was created (the
+// readable domain.CoderWorkspaceName), or, for a session created before AO
+// stored names, the name WorkspaceNameWithPrefix computes from its prefix and
+// id, so existing workspaces keep being found under their original names.
+func SessionWorkspaceName(storedName, prefix, sessionID string) string {
+	if name := strings.TrimSpace(storedName); name != "" {
+		return name
+	}
+	return WorkspaceNameWithPrefix(prefix, sessionID)
+}
+
+// WorkspaceURL is the Coder dashboard page of one workspace,
+// <baseURL>/@<owner>/<workspace name>; pass a session's SessionWorkspaceName
+// to link the workspace AO creates for it. It returns "" unless baseURL is an
+// absolute http(s) origin and owner and name are set, so a malformed record
+// never yields a link.
+func WorkspaceURL(baseURL, owner, workspaceName string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	owner = strings.TrimSpace(owner)
+	workspaceName = strings.TrimSpace(workspaceName)
 	endpoint, err := url.Parse(baseURL)
 	if err != nil || endpoint.Host == "" || endpoint.User != nil ||
 		(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
 		endpoint.RawQuery != "" || endpoint.Fragment != "" ||
-		owner == "" || strings.TrimSpace(sessionID) == "" {
+		owner == "" || workspaceName == "" {
 		return ""
 	}
-	return baseURL + "/@" + url.PathEscape(owner) + "/" +
-		url.PathEscape(WorkspaceNameWithPrefix(prefix, sessionID))
+	return baseURL + "/@" + url.PathEscape(owner) + "/" + url.PathEscape(workspaceName)
 }
 
+// workspaceName is the workspace name of sessionID: the session-bound name
+// for the session a ForSandbox client serves, otherwise the computed one.
 func (c *Client) workspaceName(sessionID string) string {
+	if c.expectedWorkspaceName != "" && c.sessionID != "" && strings.TrimSpace(sessionID) == c.sessionID {
+		return c.expectedWorkspaceName
+	}
 	return WorkspaceNameWithPrefix(c.workspaceNamePrefix, sessionID)
+}
+
+// predatesWorkspaceName reports a workspace created well before this session
+// chose its stored name: it carries the name but belongs to another session
+// (two sessions whose readable names collide), so AO must never adopt,
+// bootstrap or delete it as this session's. The workspace's created_at is by
+// the Coder server's clock and the name's time by the control plane's, so
+// created_at is first moved onto the control plane's clock by how far the
+// Coder server's clock was off when it answered (its Date header, coderNow,
+// against receivedAt): a bring-your-own Coder whose clock runs minutes behind
+// never makes the session's own workspace look like another's. Without a
+// Date header created_at is taken as is.
+func (c *Client) predatesWorkspaceName(view workspace, coderNow, receivedAt time.Time) bool {
+	if c.workspaceNameIssuedAt.IsZero() || view.CreatedAt.IsZero() {
+		return false
+	}
+	created := view.CreatedAt
+	if !coderNow.IsZero() && !receivedAt.IsZero() {
+		created = created.Add(receivedAt.Sub(coderNow))
+	}
+	return created.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
 }
 
 // Create provisions a Coder workspace from the configured template.
@@ -645,6 +724,13 @@ func (c *Client) create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 	}
 	var view workspace
 	if err := c.do(ctx, http.MethodPost, "/api/v2/users/"+url.PathEscape(c.owner)+"/workspaces", body, &view); err != nil {
+		if isConflict(err) && c.retryWorkspaceName != "" && name == c.expectedWorkspaceName {
+			// The reconciler looked the name up first and found no workspace
+			// of this session's, so the name belongs to another workspace.
+			return sandbox.Environment{}, &sandbox.WorkspaceNameTakenError{
+				Name: name, Retry: c.retryWorkspaceName, Err: err,
+			}
+		}
 		return sandbox.Environment{}, err
 	}
 	if err := c.validateWorkspaceIdentity(view, name); err != nil {
@@ -680,7 +766,8 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 	var view workspace
 	requestPath := "/api/v2/users/" + url.PathEscape(c.owner) + "/workspace/" +
 		url.PathEscape(expectedName)
-	err := c.do(ctx, http.MethodGet, requestPath, nil, &view)
+	coderNow, err := c.doAt(ctx, http.MethodGet, requestPath, nil, &view)
+	receivedAt := time.Now()
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return sandbox.Environment{}, false, nil
 	}
@@ -691,6 +778,12 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 		return sandbox.Environment{}, false, err
 	}
 	if normalizeState(view.LatestBuild.Status) == sandbox.StateDeleted {
+		return sandbox.Environment{}, false, nil
+	}
+	if c.predatesWorkspaceName(view, coderNow, receivedAt) {
+		// Another session's workspace holds this name. Report it absent: a
+		// create then fails on Coder's name conflict instead of adopting it,
+		// and a deletion completes without touching it.
 		return sandbox.Environment{}, false, nil
 	}
 	return c.toEnvironment(view), true, nil
@@ -777,6 +870,9 @@ func (c *Client) toEnvironment(view workspace) sandbox.Environment {
 		ID: sandbox.ID(view.ID), Name: view.Name, State: state, Target: agent.ID,
 		Resource: domain.ResourceProfile{}, Deadline: view.LatestBuild.Deadline,
 	}
+	if state == sandbox.StateFailed {
+		environment.Failure = buildFailure(view.LatestBuild)
+	}
 	if state == sandbox.StateStopped {
 		switch strings.ToLower(strings.TrimSpace(view.LatestBuild.Reason)) {
 		case "autostop", "dormancy":
@@ -796,6 +892,11 @@ func normalizeState(status string) string {
 		return sandbox.StateDeleting
 	case "deleted":
 		return sandbox.StateDeleted
+	case buildStatusFailed, buildStatusCanceled:
+		// A failed or canceled build never finishes on its own. Reporting it
+		// as provisioning left a session waiting out its whole startup budget
+		// with no reason, and a retry restarted nothing.
+		return sandbox.StateFailed
 	default:
 		return sandbox.StateProvisioning
 	}
@@ -894,8 +995,11 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	home := ""
 	workspaceUser := ""
 	// The workspace user mode always probes: it needs the login user and the
-	// real HOME the worker will run with, whatever the durable root is.
-	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot || c.runAsWorkspaceUser {
+	// real HOME the worker will run with, whatever the durable root is. A
+	// working-folder checkout needs the login user's HOME too: "~" in it is
+	// that user's home, and the agent must never start in it.
+	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot ||
+		c.runAsWorkspaceUser || c.checkoutDirectory != "" {
 		finishProbe := sandbox.BeginStage(ctx, sandbox.StageDurableRootProbe)
 		probe, err := c.probeWorkspace(ctx, id, ptyURL)
 		if err != nil {
@@ -933,6 +1037,9 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	installAttrs["durable_root"] = resolved.DurableRoot
 	installAttrs["worker_user"] = c.workerUserLabel(workspaceUser)
 	installAttrs["checkout_reuse"] = c.checkoutReuseLabel()
+	if resolved.CheckoutDirectory != "" {
+		installAttrs["checkout_directory"] = resolved.CheckoutDirectory
+	}
 	err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, arch)
 	var mismatch *architectureMismatchError
 	if errors.As(err, &mismatch) {
@@ -1031,6 +1138,21 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 		resolved.Environment[ProtectSecretFilesEnv] = "1"
 	}
 	if !c.runAsWorkspaceUser {
+		if c.checkoutDirectory == "" && c.checkoutDirectoryUnusable != "" {
+			// The project's working folder could not be resolved to a
+			// checkout when the session was created; starting in the durable
+			// root checkout instead would hide that.
+			return sandbox.WorkerBootstrap{}, &sandbox.StartupError{
+				Code:    sandbox.StartupErrorWorkingDirectoryUnusable,
+				Message: c.checkoutDirectoryUnusable,
+				Err:     errors.New("coder: the project's working folder cannot be the session's checkout"),
+			}
+		}
+		if c.checkoutDirectory != "" {
+			if err := c.addCheckoutDirectory(&resolved, home); err != nil {
+				return sandbox.WorkerBootstrap{}, err
+			}
+		}
 		return resolved, nil
 	}
 	home = strings.TrimSpace(home)
@@ -1049,6 +1171,88 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 	}
 	c.addLifecycleEnvironment(resolved.Environment, c.workspaceName(bootstrap.DurableIdentity))
 	return resolved, nil
+}
+
+// Worker environment for a working-folder checkout (mirrored by the worker
+// package's constants of the same names).
+const (
+	// CheckoutDirectoryEnv is the absolute folder AO checks the main
+	// repository out in; the worker verifies it is AO's own before cloning.
+	CheckoutDirectoryEnv = "AO_WORKER_CHECKOUT_DIRECTORY"
+	// UserHomeEnv is the workspace login user's home, which the worker never
+	// lets the agent start in and shows as "~" in messages.
+	UserHomeEnv = "AO_WORKER_USER_HOME"
+)
+
+// addCheckoutDirectory points a dedicated-worker-user bootstrap at the
+// session's working-folder checkout: "~/" (or "$HOME/") becomes the login
+// user's home, the worker's workspace becomes that folder instead of the
+// durable root's repository folder, and the bootstrap prepares it.
+func (c *Client) addCheckoutDirectory(resolved *sandbox.WorkerBootstrap, home string) error {
+	directory, err := ExpandCheckoutDirectory(c.checkoutDirectory, home)
+	if err != nil {
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
+			Message: fmt.Sprintf("AO couldn't use this project's working folder (%s) in the workspace: %v. "+
+				"Fix it in Project settings > Repositories, then start a new session.", c.checkoutDirectory, err),
+			Err: err,
+		}
+	}
+	// The checkout must survive a workspace restart like AO's own state:
+	// inside the durable root (for example $HOME), never a folder such as
+	// /workspace/<repo> a Docker template does not keep.
+	if root := path.Clean(resolved.DurableRoot); !strings.HasPrefix(directory, strings.TrimSuffix(root, "/")+"/") {
+		shown := root
+		if home = strings.TrimSpace(home); home != "" && root == path.Clean(home) {
+			shown = "your home folder (" + root + ")"
+		}
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryNotDurable,
+			Message: domain.CoderWorkingFolderNotDurableMessage(shown) + " " +
+				fmt.Sprintf("This project's working folder is %s. Change it in Project settings > Repositories, then start a new session.", c.checkoutDirectory),
+			Err: fmt.Errorf("coder: checkout directory %s is outside the durable root %s", directory, root),
+		}
+	}
+	resolved.CheckoutDirectory = directory
+	resolved.CheckoutSiblings = slices.Clone(c.checkoutSiblings)
+	resolved.CheckoutHome = strings.TrimSpace(home)
+	resolved.Environment["AO_WORKSPACE_DIR"] = directory
+	resolved.Environment[CheckoutDirectoryEnv] = directory
+	if home = strings.TrimSpace(home); home != "" {
+		resolved.Environment[UserHomeEnv] = home
+	}
+	return nil
+}
+
+// ExpandCheckoutDirectory resolves a session's working-folder checkout (see
+// sandbox.CoderSessionProfile.CheckoutDirectory) against the workspace login
+// user's home. The result is a clean absolute path below the filesystem root
+// that is not the home directory itself. It runs on every start of the
+// session, so a hidden folder directly in the home is not refused here: a
+// session created before that rule keeps the folder AO made for it, and the
+// bootstrap refuses to create one (checkoutDirectoryScript).
+func ExpandCheckoutDirectory(directory, home string) (string, error) {
+	directory = strings.TrimSpace(directory)
+	for _, prefix := range []string{"~/", "$HOME/"} {
+		if rest, ok := strings.CutPrefix(directory, prefix); ok {
+			home = strings.TrimSpace(home)
+			if !sandbox.SafeCoderDurableRoot(home) {
+				return "", errors.New("the workspace user has no usable home directory")
+			}
+			directory = path.Join(home, rest)
+			break
+		}
+	}
+	if !sandbox.SafeCoderDurableRoot(path.Clean(directory)) || path.Clean(directory) != directory {
+		return "", errors.New("it is not a safe absolute path")
+	}
+	if home != "" && directory == path.Clean(home) {
+		return "", errors.New("it is the home directory")
+	}
+	if path.Dir(directory) == "/" {
+		return "", errors.New("it is directly below the filesystem root")
+	}
+	return directory, nil
 }
 
 // ReuseExistingCheckoutEnv is the worker environment variable that asks the
@@ -1136,6 +1340,11 @@ func sha256Hex(data []byte) string {
 
 // classifyBootstrapError attaches the user-facing startup error a failed
 // bootstrap should surface. Errors already classified pass through.
+// workingFolderUnusableMarker starts the line the bootstrap prints when it
+// could not prepare the folders of a working-folder checkout
+// (checkoutDirectoryScript), followed by what failed.
+const workingFolderUnusableMarker = "AO working folder unusable:"
+
 func classifyBootstrapError(err error, durableRoot string) error {
 	var startupErr *sandbox.StartupError
 	if err == nil || errors.As(err, &startupErr) || errors.Is(err, context.Canceled) {
@@ -1149,6 +1358,17 @@ func classifyBootstrapError(err error, durableRoot string) error {
 		}
 	}
 	text := err.Error()
+	if _, rest, found := strings.Cut(text, workingFolderUnusableMarker); found {
+		// The same folder fails the same way on every retry: the session
+		// stops with the reason (the reconciler parks it) until it changes.
+		detail, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
+			Message: "AO couldn't prepare this project's working folder in the workspace: " + strings.TrimSpace(detail) +
+				". Fix the folder or the project's working folder (Project settings > Repositories), then start a new session.",
+			Err: err,
+		}
+	}
 	switch {
 	case strings.Contains(text, "is not a mounted directory"):
 		return &sandbox.StartupError{
@@ -1705,11 +1925,17 @@ func bootstrapCommandForArchive(
 	if bootstrap.RunAsWorkspaceUser {
 		return "sh -lc " + shellQuote(script+workspaceUserLaunchScript(bootstrap, layout, binaryPreparation))
 	}
+	// A working-folder checkout replaces the durable root's repository folder:
+	// it is never created, so the session has exactly one AO checkout.
+	repository := shellQuote(layout.Repository) + " "
+	if bootstrap.CheckoutDirectory != "" {
+		repository = ""
+	}
 	script += "sudo -n id -u " + shellQuote(workerUser) + " >/dev/null 2>&1 || sudo -n useradd -m " + shellQuote(workerUser) + "\n" +
 		dockerGroupScript(workerUser) +
 		durableRootScript(layout.DurableRoot, bootstrap.RequireMountedDurableRoot) +
 		"sudo -n chmod o+x \"$durable_root\"\n" +
-		"sudo -n mkdir -p " + shellQuote(layout.Repository) + " " + shellQuote(layout.WorkerData) + " " +
+		"sudo -n mkdir -p " + repository + shellQuote(layout.WorkerData) + " " +
 		shellQuote(layout.Home) + " " + shellQuote(layout.ClaudeConfig) + " " + shellQuote(layout.CodexHome) + "\n" +
 		"identity_file=" + shellQuote(layout.DurableIdentity) + "\n" +
 		"if sudo -n test -f \"$identity_file\"; then\n" +
@@ -1720,23 +1946,10 @@ func bootstrapCommandForArchive(
 		"  echo 'Coder durable state did not survive workspace stop/start' >&2\n  exit 1\n" +
 		"else\n" +
 		"  printf '%s\\n' " + shellQuote(strings.TrimSpace(bootstrap.DurableIdentity)) + " | sudo -n tee \"$identity_file\" >/dev/null\nfi\n" +
-		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + shellQuote(layout.Repository) + " " + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
-		// The dev-kit clones each extra repository as a sibling of the primary
-		// checkout (…/repository -> …/<name>), so the worker user must be able to
-		// create new entries directly in the durable root. Coder owns the root as
-		// the coder user and leaves it group-unwritable, which is why extra-repo
-		// clones failed with "could not create work tree dir: Permission denied".
-		// Grant the worker's group only write+traverse (g+wx, deliberately not
-		// read): a clone must create and enter <root>/<name>, never list the root.
-		// Applied to the root entry itself, non-recursively so Coder's own home
-		// entries keep their existing modes, and without transferring ownership so
-		// Coder (the owner) keeps full access. This widens the root from
-		// traversal-only to group-writable for the worker; see
-		// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
-		// permits unlink/rename of the root's top-level entries (no sticky bit);
-		// isolating the worker to a dedicated sub-root would need a larger change.
-		"sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
-		"sudo -n chmod g+wx \"$durable_root\"\n" +
+		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + repository + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
+		durableRootSiblingsScript(workerUser, bootstrap.CheckoutDirectory == "") +
+		checkoutDirectoryScript(workerUser, bootstrap.CheckoutDirectory, bootstrap.CheckoutSiblings,
+			bootstrap.CheckoutHome, layout.DurableRoot) +
 		binaryPreparation +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0600 \"$stage/worker.env\" " + shellQuote(workerEnvironment) + "\n" +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
@@ -1760,6 +1973,134 @@ func bootstrapCommandForArchive(
 		"sleep 1\nsudo -n -u " + shellQuote(workerUser) + " kill -0 \"$worker_pid\" 2>/dev/null || { echo 'AO worker exited during startup' >&2; exit 1; }\n" +
 		"rm -rf \"$stage\"\ntrap - EXIT\necho " + bootstrapOK + "\n"
 	return "sh -lc " + shellQuote(script)
+}
+
+// durableRootSiblingsScript lets the dedicated worker user add the extra
+// repositories' folders beside a durable root checkout (enabled false, for a
+// working-folder checkout, adds nothing: those folders live beside it).
+//
+// The dev-kit clones each extra repository as a sibling of the primary
+// checkout (…/repository -> …/<name>), so the worker user must be able to
+// create new entries directly in the durable root. Coder owns the root as
+// the coder user and leaves it group-unwritable, which is why extra-repo
+// clones failed with "could not create work tree dir: Permission denied".
+// Grant the worker's group only write+traverse (g+wx, deliberately not
+// read): a clone must create and enter <root>/<name>, never list the root.
+// Applied to the root entry itself, non-recursively so Coder's own home
+// entries keep their existing modes, and without transferring ownership so
+// Coder (the owner) keeps full access. This widens the root from
+// traversal-only to group-writable for the worker; see
+// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
+// permits unlink/rename of the root's top-level entries (no sticky bit);
+// isolating the worker to a dedicated sub-root would need a larger change.
+func durableRootSiblingsScript(workerUser string, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return "sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
+		"sudo -n chmod g+wx \"$durable_root\"\n"
+}
+
+// checkoutDirectoryScript prepares a working-folder checkout for the dedicated
+// worker user (directory is absolute; siblings are the additional
+// repositories' folder names beside it; home is the workspace login user's
+// home and durableRoot the resolved durable root). A missing parent folder
+// (for example ~/work, or ~/src/acme of ~/src/acme/alice) is created one level
+// at a time, only below home or the durable root, each owned by the login
+// user; the checkout's own parent gets group write for the worker user so
+// additional repositories can be cloned beside the checkout later. Only the
+// home itself and the folders below it get o+x (traversal only, as the durable
+// root does) when the worker user cannot enter them; "/", "/root" and every
+// other folder outside the home are never changed. A missing checkout or
+// sibling folder is created owned by the worker user. A folder that already
+// exists is never chowned or changed: the worker checks it is its own
+// (worker.ResolveOwnedCheckoutDirectory) and refuses a folder the template
+// created. Failing to create the checkout or a sibling folder does not fail
+// the bootstrap; the worker reports it on the session. Failing to prepare the
+// parent folders does: it reports workingFolderUnusableMarker with what
+// failed, which the control plane turns into the session's
+// working_directory_unusable startup error.
+func checkoutDirectoryScript(workerUser, directory string, siblings []string, home, durableRoot string) string {
+	if directory == "" {
+		return ""
+	}
+	user := shellQuote(workerUser)
+	parent := path.Dir(directory)
+	home = cleanFolder(home)
+	durableRoot = cleanFolder(durableRoot)
+	var script strings.Builder
+	script.WriteString("ao_folder_unusable() { printf '%s %s\\n' " + shellQuote(workingFolderUnusableMarker) + " \"$1\" >&2; exit 1; }\n")
+	script.WriteString("checkout_parent=" + shellQuote(parent) + "\n")
+	if home != "" && parent == home && strings.HasPrefix(path.Base(directory), ".") {
+		// A hidden folder directly in the home (~/.local) is never created:
+		// owned by ao-worker, it would hold what the login user's shell
+		// profile runs (~/.local/bin). One that exists is a session's own
+		// checkout from before this rule, or the worker refuses it as not AO's.
+		quoted := shellQuote(directory)
+		script.WriteString("if [ ! -e " + quoted + " ] && [ ! -L " + quoted + " ]; then\n" +
+			"  ao_folder_unusable " + shellQuote("AO does not create the hidden folder "+directory+" directly in the home folder") + "\nfi\n")
+	}
+	var ancestors []string
+	for dir := parent; dir != "/" && dir != "."; dir = path.Dir(dir) {
+		ancestors = append(ancestors, dir)
+	}
+	for index := len(ancestors) - 1; index >= 0; index-- {
+		dir := ancestors[index]
+		quoted := shellQuote(dir)
+		if folderBelow(dir, home) || folderBelow(dir, durableRoot) {
+			owner, mode := "\"$(id -u):$(id -g)\"", ""
+			if dir == parent {
+				owner, mode = "\"$(id -u):\""+user, " &&\n    sudo -n chmod g+wx "+quoted
+			}
+			script.WriteString("if [ ! -e " + quoted + " ] && [ ! -L " + quoted + " ]; then\n" +
+				"  { sudo -n mkdir " + quoted + " &&\n" +
+				"    sudo -n chown -h " + owner + " " + quoted + mode + "; } ||\n" +
+				"    ao_folder_unusable " + shellQuote("could not create "+dir) + "\nfi\n")
+		}
+		if dir != "/root" && (dir == home || folderBelow(dir, home)) {
+			// chmod follows a symbolic link, so a linked folder (a template's
+			// ~/src -> /root) is never opened up: it must already be enterable.
+			script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || { [ ! -L " + quoted + " ] && sudo -n chmod o+x " + quoted + "; }" +
+				" || ao_folder_unusable " + shellQuote("could not let AO's worker user enter "+dir) + "\n")
+		}
+	}
+	// The worker user creates its own checkout folders in a parent it can
+	// write (one this script created): root never mkdirs then chowns a path
+	// an agent could swap for a symbolic link in between. A parent that
+	// already existed (the template's ~/work, or the home itself) is not the
+	// worker's to write, so root creates the folder there and hands it over;
+	// the agent cannot write that parent, so it cannot swap the entry.
+	script.WriteString("ao_checkout_folder() {\n" +
+		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +
+		"  if sudo -n -u " + user + " test -w \"$checkout_parent\" && sudo -n -u " + user + " test -x \"$checkout_parent\"; then\n" +
+		"    sudo -n -u " + user + " mkdir \"$1\"\n" +
+		"  else\n" +
+		"    sudo -n mkdir \"$1\" && sudo -n chown -h " + shellQuote(workerUser+":"+workerUser) + " \"$1\"\n" +
+		"  fi\n}\n")
+	script.WriteString("ao_checkout_folder " + shellQuote(directory) + " || true\n")
+	for _, name := range siblings {
+		script.WriteString("ao_checkout_folder " + shellQuote(path.Join(parent, name)) + " || true\n")
+	}
+	return script.String()
+}
+
+// cleanFolder is folder as a clean absolute path other than "/", or "" when
+// it is not one.
+func cleanFolder(folder string) string {
+	folder = strings.TrimSpace(folder)
+	if !strings.HasPrefix(folder, "/") {
+		return ""
+	}
+	if folder = path.Clean(folder); folder == "/" {
+		return ""
+	}
+	return folder
+}
+
+// folderBelow reports whether dir is strictly below base (a cleanFolder; ""
+// has nothing below it).
+func folderBelow(dir, base string) bool {
+	return base != "" && strings.HasPrefix(dir, base+"/")
 }
 
 // durableRootScript prepares the durable root before anything is written
@@ -1998,18 +2339,42 @@ func sanitizePTYOutput(output string) string {
 	return strings.TrimSpace(output)
 }
 
+// apiError is a non-2xx Coder API response other than not-found.
+type apiError struct {
+	status int
+	body   string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("coder: API returned %d: %s", e.status, e.body)
+}
+
+// isConflict reports Coder's 409 Conflict, which a workspace create returns
+// when the owner already has a workspace with that name.
+func isConflict(err error) bool {
+	var api *apiError
+	return errors.As(err, &api) && api.status == http.StatusConflict
+}
+
 func (c *Client) do(ctx context.Context, method, requestPath string, body, output any) error {
+	_, err := c.doAt(ctx, method, requestPath, body, output)
+	return err
+}
+
+// doAt is do that also returns the Coder server's clock when it answered
+// (its Date header; zero when it sent none or an unreadable one).
+func (c *Client) doAt(ctx context.Context, method, requestPath string, body, output any) (time.Time, error) {
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("coder: encode request: %w", err)
+			return time.Time{}, fmt.Errorf("coder: encode request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+requestPath, requestBody)
 	if err != nil {
-		return fmt.Errorf("coder: create request: %w", err)
+		return time.Time{}, fmt.Errorf("coder: create request: %w", err)
 	}
 	request.Header.Set("Coder-Session-Token", c.token)
 	if body != nil {
@@ -2017,22 +2382,23 @@ func (c *Client) do(ctx context.Context, method, requestPath string, body, outpu
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
+		return time.Time{}, fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
 	}
 	defer response.Body.Close()
+	serverNow, _ := http.ParseTime(response.Header.Get("Date"))
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return sandbox.ErrNotFound
+		return serverNow, sandbox.ErrNotFound
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return fmt.Errorf("coder: API returned %d: %s", response.StatusCode, strings.TrimSpace(string(snippet)))
+		return serverNow, &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if output == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))
-		return nil
+		return serverNow, nil
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseBody)).Decode(output); err != nil {
-		return fmt.Errorf("coder: decode API response: %w", err)
+		return serverNow, fmt.Errorf("coder: decode API response: %w", err)
 	}
-	return nil
+	return serverNow, nil
 }
