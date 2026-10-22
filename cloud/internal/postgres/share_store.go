@@ -458,7 +458,8 @@ func (s *Store) ListSharedProjects(
 	return shared, nil
 }
 
-// ListSharedProjectSessions lists sessions covered by a whole-project grant.
+// ListSharedProjectSessions lists the project's sessions the caller's share grants
+// reach: all of them for a whole-project grant, otherwise the granted ones.
 func (s *Store) ListSharedProjectSessions(
 	ctx context.Context,
 	principal domain.Principal,
@@ -476,25 +477,31 @@ func (s *Store) ListSharedProjectSessions(
 	); err != nil {
 		return nil, err
 	}
-	var allowed bool
+	// A grant for the whole project reaches every session in it; a grant for
+	// one session reaches only that one. Without either the project is not
+	// shared with this person.
+	var grants int
+	var wholeProject bool
+	var sessionIDs []string
 	if err := tx.QueryRow(
 		ctx,
-		`SELECT EXISTS (
-			SELECT 1 FROM ao_project_share_grants
-			WHERE org_id = $1 AND project_id = $2 AND user_id = $3
-			  AND status = 'active' AND session_id IS NULL
-		)`,
+		`SELECT count(*), COALESCE(bool_or(session_id IS NULL), false),
+			COALESCE(array_agg(session_id::text) FILTER (WHERE session_id IS NOT NULL), ARRAY[]::text[])
+		FROM ao_project_share_grants
+		WHERE org_id = $1 AND project_id = $2 AND user_id = $3 AND status = 'active'`,
 		orgID, projectID, principal.UserID,
-	).Scan(&allowed); err != nil {
+	).Scan(&grants, &wholeProject, &sessionIDs); err != nil {
 		return nil, err
 	}
-	if !allowed {
+	if grants == 0 {
 		return nil, ErrForbidden
 	}
 	rows, err := tx.Query(
 		ctx,
-		sessionSelect+` WHERE session.org_id = $1 AND session.project_id = $2 ORDER BY session.updated_at DESC`,
-		orgID, projectID,
+		sessionSelect+` WHERE session.org_id = $1 AND session.project_id = $2
+			AND ($3 OR session.id::text = ANY($4))
+		ORDER BY session.updated_at DESC`,
+		orgID, projectID, wholeProject, sessionIDs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list shared project sessions: %w", err)
