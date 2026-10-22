@@ -758,6 +758,7 @@ type Session struct {
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
 	LaunchOptions                    string
+	CardSummary                      string
 	BranchNaming                     bool
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
