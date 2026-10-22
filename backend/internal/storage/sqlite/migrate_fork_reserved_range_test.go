@@ -54,6 +54,7 @@ var forkLocalMigrations = []string{
 	"gateway_entries",
 	"app_settings_process_inventory",
 	"preview_poll_sessions",
+	"review_run_current_head_lookup",
 	"orphan_workers_notification",
 	"app_settings_scm_proxy_url",
 	// "app_settings_scm_proxy_url" first shipped as 9014 in open PR #116; PR

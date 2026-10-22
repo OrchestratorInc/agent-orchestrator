@@ -401,6 +401,7 @@ func TestListCurrentHeadReviewRunsForSessionsKeepsLatestRunPerHarness(t *testing
 	insert("run-old", first.ID, "rev-"+string(first.ID), "claude-code", now, domain.VerdictChangesRequested)
 	insert("run-new", first.ID, "rev-"+string(first.ID), "codex", now.Add(time.Second), domain.VerdictApproved)
 	insert("run-other", first.ID, "rev-"+string(first.ID), "claude-code", now.Add(2*time.Second), domain.VerdictApproved)
+	insert("run-z-same-time", first.ID, "rev-"+string(first.ID), "claude-code", now.Add(2*time.Second), domain.VerdictChangesRequested)
 	insert("run-second", second.ID, "rev-"+string(second.ID), "claude-code", now, domain.VerdictApproved)
 
 	got, err := s.ListCurrentHeadReviewRunsForSessions(ctx, []domain.SessionID{first.ID, second.ID})
@@ -417,8 +418,11 @@ func TestListCurrentHeadReviewRunsForSessionsKeepsLatestRunPerHarness(t *testing
 			t.Fatalf("run session = %q, want %q", run.SessionID, first.ID)
 		}
 		byHarness[run.Harness] = run.Verdict
+		if run.Harness == "claude-code" && run.ID != "run-z-same-time" {
+			t.Fatalf("equal-time retry = %q, want the greater id", run.ID)
+		}
 	}
-	if byHarness["claude-code"] != domain.VerdictApproved || byHarness["codex"] != domain.VerdictApproved {
+	if byHarness["claude-code"] != domain.VerdictChangesRequested || byHarness["codex"] != domain.VerdictApproved {
 		t.Fatalf("first session runs = %+v, want latest per harness", got[first.ID])
 	}
 	if got[second.ID][0].Verdict != domain.VerdictApproved {
