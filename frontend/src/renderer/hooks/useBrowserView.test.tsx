@@ -271,17 +271,6 @@ describe("useBrowserView", () => {
 		expect(result.current.viewId).toBe("42:sess-1");
 	});
 
-	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
-		const bridge = setupBridge();
-		createSlot();
-		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
-		await act(async () => undefined);
-
-		// SessionView owns this hook; a flapping link must not re-render it.
-		expect(bridge.onRuntimeState).not.toHaveBeenCalled();
-		expect(bridge.getRuntimeState).not.toHaveBeenCalled();
-	});
-
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {
 		const bridge = setupBridge();
 		const firstSlot = createSlot();

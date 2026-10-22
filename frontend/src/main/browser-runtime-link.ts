@@ -1,5 +1,6 @@
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
+import { HANDSHAKE_CLOSED_BEFORE_ACCEPT } from "../shared/daemon-takeover";
 import type { BrowserRuntimeState } from "./browser-view-host";
 
 const PROTOCOL_VERSION = 2;
@@ -52,7 +53,25 @@ type BrowserRuntimeLinkOptions = {
 	token?: string;
 	log?: (message: string) => void;
 	onStateChange?: (state: BrowserRuntimeState) => void;
+	/**
+	 * Reported when the daemon refuses this app's hello, or drops the link before
+	 * accepting it — which is how a daemon predating hello-rejected refuses a stale
+	 * token. main.ts turns an unrecoverable reason into a replacement of the daemon
+	 * it merely adopted; see browserRuntimeRecoveryDecision.
+	 */
+	onHandshakeRejected?: (reason: string) => void;
 };
+
+/**
+ * The recovery decision's vocabulary, derived from the broker's stable error code
+ * (backend/internal/browserruntime/broker.go). Only a rejected token is
+ * unrecoverable by retrying; a protocol mismatch resolves once the app and the
+ * daemon are upgraded together, so it keeps its own code.
+ */
+function handshakeRejectionReason(error: BrowserRuntimeCommandError | undefined): string {
+	if (error?.code === "BROWSER_RUNTIME_TOKEN_REJECTED") return "invalid-token";
+	return error?.code ?? "handshake-rejected";
+}
 
 export function connectBrowserRuntime(
 	address: string | net.TcpNetConnectOpts,
@@ -306,6 +325,9 @@ export function connectBrowserRuntime(
 						"run `ao stop`, then reopen AO.",
 				);
 				setState({ ...REJECTED, rejectionCode: error?.code });
+				// A refused token cannot be retried into acceptance, so the caller may
+				// have to retire the daemon it adopted instead of waiting for a redial.
+				options.onHandshakeRejected?.(handshakeRejectionReason(error));
 			},
 		};
 		next.on("connect", () => {
@@ -340,6 +362,11 @@ export function connectBrowserRuntime(
 				// without resetting the backoff.
 				unansweredStreak += 1;
 				if (unansweredStreak === 1) log("browser-runtime-link: link closed before the daemon answered the hello; retrying");
+				// A daemon predating hello-rejected refuses a stale token by simply
+				// hanging up, so this is the only signal the recovery path gets for it.
+				// An accepted link that drops is an ordinary disconnect, reported above
+				// instead, and must never retire a healthy daemon.
+				options.onHandshakeRejected?.(HANDSHAKE_CLOSED_BEFORE_ACCEPT);
 				setState(BROWSER_RUNTIME_DISCONNECTED);
 			}
 			if (!disposed) scheduleReconnect();

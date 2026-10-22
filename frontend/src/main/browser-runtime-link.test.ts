@@ -1,5 +1,6 @@
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HANDSHAKE_CLOSED_BEFORE_ACCEPT } from "../shared/daemon-takeover";
 import type { BrowserRuntimeState } from "./browser-view-host";
 import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./browser-runtime-link";
 
@@ -470,6 +471,72 @@ describe("browser runtime link", () => {
 		}
 		expect(states).toEqual([CONNECTING, DISCONNECTED]);
 		expect(logs.filter((line) => line.includes("closed before the daemon answered"))).toHaveLength(1);
+	});
+
+	it("reports an unrecoverable reason so an adopted daemon can be replaced", async () => {
+		useBackoffTimers();
+		const reasons: string[] = [];
+		const address = await listen(
+			net.createServer((socket) => {
+				socket.once("data", () => {
+					socket.end(
+						`${JSON.stringify({
+							type: "hello-rejected",
+							error: { code: "BROWSER_RUNTIME_TOKEN_REJECTED", message: "token mismatch" },
+						})}\n`,
+					);
+				});
+			}),
+		);
+		const handle = connectBrowserRuntime(address, {
+			execute: async () => ({}),
+			token: "stale-token",
+			onHandshakeRejected: (reason) => reasons.push(reason),
+		});
+		handles.push(handle);
+		await until(() => handle.state.rejected, "hello-rejected");
+
+		// browserRuntimeRecoveryDecision retires a daemon only for this reason; a
+		// protocol mismatch keeps the broker's code and waits for an upgrade.
+		expect(reasons).toEqual(["invalid-token"]);
+	});
+
+	it("reports a link the daemon dropped before accepting it, but not an ordinary disconnect", async () => {
+		useBackoffTimers();
+		const silentReasons: string[] = [];
+		// How a daemon predating hello-rejected refuses a stale token: it closes.
+		const silent = await listen(
+			net.createServer((socket) => {
+				socket.once("data", () => socket.destroy());
+			}),
+		);
+		const silentHandle = connectBrowserRuntime(silent, {
+			execute: async () => ({}),
+			onHandshakeRejected: (reason) => silentReasons.push(reason),
+		});
+		handles.push(silentHandle);
+		await until(() => silentReasons.length > 0, "the silent refusal");
+		expect(silentReasons).toEqual([HANDSHAKE_CLOSED_BEFORE_ACCEPT]);
+
+		const acceptedReasons: string[] = [];
+		let serverSocket: net.Socket | null = null;
+		const accepted = await listen(
+			net.createServer((socket) => {
+				serverSocket = socket;
+				ackHello(socket);
+			}),
+		);
+		const acceptedHandle = connectBrowserRuntime(accepted, {
+			execute: async () => ({}),
+			onHandshakeRejected: (reason) => acceptedReasons.push(reason),
+		});
+		handles.push(acceptedHandle);
+		await until(() => acceptedHandle.state.connected, "the accepted handshake");
+		serverSocket!.destroy();
+		await until(() => acceptedHandle.state.connecting, "the redial after the drop");
+
+		// A daemon restart after a working link must not be retired as a refusal.
+		expect(acceptedReasons).toEqual([]);
 	});
 
 	it("does not report a refusal while the daemon is unreachable", async () => {
