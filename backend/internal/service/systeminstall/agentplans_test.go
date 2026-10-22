@@ -268,6 +268,9 @@ func TestOpenCodeV2HomebrewUnlinksItselfAndRestoresLinkedV1(t *testing.T) {
 			if !slices.EqualFunc(plan.Cleanup, wantCleanup, slices.Equal[[]string]) {
 				t.Fatalf("Cleanup = %v, want %v", plan.Cleanup, wantCleanup)
 			}
+			if !slices.Equal(plan.alsoChanges, []Target{TargetOpencode}) {
+				t.Fatalf("alsoChanges = %v, want OpenCode 1 held while unlinked", plan.alsoChanges)
+			}
 		})
 	}
 }
