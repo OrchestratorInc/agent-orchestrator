@@ -166,13 +166,22 @@ func (s *Store) ClaimWorkerTurn(
 }
 
 // RequestTurnCancellation records user intent exactly once. Repeated requests
-// are idempotent and do not create duplicate chat events.
+// are idempotent and do not create duplicate chat events. Only someone who
+// may direct the turn (see mayDirectTurnTx) may stop it.
 func (s *Store) RequestTurnCancellation(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID, turnID string,
 ) error {
-	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return ErrForbidden
+		}
+		if allowed, err := mayDirectTurnTx(ctx, tx, orgID, sessionID, turnID, principal.UserID); err != nil {
+			return err
+		} else if !allowed {
+			return ErrForbidden
+		}
 		var state string
 		err := tx.QueryRow(
 			ctx,

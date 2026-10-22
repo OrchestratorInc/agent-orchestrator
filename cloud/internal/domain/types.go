@@ -556,6 +556,9 @@ type TerminalSession struct {
 	Scopes             []string
 	ErrorMessage       string
 	ExpiresAt          time.Time
+	// UserID is the person whose ticket opened this connection; empty when
+	// unknown.
+	UserID string
 }
 
 type TerminalOutput struct {

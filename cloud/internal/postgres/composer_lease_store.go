@@ -454,3 +454,85 @@ func (s *Store) SweepComposerLeases(ctx context.Context) (int, error) {
 	}
 	return settled, nil
 }
+
+// mayDirectTurnTx reports whether userID may stop a turn or answer its
+// approval prompts: the person whose message started it, whoever holds the
+// composer lease, the session's creator, and the organization's owners and
+// admins. Anyone else in a shared session would be acting over the person the
+// turn belongs to.
+func mayDirectTurnTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, turnID, userID string) (bool, error) {
+	var allowed bool
+	err := tx.QueryRow(ctx,
+		`SELECT session.created_by_user_id = $4::uuid
+			OR EXISTS (
+				SELECT 1 FROM ao_org_memberships membership
+				WHERE membership.org_id = $1 AND membership.user_id = $4::uuid
+				  AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
+			)
+			OR EXISTS (
+				SELECT 1 FROM ao_composer_leases lease
+				WHERE lease.org_id = $1 AND lease.session_id = $2
+				  AND lease.holder_user_id = $4::uuid AND lease.expires_at > now()
+			)
+			OR EXISTS (
+				SELECT 1 FROM ao_turns turn
+				JOIN ao_events message
+					ON message.org_id = turn.org_id AND message.session_id = turn.session_id
+					AND message.sequence = turn.user_message_sequence
+				WHERE turn.org_id = $1 AND turn.session_id = $2 AND turn.id = $3::uuid
+				  AND message.payload->>'authorUserId' = $4::text
+			)
+		FROM ao_sessions session
+		WHERE session.org_id = $1 AND session.id = $2`,
+		orgID, sessionID, turnID, userID,
+	).Scan(&allowed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return allowed, err
+}
+
+// ComposerTerminalInput admits a keystroke userID typed into the session's
+// agent terminal, where typing is talking to the agent: it takes or renews
+// the composer lease for them, or refuses while someone else holds it or is
+// waiting for it. The caller has already authorized the terminal.
+func (s *Store) ComposerTerminalInput(ctx context.Context, orgID, sessionID, userID string) (bool, error) {
+	var allowed bool
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		lease, err := lockComposerLeaseTx(ctx, tx, orgID, sessionID)
+		if err != nil {
+			return err
+		}
+		holds, err := lease.stillHolds(ctx, tx, userID, lease.epoch)
+		if err != nil {
+			return err
+		}
+		if holds {
+			expires, now := lease.now.Add(ComposerLeaseTTL), lease.now
+			lease.expiresAt, lease.lastInputAt = &expires, &now
+		} else {
+			if err := lease.settle(ctx, tx); err != nil {
+				return err
+			}
+			switch lease.holder {
+			case "":
+				lease.grant(userID, ComposerLeaseTTL)
+				if _, err := tx.Exec(ctx,
+					`DELETE FROM ao_composer_waitlist WHERE org_id = $1 AND session_id = $2 AND user_id = $3`,
+					orgID, sessionID, userID,
+				); err != nil {
+					return err
+				}
+			case userID:
+				// The lease was just handed to them from the line.
+				now := lease.now
+				lease.lastInputAt = &now
+			default:
+				return lease.save(ctx, tx)
+			}
+		}
+		allowed = true
+		return lease.save(ctx, tx)
+	})
+	return allowed, err
+}
