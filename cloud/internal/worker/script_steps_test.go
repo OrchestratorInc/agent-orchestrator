@@ -188,10 +188,12 @@ func TestSetupStepEventsLiveUpdates(t *testing.T) {
 // A step that keeps writing output without finishing a new line (a progress
 // line redrawn with \r) still sends live updates at least every heartbeat,
 // each saying how long ago it last wrote a byte, so it never reads as silent.
+// The script never ends the progress line: a closing newline would complete it,
+// and a live update racing the step's final event could then publish it.
 func TestSetupStepEventsHeartbeatWhileOutputKeepsArriving(t *testing.T) {
 	t.Parallel()
 	_, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond, LiveHeartbeat: 100 * time.Millisecond},
-		[]string{"echo start; i=0; while [ $i -lt 12 ]; do printf 'progress %s\\r' $i; sleep 0.05; i=$((i+1)); done; echo"})
+		[]string{"echo start; i=0; while [ $i -lt 12 ]; do printf 'progress %s\\r' $i; sleep 0.05; i=$((i+1)); done"})
 	heartbeats := 0
 	for _, event := range events {
 		if event.Status != ScriptStepRunning || event.OutputAgeMS == nil {
