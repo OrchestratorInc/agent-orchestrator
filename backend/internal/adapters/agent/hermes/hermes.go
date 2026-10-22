@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -410,10 +411,8 @@ func identityConfirmed(ctx context.Context, path string) bool {
 	}
 	// A tracked edit changes neither the launcher nor HEAD; the probe's
 	// clean-source condition must still hold when its result is reused.
-	if root != "" {
-		if modified, known := sourceModified(ctx, root); known && modified {
-			return false
-		}
+	if root != "" && !sourceUnmodified(ctx, root) {
+		return false
 	}
 	return true
 }
@@ -461,10 +460,8 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 		// Hermes's release banner carries no dirty marker, so a source
 		// checkout with edited tracked files (locales, chrome) still prints
 		// it. Refuse when git reports such edits.
-		if root := launcherSourceRoot(path); root != "" {
-			if modified, known := sourceModified(ctx, root); known && modified {
-				return false, fmt.Sprintf("source checkout %s has modified tracked files; AO qualifies only unmodified releases", root), false
-			}
+		if root := launcherSourceRoot(path); root != "" && !sourceUnmodified(ctx, root) {
+			return false, fmt.Sprintf("source checkout %s is modified or its state could not be verified with git; AO qualifies only unmodified releases", root), false
 		}
 		return true, "", false
 	}
@@ -542,13 +539,27 @@ func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 	return ""
 }
 
+// sourceUnmodified reports whether a recognized source checkout can be
+// qualified: a git checkout must be verified clean, so an unknown answer
+// refuses. A tree without .git has no git state to compare.
+func sourceUnmodified(ctx context.Context, root string) bool {
+	if _, err := os.Lstat(filepath.Join(root, ".git")); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	modified, known := sourceModified(ctx, root)
+	return known && !modified
+}
+
 // sourceModified asks git whether a checkout has modified tracked files, or
 // an untracked (including ignored) English catalog in the bundled locales or
 // plugins directories Hermes reads from the checkout. known is false when
 // git cannot answer, including when the repository git finds is not rooted
 // at the checkout itself.
 func sourceModified(ctx context.Context, root string) (modified, known bool) {
-	top, ok := runGit(ctx, root, "rev-parse", "--show-toplevel")
+	// Only git's line terminator is dropped: a checkout path may end in
+	// whitespace, which TrimSpace would strip into a different directory.
+	top, ok := runGitOutput(ctx, root, "rev-parse", "--show-toplevel")
+	top = strings.TrimSuffix(strings.TrimSuffix(top, "\n"), "\r")
 	if !ok || !sameDir(top, root) {
 		return false, false
 	}
@@ -565,8 +576,16 @@ func sourceModified(ctx context.Context, root string) (modified, known bool) {
 		return false, false
 	}
 	for _, path := range strings.Split(untracked, "\x00") {
+		if path == "" {
+			continue
+		}
 		dir, name := filepath.Split(filepath.FromSlash(path))
 		if englishLocaleFile.MatchString(name) && filepath.Base(filepath.Clean(dir)) == "locales" {
+			return true, true
+		}
+		// Git lists an untracked symlink but never what it points to, while
+		// native plugin discovery follows it; the release ships none here.
+		if st, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); err != nil || st.Mode()&os.ModeSymlink != 0 {
 			return true, true
 		}
 	}
@@ -584,6 +603,46 @@ func runGit(ctx context.Context, root string, args ...string) (string, bool) {
 	return strings.TrimSpace(out), ok
 }
 
+// gitExecutable finds git when the daemon's PATH may be minimal, like
+// Hermes's _resolve_git_executable, plus the Git for Windows build the
+// official Windows installer pins under <HERMES_HOME>/tools (or
+// HERMES_RUNTIME_DIR) without adding it to PATH.
+func gitExecutable() string {
+	if found, err := exec.LookPath("git"); err == nil {
+		return found
+	}
+	var candidates []string
+	if runtime.GOOS == "windows" {
+		stores := []string{os.Getenv("HERMES_RUNTIME_DIR")}
+		if home, err := ResolveHome(nil); err == nil {
+			stores = append(stores, filepath.Join(home, "tools"))
+		}
+		for _, store := range stores {
+			if store != "" {
+				pinned, _ := filepath.Glob(filepath.Join(store, "git-*", "cmd", "git.exe"))
+				candidates = append(candidates, pinned...)
+			}
+		}
+		roots := []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")}
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			roots = append(roots, filepath.Join(local, "Programs"))
+		}
+		for _, root := range roots {
+			if root != "" {
+				candidates = append(candidates, filepath.Join(root, "Git", "cmd", "git.exe"), filepath.Join(root, "Git", "bin", "git.exe"))
+			}
+		}
+	} else {
+		candidates = []string{"/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git", "/bin/git"}
+	}
+	for _, candidate := range candidates {
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // runGitOutput preserves raw output, including filename whitespace and NULs.
 // It runs a read-only git query in a checkout without taking optional
 // locks, so it cannot strand an index.lock in the user's installation.
@@ -592,7 +651,11 @@ func runGit(ctx context.Context, root string, args ...string) (string, bool) {
 func runGitOutput(ctx context.Context, root string, args ...string) (string, bool) {
 	gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := aoprocess.CommandContext(gitCtx, "git", append([]string{"--no-optional-locks", "-C", root}, args...)...)
+	git := gitExecutable()
+	if git == "" {
+		return "", false
+	}
+	cmd := aoprocess.CommandContext(gitCtx, git, append([]string{"--no-optional-locks", "-C", root}, args...)...)
 	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		return strings.HasPrefix(strings.ToUpper(kv), "GIT_")
 	})

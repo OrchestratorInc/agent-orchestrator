@@ -882,32 +882,46 @@ func TestCompactBusyChromeWitnessesSubmission(t *testing.T) {
 	}
 }
 
+// gitCheckout initializes a real repository with one commit and returns a
+// helper that runs git in it.
+func gitCheckout(t *testing.T, dir string) func(args ...string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "one")
+	return git
+}
+
 func TestConfirmedIdentityFollowsInstallRevision(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HERMES_HOME", home)
-	gitDir := filepath.Join(home, "hermes-agent", ".git", "refs", "heads")
-	if err := os.MkdirAll(gitDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	write := func(path, content string) {
-		t.Helper()
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(filepath.Join(home, "hermes-agent", ".git", "HEAD"), "ref: refs/heads/main\n")
-	write(filepath.Join(gitDir, "main"), "1111111111111111111111111111111111111111\n")
+	git := gitCheckout(t, filepath.Join(home, "hermes-agent"))
 	launcher := filepath.Join(home, "hermes-agent", ".hermes", "bin", "hermes")
 	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	write(launcher, "#!/bin/sh\n")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	rememberIdentity(launcher)
 	if !identityConfirmed(t.Context(), launcher) {
 		t.Fatal("fresh confirmation not reused")
 	}
 	// A source update moves the checkout without touching the launcher.
-	write(filepath.Join(gitDir, "main"), "2222222222222222222222222222222222222222\n")
+	git("commit", "-q", "--allow-empty", "-m", "two")
 	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("confirmation survived an installation revision change")
 	}
@@ -961,23 +975,18 @@ func TestConfirmedIdentityFollowsWrapperSourceRevision(t *testing.T) {
 	t.Setenv("HERMES_HOME", t.TempDir())
 	// A checkout installed outside HERMES_HOME (install.sh --dir).
 	src := t.TempDir()
-	refs := filepath.Join(src, ".git", "refs", "heads")
-	for _, dir := range []string{refs, filepath.Join(src, ".hermes", "bin")} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	git := gitCheckout(t, src)
+	launcher := filepath.Join(src, ".hermes", "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	write := func(path, content string) {
-		t.Helper()
-		if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	write(filepath.Join(src, ".git", "HEAD"), "ref: refs/heads/main\n")
-	write(filepath.Join(refs, "main"), "1111111111111111111111111111111111111111\n")
-	write(filepath.Join(src, ".hermes", "bin", "hermes"), "#!/bin/sh\n")
 	wrapper := filepath.Join(t.TempDir(), "hermes")
-	write(wrapper, "#!/bin/sh\nexec "+filepath.Join(src, ".hermes", "bin", "hermes")+" \"$@\"\n")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec "+launcher+" \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if got, want := launcherSourceRoot(wrapper), filepath.Clean(src); got != want {
 		resolved, _ := filepath.EvalSymlinks(want)
 		if got != resolved {
@@ -988,9 +997,60 @@ func TestConfirmedIdentityFollowsWrapperSourceRevision(t *testing.T) {
 	if !identityConfirmed(t.Context(), wrapper) {
 		t.Fatal("fresh confirmation not reused")
 	}
-	write(filepath.Join(refs, "main"), "2222222222222222222222222222222222222222\n")
+	git("commit", "-q", "--allow-empty", "-m", "two")
 	if identityConfirmed(t.Context(), wrapper) {
 		t.Fatal("confirmation survived a commit in the wrapper's source checkout")
+	}
+}
+
+func TestSourceCleanlinessMatchesNativeTopology(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX paths and symlinks")
+	}
+	for _, name := range []string{"source", "source ends in space "} {
+		root := filepath.Join(t.TempDir(), name)
+		git := gitCheckout(t, root)
+		if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: Working\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git("add", "en.yaml")
+		git("commit", "-q", "-m", "release")
+		if !sourceUnmodified(t.Context(), root) {
+			t.Fatalf("%q: clean checkout reported modified", name)
+		}
+		// git prints the root with its trailing space; it must still match.
+		if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW DIRTY ROOT BUSY\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if sourceUnmodified(t.Context(), root) {
+			t.Fatalf("%q: tracked edit accepted", name)
+		}
+		git("checkout", "-q", "--", "en.yaml")
+		// Native discovery follows an untracked plugin symlink git never enters.
+		external := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(external, "locales"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(external, "locales", "en.yaml"), []byte("cli: {}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "plugins"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(external, filepath.Join(root, "plugins", "linked-pack")); err != nil {
+			t.Fatal(err)
+		}
+		if sourceUnmodified(t.Context(), root) {
+			t.Fatalf("%q: untracked plugin symlink accepted", name)
+		}
+	}
+	// A git checkout git cannot read is not verified clean.
+	broken := t.TempDir()
+	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: /nonexistent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if sourceUnmodified(t.Context(), broken) {
+		t.Fatal("unverifiable checkout accepted")
 	}
 }
 
