@@ -506,11 +506,49 @@ async function auditChatFollowup({ baseURL, sessionId, chat, timeoutMs, record }
   return second.snapshot;
 }
 
+// Drivers without a `models` list (Claude's ACP bridge) offer the model and
+// effort as Chat config options instead; that is what the Chat UI shows.
+async function auditChatConfigModel({ baseURL, sessionId, timeoutMs, record, modelsEvidence }) {
+  const path = `sessions/${encodeURIComponent(sessionId)}/conversation/config-options`;
+  const listed = await request({ baseURL, path, timeoutMs });
+  const options = Array.isArray(listed.response?.options) ? listed.response.options : [];
+  const modelOption = options.find((option) => option.category === "model" || option.id === "model");
+  const choices = (modelOption?.choices ?? []).map((choice) => choice.value).filter(Boolean);
+  await record(gate("chat_models", modelOption && choices.length ? "PASS" : "FAIL",
+    modelOption && choices.length ? `Chat offers ${choices.length} model(s) as a config option (current ${modelOption.currentValue})`
+      : "Chat has neither a model list nor a model config option",
+    { models: modelsEvidence, configOptions: { ...apiEvidence(listed), response: undefined }, choices }));
+  if (!modelOption || !choices.length) {
+    await record(gate("chat_settings", "NOT_RUN", "no Chat model to select"));
+    return;
+  }
+  const effortOption = options.find((option) => option.category === "thought_level" || option.id === "effort");
+  const wanted = [[modelOption, choices.find((value) => value !== modelOption.currentValue && value !== "default") ?? choices[0]]];
+  if (effortOption?.choices?.length) {
+    const efforts = effortOption.choices.map((choice) => choice.value);
+    wanted.push([effortOption, efforts.find((value) => value !== effortOption.currentValue && value !== "default") ?? efforts[0]]);
+  }
+  const writes = [];
+  for (const [option, value] of wanted) {
+    writes.push(apiEvidence(await request({ baseURL, method: "PATCH", path: `${path}/${encodeURIComponent(option.id)}`, body: { value }, timeoutMs })));
+  }
+  const after = await request({ baseURL, path, timeoutMs });
+  const current = Object.fromEntries((after.response?.options ?? []).map((option) => [option.id, option.currentValue]));
+  const persisted = wanted.every(([option, value]) => current[option.id] === value);
+  await record(gate("chat_settings", persisted ? "PASS" : "FAIL",
+    persisted ? `set ${wanted.map(([option, value]) => `${option.id}=${value}`).join(", ")} through config options and read them back`
+      : `requested ${wanted.map(([option, value]) => `${option.id}=${value}`).join(", ")}, read back ${JSON.stringify(current)}`,
+    { writes, readback: current }));
+}
+
 async function auditChatModelSettings({ baseURL, sessionId, dataDir, timeoutMs, record }) {
   // Models and settings.
   const modelsResponse = await request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}/conversation/models`, timeoutMs });
   const chatModels = Array.isArray(modelsResponse.response?.models) ? modelsResponse.response.models : [];
   const selected = modelsResponse.response?.selected ?? {};
+  if (modelsResponse.ok && !chatModels.length) {
+    return auditChatConfigModel({ baseURL, sessionId, timeoutMs, record, modelsEvidence: { ...apiEvidence(modelsResponse), response: undefined } });
+  }
   await record(gate("chat_models", modelsResponse.ok && chatModels.length ? "PASS" : "FAIL",
     modelsResponse.ok && chatModels.length ? `Chat lists ${chatModels.length} model(s); selected ${selected.model || "(provider default)"}` : "Chat model list failed or was empty",
     { ...apiEvidence(modelsResponse), response: undefined, modelIds: chatModels.map((item) => item.id), selected }));
