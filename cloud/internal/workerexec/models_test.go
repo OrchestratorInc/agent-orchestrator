@@ -34,6 +34,32 @@ printf '%s\n' '{"id":2,"result":{"data":[{"id":"account-model","displayName":"Ac
 	}
 }
 
+func TestDiscoverCodexModelsBeforeTheCheckoutExists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read list
+printf '%s\n' '{"id":2,"result":{"data":[{"id":"account-model","displayName":"Account Model","isDefault":true}]}}'
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The session's checkout has not been cloned yet.
+	models, err := DiscoverCodexModels(context.Background(), binary, filepath.Join(dir, "work", "repository"))
+	if err != nil {
+		t.Fatalf("discover models: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "account-model" {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
 func TestParseCodexModelListFiltersHiddenModelsAndRetainsEfforts(t *testing.T) {
 	models, cursor, err := parseCodexModelList(json.RawMessage(`{
 		"data": [

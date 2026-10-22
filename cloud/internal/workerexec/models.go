@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,7 +24,12 @@ func DiscoverCodexModels(ctx context.Context, binary, workspace string) ([]worke
 		binary = "codex"
 	}
 	command := exec.CommandContext(ctx, binary, "app-server")
-	command.Dir = workspace
+	// The catalog belongs to the account, not the checkout. Asked before the
+	// checkout exists (a sandbox that starts faster than its clone), Codex runs
+	// from the worker's own directory instead of failing to start.
+	if info, err := os.Stat(workspace); err == nil && info.IsDir() {
+		command.Dir = workspace
+	}
 	command.Stderr = io.Discard
 	stdin, err := command.StdinPipe()
 	if err != nil {

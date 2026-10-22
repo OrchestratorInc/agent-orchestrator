@@ -469,6 +469,36 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-boot" });
 	});
 
+	it("replaces a model picked while the worker was starting when the worker cannot run it", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ model: "opus", reasoningEffort: "medium", models: [
+			{ id: "opus", displayName: "Opus", default: true, efforts: ["low", "medium"] },
+		] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-haiku-local", label: "Haiku (local)" },
+		] });
+		const starting = { ...session, provider: "claude-code" as const, runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" as const } };
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={starting} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().models.map((model: { id: string }) => model.id)).toContain("claude-haiku-local"));
+		act(() => props().onChooseSettings({ model: "claude-haiku-local", reasoningEffort: "high" }, "model"));
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...starting, runtimeConnected: true }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")?.currentValue).toBe("opus"));
+		await props().onSend("go", [], "model-unrunnable");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "opus", reasoningEffort: "medium" }), { idempotencyKey: "model-unrunnable" });
+	});
+
 	it("does not wake a connected session, nor one that pauses while Chat is open", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true }] });

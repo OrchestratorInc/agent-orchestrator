@@ -662,7 +662,7 @@ export function CloudSessionChatSurface({
 	// idle-paused one waking, a restore) there is nothing to report: the picker
 	// keeps the saved choice, and the query runs by itself once the session
 	// list reports the worker connected, however long that takes. The catalog is
-	// always stale, so every reconnect refreshes it too.
+	// always stale, so a reconnect the session list sees refreshes it too.
 	const workerConnected = session.runtimeConnected === true;
 	const liveRef = useRef({ connected: workerConnected, terminated: session.isTerminated === true });
 	liveRef.current = { connected: workerConnected, terminated: session.isTerminated === true };
@@ -708,10 +708,15 @@ export function CloudSessionChatSurface({
 		if (!modelsQuery.isFetchedAfterMount || !native) return;
 		const chosenSince = native.selectionVersionAtFetch !== manualSelectionRef.current.version;
 		catalogSyncRef.current = { key: settingsKey, version: manualSelectionRef.current.version };
-		if (chosenSince || (!native.model && !native.reasoningEffort)) return;
 		const current = settingsRef.current.key === settingsKey ? settingsRef.current.settings : readSettings();
+		// A model picked from the local list before the catalog arrived is kept
+		// only if this worker can run it; otherwise the worker's own model applies.
+		const catalog = native.models ?? [];
+		const runnable = !current.model || catalog.length === 0 || catalog.some((model) => model.id === current.model);
+		if (runnable && (chosenSince || (!native.model && !native.reasoningEffort))) return;
 		const next: CloudTurnSettings = {
 			...current,
+			...(runnable ? {} : { model: undefined, reasoningEffort: undefined }),
 			...(native.model ? { model: native.model } : {}),
 			...(native.model || native.reasoningEffort ? { reasoningEffort: native.reasoningEffort || undefined } : {}),
 		};
