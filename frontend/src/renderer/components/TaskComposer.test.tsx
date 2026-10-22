@@ -2350,8 +2350,8 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		const picker = await screen.findByRole("button", { name: "Model" });
-		expect(picker).toHaveTextContent("Fast");
+		// The mode picker replaces the model picker once the catalog says it lists modes.
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Fast"));
 		fireEvent.change(task(), { target: { value: "Use the first mode" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
