@@ -62,15 +62,16 @@ func TestGitHubDeviceLoginCLICompatibility(t *testing.T) {
 					fixture.request(t, "DELETE")
 					return
 				}
-				if outcome == "storage_failure" {
+				switch outcome {
+				case "storage_failure":
 					if err := os.Chmod(fixture.configDir, 0o500); err != nil {
 						t.Fatal(err)
 					}
 					t.Cleanup(func() { _ = os.Chmod(fixture.configDir, 0o700) })
 					fixture.outcome.Store("approve")
-				} else if outcome == "revoke" {
+				case "revoke":
 					fixture.outcome.Store("approve")
-				} else {
+				default:
 					fixture.outcome.Store(outcome)
 				}
 				want := systemcheck.GitHubDeviceLoginFailed
@@ -189,12 +190,12 @@ func newGitHubDeviceFixture(t *testing.T, binary string) *githubDeviceFixture {
 	t.Cleanup(server.Close)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect || (r.Host != "github.com:443" && r.Host != "api.github.com:443") {
-			http.Error(w, "unexpected OAuth destination", 502)
+			http.Error(w, "unexpected OAuth destination", http.StatusBadGateway)
 			return
 		}
 		upstream, err := net.Dial("tcp", server.Listener.Addr().String())
 		if err != nil {
-			http.Error(w, err.Error(), 502)
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		client, _, err := w.(http.Hijacker).Hijack()
@@ -293,7 +294,7 @@ func TestGitHubDeviceBrowserFixture(t *testing.T) {
 	var once sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == "GET" {
+		if r.Method == http.MethodGet {
 			_ = json.NewEncoder(w).Encode(map[string]any{"baseUrl": strings.TrimSuffix(f.daemon.baseURL, "/api/v1"), "starts": f.starts.Load()})
 			return
 		}
