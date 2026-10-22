@@ -4,7 +4,11 @@
 const { app, BrowserWindow, protocol } = require("electron");
 const path = require("node:path");
 const assert = require("node:assert/strict");
-const base = process.argv[2];
+// Chromium flags remain in process.argv, so the script/URL positions differ
+// between the local invocation and Linux CI. Never resolve a flag as an app URL.
+const base = process.env.AO_BOUNDARY_URL;
+assert.equal(new URL(base).protocol, "http:");
+assert.equal(new URL(base).hostname, "127.0.0.1");
 app.setPath("userData", path.join(process.env.AO_BOUNDARY_DATA, "electron"));
 app.setPath("sessionData", path.join(process.env.AO_BOUNDARY_DATA, "session"));
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);

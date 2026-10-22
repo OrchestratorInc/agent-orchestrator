@@ -316,12 +316,12 @@ func TestBrowserBoundaryElectron(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	args := []string{script, srv.URL}
+	args := []string{script}
 	if runtime.GOOS == "linux" {
 		args = append([]string{"--no-sandbox", "--disable-gpu"}, args...)
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = append(os.Environ(), "AO_BOUNDARY_DATA="+t.TempDir(), "ELECTRON_RUN_AS_NODE=")
+	cmd.Env = append(os.Environ(), "AO_BOUNDARY_URL="+srv.URL, "AO_BOUNDARY_DATA="+t.TempDir(), "ELECTRON_RUN_AS_NODE=")
 	output, err := cmd.CombinedOutput()
 	t.Logf("Electron: %s", output)
 	if err != nil || !strings.Contains(string(output), "AO_BOUNDARY_RESULT:0") {
