@@ -72,11 +72,14 @@ const (
 )
 
 // artifactState is one file as a scan saw it. sha is empty until the file
-// has been hashed.
+// has been hashed. change identifies the file's inode and status change time
+// where the platform reports them, so a rewrite that keeps the size and
+// modification time is still seen.
 type artifactState struct {
-	size  int64
-	mtime time.Time
-	sha   string
+	size   int64
+	mtime  time.Time
+	change string
+	sha    string
 }
 
 type uploadedArtifact struct {
@@ -330,7 +333,7 @@ func (s *artifactSyncer) restoreFile(ctx context.Context, root *os.Root, file wo
 	if err != nil {
 		return artifactState{}, err
 	}
-	return artifactState{size: info.Size(), mtime: info.ModTime(), sha: file.SHA256}, nil
+	return artifactState{size: info.Size(), mtime: info.ModTime(), change: fileChangeID(info), sha: file.SHA256}, nil
 }
 
 // finalFlush syncs once more before the worker exits, waiting one settle delay
@@ -587,41 +590,45 @@ func (s *artifactSyncer) scan() (artifactScan, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 
-	// Files this worker synced keep their slots: the control plane holds
-	// them, so new files fill only what is left, in path order. A synced file
-	// that can no longer be sent still occupies its slot and bytes.
-	sizes := make(map[string]int64, len(entries))
-	for _, item := range entries {
-		sizes[item.path] = item.info.Size()
-	}
+	// The control plane keeps every committed file this worker synced until a
+	// commit deletes it, so each one still in the directory holds its slot
+	// and its committed bytes first. A synced file that changed is admitted
+	// when its size change fits what is left, and a new file when a slot and
+	// its bytes do, in path order. A file that does not fit keeps its
+	// committed version, so a commit never goes over the session limits.
 	held := 0
 	var total int64
 	for path, synced := range s.synced {
-		size, listed := sizes[path]
-		if (!listed || size > domain.MaxArtifactFileBytes) && scan.isPresent(path) {
+		if scan.isPresent(path) {
 			held++
 			total += synced.size
 		}
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		_, iSynced := s.synced[entries[i].path]
-		_, jSynced := s.synced[entries[j].path]
-		return iSynced && !jSynced
-	})
 	for _, item := range entries {
 		size := item.info.Size()
 		if size > domain.MaxArtifactFileBytes {
 			s.skipOnce(item.path, "file is over the per-file limit")
 			continue
 		}
-		if held+len(scan.current) >= domain.MaxSessionArtifactFiles || total+size > domain.MaxSessionArtifactBytes {
+		committed, synced := s.synced[item.path]
+		grown := size
+		if synced {
+			grown = size - committed.size
+		}
+		if (!synced && held >= domain.MaxSessionArtifactFiles) || total+grown > domain.MaxSessionArtifactBytes {
 			s.skipOnce(item.path, "session artifact limit reached")
 			continue
 		}
-		total += size
-		state := artifactState{size: size, mtime: item.info.ModTime()}
+		admit := func() {
+			total += grown
+			if !synced {
+				held++
+			}
+		}
+		state := artifactState{size: size, mtime: item.info.ModTime(), change: fileChangeID(item.info)}
 		previous, seen := s.previous[item.path]
-		if !seen || previous.size != state.size || !previous.mtime.Equal(state.mtime) {
+		if !seen || previous.size != state.size || !previous.mtime.Equal(state.mtime) || previous.change != state.change {
+			admit()
 			scan.current[item.path] = state
 			s.noteUnsettled(item.path, &scan)
 			continue
@@ -630,20 +637,18 @@ func (s *artifactSyncer) scan() (artifactScan, error) {
 		if state.sha == "" {
 			sha, err := hashArtifact(root, item.path, state)
 			if errors.Is(err, errArtifactFileChanged) {
+				admit()
 				scan.current[item.path] = state
 				s.noteUnsettled(item.path, &scan)
 				continue
 			}
 			if err != nil {
-				delete(scan.current, item.path)
-				if _, synced := s.synced[item.path]; synced {
-					held++
-				}
 				s.skipOnce(item.path, "file cannot be read")
 				continue
 			}
 			state.sha = sha
 		}
+		admit()
 		delete(s.unsettled, item.path)
 		scan.current[item.path] = state
 	}
@@ -693,7 +698,7 @@ func hashArtifact(root *os.Root, path string, expected artifactState) (string, e
 	if err != nil {
 		return "", err
 	}
-	if info.Size() != expected.size || !info.ModTime().Equal(expected.mtime) {
+	if info.Size() != expected.size || !info.ModTime().Equal(expected.mtime) || fileChangeID(info) != expected.change {
 		return "", errArtifactFileChanged
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
