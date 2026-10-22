@@ -12,7 +12,7 @@ const shellMocks = vi.hoisted(() => {
 	const state = {
 		newSessionListener: undefined as (() => void) | undefined,
 		keyboardShortcutsListener: undefined as (() => void) | undefined,
-		quitConfirmListener: undefined as (() => void) | undefined,
+		quitConfirmListener: undefined as ((request: { keepsRunning: boolean }) => void) | undefined,
 		newShellTerminalListener: undefined as (() => void) | undefined,
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
@@ -63,7 +63,7 @@ const shellMocks = vi.hoisted(() => {
 			state.keyboardShortcutsListener = listener;
 			return vi.fn();
 		}),
-		onQuitConfirmRequest: vi.fn((listener: () => void) => {
+		onQuitConfirmRequest: vi.fn((listener: (request: { keepsRunning: boolean }) => void) => {
 			state.quitConfirmListener = listener;
 			return vi.fn();
 		}),
@@ -1014,13 +1014,17 @@ describe("shell quit confirm subscription", () => {
 
 		const listener = shellMocks.state.quitConfirmListener;
 		if (!listener) throw new Error("quit confirm listener was not registered");
-		act(() => listener());
-		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
+		act(() => listener({ keepsRunning: true }));
+		expect(
+			await screen.findByText("AO will keep running in the background. You can reopen it from the menu bar."),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Quit" }));
 		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledExactlyOnceWith(true);
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
 
-		act(() => listener());
-		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		act(() => listener({ keepsRunning: false }));
+		expect(await screen.findByText("Are you sure you want to quit AO?")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
 	});
 });

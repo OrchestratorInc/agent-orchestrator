@@ -90,6 +90,7 @@ import {
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
 	QUIT_CONFIRM_REQUEST_CHANNEL,
 	QUIT_CONFIRM_RESULT_CHANNEL,
+	type QuitConfirmRequest,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
@@ -407,7 +408,12 @@ const quitConfirm = createQuitConfirmController({
 	requestConfirm: () => {
 		const shell = getShellWebContents();
 		shell?.focus();
-		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL);
+		// Mirrors desktopQuit.handleBeforeQuit: with the tray up, quitting only
+		// closes the window, and the dialog says so.
+		const request: QuitConfirmRequest = {
+			keepsRunning: trayController !== null && !browserQuitRequested && !isUpdateRestartRequested(),
+		};
+		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
 	},
 	quit: () => app.quit(),
 });

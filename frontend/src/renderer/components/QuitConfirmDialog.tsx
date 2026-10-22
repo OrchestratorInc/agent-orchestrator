@@ -17,8 +17,17 @@ import {
 // Shown on ⌘Q (macOS). Same frame and tokens as ConfirmDialog, but the footer
 // sits under a hairline and each action names its key — Esc cancels, Return
 // quits — since the dialog is always opened from the keyboard. Quit starts
-// focused so Return confirms.
-export function QuitConfirmDialog({ open, onResolve }: { open: boolean; onResolve: (confirmed: boolean) => void }) {
+// focused so Return confirms. With the menu bar icon up, Quit only closes the
+// window, so the body says AO keeps running instead of asking again.
+export function QuitConfirmDialog({
+	open,
+	keepsRunning = false,
+	onResolve,
+}: {
+	open: boolean;
+	keepsRunning?: boolean;
+	onResolve: (confirmed: boolean) => void;
+}) {
 	const { t } = useTranslation();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const quitRef = useRef<HTMLButtonElement>(null);
@@ -38,7 +47,7 @@ export function QuitConfirmDialog({ open, onResolve }: { open: boolean; onResolv
 				<div className="flex flex-col gap-1 p-5">
 					<DialogTitle className="settings-dialog-title text-base">{t("quitConfirm.title")}</DialogTitle>
 					<DialogDescription className="text-control leading-5 text-settings-muted">
-						{t("quitConfirm.body")}
+						{t(keepsRunning ? "quitConfirm.bodyKeepsRunning" : "quitConfirm.body")}
 					</DialogDescription>
 				</div>
 

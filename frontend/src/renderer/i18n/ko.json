@@ -500,6 +500,7 @@
 	"confirm.confirm": "확인",
 	"quitConfirm.title": "AO를 종료할까요?",
 	"quitConfirm.body": "AO를 종료하시겠어요?",
+	"quitConfirm.bodyKeepsRunning": "AO는 백그라운드에서 계속 실행됩니다. 메뉴 막대에서 다시 열 수 있어요.",
 	"quitConfirm.quit": "종료",
 	"createProject.agentsCached": "에이전트 사용 가능 여부가 캐시되어 있습니다.",
 	"createProject.addCodeDescription": "저장소를 복제하거나 이 컴퓨터에 이미 있는 코드를 엽니다.",

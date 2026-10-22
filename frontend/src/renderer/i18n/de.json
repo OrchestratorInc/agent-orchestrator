@@ -500,6 +500,7 @@
 	"confirm.confirm": "Bestätigen",
 	"quitConfirm.title": "AO beenden?",
 	"quitConfirm.body": "Möchtest du AO wirklich beenden?",
+	"quitConfirm.bodyKeepsRunning": "AO läuft im Hintergrund weiter. Du kannst es über die Menüleiste wieder öffnen.",
 	"quitConfirm.quit": "Beenden",
 	"createProject.agentsCached": "Agenten-Verfügbarkeit ist zwischengespeichert.",
 	"createProject.addCodeDescription": "Klone ein Repository oder öffne Code, der bereits auf diesem Computer liegt.",

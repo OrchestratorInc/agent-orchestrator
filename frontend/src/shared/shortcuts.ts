@@ -369,6 +369,8 @@ export const KEYBOARD_SHORTCUTS_HELP_CHANNEL = "app:keyboard-shortcuts-help";
 // ⌘Q on macOS: main asks the shell to show the quit confirm, and the shell
 // answers on the result channel with true (quit) or false (cancelled).
 export const QUIT_CONFIRM_REQUEST_CHANNEL = "app:quit-confirm-request";
+/** keepsRunning: quitting only closes the window; AO stays in the menu bar. */
+export type QuitConfirmRequest = { keepsRunning: boolean };
 export const QUIT_CONFIRM_RESULT_CHANNEL = "app:quit-confirm-result";
 export const NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:new-shell-terminal";
 export const CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:close-shell-terminal";

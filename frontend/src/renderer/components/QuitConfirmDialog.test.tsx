@@ -25,3 +25,11 @@ test("Cancel and Escape both dismiss without quitting", () => {
 	fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 	expect(onResolve.mock.calls).toEqual([[false], [false]]);
 });
+
+test("says AO keeps running in the menu bar when quitting only closes the window", () => {
+	render(<QuitConfirmDialog open keepsRunning onResolve={vi.fn()} />);
+
+	expect(screen.getByRole("dialog", { name: "Quit AO?" })).toHaveAccessibleDescription(
+		"AO will keep running in the background. You can reopen it from the menu bar.",
+	);
+});

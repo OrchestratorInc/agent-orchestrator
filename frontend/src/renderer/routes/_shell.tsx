@@ -1230,7 +1230,15 @@ function ShellLayout() {
 
 	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
 	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
-	useEffect(() => aoBridge.app.onQuitConfirmRequest(() => setIsQuitConfirmOpen(true)), []);
+	const [quitKeepsRunning, setQuitKeepsRunning] = useState(false);
+	useEffect(
+		() =>
+			aoBridge.app.onQuitConfirmRequest(({ keepsRunning }) => {
+				setQuitKeepsRunning(keepsRunning);
+				setIsQuitConfirmOpen(true);
+			}),
+		[],
+	);
 	const resolveQuitConfirm = useCallback((confirmed: boolean) => {
 		setIsQuitConfirmOpen(false);
 		aoBridge.app.resolveQuitConfirm(confirmed);
@@ -1376,7 +1384,7 @@ function ShellLayout() {
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
-				<QuitConfirmDialog open={isQuitConfirmOpen} onResolve={resolveQuitConfirm} />
+				<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
 					onOpenChange={setIsKeyboardShortcutsOpen}

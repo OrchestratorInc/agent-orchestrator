@@ -500,6 +500,7 @@
 	"confirm.confirm": "确认",
 	"quitConfirm.title": "退出 AO？",
 	"quitConfirm.body": "确定要退出 AO 吗？",
+	"quitConfirm.bodyKeepsRunning": "AO 会在后台继续运行。你可以从菜单栏重新打开它。",
 	"quitConfirm.quit": "退出",
 	"createProject.agentsCached": "代理可用性已缓存。",
 	"createProject.addCodeDescription": "克隆仓库，或打开这台电脑上已有的代码。",

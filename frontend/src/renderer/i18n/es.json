@@ -502,6 +502,7 @@
 	"confirm.confirm": "Confirmar",
 	"quitConfirm.title": "¿Salir de AO?",
 	"quitConfirm.body": "¿Seguro que quieres salir de AO?",
+	"quitConfirm.bodyKeepsRunning": "AO seguirá ejecutándose en segundo plano. Puedes volver a abrirlo desde la barra de menús.",
 	"quitConfirm.quit": "Salir",
 	"createProject.agentsCached": "La disponibilidad de agentes está en caché.",
 	"createProject.addCodeDescription": "Clona un repositorio o abre código que ya está en este equipo.",
