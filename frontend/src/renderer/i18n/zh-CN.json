@@ -3510,5 +3510,6 @@
 	"shareLink.open": "打开",
 	"shareLink.invalid": "这不是共享链接。",
 	"shareLink.signInFirst": "请登录 AO Cloud 以打开共享会话。",
-	"command.openSharedLink": "打开共享会话"
+	"command.openSharedLink": "打开共享会话",
+	"chat.shared.terminalRefused": "其他人正在向智能体输入。请在聊天中请求轮到你后再输入。"
 }

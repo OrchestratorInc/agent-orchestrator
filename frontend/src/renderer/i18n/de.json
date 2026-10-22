@@ -3528,5 +3528,6 @@
 	"shareLink.open": "Öffnen",
 	"shareLink.invalid": "Das ist kein Freigabelink.",
 	"shareLink.signInFirst": "Melde dich bei AO Cloud an, um geteilte Sitzungen zu öffnen.",
-	"command.openSharedLink": "Geteilte Sitzung öffnen"
+	"command.openSharedLink": "Geteilte Sitzung öffnen",
+	"chat.shared.terminalRefused": "Jemand anderes schreibt gerade an den Agenten. Fordere im Chat eine Runde an, um zu tippen."
 }

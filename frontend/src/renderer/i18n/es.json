@@ -3593,5 +3593,6 @@
 	"shareLink.open": "Abrir",
 	"shareLink.invalid": "Eso no es un enlace para compartir.",
 	"shareLink.signInFirst": "Inicia sesión en AO Cloud para abrir sesiones compartidas.",
-	"command.openSharedLink": "Abrir una sesión compartida"
+	"command.openSharedLink": "Abrir una sesión compartida",
+	"chat.shared.terminalRefused": "Otra persona está escribiendo al agente. Pide turno en el chat para escribir."
 }

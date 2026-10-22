@@ -3528,5 +3528,6 @@
 	"shareLink.open": "열기",
 	"shareLink.invalid": "공유 링크가 아닙니다.",
 	"shareLink.signInFirst": "공유 세션을 열려면 AO Cloud에 로그인하세요.",
-	"command.openSharedLink": "공유 세션 열기"
+	"command.openSharedLink": "공유 세션 열기",
+	"chat.shared.terminalRefused": "다른 사람이 에이전트에게 쓰는 중입니다. 입력하려면 채팅에서 차례를 요청하세요."
 }
