@@ -37,6 +37,7 @@ type sessionArtifactStore interface {
 	SessionArtifactsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.SessionArtifact, error)
 	SessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]domain.SessionArtifactSummary, error)
 	SessionArtifact(ctx context.Context, userID, orgID, sessionID, path string) (domain.SessionArtifact, error)
+	DeleteSessionArtifact(ctx context.Context, principal domain.Principal, orgID, sessionID, path string) (domain.ArtifactObjectVersion, error)
 }
 
 // artifactAccessTTL is how long an artifact file access prefix stays valid.
@@ -488,6 +489,34 @@ func (s *Server) listSessionArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"artifacts": toSessionArtifactResponses(artifacts)})
+}
+
+// deleteSessionArtifact deletes one of a session's artifact files, named by
+// the path query parameter: its row, its stored object version, and, through
+// a request to a connected worker, the file on the worker's disk. The stored
+// version is deleted now; if that fails, the sweeper deletes it on its next
+// pass.
+func (s *Server) deleteSessionArtifact(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	cleaned, err := domain.CleanArtifactPath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_path", "The artifact path is invalid.")
+		return
+	}
+	version, err := s.artifactRows.DeleteSessionArtifact(r.Context(), principalFrom(r), orgID, sessionID, cleaned)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if err := s.artifacts.DeleteVersion(context.WithoutCancel(r.Context()), version.S3Key, version.VersionID); err != nil {
+		s.logger.WarnContext(r.Context(), "delete artifact version; the sweeper retries", "error", err, "request_id", requestID(r))
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // createArtifactAccess returns a short-lived path prefix that serves the

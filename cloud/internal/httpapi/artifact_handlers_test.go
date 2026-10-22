@@ -237,6 +237,22 @@ func (m *memoryArtifactRows) SessionArtifact(_ context.Context, userID, orgID, s
 	return row, nil
 }
 
+func (m *memoryArtifactRows) DeleteSessionArtifact(_ context.Context, principal domain.Principal, orgID, sessionID, path string) (domain.ArtifactObjectVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.members[principal.UserID] != orgID {
+		return domain.ArtifactObjectVersion{}, postgres.ErrForbidden
+	}
+	row, ok := m.rows[sessionID][path]
+	if m.sessions[sessionID] != orgID || !ok {
+		return domain.ArtifactObjectVersion{}, postgres.ErrNotFound
+	}
+	delete(m.rows[sessionID], path)
+	version := domain.ArtifactObjectVersion{S3Key: row.S3Key, VersionID: row.VersionID}
+	m.replaced = append(m.replaced, version)
+	return version, nil
+}
+
 // artifactRouterStore answers the auth, worker-fencing and session calls the
 // artifact routes make. Any other Store call panics on the nil embedded Store.
 type artifactRouterStore struct {
@@ -964,5 +980,49 @@ func TestWorkerArtifactReadRoutesNeedArtifactsOn(t *testing.T) {
 		if rec := h.do(http.MethodGet, target, workerAuth, nil, nil); rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s with artifacts off: %d", target, rec.Code)
 		}
+	}
+}
+
+func TestUserDeletesASessionArtifact(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	h.syncArtifacts(map[string][]byte{"report.html": []byte("<p>report</p>"), "notes.md": []byte("# notes")})
+	route := "/api/cloud/v1/orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/artifacts"
+	key := "orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/report.html"
+
+	if rec := h.do(http.MethodDelete, route+"?path=report.html", "Bearer "+artifactTokenA, nil, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	listed := decodeBody[struct {
+		Artifacts []sessionArtifactResponse `json:"artifacts"`
+	}](t, h.do(http.MethodGet, route, "Bearer "+artifactTokenA, nil, nil)).Artifacts
+	if len(listed) != 1 || listed[0].Path != "notes.md" {
+		t.Fatalf("listed after delete = %+v", listed)
+	}
+	if versions := h.fake.Versions(key); versions != 0 {
+		t.Fatalf("the stored version was not deleted: %d versions left", versions)
+	}
+	if len(h.store.replaced) != 1 || h.store.replaced[0].S3Key != key {
+		t.Fatalf("the version was not queued for the sweeper: %+v", h.store.replaced)
+	}
+
+	for name, want := range map[string]int{
+		route + "?path=report.html": http.StatusNotFound,
+		route + "?path=../x":        http.StatusBadRequest,
+		route:                       http.StatusBadRequest,
+	} {
+		if rec := h.do(http.MethodDelete, name, "Bearer "+artifactTokenA, nil, nil); rec.Code != want {
+			t.Errorf("DELETE %s = %d, want %d", name, rec.Code, want)
+		}
+	}
+	if rec := h.do(http.MethodDelete, route+"?path=notes.md", "Bearer "+artifactTokenB, nil, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("another org's member deleted a file: %d", rec.Code)
+	}
+}
+
+func TestDeleteArtifactRouteNeedsArtifactsOn(t *testing.T) {
+	h := newArtifactHarness(t, false)
+	route := "/api/cloud/v1/orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/artifacts?path=report.html"
+	if rec := h.do(http.MethodDelete, route, "Bearer "+artifactTokenA, nil, nil); rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("delete with artifacts off: %d", rec.Code)
 	}
 }

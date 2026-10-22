@@ -636,6 +636,7 @@ func New(options Options) *Server {
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
 			if server.artifactsEnabled() {
 				router.Get("/sessions/{sessionId}/artifacts", server.listSessionArtifacts)
+				router.Delete("/sessions/{sessionId}/artifacts", server.deleteSessionArtifact)
 				router.Post("/sessions/{sessionId}/artifacts/access", server.createArtifactAccess)
 			}
 			router.Delete("/sessions/{sessionId}", server.deleteSession)

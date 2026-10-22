@@ -895,3 +895,96 @@ func TestArtifactSyncSeesARewriteThatKeepsSizeAndModTime(t *testing.T) {
 		t.Fatal("a rewrite that kept the size and modification time was not synced")
 	}
 }
+
+// userDelete removes a committed file as the user's delete route does.
+func (p *fakeArtifactPlane) userDelete(path string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.rows, path)
+}
+
+func TestArtifactSyncRemovesAFileTheUserDeleted(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "a.md", "# a")
+	writeArtifact(t, dir, "b.md", "# b")
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	_, uploads, commits := plane.counts()
+
+	plane.userDelete("a.md")
+	s.reconcileCommitted(context.Background())
+	if _, err := os.Stat(filepath.Join(dir, "a.md")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the deleted file is still on disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.md")); err != nil {
+		t.Fatalf("another file was removed: %v", err)
+	}
+	syncSettled(s)
+	if _, u, c := plane.counts(); u != uploads || c != commits {
+		t.Fatalf("the delete was synced back: uploads %d->%d commits %d->%d", uploads, u, commits, c)
+	}
+}
+
+func TestArtifactSyncKeepsADeletedFileTheAgentChanged(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "a.md", "# a")
+	s := testSyncer(c, dir)
+	syncSettled(s)
+
+	writeArtifact(t, dir, "a.md", "# a, edited after the delete")
+	plane.userDelete("a.md")
+	s.reconcileCommitted(context.Background())
+	if got, _ := os.ReadFile(filepath.Join(dir, "a.md")); string(got) != "# a, edited after the delete" {
+		t.Fatalf("the agent's change was removed: %q", got)
+	}
+	syncSettled(s)
+	if got := plane.paths(); !slices.Equal(got, []string{"a.md"}) {
+		t.Fatalf("the changed file was not synced as a new one: %v", got)
+	}
+}
+
+func TestArtifactRestoreRemovesFilesDeletedWhileNoWorkerRan(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := filepath.Join(t.TempDir(), "session")
+	writeArtifact(t, dir, "a.md", "# a")
+	writeArtifact(t, dir, "b.md", "# b")
+	syncSettled(testSyncer(c, dir))
+
+	// The worker stops, the user deletes a.md, and a new worker starts on the kept disk.
+	plane.userDelete("a.md")
+	s := testSyncer(c, dir)
+	if restored, err := s.restore(context.Background()); err != nil || restored != 0 {
+		t.Fatalf("restore = %d, %v", restored, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.md")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a file deleted while no worker ran is still on disk: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "b.md")); string(got) != "# b" {
+		t.Fatalf("b.md = %q", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("the synced list was written into the artifact directory: %v", entries)
+	}
+}
+
+func TestWaitForWorkPokesTheSyncerWhenArtifactsChanged(t *testing.T) {
+	answer := `{}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(answer))
+	}))
+	t.Cleanup(server.Close)
+	c := &client{baseURL: server.URL, http: server.Client(), token: "worker-token"}
+	calls := 0
+	poke := func() { calls++ }
+	c.artifactsChanged.Store(&poke)
+
+	if err := c.WaitForWork(context.Background()); err != nil || calls != 0 {
+		t.Fatalf("plain wake: calls=%d err=%v", calls, err)
+	}
+	answer = `{"artifactsChanged":true}`
+	if err := c.WaitForWork(context.Background()); err != nil || calls != 1 {
+		t.Fatalf("artifact wake: calls=%d err=%v", calls, err)
+	}
+}

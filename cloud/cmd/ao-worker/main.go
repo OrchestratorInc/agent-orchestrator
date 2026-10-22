@@ -305,6 +305,8 @@ func run(logger *slog.Logger) error {
 			logger.Warn("create artifact directory; artifacts are not synced", "error", err)
 		} else {
 			artifacts = newArtifactSyncer(client, artifactsDir, logger)
+			changed := artifacts.pokeCommittedChanged
+			client.artifactsChanged.Store(&changed)
 			// A new sandbox starts with the files the session already has.
 			restoreCtx, cancelRestore := context.WithTimeout(ctx, artifactRestoreTimeout)
 			if restored, err := artifacts.restore(restoreCtx); err != nil {
@@ -1179,6 +1181,10 @@ type client struct {
 	// busy reports sandbox activity for the next heartbeat; set once the
 	// transport supervisor exists.
 	busy atomic.Pointer[func() bool]
+	// artifactsChanged is called when WaitForWork reports that the session's
+	// committed artifacts changed without this worker; set once the artifact
+	// syncer exists.
+	artifactsChanged atomic.Pointer[func()]
 	// busyAccepted records that the control plane's last heartbeat response
 	// advertised worker.HeartbeatFeatureBusy. Until then (and after a
 	// control-plane rollback) the field is not sent: an older control plane
@@ -1648,10 +1654,19 @@ func (c *client) ClaimTransport(ctx context.Context) (*worker.TransportRequest, 
 // WaitForWork long-polls the control plane until a turn or transport request is
 // enqueued for this session (or a short server-side timeout), replacing the old
 // ~100ms busy-poll of the claim routes. It returns no work; the caller re-runs
-// the claim RPCs. An older control plane without the endpoint returns an error,
+// the claim RPCs. A wake that reports changed artifacts pokes the artifact
+// syncer. An older control plane without the endpoint returns an error,
 // which the transport supervisor treats as a bounded back-off.
 func (c *client) WaitForWork(ctx context.Context) error {
-	return c.doMethod(ctx, http.MethodGet, "/worker/work/wait", nil, nil)
+	var response worker.WorkWaitResponse
+	// An empty body reports no artifact change.
+	if err := c.doMethod(ctx, http.MethodGet, "/worker/work/wait", nil, &response); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if changed := c.artifactsChanged.Load(); response.ArtifactsChanged && changed != nil {
+		(*changed)()
+	}
+	return nil
 }
 
 func (c *client) CompleteTransport(
