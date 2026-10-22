@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudCpClientEvent, CloudCpSessionLive } from "../../lib/cloud-cp";
+import type { CloudCpClientEvent, CloudCpSessionLive, CloudCpSessionViewer } from "../../lib/cloud-cp";
 import type { ComposerLeaseState } from "../../hooks/useComposerLease";
 import type { WorkspaceSession } from "../../types/workspace";
 import { CloudSessionChatSurface, toSnapshot } from "./CloudSessionChatSurface";
@@ -51,7 +51,7 @@ const session = {
 const me = { userId: "user-me", name: "Me", role: "member" as const };
 const alice = { userId: "user-alice", name: "Alice", role: "editor" as const };
 
-function liveState(composer: Partial<CloudCpSessionLive["composer"]> = {}, viewers = [me, alice], canTakeOver = false): CloudCpSessionLive {
+function liveState(composer: Partial<CloudCpSessionLive["composer"]> = {}, viewers: CloudCpSessionViewer[] = [me, alice], canTakeOver = false): CloudCpSessionLive {
 	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver };
 }
 

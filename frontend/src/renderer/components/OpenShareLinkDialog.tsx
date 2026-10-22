@@ -42,7 +42,7 @@ export function ShareLinkHost() {
 	const navigate = useNavigate();
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState("");
-	const autoOpened = useRef<string>();
+	const autoOpened = useRef<string | undefined>(undefined);
 
 	const redeem = useMutation({
 		mutationFn: async (link: string) => {
