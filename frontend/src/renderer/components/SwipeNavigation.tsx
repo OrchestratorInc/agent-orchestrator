@@ -1,6 +1,7 @@
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { type RefObject, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
+import { useUiStore } from "../stores/ui-store";
 
 // Two-finger horizontal trackpad swipes over the center pane go back/forward in
 // navigation history, like a browser. A puck follows the fingers in from the pane
@@ -65,6 +66,7 @@ export function SwipeNavigation({
 	containerRef: RefObject<HTMLElement | null>;
 	navigation: SwipeNavigationActions;
 }) {
+	const enabled = useUiStore((state) => state.navigationGestures);
 	const backRef = useRef<HTMLDivElement>(null);
 	const forwardRef = useRef<HTMLDivElement>(null);
 	const historyState = useRef(navigation);
@@ -72,7 +74,7 @@ export function SwipeNavigation({
 
 	useEffect(() => {
 		const container = containerRef.current;
-		if (!container) return;
+		if (!container || !enabled) return;
 		let gesture: Gesture | null = null;
 		let idleTimer: number | undefined;
 		let frame = 0;
@@ -207,7 +209,9 @@ export function SwipeNavigation({
 			window.clearTimeout(idleTimer);
 			cancelAnimationFrame(frame);
 		};
-	}, [containerRef]);
+	}, [containerRef, enabled]);
+
+	if (!enabled) return null;
 
 	return (
 		<>

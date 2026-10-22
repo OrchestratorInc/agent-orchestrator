@@ -2,6 +2,7 @@ import { act, render } from "@testing-library/react";
 import { useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeNavigation } from "./SwipeNavigation";
+import { useUiStore } from "../stores/ui-store";
 import { useCanGoForward } from "./TitlebarNav";
 import type { ScrollPhase } from "../../shared/scroll-phase";
 
@@ -73,6 +74,7 @@ const drag = (deltaX: number, count: number) => Array.from({ length: count }, ()
 describe("SwipeNavigation", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		useUiStore.setState({ navigationGestures: true });
 		history.canGoBack.mockReturnValue(true);
 	});
 
@@ -88,6 +90,40 @@ describe("SwipeNavigation", () => {
 		swipe(getByTestId("pane"), drag(-20, 8));
 		expect(history.back).toHaveBeenCalledTimes(1);
 		expect(history.forward).not.toHaveBeenCalled();
+	});
+
+	it("ignores back and forward swipes when navigation gestures are disabled", () => {
+		useUiStore.setState({ navigationGestures: false });
+		const { getByTestId } = render(<Harness />);
+		const pane = getByTestId("pane");
+		swipe(pane, drag(-20, 8));
+		swipe(pane, drag(20, 8));
+		expect(history.back).not.toHaveBeenCalled();
+		expect(history.forward).not.toHaveBeenCalled();
+		expect(pane.querySelector("[data-swipe-puck]")).toBeNull();
+		expect(phaseListeners.size).toBe(0);
+	});
+
+	it("cancels a pending wheel swipe when disabled and navigates again after enabling", () => {
+		const { getByTestId } = render(<Harness />);
+		const pane = getByTestId("pane");
+		swipe(pane, drag(-20, 8), 0);
+		act(() => useUiStore.getState().setNavigationGestures(false));
+		act(() => vi.advanceTimersByTime(200));
+		expect(history.back).not.toHaveBeenCalled();
+		act(() => useUiStore.getState().setNavigationGestures(true));
+		swipe(pane, drag(-20, 8));
+		expect(history.back).toHaveBeenCalledTimes(1);
+	});
+
+	it("cancels a held native swipe when disabled", () => {
+		const { getByTestId } = render(<Harness />);
+		fingers("down");
+		swipe(getByTestId("pane"), drag(-20, 8));
+		act(() => useUiStore.getState().setNavigationGestures(false));
+		fingers("up");
+		expect(history.back).not.toHaveBeenCalled();
+		expect(phaseListeners.size).toBe(0);
 	});
 
 	it("snaps back without navigating when the swipe is short", () => {

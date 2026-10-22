@@ -144,6 +144,7 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	navigationGestures: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -196,6 +197,7 @@ export type UiState = {
 	setSideChats: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setNavigationGestures: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -257,6 +259,7 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const navigationGesturesStorageKey = "ao.navigationGestures";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -350,6 +353,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	sideChats: initialSideChats(),
 	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -411,6 +415,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
 		set({ windowTranslucency });
+	},
+	setNavigationGestures: (navigationGestures) => {
+		getLocalStorage()?.setItem(navigationGesturesStorageKey, String(navigationGestures));
+		set({ navigationGestures });
 	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));

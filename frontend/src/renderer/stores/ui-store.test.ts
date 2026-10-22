@@ -123,6 +123,29 @@ describe("remoteHosts flag", () => {
 	});
 });
 
+describe("navigation gestures", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+		useUiStore.setState({ navigationGestures: true });
+	});
+
+	it("is enabled by default", async () => {
+		expect((await bootStore()).getState().navigationGestures).toBe(true);
+	});
+
+	it("restores the saved choice after restarting", async () => {
+		useUiStore.getState().setNavigationGestures(false);
+		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("false");
+		let store = await bootStore();
+		expect(store.getState().navigationGestures).toBe(false);
+		store.getState().setNavigationGestures(true);
+		vi.resetModules();
+		store = await bootStore();
+		expect(store.getState().navigationGestures).toBe(true);
+	});
+});
+
 describe("terminalCopyOnSelect flag", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
