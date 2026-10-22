@@ -374,6 +374,53 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 	}
 }
 
+// refreshRecordingCatalog serves a saved catalog and a rediscovered one, and
+// records which a launch asked for.
+type refreshRecordingCatalog struct {
+	saved, fresh ports.AgentModelCatalog
+	refreshes    *[]bool
+}
+
+func (c refreshRecordingCatalog) Models(_ context.Context, _, _ string, refresh bool) (ports.AgentModelCatalog, error) {
+	*c.refreshes = append(*c.refreshes, refresh)
+	if refresh {
+		return c.fresh, nil
+	}
+	return c.saved, nil
+}
+
+func TestResolveAgentConfigValidatesAgainstSavedCatalogFirst(t *testing.T) {
+	spawn := ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: ports.AgentConfig{Model: "sonnet", Effort: "high"}, EffortOverride: true,
+	}
+	var refreshes []bool
+	m := &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes, saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "sonnet", Efforts: []string{"high"}},
+	}}}}
+	if _, err := m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshes) != 1 || refreshes[0] {
+		t.Fatalf("catalog reads = %v, want one saved read and no rediscovery", refreshes)
+	}
+
+	// A model the saved catalog does not list yet is checked against a live
+	// rediscovery before the launch is rejected.
+	refreshes = nil
+	m = &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes,
+		saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus", Efforts: []string{"high"}}}},
+		fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", Efforts: []string{"high"}}}},
+	}}
+	resolved, err := m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Effort != "high" || len(refreshes) != 2 || refreshes[0] || !refreshes[1] {
+		t.Fatalf("resolved=%#v reads=%v, want a saved read then a rediscovery", resolved, refreshes)
+	}
+}
+
 func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	catalogCalls := 0
 	m := &Manager{modelCatalog: tuningCatalog{calls: &catalogCalls, catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{

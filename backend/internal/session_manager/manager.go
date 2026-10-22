@@ -1582,7 +1582,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		return resolved, nil
 	}
-	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	// Validate against the saved catalog first so a launch does not wait on a
+	// live model discovery. Rediscover only when the saved catalog cannot answer:
+	// it failed, is stale or empty, or does not list the requested model.
+	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false)
+	if err != nil || !savedCatalogCovers(catalog, modelID) {
+		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	}
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
@@ -7008,4 +7014,21 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// savedCatalogCovers reports whether a saved model catalog can answer a launch's
+// model and effort checks without a live rediscovery.
+func savedCatalogCovers(catalog ports.AgentModelCatalog, modelID string) bool {
+	if catalog.Stale || len(catalog.Models) == 0 {
+		return false
+	}
+	if modelID == "" {
+		return true
+	}
+	for _, item := range catalog.Models {
+		if item.ID == modelID {
+			return true
+		}
+	}
+	return false
 }
