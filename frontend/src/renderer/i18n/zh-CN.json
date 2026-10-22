@@ -3528,5 +3528,6 @@
 	"statusBar.stateOwned": "自有",
 	"statusBar.stateAdopted": "已接管",
 	"statusBar.stateOrphan": "孤儿",
-	"statusBar.stateForeign": "外部"
+	"statusBar.stateForeign": "外部",
+	"settings.agentAccounts.cliLogin": "CLI 登录"
 }

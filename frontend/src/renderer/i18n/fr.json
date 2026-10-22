@@ -3595,5 +3595,6 @@
 	"statusBar.stateOwned": "propre",
 	"statusBar.stateAdopted": "adopté",
 	"statusBar.stateOrphan": "orphelin",
-	"statusBar.stateForeign": "étranger"
+	"statusBar.stateForeign": "étranger",
+	"settings.agentAccounts.cliLogin": "Connexion de la CLI"
 }

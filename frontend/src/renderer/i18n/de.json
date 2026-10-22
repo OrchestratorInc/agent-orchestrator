@@ -3546,5 +3546,6 @@
 	"statusBar.stateOwned": "eigen",
 	"statusBar.stateAdopted": "adoptiert",
 	"statusBar.stateOrphan": "verwaist",
-	"statusBar.stateForeign": "fremd"
+	"statusBar.stateForeign": "fremd",
+	"settings.agentAccounts.cliLogin": "CLI-Anmeldung"
 }

@@ -3546,5 +3546,6 @@
 	"statusBar.stateOwned": "소유",
 	"statusBar.stateAdopted": "재연결됨",
 	"statusBar.stateOrphan": "고아",
-	"statusBar.stateForeign": "외부"
+	"statusBar.stateForeign": "외부",
+	"settings.agentAccounts.cliLogin": "CLI 로그인"
 }
