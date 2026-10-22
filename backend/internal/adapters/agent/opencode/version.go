@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,38 @@ type IncompatibleVersionError struct {
 
 func (e *IncompatibleVersionError) Error() string {
 	return fmt.Sprintf("opencode: selected harness requires OpenCode %d, but %q reports OpenCode %d (%s); select the matching harness or put OpenCode %d on PATH", e.ExpectedMajor, e.Path, e.FoundMajor, e.FoundVersion, e.ExpectedMajor)
+}
+
+// ReplacedOpenCode1Message explains an OpenCode 1 check that found only
+// OpenCode 2 at a default location: an OpenCode 2 install outside AO's private
+// locations wrote its `opencode` over OpenCode 1's. It returns "" for any other
+// mismatch, including OpenCode 2 installed only where AO keeps it apart.
+func (e *IncompatibleVersionError) ReplacedOpenCode1Message() string {
+	if e.ExpectedMajor != 1 || e.FoundMajor != 2 || isPrivateV2Location(e.Path) {
+		return ""
+	}
+	return fmt.Sprintf("OpenCode 1 is not installed: %s is OpenCode 2 (%s), which replaced OpenCode 1 at its default location. "+
+		"To run both, first reinstall OpenCode 2 from AO, which keeps it in its own folder, then reinstall OpenCode 1 "+
+		"(official installer, Homebrew, or npm opencode-ai) and check again.", e.Path, e.FoundVersion)
+}
+
+// isPrivateV2Location reports whether path is where AO installs OpenCode 2
+// apart from OpenCode 1: under the OpenCode 2 data home (npm prefix,
+// installer home) or the opencode-v2 formula's opt link.
+func isPrivateV2Location(path string) bool {
+	if path == "" {
+		return false
+	}
+	path = filepath.Clean(path)
+	if slices.Contains(v2HomebrewBinaries, filepath.ToSlash(path)) {
+		return true
+	}
+	home, err := V2DataHome()
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(home, path)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 // ResolveBinaryForMajor returns the opencode executable whose major version

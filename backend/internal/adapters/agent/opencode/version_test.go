@@ -289,3 +289,31 @@ func TestResolveBinaryForMajorUsesDistinctManagedLaunchers(t *testing.T) {
 		}
 	}
 }
+
+func TestReplacedOpenCode1MessageOnlyForDefaultLocations(t *testing.T) {
+	dataHome := filepath.Join(t.TempDir(), "share")
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	v2Home := filepath.Join(dataHome, "opencode-v2-home")
+	for _, tc := range []struct {
+		name     string
+		err      IncompatibleVersionError
+		replaced bool
+	}{
+		{"v2 at the installer default", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "opencode v2.1.2", Path: "/Users/me/.opencode/bin/opencode"}, true},
+		{"v2 linked by Homebrew", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: "/opt/homebrew/bin/opencode"}, true},
+		{"v2 in AO's npm prefix", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(v2Home, "npm", "bin", "opencode")}, false},
+		{"v2 in AO's installer home", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(v2Home, "installer", ".opencode", "bin", "opencode")}, false},
+		{"v2 through the unlinked formula", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: "/opt/homebrew/opt/opencode-v2/bin/opencode"}, false},
+		{"v1 found for the OpenCode 2 harness", IncompatibleVersionError{ExpectedMajor: 2, FoundMajor: 1, FoundVersion: "1.19.3", Path: "/Users/me/.opencode/bin/opencode"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.err.ReplacedOpenCode1Message()
+			if tc.replaced != (got != "") {
+				t.Fatalf("ReplacedOpenCode1Message() = %q, want replaced=%v", got, tc.replaced)
+			}
+			if tc.replaced && (!strings.Contains(got, tc.err.Path) || !strings.Contains(got, "reinstall OpenCode 1")) {
+				t.Fatalf("message %q must name %s and the repair steps", got, tc.err.Path)
+			}
+		})
+	}
+}
