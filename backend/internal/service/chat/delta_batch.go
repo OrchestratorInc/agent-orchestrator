@@ -29,7 +29,8 @@ func coalescible(event ports.ChatEvent) bool {
 	switch event.Kind {
 	case ports.ChatEventMessageDelta, ports.ChatEventReasoningDelta, ports.ChatEventCommandOutputDelta,
 		ports.ChatEventCommandInput, ports.ChatEventActivityText:
-		return event.Err == nil
+		// SQLite's capped appends stop at NUL; joining would discard later deltas too.
+		return event.Err == nil && !strings.ContainsRune(event.Delta, '\x00')
 	}
 	return false
 }

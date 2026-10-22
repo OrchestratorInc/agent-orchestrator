@@ -2441,8 +2441,8 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
-	// Text the provider already streamed is committed before Stop can settle the
-	// turn, so a batched delta cannot land after the settle and reopen the reply.
+	// Commit the current batch before Stop settles the turn. The store keeps any
+	// later deltas settled while retaining text that arrives during cancellation.
 	c.flushDeltas(ctx)
 	// Stop's linearization point is the dispatch lock. A Send that acquired the
 	// lock first is existing work Stop should cancel; a Send that arrives after
