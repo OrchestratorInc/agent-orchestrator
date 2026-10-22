@@ -4,8 +4,8 @@
  * While the agent works, its tool calls and interim notes arrive faster than anyone
  * reads them, and left to grow they push everything else down the screen. Here they
  * scroll inside a fixed-height window that keeps the newest step in view, with older
- * steps fading out at the top edge. Scrolling up or clicking inside takes over until
- * the reader scrolls back to the bottom. When the turn finishes the window gives way
+ * steps fading out at the top edge. Scrolling up, clicking inside, or moving focus or
+ * pressing a key inside takes over until the reader scrolls back to the bottom. When the turn finishes the window gives way
  * to "Worked for", which keeps the whole record.
  */
 
@@ -58,6 +58,10 @@ export function LiveActivityWindow({ children }: { children: ReactNode }) {
 				if (event.deltaY < 0) takeOver();
 			}}
 			onPointerDown={takeOver}
+			// The keyboard path to the same takeover: tabbing onto a step, or a key
+			// that opens or scrolls one, means the reader is working inside the window.
+			onFocus={takeOver}
+			onKeyDown={takeOver}
 			data-live-activity=""
 			className="edge-fade-viewport scrollbar-none max-h-60 min-w-0 overflow-y-auto"
 		>

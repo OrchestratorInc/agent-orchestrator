@@ -1219,7 +1219,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// with every tool call. Keyed by its text the label would remount, and replay its
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
-	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? `task:${task}` : undefined;
+	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
 	return (
 		<div className="min-w-0">
 			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">

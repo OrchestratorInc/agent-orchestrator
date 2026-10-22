@@ -232,6 +232,15 @@ describe("LiveResponseStatus", () => {
 		expect(screen.getByTestId("live-turn-status")).toHaveTextContent("401 Unauthorized, again");
 	});
 
+	it("updates the step label in place as the step changes, without replaying its entrance", () => {
+		const view = render(<LiveResponseStatus startedAt={new Date().toISOString()} task="Search" />);
+		const label = screen.getByTestId("live-working-task");
+
+		view.rerender(<LiveResponseStatus startedAt={new Date().toISOString()} task="Read file" />);
+		expect(screen.getByTestId("live-working-task")).toBe(label);
+		expect(label).toHaveTextContent("Read file");
+	});
+
 	it("names the current step beside the timer, and only the timer between steps", async () => {
 		const view = render(<LiveResponseStatus startedAt={new Date().toISOString()} task="Search" />);
 		expect(screen.getByTestId("live-working-task")).toHaveTextContent("Search");

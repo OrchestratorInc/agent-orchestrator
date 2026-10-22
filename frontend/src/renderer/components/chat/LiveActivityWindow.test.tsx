@@ -1,7 +1,8 @@
-import { render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { LiveActivityWindow } from "./LiveActivityWindow";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot, TurnState } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
@@ -50,5 +51,60 @@ describe("live activity window", () => {
 		expect(container.querySelector("[data-live-activity]")).toBeNull();
 		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
 		expect(screen.getByText("Here is what I found so far")).toBeInTheDocument();
+	});
+});
+
+// A keyboard user takes over the window the same way a pointer user does: once they
+// are working inside it, new steps must not pull it to the bottom under them.
+describe("live activity window follow", () => {
+	const originalObserver = window.ResizeObserver;
+	afterEach(() => {
+		window.ResizeObserver = originalObserver;
+	});
+
+	/** The window with a step to focus, its geometry stated, and a way to report growth. */
+	function mountWindow() {
+		const callbacks: ResizeObserverCallback[] = [];
+		window.ResizeObserver = class {
+			constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		} as unknown as typeof ResizeObserver;
+		const { container } = render(
+			<LiveActivityWindow>
+				<button type="button">Ran npm test</button>
+			</LiveActivityWindow>,
+		);
+		const viewport = container.querySelector<HTMLElement>("[data-live-activity]")!;
+		let height = 1000;
+		Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => height });
+		Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 240 });
+		viewport.scrollTop = 500;
+		const grow = (to: number) => {
+			height = to;
+			act(() => callbacks.forEach((callback) => callback([], {} as ResizeObserver)));
+		};
+		return { viewport, step: screen.getByRole("button", { name: "Ran npm test" }), grow };
+	}
+
+	it("follows new steps until the reader works inside it", () => {
+		const { viewport, grow } = mountWindow();
+		grow(1200);
+		expect(viewport.scrollTop).toBe(1200);
+	});
+
+	it("stops following once a step inside takes keyboard focus", () => {
+		const { viewport, step, grow } = mountWindow();
+		act(() => step.focus());
+		grow(1200);
+		expect(viewport.scrollTop).toBe(500);
+	});
+
+	it("stops following once a key is pressed on a step inside", () => {
+		const { viewport, step, grow } = mountWindow();
+		fireEvent.keyDown(step, { key: "Enter" });
+		grow(1200);
+		expect(viewport.scrollTop).toBe(500);
 	});
 });

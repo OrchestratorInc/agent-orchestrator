@@ -4385,7 +4385,9 @@ const TurnGroup = memo(function TurnGroup({
 		: undefined;
 	// A turn that stopped or failed closes on its outcome, so the answer above it
 	// hands its copy and undo down to the outcome's action row: one row per turn.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed");
+	// An account switch shows its own marker instead of an outcome, so its turn keeps
+	// the answer's row (or the tool-only fallback) like a finished one.
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
