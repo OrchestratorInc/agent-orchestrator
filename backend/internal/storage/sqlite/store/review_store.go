@@ -432,6 +432,23 @@ func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, e
 	return n > 0, nil
 }
 
+// RecordReviewRunNoticeFailure records a failed attempt to deliver a pass's
+// "review done" message and keeps it pending. It reports false when the
+// notice was not pending.
+func (s *Store) RecordReviewRunNoticeFailure(ctx context.Context, id, sendErr string, at time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.RecordReviewRunNoticeFailure(ctx, gen.RecordReviewRunNoticeFailureParams{
+		WorkerNoticeError:       sendErr,
+		WorkerNoticeAttemptedAt: sql.NullTime{Time: at, Valid: true},
+		ID:                      id,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func reviewFromGetReviewBySessionRow(r gen.GetReviewBySessionRow) domain.Review {
 	return domain.Review{
 		ID:                     r.ID,
@@ -544,6 +561,10 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		AutoInjectReview: r.AutoInjectReview,
 		ReviewerModel:    r.ReviewerModel,
 		WorkerNotice:     domain.ReviewWorkerNotice(r.WorkerNotice),
+
+		WorkerNoticeAttempts:    int(r.WorkerNoticeAttempts),
+		WorkerNoticeError:       r.WorkerNoticeError,
+		WorkerNoticeAttemptedAt: nullTimePtr(r.WorkerNoticeAttemptedAt),
 	}
 }
 

@@ -103,7 +103,13 @@ type ReviewRun struct {
 	// WorkerNotice tracks the one "review done" message owed to the worker
 	// once this pass is final. The store marks it pending on the final status
 	// write when the session receives review feedback.
-	WorkerNotice ReviewWorkerNotice `json:"-"`
+	WorkerNotice ReviewWorkerNotice `json:"workerNotice,omitempty" enum:",pending,sent"`
+	// WorkerNoticeAttempts counts failed attempts to deliver the notice;
+	// WorkerNoticeError and WorkerNoticeAttemptedAt describe the latest one.
+	// A failed send keeps the notice pending and is retried with backoff.
+	WorkerNoticeAttempts    int        `json:"workerNoticeAttempts,omitempty"`
+	WorkerNoticeError       string     `json:"workerNoticeError,omitempty"`
+	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
 }
 
 // ReviewWorkerNotice is the delivery state of a pass's "review done" message.
