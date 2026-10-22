@@ -54,10 +54,12 @@ test("renderer: hidden model-menu scrollbar keeps wheel scrolling functional @T0
 	await page.goto(`/#/projects/${projectId}`);
 	await page.getByRole("button", { name: "New task" }).first().click();
 	await expect(page).toHaveURL(/#\/new/);
-	await page.getByRole("button", { name: "Model and reasoning effort for the next turn" }).click();
+	// The new chat page uses the session's own picker: agent, model and effort in one menu.
+	await page.getByRole("button", { name: "Agent, model and reasoning effort for the next message" }).click();
 	await page.getByRole("menuitem", { name: /^Model/ }).click();
 
-	const scroller = page.locator(".model-menu-scroll");
+	// The picker's own menu scrolls on the same strip; the model list is the submenu, opened last.
+	const scroller = page.locator(".model-menu-scroll").last();
 	await expect(scroller).toBeVisible();
 	const geometry = await scroller.evaluate((element) => ({
 		clientHeight: element.clientHeight,

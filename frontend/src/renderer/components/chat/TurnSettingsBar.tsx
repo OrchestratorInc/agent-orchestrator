@@ -39,7 +39,6 @@ import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { providerQualifiedChoice } from "../../lib/model-variants";
-import { AgentAvatar } from "../AgentAvatar";
 import type {
 	ApprovalMode,
 	ChatConfigOption,
@@ -123,9 +122,6 @@ export function TurnSettingsBar({
 	beforePicker,
 	modelsLoading,
 	lastModel,
-	agentMenu,
-	agentIcon = false,
-	modelMenu,
 	children,
 }: {
 	models: ChatModel[];
@@ -182,12 +178,6 @@ export function TurnSettingsBar({
 	lastModel?: string;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
-	/** First row of the model menu, for choosing the agent before a session exists. */
-	agentMenu?: ReactNode;
-	/** Lead the model trigger with the agent's icon, for a chat that can still change agent. */
-	agentIcon?: boolean;
-	/** Holds the model menu open across a switch between the native and provider pickers. */
-	modelMenu?: MenuOpenState;
 }) {
 	const { t } = useTranslation();
 	const displayModels = useMemo(
@@ -249,7 +239,7 @@ export function TurnSettingsBar({
 			: optionId;
 		void Promise.resolve(onChangeConfigOption(providerId, value)).catch(() => {});
 	};
-	const nativeModelMenu = Boolean(onChange && (displayModels.length > 0 || agentMenu) && grouped.model.length === 0);
+	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
 	// A model with effort levels but no provider default would otherwise show no
 	// selected effort. AO picks a level and sets it, so what the picker shows is
 	// what the next turn uses.
@@ -474,9 +464,6 @@ export function TurnSettingsBar({
 					) : null}
 					{!unified && nativeModelMenu && onChange ? (
 						<ModelEffortPicker
-							agentMenu={agentMenu}
-							agentIcon={agentIcon && harness ? <AgentAvatar provider={harness} className="mr-2 size-icon-sm" decorative /> : null}
-							menuOpen={modelMenu}
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
@@ -499,9 +486,6 @@ export function TurnSettingsBar({
 
 					{!unified && onChangeConfigOption && clubbedLeft && !nativeModelMenu ? (
 						<ClubbedConfigPicker
-							agentMenu={agentMenu}
-							agentIcon={agentIcon && harness ? <AgentAvatar provider={harness} className="mr-2 size-icon-sm" decorative /> : null}
-							menuOpen={modelMenu}
 							groupClaude={harness === "claude-code"}
 							modelOptions={grouped.model}
 							effortOptions={grouped.effort}
@@ -733,16 +717,10 @@ function ModelEffortPicker({
 	toggles = [],
 	extraOptions = [],
 	onChangeConfigOption,
-	agentMenu,
-	agentIcon,
-	menuOpen,
 }: {
 	models: ChatModel[];
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
-	agentMenu?: ReactNode;
-	agentIcon?: ReactNode;
-	menuOpen?: MenuOpenState;
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
@@ -764,7 +742,7 @@ function ModelEffortPicker({
 	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
-		<OptionMenu open={menuOpen?.open} onOpenChange={menuOpen?.onOpenChange}>
+		<OptionMenu>
 				<OptionMenuTrigger
 					showCaret={false}
 					disabled={disabled}
@@ -779,7 +757,6 @@ function ModelEffortPicker({
 					}
 					className={TRIGGER_CLASS}
 				>
-					{agentIcon}
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 					{reroute ? (
 						// A mark, not a second name. Two truncated model names side by side is
@@ -792,7 +769,6 @@ function ModelEffortPicker({
 					) : null}
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
-				{agentMenu}
 				<OptionMenuSub>
 					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
@@ -856,13 +832,7 @@ function ClubbedConfigPicker({
 	disabled,
 	onChange,
 	groupClaude,
-	agentMenu,
-	agentIcon,
-	menuOpen,
 }: {
-	agentMenu?: ReactNode;
-	agentIcon?: ReactNode;
-	menuOpen?: MenuOpenState;
 	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
@@ -915,7 +885,7 @@ function ClubbedConfigPicker({
 	}
 
 	return (
-		<OptionMenu open={menuOpen?.open} onOpenChange={menuOpen?.onOpenChange}>
+		<OptionMenu>
 				<OptionMenuTrigger
 					showCaret={false}
 					disabled={disabled}
@@ -924,11 +894,9 @@ function ClubbedConfigPicker({
 					title="Model and reasoning effort for the next turn"
 					className={TRIGGER_CLASS}
 				>
-					{agentIcon}
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
-				{agentMenu}
 				{modelOptions.map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
@@ -1605,8 +1573,6 @@ function optionIsEnabled(option: ChatConfigOption): boolean {
 function choiceIsEnabled(choice: ChatConfigOption["choices"][number] | undefined): boolean {
 	return Boolean(choice && /(?:^|[\s_-])(on|enabled|true)(?:[\s_-]|$)/i.test(`${choice.name} ${choice.value}`));
 }
-
-type MenuOpenState = { open: boolean; onOpenChange: (open: boolean) => void };
 
 /**
  * Whether a provider catalog replaces AO's own approval control. A `mode` option

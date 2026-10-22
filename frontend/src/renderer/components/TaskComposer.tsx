@@ -9,12 +9,6 @@ import {
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
-import { AgentAvatar } from "./AgentAvatar";
-import { DropdownMenuSeparator } from "./ui/dropdown-menu";
-import { CHAT_MENU_CLASS } from "./chat/TurnSettingsBar";
-import { ModelMenuChoices } from "./chat/ModelMenuChoices";
-import { cn } from "../lib/utils";
-import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "./ui/option-menu";
 import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { components } from "../../api/schema";
@@ -47,7 +41,6 @@ import {
 	isLaunchableAgent,
 	isReadyAgent,
 	unknownAgentReadiness,
-	type AgentInfo,
 } from "../lib/agent-select-options";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -808,6 +801,38 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		setEffortTouched(false);
 	};
 
+	// The agents the new chat page's picker offers: the launchable ones, ranked as in New Task.
+	const agentChoices = useMemo(() => {
+		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
+		const ranked = buildRankedAgentOptions({
+			agents,
+			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
+		});
+		return (agents ? ranked.filter(isLaunchableAgent) : ranked).map(({ id, label }) => ({ id, label }));
+	}, [agentCatalog?.agents, cloudAgents, isCloudProject]);
+	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
+	// A pick from the picker's other agents: that agent, with the model and effort chosen
+	// alongside it, if any. Its catalog is cached, since the picker lists its models.
+	const switchAgent = (harness: string, pick: { model?: string; effort?: string } = {}) => {
+		if (harness !== selectedAgent) changeAgent(harness);
+		if (pick.model) {
+			const catalog = queryClient.getQueryData(agentModelsQueryOptions(harness, catalogProjectId, hostId).queryKey);
+			if (catalog?.selectionMode === "mode") {
+				setMode(pick.model);
+				setModel("");
+			} else {
+				setModel(pick.model);
+				setMode("");
+			}
+			setModelTouched(true);
+		}
+		if (pick.effort) {
+			setEffort(pick.effort);
+			setEffortTouched(true);
+		}
+	};
+
 	const showEffort = cursorChoice ? cursorChoice.family.efforts.length > 1 : !requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"));
 	// The same choices in the chat composer's shape, so the new chat page can use its settings bar.
 	const chatModels = useMemo<ChatModel[]>(() => catalogModels.map((item) => ({
@@ -935,19 +960,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		chatModels,
 		turnSettings,
 		chooseTurnSettings,
-		agentMenu: (
-			<AgentMenuSection
-				agents={isCloudProject ? cloudAgents : agentCatalog?.agents}
-				value={selectedAgent}
-				onChange={changeAgent}
-				// Load an agent's models before it is picked, so switching shows its model at once.
-				onPreview={(agentId) => void queryClient.prefetchQuery(
-					agentModelsQueryOptions(agentId, isCloudProject || isStandalone ? "" : projectId ?? "", hostId),
-				)}
-				hostId={hostId}
-				manageView={isCloudProject ? "cloud" : "local"}
-			/>
-		),
+		agentChoices,
+		catalogProjectId,
+		switchAgent,
 		renderAgentControl: (control: TaskComposerAgentControl) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />,
 		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
 			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
@@ -1155,74 +1170,3 @@ function TaskModelPicker({
 
 // The agent choice as the first row of the chat model menu. Its submenu lists
 // the launchable agents, then a way to set up more, like the standalone chip.
-function AgentMenuSection({
-	agents,
-	value,
-	onChange,
-	onPreview,
-	hostId,
-	manageView,
-}: {
-	agents?: AgentInfo[];
-	value: string;
-	onChange: (agentId: string) => void;
-	onPreview: (agentId: string) => void;
-	hostId?: string;
-	manageView: "local" | "cloud";
-}) {
-	const { t } = useTranslation();
-	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
-	const options = buildRankedAgentOptions({
-		agents,
-		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
-		fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
-	});
-	const visibleOptions = agents ? options.filter(isLaunchableAgent) : options;
-	const selectedLabel = options.find((agent) => agent.id === value)?.label ?? (value ? agentLabel(value) : t("newTask.selectAgent"));
-	// Drawn as the Model row and its submenu are, so the menu reads as one list.
-	return (
-		<OptionMenuSub>
-			<OptionMenuSubTrigger aria-label={t("newTask.agent")} label={t("newTask.agent")} value={selectedLabel} />
-			<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS}>
-				{visibleOptions.length > 0 ? (
-					<ModelMenuChoices models={visibleOptions} searchable={false}>
-						{() => visibleOptions.map((agent) => (
-							<OptionMenuItem
-								key={agent.id}
-								disabled={agent.disabled}
-								radio
-								active={agent.id === value}
-								onPointerEnter={() => onPreview(agent.id)}
-								onFocus={() => onPreview(agent.id)}
-								// The menu stays open: the next choice is usually a model for this agent,
-								// and closing mid-switch flickers the trigger.
-								onSelect={(event) => {
-									event.preventDefault();
-									if (agent.id !== value) onChange(agent.id);
-								}}
-								className={cn("text-xs", agent.id === value ? "text-foreground" : "text-muted-foreground")}
-							>
-								<span className="flex min-w-0 flex-1 items-center gap-2">
-									<AgentAvatar provider={agent.id} className="size-icon-sm" decorative />
-									<span className="min-w-0 truncate">{agent.label}</span>
-								</span>
-							</OptionMenuItem>
-						))}
-					</ModelMenuChoices>
-				) : <p className="px-2 py-1.5 text-xs text-settings-muted">{t("agentSelector.noneReady")}</p>}
-				<DropdownMenuSeparator />
-				<OptionMenuItem
-					className="text-xs"
-					onSelect={() => openGlobalSettings("harness", {
-						focusAgentId: value,
-						...(hostId ? { hostId } : {}),
-						harnessView: manageView,
-						preserveProject: true,
-					})}
-				>
-					{(manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage")).replace(/[.…]+$/u, "")}
-				</OptionMenuItem>
-			</OptionMenuSubContent>
-		</OptionMenuSub>
-	);
-}
