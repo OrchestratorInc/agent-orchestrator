@@ -209,7 +209,7 @@ describe("useGitHubDeviceLogin", () => {
 	it("can cancel a request while the CLI is still getting its code", async () => {
 		setBaseUrl("http://127.0.0.1:3037");
 		vi.mocked(apiClient.GET).mockResolvedValue({ data: { state: "idle" } } as never);
-		vi.mocked(apiClient.POST).mockImplementation((_path, options) => new Promise((_resolve, reject) => {
+		vi.mocked(apiClient.POST).mockImplementation((_path, options?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
 			options?.signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")));
 		}) as never);
 		vi.mocked(apiClient.DELETE).mockResolvedValue({ data: { id: "starting", state: "cancelled" } } as never);

@@ -57,23 +57,23 @@ describe("TopbarOpenEditorButton", () => {
 	// state, leaving it enabled to fail again. Failing the open must re-read
 	// availability and disable the control.
 	it("refreshes availability after a failed open so the control stops inviting the click", async () => {
-		const getState = vi
-			.fn()
-			.mockResolvedValueOnce(availableState)
-			.mockResolvedValue({ ...availableState, workspaceAvailable: false, unavailableReason: "Session workspace is not available" });
+		let workspaceAvailable = true;
+		const getState = vi.fn(async () => workspaceAvailable ? availableState : { ...availableState, workspaceAvailable: false, unavailableReason: "Session workspace is not available" });
 		window.ao!.editorHandoff.getState = getState;
-		window.ao!.editorHandoff.open = vi.fn().mockRejectedValue(
-			new Error("Error invoking remote method 'editorHandoff:open': Error: Session workspace is not available"),
-		);
+		window.ao!.editorHandoff.open = vi.fn().mockImplementation(async () => {
+			workspaceAvailable = false;
+			throw new Error("Error invoking remote method 'editorHandoff:open': Error: Session workspace is not available");
+		});
 		renderButton();
 
 		const main = await screen.findByRole("button", { name: "Open in Cursor" });
 		expect(main).toBeEnabled();
 
+		const callsBeforeOpen = getState.mock.calls.length;
 		await userEvent.click(main);
 
 		// the failure must trigger a refetch, not just show a message
-		await waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(getState.mock.calls.length).toBeGreaterThan(callsBeforeOpen));
 		await waitFor(() =>
 			expect(screen.getByRole("button", { name: "Session workspace is not available" })).toBeDisabled(),
 		);

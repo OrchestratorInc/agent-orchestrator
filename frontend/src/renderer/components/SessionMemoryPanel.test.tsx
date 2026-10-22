@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toKanbanColumn } from "@aoagents/product-ui";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import type { SessionMemoryReading } from "../hooks/useSessionMemory";
@@ -126,7 +126,10 @@ function renderButton() {
 	return { ...result, rerender: () => result.rerender(tree()) };
 }
 
+afterEach(() => vi.useRealTimers());
+
 beforeEach(() => {
+	vi.useFakeTimers({ toFake: ["Date"] });
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	clipboardMock.mockReset().mockResolvedValue(undefined);
 	usageQueryMock.mockReset().mockReturnValue({ data: undefined });
