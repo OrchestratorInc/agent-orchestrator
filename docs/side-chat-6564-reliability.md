@@ -1,6 +1,7 @@
 # Side-chat reliability: issue #6564
 
 Base: upstream `464fa1ee943ddc2b5fd356c6b6ccb1ffe6ab9af8`.
+Rebased before PR onto upstream `beaf8950b` (the two subsequent storage fixes).
 Branch: `codex/fix-6564-side-chat-reliability`.
 
 Severity measures user impact; complexity measures implementation and verification
