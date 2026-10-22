@@ -506,8 +506,8 @@ describe("startup harness update notice", () => {
 		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
 		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
 		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 		expect(screen.getByRole("button", { name: "View details" })).toBeEnabled();
-		expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {

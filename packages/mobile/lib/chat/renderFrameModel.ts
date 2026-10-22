@@ -368,5 +368,22 @@ export function readRenderBridgeMessage(data: string): RenderBridgeMessage | und
 
 /** Whether a navigation is the page itself loading; anything else stays out of the frame. */
 export function isRenderPageLoad(url: string, pageUrl: string): boolean {
-	return url.split("#")[0] === pageUrl.split("#")[0];
+	return canonicalPageUrl(url) === canonicalPageUrl(pageUrl);
+}
+
+const DEFAULT_PORTS: Record<string, string> = { http: "80", https: "443" };
+
+/**
+ * A URL as WebKit hands it back: the scheme and host lowercased, a default port
+ * dropped, and the fragment gone. iOS asks about the initial load with that form,
+ * so `https://host:443/…` must match `https://host/…`. The path stays exact.
+ * React Native's URL does not expose host and port, so this parses by hand.
+ */
+function canonicalPageUrl(value: string): string {
+	const url = value.split("#")[0];
+	const match = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^/?:]*)(?::(\d*))?([/?].*)?$/i.exec(url);
+	if (!match) return url;
+	const scheme = match[1].toLowerCase();
+	const port = match[3] && match[3] !== DEFAULT_PORTS[scheme] ? `:${match[3]}` : "";
+	return `${scheme}://${match[2].toLowerCase()}${port}${match[4] ?? ""}`;
 }

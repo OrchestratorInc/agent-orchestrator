@@ -3,6 +3,8 @@ import { ChevronLeft, Folder, Link2, LoaderCircle, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { components } from "../../api/schema";
+import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { Button } from "./ui/button";
@@ -18,6 +20,13 @@ export type CloneRepositorySelection = CloneRepositoryDetails & {
 	targetPath: string;
 };
 
+type CloneDestination = components["schemas"]["CloneDestination"];
+type DestinationCheck =
+	| { kind: "idle" }
+	| { kind: "checking"; key: string }
+	| { kind: "ready"; key: string; destination: CloneDestination }
+	| { kind: "error"; key: string; message: string };
+
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
@@ -28,6 +37,10 @@ export default function CloneRepositoryDialog({
 	onChange,
 	onClose,
 	onContinue,
+	onCheckDestination,
+	onUseExisting,
+	onCancel,
+	activity = null,
 	onError,
 	onChooseRemoteDestination,
 	open,
@@ -43,6 +56,10 @@ export default function CloneRepositoryDialog({
 	onChange: (value: CloneRepositoryDetails) => void;
 	onClose: () => void;
 	onContinue: (selection: CloneRepositorySelection) => void;
+	onCheckDestination: (input: CloneRepositoryDetails, signal: AbortSignal) => Promise<CloneDestination>;
+	onUseExisting: (path: string) => void;
+	onCancel: () => void;
+	activity?: "cloning" | "validating" | null;
 	onError?: (message: string) => void;
 	onChooseRemoteDestination?: () => void;
 	open: boolean;
@@ -54,7 +71,9 @@ export default function CloneRepositoryDialog({
 }) {
 	const { t } = useTranslation();
 	const [submitted, setSubmitted] = useState(false);
-	const [repositoryCheck, setRepositoryCheck] = useState<"idle" | "checking" | "valid" | "invalid" | "unchecked">("idle");
+	const [destinationCheck, setDestinationCheck] = useState<DestinationCheck>({ kind: "idle" });
+	const [checkAttempt, setCheckAttempt] = useState(0);
+	const [elapsed, setElapsed] = useState(0);
 	const repositoryCheckRequest = useRef(0);
 	const destinationPickerRequest = useRef(0);
 	const shakeFrame = useRef<number | null>(null);
@@ -75,21 +94,19 @@ export default function CloneRepositoryDialog({
 		targetPath && existingProjectPaths.some((path) => sameProjectPath(path, targetPath)),
 	);
 	const urlError = hasRemoteUrl && !repositoryName ? t("createProject.cloneInvalidUrl") : null;
-	const repositoryAccessError = repositoryName && repositoryCheck === "invalid"
-		? t("createProject.cloneRepositoryUnavailable", {
-				defaultValue: "This isn't a repository or you don't have access",
-			})
-		: null;
+	const checkKey = JSON.stringify([value.remoteUrl.trim(), value.destinationParent.trim()]);
+	const currentCheck = "key" in destinationCheck && destinationCheck.key === checkKey ? destinationCheck : null;
+	const destination = currentCheck?.kind === "ready" ? currentCheck.destination : null;
 	const duplicateError = repositoryName && projectExists ? t("createProject.cloneProjectExists") : null;
 	const deferredRepositoryError = urlError ?? duplicateError;
-	const inlineRepositoryError = repositoryAccessError ?? (
+	const inlineRepositoryError = (
 		repositoryFieldTouched || submitted ? deferredRepositoryError : null
 	);
 	const parentError = error === inlineRepositoryError ? null : error;
 	const destinationError = submitted && !hasDestination ? t("createProject.cloneDestinationRequired") : null;
 	const canContinue = Boolean(
 		repositoryName &&
-		(repositoryCheck === "valid" || (remote && repositoryCheck === "unchecked")) &&
+		destination && !destination.exists &&
 		hasDestination &&
 		!projectExists &&
 		!disabled &&
@@ -122,7 +139,7 @@ export default function CloneRepositoryDialog({
 		repositoryCheckRequest.current += 1;
 		destinationPickerRequest.current += 1;
 		setSubmitted(false);
-		setRepositoryCheck("idle");
+		setDestinationCheck({ kind: "idle" });
 		setChoosingDestination(false);
 		setRepositoryFieldTouched(false);
 		setDestinationPickerError(null);
@@ -150,27 +167,30 @@ export default function CloneRepositoryDialog({
 
 	useEffect(() => {
 		const requestId = ++repositoryCheckRequest.current;
-		if (!open || !repositoryName) {
-			setRepositoryCheck("idle");
-			return;
-		}
-		// Host access is not checked until clone/prepare; do not label it validated.
-		if (remote) {
-			setRepositoryCheck("unchecked");
-			return;
-		}
-		setRepositoryCheck("checking");
+		if (!open || !repositoryName || !hasDestination || activity) return;
+		const controller = new AbortController();
+		setDestinationCheck({ kind: "checking", key: checkKey });
 		const timer = window.setTimeout(() => {
-			void aoBridge.app.checkGitRepository(value.remoteUrl.trim()).then((exists) => {
-				if (requestId !== repositoryCheckRequest.current) return;
-				setRepositoryCheck(exists ? "valid" : "invalid");
-			}).catch(() => {
-				if (requestId !== repositoryCheckRequest.current) return;
-				setRepositoryCheck("invalid");
+			void onCheckDestination({ remoteUrl: value.remoteUrl.trim(), destinationParent: value.destinationParent.trim() }, controller.signal).then((destination) => {
+				if (requestId === repositoryCheckRequest.current) setDestinationCheck({ kind: "ready", key: checkKey, destination });
+			}).catch((err: unknown) => {
+				if (controller.signal.aborted || requestId !== repositoryCheckRequest.current) return;
+				setDestinationCheck({ kind: "error", key: checkKey, message: apiErrorMessage(err, t("createProject.cloneCheckFailed")) });
 			});
 		}, 300);
-		return () => window.clearTimeout(timer);
-	}, [open, remote, repositoryName, value.remoteUrl]);
+		return () => {
+			window.clearTimeout(timer);
+			controller.abort();
+		};
+	}, [open, repositoryName, hasDestination, checkKey, checkAttempt, onCheckDestination, activity, t]);
+
+	useEffect(() => {
+		setElapsed(0);
+		if (!activity) return;
+		const started = Date.now();
+		const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+		return () => window.clearInterval(timer);
+	}, [activity]);
 
 	const chooseDestination = async () => {
 		if (remote) {
@@ -225,7 +245,7 @@ export default function CloneRepositoryDialog({
 		}
 		onContinue({
 			...value,
-			remoteUrl: value.remoteUrl.trim(),
+			remoteUrl: destination?.remoteUrl ?? value.remoteUrl.trim(),
 			destinationParent: value.destinationParent.trim(),
 			targetPath,
 		});
@@ -282,7 +302,7 @@ export default function CloneRepositoryDialog({
 										{inlineRepositoryError ? (
 											<motion.p
 												id="cloneRepositoryUrlError"
-												key={urlError ? "repository-url-error" : repositoryAccessError ? "repository-access-error" : "duplicate-project-error"}
+												key={urlError ? "repository-url-error" : "duplicate-project-error"}
 												initial={{ opacity: 0, filter: "blur(2px)" }}
 												animate={{ opacity: 1, filter: "blur(0px)" }}
 												exit={{ opacity: 0, filter: "blur(2px)" }}
@@ -302,7 +322,7 @@ export default function CloneRepositoryDialog({
 										autoCapitalize="none"
 										autoComplete="off"
 										aria-describedby={`cloneRepositoryUrlHelp${inlineRepositoryError ? " cloneRepositoryUrlError" : ""}`}
-										aria-invalid={urlError || repositoryAccessError || duplicateError ? true : undefined}
+										aria-invalid={urlError || duplicateError ? true : undefined}
 										className="bg-[var(--color-bg-import-card)] pl-10 pr-10 font-mono text-[13px]"
 										disabled={disabled}
 										placeholder={t("createProject.cloneRepositoryUrlPlaceholder")}
@@ -311,8 +331,8 @@ export default function CloneRepositoryDialog({
 										onChange={(event) => onChange({ ...value, remoteUrl: event.target.value })}
 										onBlur={() => setRepositoryFieldTouched(true)}
 									/>
-									{repositoryCheck === "checking" ? (
-										<LoaderCircle className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label={t("createProject.cloneCheckingRepository", { defaultValue: "Checking repository" })} />
+									{currentCheck?.kind === "checking" ? (
+										<LoaderCircle className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label={t("createProject.cloneCheckingRepository", { defaultValue: "Checking destination" })} />
 									) : null}
 									<RepositoryOwnerIcon owner={repositoryAvatar?.owner ?? null} avatarUrl={repositoryAvatar?.url ?? null} />
 								</div>
@@ -354,11 +374,23 @@ export default function CloneRepositoryDialog({
 								</div>
 								<p id="cloneDestinationHelp" className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]">
 									{cloning && targetPath
-										? t("createProject.cloneInProgress", { path: targetPath })
+										? t("createProject.cloneDestinationInProgress", { path: targetPath })
 										: targetPath
 											? t("createProject.cloneDestinationTarget", { path: targetPath })
 											: t("createProject.cloneDestinationHelp")}
 								</p>
+								{currentCheck?.kind === "error" ? (
+									<div role="alert" className="space-y-2 text-[12px] text-destructive">
+										<p>{currentCheck.message}</p>
+										<Button type="button" variant="outline" disabled={disabled} onClick={() => setCheckAttempt((attempt) => attempt + 1)}>{t("createProject.retry")}</Button>
+									</div>
+								) : null}
+								{destination?.exists ? (
+									<div className="space-y-2 text-[12px]" role="status">
+										<p>{t("createProject.cloneDestinationConflict", { path: destination.path })}</p>
+										{destination.canUseExisting ? <Button type="button" variant="outline" disabled={disabled} onClick={() => onUseExisting(destination.path)}>{t("createProject.cloneUseExisting")}</Button> : null}
+									</div>
+								) : null}
 								{destinationError ? (
 									<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
 										{destinationError}
@@ -368,10 +400,15 @@ export default function CloneRepositoryDialog({
 
 						</div>
 
+						{activity ? <div className="space-y-1 px-4 pt-3 text-[12px] text-muted-foreground" role="status" aria-live="polite">
+							<p className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(activity === "cloning" ? "createProject.cloneInProgress" : "createProject.cloneVerifying", { seconds: elapsed })}</p>
+							{activity === "cloning" ? <p>{t("createProject.cloneSlowHint")}</p> : null}
+						</div> : null}
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
+								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
 								<Button type="submit" variant="primary" disabled={!canContinue}>
-									{cloning ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t("createProject.cloneContinue")}
+									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>

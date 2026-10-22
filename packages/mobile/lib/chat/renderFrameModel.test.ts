@@ -124,6 +124,25 @@ describe("isRenderPageLoad", () => {
 		expect(isRenderPageLoad("https://example.com/", uri)).toBe(false);
 		expect(isRenderPageLoad(`http://192.168.1.5:3001/api/v1/sessions`, uri)).toBe(false);
 	});
+
+	// iOS asks about the initial load too, with the URL WebKit canonicalized: the
+	// default port dropped and the host lowercased. Refusing it cancels the load
+	// without an error, and the frame stays a skeleton.
+	it("allows the page as WebKit canonicalizes its URL", () => {
+		expect(isRenderPageLoad(`https://abc.trycloudflare.com${path}#ao-theme=x`, `https://abc.trycloudflare.com:443${path}#ao-theme=x`)).toBe(true);
+		expect(isRenderPageLoad(`http://my-pc.local${path}`, `http://my-pc.local:80${path}#ao-theme=x`)).toBe(true);
+		expect(isRenderPageLoad(`http://localhost:3226${path}`, `http://LocalHost:3226${path}#ao-theme=x`)).toBe(true);
+		expect(isRenderPageLoad(`https://my-pc.tail1234.ts.net${path}`, `HTTPS://My-PC.tail1234.ts.net:443${path}`)).toBe(true);
+	});
+
+	it("still refuses another origin or path once canonicalized", () => {
+		const tunnel = `https://abc.trycloudflare.com:443${path}#ao-theme=x`;
+		expect(isRenderPageLoad(`http://abc.trycloudflare.com${path}`, tunnel)).toBe(false);
+		expect(isRenderPageLoad(`https://abc.trycloudflare.com:8443${path}`, tunnel)).toBe(false);
+		expect(isRenderPageLoad(`https://evil.example${path}`, tunnel)).toBe(false);
+		expect(isRenderPageLoad(`https://abc.trycloudflare.com${path}/other`, tunnel)).toBe(false);
+		expect(isRenderPageLoad(`https://abc.trycloudflare.com${path.toUpperCase()}`, tunnel)).toBe(false);
+	});
 });
 
 describe("RENDER_ZOOM_SCRIPT", () => {
