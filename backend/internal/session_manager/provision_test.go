@@ -421,6 +421,45 @@ func TestResolveAgentConfigValidatesAgainstSavedCatalogFirst(t *testing.T) {
 	}
 }
 
+func TestResolveAgentConfigRediscoversUnusableSavedCatalog(t *testing.T) {
+	for _, state := range []string{"queued", "refreshing", "error"} {
+		t.Run(state, func(t *testing.T) {
+			var refreshes []bool
+			m := &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes,
+				saved: ports.AgentModelCatalog{RefreshState: state, Models: []ports.AgentModelInfo{{ID: "sonnet"}}},
+				fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "bedrock-sonnet"}}},
+			}}
+			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: "sonnet"},
+			}, domain.ProjectConfig{})
+			if !errors.Is(err, ErrUnsupportedModel) {
+				t.Fatalf("error = %v, want provider catalog to reject old model", err)
+			}
+			if len(refreshes) != 2 || refreshes[0] || !refreshes[1] {
+				t.Fatalf("catalog reads = %v, want saved then fresh", refreshes)
+			}
+		})
+	}
+	for _, model := range []string{"sonnet", ""} {
+		t.Run("new effort/model="+model, func(t *testing.T) {
+			var refreshes []bool
+			m := &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes,
+				saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", IsDefault: true, Efforts: []string{"high"}}}},
+				fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", IsDefault: true, Efforts: []string{"high", "max"}}}},
+			}}
+			resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: model, Effort: "max"}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if err != nil || resolved.Effort != "max" {
+				t.Fatalf("new effort = %#v, %v", resolved, err)
+			}
+			if len(refreshes) != 2 || refreshes[0] || !refreshes[1] {
+				t.Fatalf("catalog reads = %v, want saved then fresh", refreshes)
+			}
+		})
+	}
+}
+
 func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	catalogCalls := 0
 	m := &Manager{modelCatalog: tuningCatalog{calls: &catalogCalls, catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{

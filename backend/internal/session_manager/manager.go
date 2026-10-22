@@ -1584,9 +1584,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	}
 	// Validate against the saved catalog first so a launch does not wait on a
 	// live model discovery. Rediscover only when the saved catalog cannot answer:
-	// it failed, is stale or empty, or does not list the requested model.
+	// it failed, is stale or updating, or lacks the requested model or effort.
 	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false)
-	if err != nil || !savedCatalogCovers(catalog, modelID) {
+	if err != nil || !savedCatalogCovers(catalog, modelID, resolved.Effort) {
 		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
 	}
 	if err != nil {
@@ -7018,16 +7018,21 @@ func firstNonEmptyString(values ...string) string {
 
 // savedCatalogCovers reports whether a saved model catalog can answer a launch's
 // model and effort checks without a live rediscovery.
-func savedCatalogCovers(catalog ports.AgentModelCatalog, modelID string) bool {
-	if catalog.Stale || len(catalog.Models) == 0 {
+func savedCatalogCovers(catalog ports.AgentModelCatalog, modelID, effort string) bool {
+	if catalog.Stale || len(catalog.Models) == 0 || (catalog.RefreshState != "" && catalog.RefreshState != "idle") {
 		return false
 	}
-	if modelID == "" {
-		return true
-	}
 	for _, item := range catalog.Models {
-		if item.ID == modelID {
-			return true
+		if item.ID == modelID || (modelID == "" && item.IsDefault) {
+			if effort == "" || containsString(item.Efforts, effort) {
+				return true
+			}
+			if len(item.Efforts) == 0 {
+				if concrete := newestClaudeFamilyModel(catalog.Models, item.ID); concrete != nil {
+					return containsString(concrete.Efforts, effort)
+				}
+			}
+			return false
 		}
 	}
 	return false

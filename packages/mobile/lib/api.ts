@@ -671,8 +671,14 @@ const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
 
 function pollDelay(signal: AbortSignal | undefined): Promise<void> {
 	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, MODEL_CATALOG_REFRESH_POLL_MS);
-		signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, MODEL_CATALOG_REFRESH_POLL_MS);
+		signal?.addEventListener("abort", finish, { once: true });
+		if (signal?.aborted) finish();
 	});
 }
 

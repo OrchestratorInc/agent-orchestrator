@@ -69,11 +69,19 @@ describe("mobile Chat API boundaries", () => {
 				vi.mocked(fetch).mockResolvedValueOnce(response({ agentId: "opencode", models: [], refreshState: "refreshing" }));
 			}
 			vi.mocked(fetch).mockResolvedValueOnce(response({ agentId: "opencode", models: [{ id: "big-pickle", label: "Big Pickle" }], refreshState: "idle" }));
-			const pending = getAgentModels(cfg, "opencode");
+			const polling = new AbortController();
+			const addListener = vi.spyOn(polling.signal, "addEventListener");
+			const removeListener = vi.spyOn(polling.signal, "removeEventListener");
+			const pending = getAgentModels(cfg, "opencode", undefined, polling.signal);
 			await vi.advanceTimersByTimeAsync(discovering * 1_500);
 			const catalog = await pending;
 			expect(vi.mocked(fetch)).toHaveBeenCalledTimes(discovering + 1);
 			expect(catalog.models.map((model) => model.id)).toEqual(["big-pickle"]);
+			expect(addListener).toHaveBeenCalledTimes(discovering);
+			expect(removeListener).toHaveBeenCalledTimes(discovering);
+			for (const [, listener] of addListener.mock.calls) {
+				expect(removeListener).toHaveBeenCalledWith("abort", listener);
+			}
 		} finally {
 			vi.useRealTimers();
 		}

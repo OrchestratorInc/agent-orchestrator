@@ -1593,7 +1593,7 @@ func TestModelUpdateWaitsForStartupReadiness(t *testing.T) {
 
 	done := make(chan ports.AgentModelCatalog, 1)
 	go func() {
-		refreshed, _ := svc.Models(context.Background(), "codex", "", true)
+		refreshed, _ := svc.revalidateModels(context.Background(), "codex", "")
 		done <- refreshed
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -1623,12 +1623,61 @@ func TestModelUpdateKeepsFullDiscoveryBudgetAfterReadinessWait(t *testing.T) {
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, &fakeModelCache{}, discoverer)
 	svc.readinessWarm = make(chan struct{}) // never finishes
 
-	got, err := svc.Models(context.Background(), "codex", "", true)
+	got, err := svc.revalidateModels(context.Background(), "codex", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
 		t.Fatalf("catalog = %#v, want discovery to finish after the readiness wait", got)
+	}
+}
+
+func TestModelRefreshBypassesStartupReadiness(t *testing.T) {
+	for _, joinBackground := range []bool{false, true} {
+		t.Run(fmt.Sprintf("joinBackground=%t", joinBackground), func(t *testing.T) {
+			discoverer := successfulModelDiscoverer()
+			svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, &fakeModelCache{}, discoverer)
+			svc.readinessWarm = make(chan struct{}) // never finishes
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if joinBackground {
+				// The first cache read starts a coalesced background load, which
+				// must be woken when spawn asks for an explicit rediscovery.
+				first, err := svc.Models(ctx, "codex", "", false)
+				if err != nil || first.RefreshState != "refreshing" {
+					t.Fatalf("first read = %#v, %v", first, err)
+				}
+			}
+			got, err := svc.Models(ctx, "codex", "", true)
+			if err != nil || len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+				t.Fatalf("explicit refresh = %#v, %v", got, err)
+			}
+			if calls := discoverer.discoverCalls.Load(); calls != 1 {
+				t.Fatalf("discoveries = %d, want one coalesced discovery", calls)
+			}
+		})
+	}
+}
+
+func TestModelRefreshIgnoresExpiredNotInstalledReadiness(t *testing.T) {
+	now := time.Now().UTC()
+	agent := &mutableInstallAgent{}
+	discoverer := successfulModelDiscoverer()
+	item := harnessAgent("gemini", "Gemini", nil)
+	item.Agent = agent
+	svc := newService([]agentregistry.HarnessAgent{item}, &fakeModelCache{}, discoverer)
+	svc.readiness.now = func() time.Time { return now }
+	if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"gemini"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	agent.installed.Store(true)
+	now = now.Add(svc.readiness.displayTTL + time.Second)
+	got, err := svc.Models(context.Background(), "gemini", "", true)
+	if err != nil || len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+		t.Fatalf("refresh after external install = %#v, %v", got, err)
+	}
+	if discoverer.discoverCalls.Load() != 1 {
+		t.Fatal("expired not-installed observation blocked discovery")
 	}
 }
 

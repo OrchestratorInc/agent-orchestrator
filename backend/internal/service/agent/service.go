@@ -60,6 +60,7 @@ const (
 
 type modelCatalogCall struct {
 	done       chan struct{}
+	refresh    chan struct{} // closed under modelCallMu when an explicit refresh joins
 	catalog    ports.AgentModelCatalog
 	err        error
 	generation int64
@@ -377,15 +378,16 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 	return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRefresh)
 }
 
-// modelUpdateReadinessWait bounds how long a catalog update waits for the
+// modelUpdateReadinessWait bounds how long a background catalog update waits for the
 // startup readiness pass, so a daemon that never warms readiness still updates.
 var modelUpdateReadinessWait = 30 * time.Second
 
-// waitForStartupReadiness holds a catalog load until the startup readiness pass
+// waitForStartupReadiness holds a background load until the startup readiness pass
 // finishes, at most modelUpdateReadinessWait. Reads of the saved catalog never
 // come here, so the UI lists models without waiting on readiness. It runs
-// before the discovery slot and timeout, which keep their full budget.
-func (s *Service) waitForStartupReadiness(ctx context.Context) {
+// before the discovery slot and timeout, which keep their full budget. An
+// explicit refresh bypasses the wait, including when it joins a background load.
+func (s *Service) waitForStartupReadiness(ctx context.Context, refresh <-chan struct{}) {
 	if s.readinessWarm == nil {
 		return
 	}
@@ -393,13 +395,14 @@ func (s *Service) waitForStartupReadiness(ctx context.Context) {
 	defer timer.Stop()
 	select {
 	case <-s.readinessWarm:
+	case <-refresh:
 	case <-timer.C:
 	case <-ctx.Done():
 	}
 }
 
 // readyForModelUpdate reports whether readiness lets a catalog update discover
-// the agent. Only an agent readiness found not installed skips the update; an
+// the agent. Only a fresh not-installed observation skips the update; an
 // unknown installation still discovers, and sign-in is left to discovery, which
 // keeps the saved catalog while an agent is signed out.
 func (s *Service) readyForModelUpdate(agentID string) bool {
@@ -408,7 +411,7 @@ func (s *Service) readyForModelUpdate(agentID string) bool {
 	}
 	for _, snapshot := range s.readiness.Snapshot() {
 		if snapshot.ID == agentID {
-			return snapshot.Installation.State != domain.AgentInstallationNotInstalled
+			return snapshot.Installation.State != domain.AgentInstallationNotInstalled || snapshot.Installation.Freshness != domain.AgentReadinessFresh
 		}
 	}
 	return true
@@ -652,6 +655,13 @@ func (s *Service) coalesceModelLoad(
 	key := agentID + "\x00" + projectID
 	s.modelCallMu.Lock()
 	if active := s.modelCalls[key]; active != nil {
+		if mode == modelLoadRefresh {
+			select {
+			case <-active.refresh:
+			default:
+				close(active.refresh)
+			}
+		}
 		s.modelCallMu.Unlock()
 		select {
 		case <-active.done:
@@ -666,7 +676,10 @@ func (s *Service) coalesceModelLoad(
 	} else {
 		s.modelGeneration[key]++
 	}
-	call := &modelCatalogCall{done: make(chan struct{}), generation: s.modelGeneration[key]}
+	call := &modelCatalogCall{done: make(chan struct{}), refresh: make(chan struct{}), generation: s.modelGeneration[key]}
+	if mode == modelLoadRefresh {
+		close(call.refresh)
+	}
 	s.modelCalls[key] = call
 	s.modelCallMu.Unlock()
 
@@ -677,8 +690,9 @@ func (s *Service) coalesceModelLoad(
 	go func() {
 		// Wait for readiness before taking a discovery slot or starting the
 		// discovery timeout, so a slow startup neither holds slots nor eats into
-		// the discovery's own budget.
-		s.waitForStartupReadiness(baseCtx)
+		// the discovery's own budget. An explicit refresh also wakes an existing
+		// background load so spawn validation does not wait on startup readiness.
+		s.waitForStartupReadiness(baseCtx, call.refresh)
 		select {
 		case s.discoverySlots <- struct{}{}:
 			defer func() { <-s.discoverySlots }()
@@ -692,6 +706,11 @@ func (s *Service) coalesceModelLoad(
 		}
 		loadCtx, cancel := context.WithTimeout(baseCtx, modelCatalogLoadTimeout)
 		defer cancel()
+		select {
+		case <-call.refresh:
+			mode = modelLoadRefresh
+		default:
+		}
 		call.catalog, call.err = s.loadModels(loadCtx, agentID, projectID, mode, call.generation)
 		s.modelCallMu.Lock()
 		delete(s.modelCalls, key)
