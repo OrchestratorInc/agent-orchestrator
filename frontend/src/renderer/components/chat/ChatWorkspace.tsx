@@ -127,6 +127,21 @@ import {
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
+import {
+	indexWorkerUpdates,
+	isQuietWorkerTurn,
+	isTaskTitleUpdate,
+	OrchestratorAction,
+	piggybackedUpdates,
+	renamedTitle,
+	SpawnedAgents,
+	spawnedSessionIds,
+	splitOrchestratorReply,
+	TaskNamedLine,
+	WorkerUpdateIndexContext,
+	WorkerUpdateRows,
+	workerUpdatesOf,
+} from "./WorkerUpdates";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -1779,6 +1794,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
 									snapshot={snapshot}
@@ -2543,6 +2559,7 @@ export function Timeline({
 	localEchos = [],
 	startup,
 	arriving = false,
+	workerUpdates = false,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -2581,6 +2598,8 @@ export function Timeline({
 	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
 	/** An interface switch is bringing this conversation in; only then does the transcript fade in. */
 	arriving?: boolean;
+	/** Orchestrator chat: draw worker messages and reports as rows, and the orchestrator's handling under them. */
+	workerUpdates?: boolean;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3407,6 +3426,12 @@ export function Timeline({
 		);
 	}, [openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	const workerUpdateIndex = useMemo(
+		() => (workerUpdates ? indexWorkerUpdates(snapshot.items) : null),
+		[workerUpdates, snapshot.items],
+	);
+	const quietWorkerGroup = (group: TimelineGroup | undefined) =>
+		Boolean(workerUpdates && group?.outcome?.state === "completed" && isQuietWorkerTurn(group.items));
 	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
 	// once real conversation content exists (history can load after the chat opens).
 	const groupCountRef = useRef(groups.length);
@@ -4014,8 +4039,12 @@ export function Timeline({
 								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
+								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
 									group={group}
+									workerUpdates={workerUpdates}
+									// Consecutive quiet worker turns read as one list of rows, not separate turns.
+									tight={quietWorkerGroup(group) && quietWorkerGroup(groups[index - 1])}
 									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -4058,6 +4087,7 @@ export function Timeline({
 									busy={busy}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
 					})}
@@ -4258,6 +4288,8 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds,
 	startup,
 	onSelectAnnotation,
+	workerUpdates = false,
+	tight = false,
 }: {
 	group: TimelineGroup;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
@@ -4298,6 +4330,8 @@ const TurnGroup = memo(function TurnGroup({
 	/** The opening turn of a starting session: its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup>;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	workerUpdates?: boolean;
+	tight?: boolean;
 }) {
 	const { t } = useTranslation();
 	const hasTerminalFailure =
@@ -4408,7 +4442,24 @@ const TurnGroup = memo(function TurnGroup({
 	// One flat keyed list rather than a slot per section, so a run keeps its element
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
-	const body: ReactNode[] = humanRuns.map(renderRun);
+	// Orchestrator chat: a worker's message or report opens its turn as rows, and
+	// once the turn settles the orchestrator's reply splits into action lines under
+	// them and, only when it asks the user something, a reply.
+	const lead = workerUpdates ? humanRuns[0]?.items[0] : undefined;
+	const leadMessage = lead?.kind === "message" ? lead : undefined;
+	const leadUpdates = leadMessage ? workerUpdatesOf(leadMessage) : [];
+	const namedTitle = leadMessage && isTaskTitleUpdate(leadMessage) ? renamedTitle(group.items) : undefined;
+	const finalMessage = finalRun?.items[0]?.kind === "message" ? finalRun.items[0] : undefined;
+	const renderLeadRun = (run: TimelineRun): ReactNode | ReactNode[] => {
+		const item = run.items[0];
+		if (!workerUpdates || item?.kind !== "message") return renderRun(run);
+		if (item === leadMessage && leadUpdates.length > 0) return <WorkerUpdateRows key={run.key} updates={leadUpdates} />;
+		if (item === leadMessage && namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
+		const piggybacked = piggybackedUpdates(item);
+		if (piggybacked.length === 0) return renderRun(run);
+		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
+	};
+	const body: ReactNode[] = humanRuns.flatMap(renderLeadRun);
 	// A live provider failure replaces the Working row with its reconnect card, and a
 	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
 	// The setup checklist sits exactly where the Working row will, so the handoff
@@ -4427,8 +4478,21 @@ const TurnGroup = memo(function TurnGroup({
 		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
+	const workerReply = outcome && (leadUpdates.length > 0 || namedTitle)
+		? splitOrchestratorReply(finalMessage?.text ?? "")
+		: undefined;
+	if (workerReply && !namedTitle) {
+		const work = workerReply.question || foldedRuns.length === 0 ? undefined : foldedRuns.map(renderRun);
+		body.push(...workerReply.actions.map((action, index) => (
+			<OrchestratorAction key={`action-${index}`} text={action}>
+				{index === workerReply.actions.length - 1 ? work : undefined}
+			</OrchestratorAction>
+		)));
+	}
 	if (!outcome) {
 		body.push(...workedRuns.map(renderRun));
+	} else if (workerReply && !workerReply.question) {
+		// Nothing to ask: the action lines above are the whole answer.
 	} else {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
@@ -4443,9 +4507,15 @@ const TurnGroup = memo(function TurnGroup({
 		);
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
-	if (finalRun) body.push(renderRun(finalRun));
+	if (finalRun && finalMessage && workerReply) {
+		if (workerReply.question) body.push(renderRun({ ...finalRun, items: [{ ...finalMessage, text: workerReply.question }] }));
+	} else if (finalRun) {
+		body.push(renderRun(finalRun));
+	}
+	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
 	return (
-		<div className="flex min-w-0 flex-col gap-2.5">
+		<div className={cn("flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
 			{body}
 			{/* Both of these are current state of the turn rather than steps in it, which
 			    is why they sit at its end: a checklist that ticks itself off and a file
