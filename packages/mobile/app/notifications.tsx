@@ -1,5 +1,6 @@
 import { Feather } from "../lib/icons";
 import { useFocusEffect, useRouter, type Href } from "expo-router";
+import { useIsFocused } from "expo-router/react-navigation";
 import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -98,6 +99,7 @@ function NotificationsContent() {
 	// a session leaves this screen mounted underneath, and coming back should
 	// show those rows as read, like reopening the desktop panel.
 	useFocusEffect(useCallback(() => () => setHighlightedIds(new Set()), []));
+	const focused = useIsFocused();
 	const items = useMemo(() => notificationsAcrossHosts(Object.values(feeds).map((feed) => {
 		const host = hostStates.find((candidate) => candidate.hostId === feed.hostId);
 		return {
@@ -209,8 +211,11 @@ function NotificationsContent() {
 	}, [hostSignature]);
 
 	// Concrete loaded ids only, never "everything": unread rows on pages not
-	// loaded yet stay unread until the user scrolls to them.
+	// loaded yet stay unread until the user scrolls to them. Only while focused:
+	// a reload under an open session (a host reconnecting) must not mark rows
+	// the user has not seen. They are acked, and highlighted, on return.
 	useEffect(() => {
+		if (!focused) return;
 		for (const feed of Object.values(feeds)) {
 			const source = feed.error ? null : configForHost(feed.hostId);
 			if (!source) continue;
@@ -252,7 +257,7 @@ function NotificationsContent() {
 					});
 				});
 		}
-	}, [configForHost, feeds, refreshHost, updateFeeds]);
+	}, [configForHost, feeds, focused, refreshHost, updateFeeds]);
 
 	function open(notification: FeedItem) {
 		const source = configForHost(notification.hostId);

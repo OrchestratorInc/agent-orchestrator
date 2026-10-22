@@ -12,7 +12,14 @@ const fixtures = vi.hoisted(() => {
 		clearNotification: vi.fn(async () => {}),
 		clearAllNotifications: vi.fn(async (_config: unknown) => {}),
 		alert: vi.fn(),
-		blur: undefined as (() => void) | undefined,
+		focus: (() => {
+			const listeners = new Set<() => void>();
+			return {
+				value: true,
+				subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+				set(next: boolean) { this.value = next; for (const listener of listeners) listener(); },
+			};
+		})(),
 		markAllNotificationsRead: vi.fn(async (_config: unknown, _ids?: string[]) => {}),
 		refreshHost: vi.fn(async (_hostId: string) => {}),
 		getNotifications: vi.fn(async (config: { hostId: "dev" | "mac" }) => ({
@@ -63,15 +70,20 @@ vi.mock("expo-router", async () => {
 	const React = await import("react");
 	return {
 		useRouter: () => ({ navigate: vi.fn(), push: vi.fn(), back: vi.fn(), canGoBack: () => false }),
-		// Focus runs the effect on mount; blur() runs its cleanup like losing focus.
+		// Runs the effect while focused and its cleanup on blur, like react-navigation.
 		useFocusEffect: (effect: () => (() => void) | void) => {
+			const focused = React.useSyncExternalStore(fixtures.focus.subscribe, () => fixtures.focus.value);
 			React.useEffect(() => {
+				if (!focused) return;
 				const cleanup = effect();
-				fixtures.blur = () => cleanup?.();
 				return cleanup ?? undefined;
-			}, [effect]);
+			}, [effect, focused]);
 		},
 	};
+});
+vi.mock("expo-router/react-navigation", async () => {
+	const React = await import("react");
+	return { useIsFocused: () => React.useSyncExternalStore(fixtures.focus.subscribe, () => fixtures.focus.value) };
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock("./api", () => ({
@@ -144,6 +156,7 @@ beforeEach(() => {
 	fixtures.clearAllNotifications.mockImplementation(async () => {});
 	fixtures.alert.mockClear();
 	fixtures.offline.clear();
+	fixtures.focus.value = true;
 });
 
 afterEach(async () => {
@@ -194,9 +207,36 @@ describe("NotificationsScreen", () => {
 		expect(renderer!.root.findAllByType("Dot" as never)).toHaveLength(2);
 
 		// Leaving for a session keeps the screen mounted; coming back shows them read.
-		act(() => { fixtures.blur?.(); });
+		act(() => { fixtures.focus.set(false); });
 		expect(renderer!.root.findAllByType("Dot" as never)).toHaveLength(0);
 		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not ack rows that load while the screen is blurred, and acks them on return", async () => {
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(1);
+
+		// Into a session: the screen stays mounted, and a reload brings a new unread row.
+		act(() => { fixtures.focus.set(false); });
+		const base = fixtures.getNotifications.getMockImplementation()!;
+		try {
+			fixtures.getNotifications.mockImplementation(async (config: { hostId: "dev" | "mac" }) => {
+				const page = await base(config);
+				if (config.hostId !== "mac") return page;
+				return { ...page, notifications: [{ id: "mac-2", sessionId: "worker-2", projectId: "project-2", prUrl: "", type: "needs_input", title: "Fresh", body: "", status: "unread", createdAt: "2026-10-08T10:30:00Z" }, ...page.notifications], unreadCount: 1 };
+			});
+			fixtures.markAllNotificationsRead.mockClear();
+			fixtures.refreshHost.mockClear();
+			const list = renderer!.root.findByType("SectionList" as never);
+			await act(async () => { await list.props.refreshControl.props.onRefresh(); });
+			expect(fixtures.markAllNotificationsRead).not.toHaveBeenCalled();
+			expect(fixtures.refreshHost).not.toHaveBeenCalled();
+
+			await act(async () => { fixtures.focus.set(true); });
+			expect(fixtures.markAllNotificationsRead).toHaveBeenCalledWith(fixtures.configs.mac, ["mac-2"]);
+		} finally {
+			fixtures.getNotifications.mockImplementation(base);
+		}
 	});
 
 	it("restores unread rows when the ack fails without retrying in a loop", async () => {
