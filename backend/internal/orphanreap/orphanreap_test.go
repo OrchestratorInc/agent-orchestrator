@@ -86,6 +86,47 @@ func TestPlanSparesLiveSessionOfOtherInstallation(t *testing.T) {
 	}
 }
 
+// TestPlanReapsSupersededLiveSessionTree pins the fork issue #115 class: a
+// live session's pty-host orphaned by a daemon restart (PPID=1, no registry
+// entry) is invisible to Destroy and untouchable while the session is live.
+// Once THIS daemon binds a freshly created runtime to the same session id —
+// Superseded — the pre-boot tree is provably stale: the session's live runtime
+// is the new host, and adoption no longer owns the old one.
+func TestPlanReapsSupersededLiveSessionTree(t *testing.T) {
+	tbl := orphanTable(t)
+	deps := testDeps(map[string]struct{}{})
+	deps.Superseded = map[string]struct{}{"nokia-1": {}}
+	victims := Plan(tbl, snapshotAt, deps)
+	if len(victims) != 1 {
+		t.Fatalf("victims = %d (%+v), want exactly the superseded tree", len(victims), victims)
+	}
+	if victims[0].PID != 100 || victims[0].SessionID != "nokia-1" || !victims[0].Superseded {
+		t.Fatalf("victim = pid %d session %q superseded %v, want pid 100 nokia-1 superseded",
+			victims[0].PID, victims[0].SessionID, victims[0].Superseded)
+	}
+	// A tree of another live session that this daemon has not superseded stays
+	// untouchable: supersession is per-session evidence, not a blanket pass.
+	deps.Superseded = map[string]struct{}{"other-1": {}}
+	if victims := Plan(tbl, snapshotAt, deps); len(victims) != 0 {
+		t.Fatalf("unrelated live session's runtime reaped: %+v", victims)
+	}
+}
+
+// A superseded session's tree that started after this daemon booted is a
+// runtime of THIS incarnation (or a same-id spawn race) — never a leftover.
+func TestPlanSparesSupersededTreeStartedAfterBoot(t *testing.T) {
+	out := "  210     1  7168  00:00:02 " + bundleExe + " pty-host nokia-1 /Users/u/.ao/data/worktrees/proj/nokia-1 bash -lc claude"
+	tbl, err := ParseTable(out, snapshotAt)
+	if err != nil {
+		t.Fatalf("ParseTable: %v", err)
+	}
+	deps := testDeps(map[string]struct{}{})
+	deps.Superseded = map[string]struct{}{"nokia-1": {}}
+	if victims := Plan(tbl, snapshotAt, deps); len(victims) != 0 {
+		t.Fatalf("this daemon's own runtime reaped: %+v", victims)
+	}
+}
+
 func TestPlanSparesForeignProcesses(t *testing.T) {
 	deps := testDeps(map[string]struct{}{"nokia-1": {}})
 	// name bait: a foreign claude process is never a candidate, whatever its age.

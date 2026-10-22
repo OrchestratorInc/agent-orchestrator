@@ -148,6 +148,43 @@ func (m *Manager) orphanDeps(exe string, terminated map[string]struct{}) orphanr
 	}
 }
 
+// reapSupersededRuntime kills the stale pre-boot pty-host trees of one live
+// session right after a relaunch bound a freshly created runtime to it (fork
+// issue #115). A daemon restart orphans the old pty-host (PPID=1) and, when
+// its registry entry was lost, leaves it invisible to Destroy — the relaunch
+// then re-binds the same session id while the old tree leaks on. At that
+// moment supersession is proven — the session's live runtime is the fresh
+// host — so the same evidence stack that plans the boot report condemns the
+// old tree, scoped to exactly this session id (no terminated evidence, so no
+// other session's tree is decidable here). Best-effort: failures are logged
+// and never fail the relaunch, and AO_NO_ORPHANREAP turns the pass off with
+// the rest of the orphan mechanism.
+func (m *Manager) reapSupersededRuntime(ctx context.Context, sessionID domain.SessionID) {
+	if orphanReapDisabled() {
+		return
+	}
+	// The relaunch request's deadline must not cut the teardown short; bound
+	// the pass independently of the caller instead.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reapSupersededBudget)
+	defer cancel()
+	tbl, at, err := m.processTable(ctx)
+	if err != nil {
+		m.logger.Warn("reap: superseded-runtime scan skipped", "sessionID", sessionID, "error", err)
+		return
+	}
+	exe, err := m.executable()
+	if err != nil {
+		m.logger.Warn("reap: superseded-runtime scan skipped", "sessionID", sessionID, "error", err)
+		return
+	}
+	deps := m.orphanDeps(exe, nil)
+	deps.Superseded = map[string]struct{}{string(sessionID): {}}
+	orphanreap.Reap(ctx, tbl, at, deps, m.orphanKiller)
+}
+
+// reapSupersededBudget bounds one superseded-tree teardown inside a relaunch.
+const reapSupersededBudget = 10 * time.Second
+
 // snapshotProcessTable reads the process table for the orphan scan. etime (not
 // time=) is the age column: wall-clock time since start, locale-free on Linux
 // and macOS, so start-time evidence does not depend on the machine locale. On

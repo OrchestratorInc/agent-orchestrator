@@ -258,6 +258,65 @@ describe("useTerminalSession", () => {
 		expect(muxes).toHaveLength(0);
 	});
 
+	// Fork issue #115: replacing the daemon under an attached pane must end at
+	// a live attachment on the new daemon — immediately when the daemon is
+	// back — instead of swallowing composer input in a dead channel.
+	it("reattaches to the replacement daemon as soon as it is ready again", () => {
+		const { view, terminal, muxes } = setup({ daemonReady: true });
+		act(() => muxes[0].emitOpened("handle-1"));
+		expect(view.result.current.state).toBe("attached");
+		// The daemon dies under the attached pane; the status flips down.
+		act(() => muxes[0].emitConnection("closed"));
+		expect(view.result.current.state).toBe("reattaching");
+		act(() => view.rerender({ daemonReady: false, isVisible: true, inputDisabled: false }));
+		// The in-flight retry lands against the dead daemon and stays down:
+		// no timer while the daemon is down.
+		act(() => vi.advanceTimersByTime(1_000));
+		act(() => muxes[1].emitConnection("closed"));
+		expect(view.result.current.state).toBe("reattaching");
+		expect(muxes).toHaveLength(2);
+		// The replacement daemon is ready: the pane reconnects immediately.
+		act(() => view.rerender({ daemonReady: true, isVisible: true, inputDisabled: false }));
+		expect(muxes).toHaveLength(3);
+		expect(muxes[2].opens).toEqual([["handle-1", 80, 24]]);
+		act(() => muxes[2].emitOpened("handle-1"));
+		expect(view.result.current.state).toBe("attached");
+		act(() => { terminal.typeKeys("hi"); });
+		expect(muxes[2].inputs).toContainEqual(["handle-1", "hi"]);
+	});
+
+	// The same replacement can take the pane down as exited/error. Its only
+	// other recovery path is a session-data transition, which lags the new
+	// daemon by minutes; the daemon's return must revive it directly.
+	it("revives a pane the dead daemon left exited once the daemon is back", () => {
+		const { view, terminal, muxes } = setup({ daemonReady: true });
+		act(() => muxes[0].emitOpened("handle-1"));
+		act(() => muxes[0].emitExit("handle-1"));
+		expect(view.result.current.state).toBe("exited");
+		act(() => view.rerender({ daemonReady: false, isVisible: true, inputDisabled: false }));
+		expect(muxes).toHaveLength(1);
+		act(() => view.rerender({ daemonReady: true, isVisible: true, inputDisabled: false }));
+		expect(view.result.current.state).toBe("connecting");
+		expect(muxes).toHaveLength(2);
+		expect(muxes[1].opens).toEqual([["handle-1", 80, 24]]);
+		act(() => muxes[1].emitOpened("handle-1"));
+		expect(view.result.current.state).toBe("attached");
+		act(() => { terminal.typeKeys("ok"); });
+		expect(muxes[1].inputs).toContainEqual(["handle-1", "ok"]);
+	});
+
+	// A genuine agent exit must stay a terminal state: the daemon returning
+	// without having been away (no ready false→true flip) revives nothing.
+	it("keeps a genuinely exited pane exited when the daemon readiness never flipped", () => {
+		const { view, muxes } = setup({ daemonReady: true });
+		act(() => muxes[0].emitOpened("handle-1"));
+		act(() => muxes[0].emitExit("handle-1"));
+		expect(view.result.current.state).toBe("exited");
+		act(() => view.rerender({ daemonReady: true, isVisible: true, inputDisabled: false }));
+		expect(muxes).toHaveLength(1);
+		expect(view.result.current.state).toBe("exited");
+	});
+
 	it("forwards PTY output, keystrokes, and resizes across the attachment", () => {
 		const { terminal, muxes } = setup();
 		act(() => muxes[0].emitOpened("handle-1"));

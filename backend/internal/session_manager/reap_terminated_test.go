@@ -172,3 +172,108 @@ func TestReapOrphanWorkersKillsPlannedVictimsOnly(t *testing.T) {
 		t.Fatalf("signaled = %v, want exactly the dead session's pty-host root 500", *signaled)
 	}
 }
+
+// supersededResumeHarness builds a manager around a full resume fixture: an
+// exited live session whose recorded handle probes definitively gone, so the
+// resume's restartRuntime falls through to a fresh Create — the supersession
+// moment. The process table shows a pre-boot PPID=1 pty-host chain for that
+// session (the #115 orphan) and one for an unrelated live session.
+func supersededResumeHarness(t *testing.T) (*Manager, *fakeRuntime, *[]int) {
+	t.Helper()
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:        "mer-1",
+		ProjectID: "mer",
+		Kind:      domain.KindWorker,
+		Harness:   domain.HarnessCodex,
+		Activity:  domain.Activity{State: domain.ActivityExited},
+		Metadata: domain.SessionMetadata{
+			WorkspacePath:   "/ws/mer-1",
+			Branch:          "ao/mer-1",
+			RuntimeHandleID: "h-mer-1",
+			RuntimeLaunchID: "launch-old",
+			AgentSessionID:  "agent-x",
+		},
+	}
+	rt := &fakeRuntime{}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		DataDir:     t.TempDir(),
+		LookPath:    func(string) (string, error) { return "/bin/true", nil },
+		Executable:  func() (string, error) { return "/tmp/fake-bin/ao", nil },
+		NewLaunchID: func() string { return "launch-new" },
+	})
+	boot := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	m.bootStartedAt = boot
+	at := boot.Add(5 * time.Second)
+	m.processTable = func(context.Context) (*orphanreap.Table, time.Time, error) {
+		tbl, err := orphanreap.ParseTable(strings.Join([]string{
+			"  502     1  7168  2-00:00:00 /tmp/fake-bin/ao pty-host mer-1 " +
+				filepath.Join(m.dataDir, "worktrees", "mer", "mer-1") + " bash -lc claude",
+			"  503     1  7168  2-00:00:00 /tmp/fake-bin/ao pty-host other-9 " +
+				filepath.Join(m.dataDir, "worktrees", "mer", "other-9") + " bash -lc claude",
+		}, "\n"), at)
+		return tbl, at, err
+	}
+	var signaled []int
+	m.orphanKiller = orphanreap.Killer{
+		Signal: func(pid int) error { signaled = append(signaled, pid); return nil },
+		Kill:   func(pid int) error { signaled = append(signaled, pid); return nil },
+		Alive:  func(int) bool { return false },
+		Grace:  time.Millisecond,
+		Poll:   time.Millisecond,
+	}
+	return m, rt, &signaled
+}
+
+// TestResumeReapsSupersededOrphanTree pins the #115 reap: the resume binds a
+// fresh runtime to the live session, and the pre-boot PPID=1 pty-host tree of
+// the SAME session is reaped. The unrelated live session's tree stays — no
+// terminated evidence, no supersession, not this pass's business.
+func TestResumeReapsSupersededOrphanTree(t *testing.T) {
+	m, _, signaled := supersededResumeHarness(t)
+	if _, err := m.ResumeAgentWithMode(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !sameInts(*signaled, []int{502}) {
+		t.Fatalf("signaled = %v, want exactly the superseded mer-1 tree root 502", *signaled)
+	}
+}
+
+// The supersession reap rides the same kill switch as the boot pass: with
+// AO_NO_ORPHANREAP set, a resume never signals anything.
+func TestResumeSupersededReapRespectsKillSwitch(t *testing.T) {
+	t.Setenv("AO_NO_ORPHANREAP", "1")
+	m, _, signaled := supersededResumeHarness(t)
+	if _, err := m.ResumeAgentWithMode(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*signaled) != 0 {
+		t.Fatalf("disabled reap signaled %v", *signaled)
+	}
+}
+
+func sameInts(got, want []int) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := make(map[int]int, len(want))
+	for _, w := range want {
+		seen[w]++
+	}
+	for _, g := range got {
+		seen[g]--
+		if seen[g] < 0 {
+			return false
+		}
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}

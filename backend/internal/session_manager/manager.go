@@ -3805,6 +3805,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
+	// The fresh binding supersedes any pre-boot pty-host tree of this session
+	// (fork issue #115): reap it here, best-effort, without failing the launch.
+	m.reapSupersededRuntime(ctx, rec.ID)
 	// A runtime accepting Restart only proves that its supervisor was created.
 	// Keep the previous launch (and stale/release references) until the exact
 	// resumed child is observable. A failed native resume remains recoverable.

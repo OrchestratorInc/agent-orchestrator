@@ -219,7 +219,14 @@ type Deps struct {
 	// updated install carries the old binary's path.
 	ExecutableBase string
 	Terminated     map[string]struct{}
-	Logger         *slog.Logger
+	// Superseded holds live session ids whose live runtime THIS daemon bound
+	// freshly in this incarnation (fork issue #115). A pre-boot pty-host tree
+	// carrying such an id can no longer be the session's live runtime: the
+	// fresh host is, and the old daemon's host — registry-lost, PPID=1 — is
+	// provably stale. Supersession is per-session: ids outside both maps keep
+	// the adoption owns it protection.
+	Superseded map[string]struct{}
+	Logger     *slog.Logger
 }
 
 // Victim is one decided orphan: the pty-host root, its session id, and the
@@ -229,6 +236,10 @@ type Victim struct {
 	PID       int
 	Tree      []int
 	Args      string
+	// Superseded marks a victim decided by the #115 supersession evidence
+	// (live session, fresh runtime bound by this daemon) rather than a
+	// terminated row, so the reap log can say which fact condemned the tree.
+	Superseded bool
 }
 
 // Plan decides which processes are provably orphaned workers of already
@@ -242,15 +253,16 @@ func Plan(tbl *Table, at time.Time, deps Deps) []Victim {
 	}
 	var victims []Victim
 	for _, p := range tbl.All() {
-		session, ok := matchOrphan(p, at, deps, logger)
+		session, superseded, ok := matchOrphan(p, at, deps, logger)
 		if !ok {
 			continue
 		}
 		victims = append(victims, Victim{
-			SessionID: session,
-			PID:       p.PID,
-			Tree:      tbl.Tree(p.PID),
-			Args:      p.Args,
+			SessionID:  session,
+			PID:        p.PID,
+			Tree:       tbl.Tree(p.PID),
+			Args:       p.Args,
+			Superseded: superseded,
 		})
 	}
 	return victims
@@ -259,10 +271,10 @@ func Plan(tbl *Table, at time.Time, deps Deps) []Victim {
 // matchOrphan applies the evidence stack to one process. Every disagreement is
 // logged with its reason — the report is the deliverable for dubious cases,
 // the kill is reserved for full agreement.
-func matchOrphan(p Proc, at time.Time, deps Deps, logger *slog.Logger) (string, bool) {
+func matchOrphan(p Proc, at time.Time, deps Deps, logger *slog.Logger) (string, bool, bool) {
 	tokens := strings.Fields(p.Args)
 	if len(tokens) < 3 {
-		return "", false
+		return "", false, false
 	}
 	verb := -1
 	for i := 1; i < len(tokens); i++ {
@@ -272,12 +284,12 @@ func matchOrphan(p Proc, at time.Time, deps Deps, logger *slog.Logger) (string, 
 		}
 	}
 	if verb < 0 {
-		return "", false
+		return "", false, false
 	}
-	dubious := func(reason string) (string, bool) {
+	dubious := func(reason string) (string, bool, bool) {
 		logger.Warn("orphanreap: pty-host candidate not reaped",
 			"pid", p.PID, "reason", reason, "args", truncate(p.Args))
-		return "", false
+		return "", false, false
 	}
 	// Everything before the verb is the executable path; ps preserves the
 	// spaces inside it, so the basename is read off the joined prefix. The
@@ -300,8 +312,10 @@ func matchOrphan(p Proc, at time.Time, deps Deps, logger *slog.Logger) (string, 
 	if !underDir(tokens[j+1], deps.WorktreesDir) {
 		return dubious("cwd argument is outside this installation's worktrees")
 	}
-	if _, known := deps.Terminated[id]; !known {
-		return dubious("session is not marked terminated in this database")
+	_, terminated := deps.Terminated[id]
+	_, superseded := deps.Superseded[id]
+	if !terminated && !superseded {
+		return dubious("session is neither terminated nor superseded by a fresh runtime")
 	}
 	if p.Age < 0 {
 		return dubious("process start time unknown")
@@ -309,7 +323,7 @@ func matchOrphan(p Proc, at time.Time, deps Deps, logger *slog.Logger) (string, 
 	if !at.Add(-p.Age).Before(deps.Boot) {
 		return dubious("process started after this daemon booted")
 	}
-	return id, true
+	return id, superseded, true
 }
 
 // underDir reports whether path is strictly inside dir. The worktrees root
@@ -385,8 +399,13 @@ func Reap(ctx context.Context, tbl *Table, at time.Time, deps Deps, k Killer) []
 		logger = slog.Default()
 	}
 	for _, v := range victims {
-		logger.Warn("orphanreap: reaping orphaned worker tree of a terminated session",
-			"session", v.SessionID, "pid", v.PID, "tree", v.Tree, "args", truncate(v.Args))
+		if v.Superseded {
+			logger.Warn("orphanreap: reaping stale worker tree superseded by this daemon's fresh runtime",
+				"session", v.SessionID, "pid", v.PID, "tree", v.Tree, "args", truncate(v.Args))
+		} else {
+			logger.Warn("orphanreap: reaping orphaned worker tree of a terminated session",
+				"session", v.SessionID, "pid", v.PID, "tree", v.Tree, "args", truncate(v.Args))
+		}
 		if err := k.Signal(v.PID); err != nil {
 			logger.Warn("orphanreap: graceful signal failed, forcing", "pid", v.PID, "err", err)
 		}

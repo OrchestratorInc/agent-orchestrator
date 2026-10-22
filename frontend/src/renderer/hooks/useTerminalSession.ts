@@ -1088,15 +1088,34 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	}, []);
 
 	// Daemon came back while we were waiting: reconnect immediately, without
-	// backoff debt from attempts made against the dead daemon.
+	// backoff debt from attempts made against the dead daemon. A pane the dead
+	// daemon took down as exited/error revives here too (fork issue #115): its
+	// only other recovery path is a session-data transition, which can lag the
+	// new daemon by minutes and leave the composer silently swallowing input.
+	// Genuinely exited agents answer the fresh attach with their own exit, so
+	// the revival is self-limiting to one attempt per daemon return.
 	const daemonReady = options.daemonReady;
 	useEffect(() => {
 		const r = runtime.current;
 		if (!daemonReady || r.detached) return;
-		if (stateRef.current !== "reattaching" || r.retryTimer) return;
-		r.attempts = 0;
-		connect();
-	}, [daemonReady, connect]);
+		if (stateRef.current === "reattaching") {
+			if (!r.retryTimer) {
+				r.attempts = 0;
+				connect();
+			}
+			return;
+		}
+		const session = sessionRef.current;
+		if (
+			(stateRef.current === "exited" || stateRef.current === "error") &&
+			session &&
+			sessionIsActive(session) &&
+			r.handle === (session.terminalHandleId ?? null)
+		) {
+			transition("connecting");
+			connect();
+		}
+	}, [daemonReady, connect, transition]);
 
 	// A parked cache entry keeps parsing output, but it must be inert as a PTY
 	// client. A hidden local refit cannot be forwarded. useLayoutEffect runs
