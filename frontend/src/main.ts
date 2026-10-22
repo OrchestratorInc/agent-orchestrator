@@ -3354,8 +3354,34 @@ function focusCloudWindow(): void {
 	window.focus();
 }
 
+// A shared session's link (ao-app://share/<orgId>/<token>) the renderer has
+// not taken yet: one that arrived before the window was ready waits here.
+let pendingShareLink: string | undefined;
+
+ipcMain.handle("cloud:takePendingShareLink", () => {
+	const link = pendingShareLink;
+	pendingShareLink = undefined;
+	return link ?? null;
+});
+
+function isShareDeepLink(raw: string): boolean {
+	try {
+		const url = new URL(raw);
+		return url.protocol === "ao-app:" && url.hostname === "share";
+	} catch {
+		return false;
+	}
+}
+
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	focusCloudWindow();
+	// A shared cloud session: the renderer redeems it and opens the session.
+	if (isShareDeepLink(url)) {
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openShareLink", url);
+		else pendingShareLink = url;
+		return;
+	}
 	// Stripe Checkout and the Customer Portal return here (via the control
 	// plane's /billing/return page): open Settings on Billing, which re-reads
 	// the plan when it mounts.

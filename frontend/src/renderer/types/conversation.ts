@@ -200,6 +200,8 @@ export interface ConversationMessage {
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
+	/** Set on a human message another participant in a shared session sent. */
+	authorName?: string;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;

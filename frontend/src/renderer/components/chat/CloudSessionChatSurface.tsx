@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
+import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
+import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
@@ -17,6 +19,7 @@ import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
+import { SharedComposerNotice } from "./SharedComposerNotice";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -50,6 +53,8 @@ type EventPayload = {
 	turnId?: unknown;
 	activity?: unknown;
 	itemId?: unknown;
+	authorUserId?: unknown;
+	authorName?: unknown;
 };
 
 type CloudTurnSettings = TurnSettings & { executionMode?: "agent" | "plan" };
@@ -344,7 +349,16 @@ export function withoutFailedSetupAttempts(items: ConversationItem[], startFaile
 	});
 }
 
-export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
+/**
+ * The name to show on a prompt in a shared session: another participant's,
+ * never the viewer's own, and nothing for a message no person sent.
+ */
+function promptAuthorName(payload: EventPayload, viewerUserId: string | undefined): string | undefined {
+	if (!viewerUserId || typeof payload.authorUserId !== "string" || payload.authorUserId === viewerUserId) return undefined;
+	return typeof payload.authorName === "string" && payload.authorName.trim() !== "" ? payload.authorName.trim() : undefined;
+}
+
+export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[], viewerUserId?: string): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
 	const approvals = new Map<string, ConversationActivity>();
@@ -512,6 +526,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			items.push({
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
+				authorName: automation ? undefined : promptAuthorName(payload, viewerUserId),
 				text: automation && typeof payload.displayText === "string" ? payload.displayText : text,
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
 				senderSessionId, senderProjectId, senderDisplayName,
@@ -664,7 +679,7 @@ export function CloudSessionChatSurface({
 }) {
 	const cloud = session.cloud;
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
-	const { client, ready } = useCloudCp();
+	const { client, ready, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	// A failed checkout or Setup reads the way a failed local Chat start does: the
 	// setup checklist under the opening message, with Retry. Retry asks the running
@@ -817,6 +832,13 @@ export function CloudSessionChatSurface({
 	});
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
+	// A shared session's live state: who else has it open and who holds its
+	// composer, the lock on talking to the agent.
+	const live = useCloudSessionLive(cloud?.orgId, session.id, Boolean(cloud && ready && session.isTerminated !== true));
+	const myRole = live?.viewers.find((viewer) => viewer.userId === userId)?.role;
+	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId, live, canWrite: myRole !== "viewer" });
+	const leaseRef = useRef(lease);
+	leaseRef.current = lease;
 	const send = useMutation({
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
@@ -830,15 +852,21 @@ export function CloudSessionChatSurface({
 			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
+			const composerEpoch = leaseRef.current.epoch;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
 				text,
 				...(selectedSettings.model ? { model: selectedSettings.model } : {}),
 				...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
 				...(mode ? { mode } : {}),
 				...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
+				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			}, { idempotencyKey: clientMessageId });
 		},
-		onSuccess: () => void invalidate(),
+		onSuccess: () => {
+			// The send released the lease to whoever is next in line.
+			leaseRef.current.sent();
+			void invalidate();
+		},
 	});
 	// A pick the session no longer allows (its mode dropped while Chat was
 	// open) is neither sent nor shown. One the selected model cannot run shows
@@ -858,14 +886,14 @@ export function CloudSessionChatSurface({
 	const startFailed = Boolean(workspaceFailure);
 	const startStopped = startFailed && !rerunning;
 	const snapshot = useMemo(() => {
-		const projected = toSnapshot(session, eventsQuery.data ?? []);
+		const projected = toSnapshot(session, eventsQuery.data ?? [], userId);
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
 		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, session, settings, shownApprovalMode, startFailed, startStopped]);
+	}, [eventsQuery.data, session, settings, shownApprovalMode, startFailed, startStopped, userId]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
@@ -900,7 +928,10 @@ export function CloudSessionChatSurface({
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud || !activeTurn) return { status: "not-accepted" as const, reason: "There is no active turn." };
 			const key = clientMessageId ?? crypto.randomUUID();
-			const accepted = await client.steerTurn(cloud.orgId, session.id, activeTurn.id, { text }, { idempotencyKey: key });
+			const composerEpoch = leaseRef.current.epoch;
+			const accepted = await client.steerTurn(cloud.orgId, session.id, activeTurn.id,
+				{ text, ...(composerEpoch !== undefined ? { composerEpoch } : {}) }, { idempotencyKey: key });
+			leaseRef.current.sent();
 			let after = accepted.event.sequence;
 			for (let attempt = 0; attempt < 60; attempt++) {
 				const page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
@@ -1001,6 +1032,15 @@ export function CloudSessionChatSurface({
 							: modelsError
 			}
 			headerActions={headerActions}
+			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={userId} /> : undefined}
+			composerLockedPlaceholder={myRole === "viewer"
+				? appI18n.t("chat.shared.viewOnly")
+				: lease.locked
+					? (lease.holder
+						? appI18n.t("chat.shared.lockedBy", { name: lease.holder.name || appI18n.t("chat.shared.someone") })
+						: appI18n.t("chat.shared.waitingForTurn"))
+					: undefined}
+			onComposerInput={lease.noteDraft}
 			onOpenFiles={onOpenFiles}
 			onOpenFile={onOpenFile}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}

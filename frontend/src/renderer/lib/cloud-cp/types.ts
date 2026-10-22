@@ -1187,6 +1187,12 @@ export interface CloudCpSendMessageRequest {
 	/** Per-turn permission mode, capped by the session and share grant. */
 	mode?: "read-only" | "standard" | "trusted";
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+	/**
+	 * The composer lease grant the sender holds in a shared session. Omitted,
+	 * the message is accepted only while nobody holds the lease and nobody is
+	 * waiting for it; otherwise it fails with 409 COMPOSER_LOCKED.
+	 */
+	composerEpoch?: number;
 }
 
 export interface CloudCpChatModelsResponse {
@@ -1492,4 +1498,106 @@ export interface CloudCpPlanOffer {
 /** POST /orgs/{orgId}/billing/checkout and /billing/portal */
 export interface CloudCpBillingLinkResponse {
 	url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shared sessions (`share_handlers.go`, `composer_handlers.go`, and the
+// session.live frames of a live=1 event stream)
+// ---------------------------------------------------------------------------
+
+/** A person named by the composer lease. `name` is a display name, never an email. */
+export interface CloudCpComposerParticipant {
+	userId: string;
+	name: string;
+}
+
+/**
+ * The composer lease: a shared session's hard lock on talking to its agent.
+ * Only the holder may send or steer.
+ */
+export interface CloudCpComposerLease {
+	/** null while nobody holds the lease. */
+	holder: CloudCpComposerParticipant | null;
+	/** Increases with every grant; a holder presents it to send, steer, renew, or release. */
+	epoch: number;
+	/** Everyone waiting for the lease, first in line first. */
+	waitlist: CloudCpComposerParticipant[];
+}
+
+/** Answer to every composer request; a refusal is this answer with `granted` false. */
+export interface CloudCpComposerAnswer {
+	composer: CloudCpComposerLease & {
+		/** How long the caller's grant has left; 0 unless granted. */
+		expiresInMs: number;
+	};
+	granted: boolean;
+}
+
+/** Someone with the session open right now. */
+export interface CloudCpSessionViewer {
+	userId: string;
+	name: string;
+	/** member: an organization member; editor/viewer: a share grant's role. */
+	role: "member" | "editor" | "viewer";
+}
+
+/** A session.live frame: the session's current live state, replacing the last one. */
+export interface CloudCpSessionLive {
+	type: "session.live";
+	viewers: CloudCpSessionViewer[];
+	composer: CloudCpComposerLease;
+	/** Whether the person reading the stream may take the lease from its holder. */
+	canTakeOver: boolean;
+}
+
+export type CloudCpShareRole = "viewer" | "editor";
+
+/** POST /orgs/{orgId}/projects/{projectId}/shares */
+export interface CloudCpCreateShareLinkRequest {
+	/** Shares one session; omitted, the whole project. */
+	sessionId?: string;
+	role?: CloudCpShareRole;
+	/** anyone: whoever has the link; restricted: only `recipients`. */
+	accessScope?: "anyone" | "restricted";
+	recipients?: string[];
+	interaction?: "view" | "interact";
+	modeCap?: "read-only" | "standard" | "trusted";
+	deniedCommands?: string[];
+	expiresInHours?: number;
+}
+
+export interface CloudCpShareLink {
+	id: string;
+	orgId: string;
+	projectId: string;
+	sessionId?: string;
+	role: CloudCpShareRole;
+	status: "active" | "revoked";
+	accessScope: "anyone" | "restricted";
+	recipients: string[];
+	interaction: "view" | "interact";
+	modeCap?: string;
+	deniedCommands: string[];
+	expiresAt?: string;
+	createdAt: string;
+	updatedAt: string;
+	/** Only in the creation response: the raw token is never stored. */
+	token?: string;
+	url?: string;
+}
+
+/** A project or session someone shared with the caller. */
+export interface CloudCpSharedProject {
+	grant: {
+		id: string;
+		role: CloudCpShareRole;
+		status: string;
+		modeCap?: string;
+		deniedCommands: string[];
+		redeemedAt: string;
+	};
+	project: CloudCpProject;
+	sessionId?: string;
+	sessionName?: string;
+	sharedByName?: string;
 }
