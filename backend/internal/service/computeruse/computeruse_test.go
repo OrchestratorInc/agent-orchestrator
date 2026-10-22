@@ -780,3 +780,48 @@ func TestCallReturnsFailedRunStepsReport(t *testing.T) {
 		t.Fatalf("refused batch err = %v", err)
 	}
 }
+
+func TestAgentToolsReadSchemasFromTheDriver(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	var described []string
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		if args[0] != "describe" {
+			return []byte(`{}`), nil, nil
+		}
+		described = append(described, args[1])
+		switch args[1] {
+		case "click":
+			return []byte("name: click\n\ndescription:\nClick a target pid.\n\ninput_schema:\n" +
+				`{"type":"object","properties":{"element_token":{"type":"string"},"scope":{"enum":["window","desktop"]},"session":{"type":"string"},"x":{"type":"number"}},"required":["session","x"]}` + "\n"), nil, nil
+		case "zoom":
+			return []byte("Unknown tool. Available tools: ..."), nil, nil
+		}
+		return nil, []byte("no such tool"), errors.New("exit status 1")
+	}
+	s := newTestService(t, driver, "darwin")
+	tools, err := s.AgentTools(context.Background())
+	if err != nil {
+		t.Fatalf("AgentTools() error = %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "click" || tools[0].Description != "Click a target pid." {
+		t.Fatalf("tools = %+v, want only click", tools)
+	}
+	properties := tools[0].InputSchema["properties"].(map[string]any)
+	if _, ok := properties["session"]; ok {
+		t.Fatalf("session left in schema: %v", properties)
+	}
+	if _, ok := properties["scope"]; ok {
+		t.Fatalf("scope left in schema: %v", properties)
+	}
+	if fmt.Sprint(tools[0].InputSchema["required"]) != "[x]" {
+		t.Fatalf("required = %v", tools[0].InputSchema["required"])
+	}
+	if len(described) != len(agentToolNames) {
+		t.Fatalf("described %v", described)
+	}
+
+	// The same driver version is read once.
+	if _, err := s.AgentTools(context.Background()); err != nil || len(described) != len(agentToolNames) {
+		t.Fatalf("second AgentTools() re-described: err=%v, %d calls", err, len(described))
+	}
+}

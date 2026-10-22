@@ -2082,6 +2082,12 @@ type ComputerUseToolsResponse struct {
 	Tools []computeruse.Tool `json:"tools"`
 }
 
+// ComputerUseAgentToolsResponse lists the driver tools AO offers agents as
+// MCP tools, with their input schemas.
+type ComputerUseAgentToolsResponse struct {
+	Tools []computeruse.AgentTool `json:"tools"`
+}
+
 // ComputerUseToolParam is the {tool} path parameter for /computer-use/tools/{tool}.
 type ComputerUseToolParam struct {
 	Tool string `path:"tool" description:"Cua Driver tool name, e.g. get_window_state."`

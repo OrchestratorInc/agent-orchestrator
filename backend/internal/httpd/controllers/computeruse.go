@@ -19,6 +19,7 @@ type ComputerUse interface {
 	Doctor(ctx context.Context) (string, error)
 	Tools(ctx context.Context) ([]computeruse.Tool, error)
 	DescribeTool(ctx context.Context, tool string) (string, error)
+	AgentTools(ctx context.Context) ([]computeruse.AgentTool, error)
 	Call(ctx context.Context, request computeruse.CallRequest) (computeruse.CallResult, error)
 }
 
@@ -35,6 +36,7 @@ func (c *ComputerUseController) Register(r chi.Router) {
 	r.Get("/computer-use/doctor", c.doctor)
 	r.Get("/computer-use/tools", c.tools)
 	r.Get("/computer-use/tools/{tool}", c.describeTool)
+	r.Get("/computer-use/agent-tools", c.agentTools)
 	r.Post("/computer-use/call", c.call)
 }
 
@@ -100,6 +102,19 @@ func (c *ComputerUseController) describeTool(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ComputerUseToolDescription{Name: tool, Description: description})
+}
+
+func (c *ComputerUseController) agentTools(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/computer-use/agent-tools")
+		return
+	}
+	tools, err := c.Svc.AgentTools(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ComputerUseAgentToolsResponse{Tools: tools})
 }
 
 func (c *ComputerUseController) call(w http.ResponseWriter, r *http.Request) {

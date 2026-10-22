@@ -1029,6 +1029,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/computer-use/agent-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the Cua Driver tools AO offers agents as MCP tools, with their input schemas */
+        get: operations["listComputerUseAgentTools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/computer-use/call": {
         parameters: {
             query?: never;
@@ -5225,6 +5242,17 @@ export interface components {
              * @description Deprecated compatibility alias for processedTokens.
              */
             totalTokens: number;
+        };
+        ComputerUseAgentTool: {
+            description: string;
+            /** @description The tool's JSON Schema input, without the arguments AO sets itself. */
+            inputSchema: {
+                [key: string]: unknown;
+            } | null;
+            name: string;
+        };
+        ComputerUseAgentToolsResponse: {
+            tools: components["schemas"]["ComputerUseAgentTool"][];
         };
         ComputerUseCallRequest: {
             /** @description Tool arguments as a JSON object. */
@@ -11178,6 +11206,53 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listComputerUseAgentTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseAgentToolsResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -60,4 +60,39 @@ func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 			}
 		}
 	}
+
+	// A chat session gets the tools from its `ao mcp` server instead.
+	sp, err = m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt(chat): %v", err)
+	}
+	for _, want := range []string{"## Computer use", "AO's `ao` tool server", "`get_window_state`", "screenshot as an image", "commands/cua.md", "use `ao cua` in your shell", "untrusted"} {
+		if !strings.Contains(sp, want) {
+			t.Fatalf("chat prompt missing %q", want)
+		}
+	}
+}
+
+// The chat session's `ao mcp` server offers the computer-use tools only while
+// the setting is on.
+func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
+	enabled := false
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(),
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+	m.SetComputerUseEnabled(func(context.Context) bool { return enabled })
+	env := map[string]string{EnvSessionID: "mer-1"}
+	for _, on := range []bool{false, true} {
+		enabled = on
+		servers := m.aoMCPServers(context.Background(), domain.HarnessClaudeCode, env)
+		if len(servers) != 1 {
+			t.Fatalf("ao tool servers = %v", servers)
+		}
+		if got := servers[0].Env[envComputerUse] == "1"; got != on {
+			t.Fatalf("setting %v: server env = %v", on, servers[0].Env)
+		}
+	}
 }

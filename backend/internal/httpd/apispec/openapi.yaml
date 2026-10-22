@@ -2476,6 +2476,38 @@ paths:
       summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
+  /api/v1/computer-use/agent-tools:
+    get:
+      operationId: listComputerUseAgentTools
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseAgentToolsResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the Cua Driver tools AO offers agents as MCP tools, with their
+        input schemas
+      tags:
+      - computer-use
   /api/v1/computer-use/call:
     post:
       operationId: callComputerUseTool
@@ -15194,6 +15226,33 @@ components:
       - totalTokens
       - incomplete
       - estimatedCost
+      type: object
+    ComputerUseAgentTool:
+      properties:
+        description:
+          type: string
+        inputSchema:
+          additionalProperties: {}
+          description: The tool's JSON Schema input, without the arguments AO sets
+            itself.
+          type:
+          - object
+          - "null"
+        name:
+          type: string
+      required:
+      - name
+      - description
+      - inputSchema
+      type: object
+    ComputerUseAgentToolsResponse:
+      properties:
+        tools:
+          items:
+            $ref: '#/components/schemas/ComputerUseAgentTool'
+          type: array
+      required:
+      - tools
       type: object
     ComputerUseCallRequest:
       properties:

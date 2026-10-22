@@ -149,6 +149,7 @@ type Service struct {
 	// sessionless are tools the driver refused a `session` argument for.
 	sessionless map[string]bool
 	snapshots   snapshotWindows
+	agentTools  agentToolCache
 }
 
 // New returns a Service that saves screenshots under dataDir/computer-use.
