@@ -37,11 +37,20 @@ type ClonePreparationResult struct {
 	PreparationID string `json:"preparationId"`
 }
 
+// CloneDestination reports local destination readiness without contacting the remote.
+type CloneDestination struct {
+	RemoteURL      string `json:"remoteUrl"`
+	Path           string `json:"path"`
+	Exists         bool   `json:"exists"`
+	CanUseExisting bool   `json:"canUseExisting"`
+}
+
 // ClonePreparationCleanupInput identifies a checkout created by prepare-clone
 // that the user abandoned before project registration.
 type ClonePreparationCleanupInput struct {
 	Path          string `json:"path" minLength:"1"`
 	PreparationID string `json:"preparationId" minLength:"1"`
+	KeepCheckout  bool   `json:"keepCheckout,omitempty"`
 }
 
 // InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.
