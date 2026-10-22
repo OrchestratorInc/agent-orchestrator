@@ -487,7 +487,7 @@ it("opens a TUI host file in a shared center tab and renames on that host", asyn
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toHaveAttribute("aria-selected", "true");
 	expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("tab", { name: /Worker · Codex/ }));
-	expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+	expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
 	expect(screen.getByTestId("remote-terminal-base")).toBeVisible();
 	await userEvent.dblClick(screen.getByRole("tab", { name: /Worker · Codex/ }));
 	const rename = screen.getByRole("textbox", { name: /Rename/ });
@@ -908,5 +908,5 @@ it("hides Chat switching for a remote harness outside that host's Chat list", as
 	renderRemoteSession(queryClient);
 	await screen.findByTestId("remote-terminal-base");
 	await waitFor(() => expect(queryClient.getQueryData(["settings", "box-a"])).toMatchObject({ chatHarnesses: ["claude-code", "codex"] }));
-	expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 });

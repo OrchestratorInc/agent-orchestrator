@@ -229,7 +229,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		},
 		// chatHarnesses lets the new-task composer pick Chat or the terminal the
 		// way it does for the local daemon's settings chatHarnesses.
-		"chatHarnesses": chatHarnesses,
+		"chatHarnesses": domain.ChatHarnesses(),
 	})
 }
 

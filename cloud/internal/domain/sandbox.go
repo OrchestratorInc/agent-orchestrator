@@ -89,7 +89,17 @@ type Sandbox struct {
 	// StartupErrorCode is the code of the latest user-facing startup error, or
 	// empty when none is recorded (see RecordSandboxStartupError).
 	StartupErrorCode string
-	UpdatedAt        time.Time
+	// StartupErrorAt is when that error was first recorded. One recorded at or
+	// after StartupStartedAt belongs to the current startup window, which only
+	// a user retry, a resume or a restore reopens.
+	StartupErrorAt *time.Time
+	// ProviderFailureID is the failed provider build the reconciler already
+	// acted on, and how (stored as bootstrap_context.providerFailureId): the
+	// bare build id once reported, "<id>#restarted" once it started the one
+	// new build a user retry asked for, "<id>#ignored" when a connected worker
+	// made it leave the failure alone.
+	ProviderFailureID string
+	UpdatedAt         time.Time
 }
 
 // SandboxLifecycle is the small intent/observation projection returned by an

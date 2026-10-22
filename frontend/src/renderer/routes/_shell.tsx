@@ -775,6 +775,15 @@ function ShellLayout() {
 						}
 					}
 					if (registeredWorkspace) {
+						if (input.clonePreparationId) {
+							setOrchestratorStartupError(registeredWorkspace.id, null);
+							setProjectProvisioning(registeredWorkspace.id, true);
+							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
+							// Registration may have committed before its response was lost.
+							// The daemon reuses an active orchestrator under its project lock.
+							void provisionOrchestrator(registeredWorkspace, input, "project_add");
+							return;
+						}
 						showGlobalToast("Project already added", "Opened the registered project for this folder.");
 						void navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
 						return;
@@ -790,7 +799,7 @@ function ShellLayout() {
 			if (!data?.project) throw new Error("Project creation returned no project");
 			await completeProjectCreation(data.project, input, "project_add");
 		},
-		[completeProjectCreation, navigate, queryClient, showGlobalToast],
+		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
 
 	const cloneProject = useCallback(
@@ -862,8 +871,15 @@ function ShellLayout() {
 			clonePreparationId: input.clonePreparationId,
 			config: createProjectConfig(input),
 		} });
-		if (error || !data?.project) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
-		const projectId = data.project.id;
+		let projectId = error ? undefined : data?.project.id;
+		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {
+			const existingProjectId = apiErrorDetails(error)?.existingProjectId;
+			if (typeof existingProjectId === "string" && existingProjectId !== "") {
+				const existing = await client.GET("/api/v1/projects/{id}", { params: { path: { id: existingProjectId } } });
+				if (!existing.error && existing.data?.status === "ok" && existing.data.project.id === existingProjectId) projectId = existingProjectId;
+			}
+		}
+		if (!projectId) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));

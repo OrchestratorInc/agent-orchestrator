@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
@@ -207,6 +210,9 @@ func (s *Server) createOrgInvitation(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	// Role and a hash of the org only; the invitee's email never leaves the cloud.
+	sum := sha256.Sum256([]byte(orgID))
+	s.capture(r, analytics.InviteSent, map[string]any{"role": role, "org_id_hash": hex.EncodeToString(sum[:8])})
 	writeJSON(w, http.StatusCreated, map[string]any{"invitation": toInvitationResponse(invitation)})
 }
 

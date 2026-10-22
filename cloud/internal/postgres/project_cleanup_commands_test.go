@@ -28,6 +28,13 @@ func TestProjectCleanupCommandsReadsTheCurrentProjectConfig(t *testing.T) {
 		t.Fatalf("Cleanup = %v (%v), want the project's current commands", commands, err)
 	}
 
+	// A step's own time limit travels with it as its marker line.
+	setCleanup(`{"preRemove": ["# ao-timeout: 45m\nmake down", "docker compose down"]}`)
+	commands, err = store.ProjectCleanupCommands(ctx, fixture.orgID, fixture.sessionID)
+	if err != nil || strings.Join(commands, "|") != "# ao-timeout: 45m\nmake down|docker compose down" {
+		t.Fatalf("timed Cleanup = %q (%v), want the step's limit kept", commands, err)
+	}
+
 	setCleanup(`{"postCreate": ["make up"]}`)
 	if commands, err := store.ProjectCleanupCommands(ctx, fixture.orgID, fixture.sessionID); err != nil || len(commands) != 0 {
 		t.Fatalf("Cleanup without preRemove = %v (%v), want an empty list", commands, err)

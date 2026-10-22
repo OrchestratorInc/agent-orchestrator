@@ -8,6 +8,7 @@ import { agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "..
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { groupModelProviders } from "../../../lib/model-providers";
+import { collapseModelVariants, listsModelVariants } from "../../../lib/model-variants";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { Switch } from "../../ui/switch";
@@ -99,14 +100,20 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
-	const providerModels = claude ? [...claude.current, ...claude.other] : catalogModels;
+	// Cursor lists one id per model setting; each model shows once and switches all its variants.
+	const families = listsModelVariants(agentId) ? collapseModelVariants(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
+	const familyIds = new Map(families?.map((family) => [family.id, family.variants.map((variant) => variant.id)]));
+	const idsOf = (id: string) => familyIds.get(id) ?? [id];
+	const providerModels = families
+		? families.map((family) => ({ ...catalogModels.find((model) => model.id === family.defaultVariant.id)!, id: family.id, label: family.label, efforts: family.efforts }))
+		: claude ? [...claude.current, ...claude.other] : catalogModels;
 	const normalizedModelSearch = modelSearch.trim().toLocaleLowerCase();
 	const models = normalizedModelSearch
 		? providerModels.filter((model) => `${model.label} ${model.id}`.toLocaleLowerCase().includes(normalizedModelSearch))
 		: providerModels;
 	const switchableModels = models.filter((model) => isConcreteModelID(model.id));
 	// Enable all and Disable all cover every provider's models, or only the search results.
-	const bulkModelIds = normalizedModelSearch ? switchableModels.map((model) => model.id) : allModelIds;
+	const bulkModelIds = normalizedModelSearch ? switchableModels.flatMap((model) => idsOf(model.id)) : allModelIds;
 	const bulkModelIdSet = new Set(bulkModelIds);
 	// Pickers need at least one model, so Disable all keeps one on when nothing it leaves
 	// alone is: the one already on in view, else the default.
@@ -115,6 +122,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		: (switchableModels.find((model) => model.isDefault && isModelEnabled(model.id))
 			?? switchableModels.find((model) => isModelEnabled(model.id))
 			?? switchableModels.find((model) => model.isDefault) ?? switchableModels[0])?.id;
+	const keptOnId = keptOnDisable && idsOf(keptOnDisable)[0];
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
@@ -154,14 +162,16 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div> : null}
 		<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
-			{allModelIds.length ? <span className="text-xs tabular-nums text-settings-muted">{t("settings.harness.models.enabledSummary", { enabled: enabledCount, total: allModelIds.length })}</span> : null}
+			{allModelIds.length ? <span className="text-xs tabular-nums text-settings-muted">{t("settings.harness.models.enabledSummary", families
+				? { enabled: families.filter((family) => idsOf(family.id).some(isModelEnabled)).length, total: families.length }
+				: { enabled: enabledCount, total: allModelIds.length })}</span> : null}
 			{bulkModelIds.length > 1 ? <span className="ml-auto flex items-center gap-1">
 				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
 					disabled={bulkModelIds.every(isModelEnabled)}
 					onClick={() => setModelsEnabled(bulkModelIds, true)}>{t("settings.harness.models.enableAll")}</Button>
 				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
-					disabled={!bulkModelIds.some((id) => id !== keptOnDisable && isModelEnabled(id))}
-					onClick={() => setModelsEnabled(bulkModelIds, false, keptOnDisable)}>{t("settings.harness.models.disableAll")}</Button>
+					disabled={!bulkModelIds.some((id) => id !== keptOnId && isModelEnabled(id))}
+					onClick={() => setModelsEnabled(bulkModelIds, false, keptOnId)}>{t("settings.harness.models.disableAll")}</Button>
 			</span> : null}
 		</div>
 		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
@@ -191,9 +201,9 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 					</span> : null}
 					{isConcreteModelID(model.id) ? <Switch
 						aria-label={t("settings.harness.models.toggleModel", { model: agentModelDisplayLabel(agentId, model.label) })}
-						checked={isModelEnabled(model.id)}
-						disabled={isModelEnabled(model.id) && enabledCount <= 1}
-						onCheckedChange={(on) => setModelsEnabled([model.id], on)}
+						checked={idsOf(model.id).some(isModelEnabled)}
+						disabled={idsOf(model.id).some(isModelEnabled) && enabledCount <= idsOf(model.id).filter(isModelEnabled).length}
+						onCheckedChange={(on) => setModelsEnabled(idsOf(model.id), on)}
 					/> : null}
 				</li>)}
 			</ul>}

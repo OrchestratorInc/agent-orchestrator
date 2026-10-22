@@ -59,6 +59,9 @@ type ConversationService interface {
 	RetryTurn(ctx context.Context, session domain.SessionID, turnID string) (domain.ConversationTurn, error)
 	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
 	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
+	SwitchProvider(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest) error
+	SwitchProviderAndSend(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest, msg ports.ChatUserMessage) (domain.ConversationTurn, bool, error)
+	SessionHistory(ctx context.Context, session domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error)
 }
 
 type pagedConversationService interface {
@@ -132,6 +135,9 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit", c.editQueuedTurn)
 	r.Post("/sessions/{sessionId}/conversation/queue/reorder", c.reorderQueuedTurns)
 	r.Post("/sessions/{sessionId}/conversation/compact", c.compact)
+	r.Post("/agents/{agent}/chat/prewarm", c.prewarmAgent)
+	r.Get("/agents/chat/unavailable", c.unavailableChatAgents)
+	r.Get("/agents/chat/permission-modes", c.chatPermissionModes)
 	r.Get("/sessions/{sessionId}/conversation/models", c.models)
 	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
@@ -144,6 +150,8 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/provider-switch", c.switchProvider)
+	r.Get("/sessions/{sessionId}/history", c.sessionHistory)
 	r.Post("/sessions/{sessionId}/renders", c.publishRender)
 	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
 	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
@@ -671,6 +679,86 @@ func (c *ConversationsController) compact(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// chatPrewarmer runs an agent's Chat readiness check ahead of need.
+type chatPrewarmer interface {
+	PrewarmChat(harness domain.AgentHarness)
+}
+
+// prewarmAgent starts an agent's Chat readiness check in the background when it
+// is picked, so the switch the next send makes does not wait on it.
+func (c *ConversationsController) prewarmAgent(w http.ResponseWriter, r *http.Request) {
+	prewarmer, ok := c.Svc.(chatPrewarmer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/{agent}/chat/prewarm")
+		return
+	}
+	agent := strings.TrimSpace(chi.URLParam(r, "agent"))
+	prewarmer.PrewarmChat(domain.AgentHarness(agent))
+	envelope.WriteJSON(w, http.StatusAccepted, PrewarmChatAgentResponse{Agent: agent})
+}
+
+// chatAvailability reports agents whose chat adapter is missing.
+type chatAvailability interface {
+	ChatUnavailable(ctx context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string
+}
+
+// unavailableChatAgents lists the asked agents missing a chat adapter. It starts nothing.
+func (c *ConversationsController) unavailableChatAgents(w http.ResponseWriter, r *http.Request) {
+	checker, ok := c.Svc.(chatAvailability)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/chat/unavailable")
+		return
+	}
+	harnesses := queryHarnesses(r)
+	unavailable := checker.ChatUnavailable(r.Context(), harnesses)
+	response := UnavailableChatAgentsResponse{Agents: []UnavailableChatAgent{}}
+	for _, harness := range harnesses {
+		if reason, missing := unavailable[harness]; missing {
+			response.Agents = append(response.Agents, UnavailableChatAgent{Agent: string(harness), Reason: reason})
+		}
+	}
+	envelope.WriteJSON(w, http.StatusOK, response)
+}
+
+// queryHarnesses reads the comma-separated agents query, at most 64 of them.
+func queryHarnesses(r *http.Request) []domain.AgentHarness {
+	var harnesses []domain.AgentHarness
+	for _, agent := range strings.Split(r.URL.Query().Get("agents"), ",") {
+		if agent = strings.TrimSpace(agent); agent != "" && len(harnesses) < 64 {
+			harnesses = append(harnesses, domain.AgentHarness(agent))
+		}
+	}
+	return harnesses
+}
+
+// chatPermissionModesLister reports the permission modes a harness runs a chat in.
+type chatPermissionModesLister interface {
+	PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error)
+}
+
+// chatPermissionModes lists the modes each asked agent runs a chat in, so a
+// picker can show the one a switch starts it in. Agents with no chat are left out.
+func (c *ConversationsController) chatPermissionModes(w http.ResponseWriter, r *http.Request) {
+	lister, ok := c.Svc.(chatPermissionModesLister)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/chat/permission-modes")
+		return
+	}
+	response := ChatPermissionModesResponse{Agents: []ChatAgentPermissionModes{}}
+	for _, harness := range queryHarnesses(r) {
+		modes, err := lister.PermissionModes(r.Context(), harness)
+		if err != nil || len(modes) == 0 {
+			continue
+		}
+		entry := ChatAgentPermissionModes{Agent: string(harness), Modes: make([]string, 0, len(modes))}
+		for _, mode := range modes {
+			entry.Modes = append(entry.Modes, string(mode))
+		}
+		response.Agents = append(response.Agents, entry)
+	}
+	envelope.WriteJSON(w, http.StatusOK, response)
+}
+
 // models serves the provider's catalog for this session plus the current choice.
 func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
@@ -722,6 +810,10 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 			Model:           req.Model,
 			ReasoningEffort: req.ReasoningEffort,
 			ApprovalMode:    approval,
+
+			FastMode:          req.FastMode,
+			PlanMode:          req.PlanMode,
+			AutoCompactWindow: req.AutoCompactWindow,
 		})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -746,6 +838,7 @@ func conversationModelsResponse(
 			Default:       model.Default,
 			Efforts:       model.Efforts,
 			DefaultEffort: model.DefaultEffort,
+			SupportsFast:  model.FastTier != "",
 		})
 	}
 	return out
@@ -786,6 +879,10 @@ func turnSettingsPayload(settings domain.ConversationSettings) ConversationTurnS
 		Model:           settings.Model,
 		ReasoningEffort: settings.ReasoningEffort,
 		ApprovalMode:    string(settings.ApprovalMode),
+
+		FastMode:          settings.FastMode,
+		PlanMode:          settings.PlanMode,
+		AutoCompactWindow: settings.AutoCompactWindow,
 	}
 }
 
@@ -845,19 +942,30 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
+	message, invalid := chatUserMessage(req)
+	if invalid != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)
+		return
+	}
+	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), message)
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, sendConversationMessageResponse(turn))
+}
+
+// chatUserMessage validates a send request and turns it into the message the
+// agent receives.
+func chatUserMessage(req SendConversationMessageRequest) (ports.ChatUserMessage, *attachmentError) {
 	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
 		// There is no keystroke concept in Chat mode: an empty body is a client
 		// bug, not a way to nudge the agent.
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
-			"CHAT_MESSAGE_EMPTY", "message text is required", nil)
-		return
+		return ports.ChatUserMessage{}, &attachmentError{code: "CHAT_MESSAGE_EMPTY", message: "message text is required"}
 	}
-
 	content, attachmentErr := conversationContent(req)
 	if attachmentErr != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
-			attachmentErr.code, attachmentErr.message, nil)
-		return
+		return ports.ChatUserMessage{}, attachmentErr
 	}
 	text := req.Text
 	if text == "" {
@@ -874,28 +982,26 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 			Revision: excerpt.Revision, Text: excerpt.Text,
 		})
 	}
-	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), ports.ChatUserMessage{
+	return ports.ChatUserMessage{
 		Text:            text,
 		Content:         content,
 		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
 		Continuation:    req.Continuation,
-	})
-	if err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
+	}, nil
+}
 
-	// An empty turn means the client message id was already delivered. Reporting
-	// the duplicate explicitly lets a retrying client stop rather than assume a
-	// new turn began.
-	envelope.WriteJSON(w, http.StatusAccepted, SendConversationMessageResponse{
+// sendConversationMessageResponse reports an accepted send. An empty turn means
+// the client message id was already delivered. Reporting the duplicate
+// explicitly lets a retrying client stop rather than assume a new turn began.
+func sendConversationMessageResponse(turn domain.ConversationTurn) SendConversationMessageResponse {
+	return SendConversationMessageResponse{
 		TurnID:         turn.ID,
 		ProviderTurnID: turn.ProviderTurnID,
 		State:          turn.State,
 		Duplicate:      turn.ID == "",
-	})
+	}
 }
 
 func conversationContent(req SendConversationMessageRequest) ([]ports.ChatContent, *attachmentError) {

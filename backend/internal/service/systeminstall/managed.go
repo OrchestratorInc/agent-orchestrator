@@ -116,8 +116,17 @@ func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	return record, true
 }
 
+// managedCLINames fixes the executable a managed install puts in bin/ for
+// targets whose resolved binary has another name. OpenCode v2 resolves its own
+// opencode-v2 launcher but installs bin/opencode, and the Copilot resolver
+// follows the npm loader to its platform binary (copilot-darwin-arm64).
+var managedCLINames = map[Target]string{
+	TargetOpencodeV2: "opencode",
+	TargetCopilot:    "copilot",
+}
+
 // managedCLIName is the executable name sessions launch, taken from the
-// binary AO resolved before the update.
+// binary AO resolved before the update. managedCLINames overrides it.
 func managedCLIName(baseline *installedBaseline) string {
 	if baseline == nil || baseline.path == "" {
 		return ""
@@ -194,22 +203,27 @@ func nextManagedDir(versionsDir string) string {
 	return "v" + strconv.Itoa(highest+1)
 }
 
+const (
+	switchFailed = "Installed, but could not switch to it."
+	// After current moved, new sessions already run the new release.
+	setupFailed  = "Switched to the new version, but could not finish setting it up."
+	recordFailed = "Switched to the new version, but could not record it."
+)
+
 // runManagedInstall installs the update into a new release directory,
 // verifies it, and switches the target's current release to it. Nothing a
 // running session uses is touched; on any failure the new directory is
 // removed and the current release stays as it was.
 func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *installedBaseline, env []string, out io.Writer) error {
-	cli := managedCLIName(baseline)
+	cli := managedCLINames[plan.Target]
+	if cli == "" {
+		cli = managedCLIName(baseline)
+	}
 	if cli == "" {
 		// A reinstall has no baseline; it repairs the copy AO already manages.
 		if record, ok := s.readManagedRecord(plan.Target); ok {
 			cli = record.CLI
 		}
-	}
-	// V1 and V2 share the native executable name but have distinct managed
-	// launchers. A v2 launcher baseline must still install bin/opencode.
-	if plan.Target == TargetOpencodeV2 {
-		cli = "opencode"
 	}
 	if cli == "" {
 		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")
@@ -217,12 +231,12 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	targetDir := s.managedTargetDir(plan.Target)
 	versionsDir := filepath.Join(targetDir, "versions")
 	if err := os.MkdirAll(versionsDir, 0o750); err != nil {
-		return fmt.Errorf("create managed install directory: %w", err)
+		return installFailed("Could not create the install folder.", fmt.Errorf("create managed install directory: %w", err))
 	}
 	name := nextManagedDir(versionsDir)
 	dir := filepath.Join(versionsDir, name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create release directory: %w", err)
+		return installFailed("Could not create the install folder.", fmt.Errorf("create release directory: %w", err))
 	}
 	keep := false
 	defer func() {
@@ -241,19 +255,19 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	}
 	argv, extraEnv := managedInstallCommand(plan.Method, pkg, pin, dir)
 	if argv == nil {
-		return fmt.Errorf("%s cannot install a managed copy", installMethodLabel(plan.Method))
+		return installFailed(fmt.Sprintf("%s cannot install a side-by-side copy.", installMethodLabel(plan.Method)), nil)
 	}
 	_, _ = fmt.Fprintf(out, "Installing %s into %s\n", pkg, dir)
 	if err := s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), extraEnv...)}, out, out); err != nil {
-		return err
+		return installFailed("The install command failed.", err)
 	}
 
 	binRel := managedBinRel(s.goos, plan.Method, cli)
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
-		return fmt.Errorf("the install finished but %s is missing", binary)
+		return installFailed(fmt.Sprintf("Installed, but %s was not found.", cli), fmt.Errorf("%s is missing", binary))
 	}
-	version, err := s.probeManagedVersion(ctx, plan.Target, binary)
+	version, err := s.probeManagedVersion(ctx, plan.Target, cli, binary)
 	if err != nil {
 		return err
 	}
@@ -262,7 +276,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		installed, okInstalled := scheme.parse(version)
 		wanted, okWanted := scheme.parse(pin)
 		if comparison, okCompare := scheme.compare(installed, wanted); okInstalled && okWanted && okCompare && comparison < 0 {
-			return fmt.Errorf("the new copy reports %s, not %s", version, pin)
+			return installFailed(fmt.Sprintf("The new %s reports %s, not %s.", cli, version, pin), nil)
 		}
 	}
 	previous := s.currentManagedRelease(targetDir)
@@ -279,7 +293,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	}
 	if s.releases != nil && !wasUnsettled {
 		if err := writeFileAtomic(marker, []byte(name)); err != nil {
-			return fmt.Errorf("prepare release switch: %w", err)
+			return installFailed(switchFailed, fmt.Errorf("prepare release switch: %w", err))
 		}
 	}
 	if err := s.switchManagedCurrent(ctx, targetDir, name); err != nil {
@@ -290,7 +304,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			// Keep the intent and candidate so startup can repair the junction.
 			keep = true
 		}
-		return err
+		return installFailed(switchFailed, err)
 	}
 	if s.releases != nil {
 		// Still under the harness lock: every launch from here on records this
@@ -306,20 +320,20 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 				// every release is kept until no session that may have
 				// launched meanwhile is left.
 				keep = true
-				return errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr))
+				return installFailed(recordFailed, errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr)))
 			}
 			settle()
-			return recordErr
+			return installFailed(switchFailed, recordErr)
 		}
 		settle()
 	}
 	keep = true
 	record := managedRecord{Method: plan.Method, Package: pkg, CLI: cli, Version: version, Dir: name, BinRel: binRel}
 	if err := s.ensureManagedLauncher(plan.Target, record); err != nil {
-		return err
+		return installFailed(setupFailed, err)
 	}
 	if err := writeFileAtomic(filepath.Join(targetDir, "managed.json"), mustJSON(record)); err != nil {
-		return fmt.Errorf("record managed install: %w", err)
+		return installFailed(setupFailed, fmt.Errorf("record managed install: %w", err))
 	}
 	_, _ = fmt.Fprintf(out, "AO now runs %s %s from %s\n", cli, version, dir)
 	s.mu.Lock()
@@ -332,16 +346,16 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 }
 
 // probeManagedVersion runs the new copy's --version.
-func (s *Service) probeManagedVersion(ctx context.Context, target Target, binary string) (string, error) {
+func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, binary string) (string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, defaultVerifyTimeout)
 	defer cancel()
 	var output strings.Builder
 	if err := s.commands.Run(probeCtx, []string{binary, "--version"}, &output, &output); err != nil {
-		return "", fmt.Errorf("the new copy did not start: %w", err)
+		return "", installFailed(fmt.Sprintf("The new %s did not start.", cli), fmt.Errorf("the new copy did not start: %w", err))
 	}
 	version, ok := versionSchemeFor(target).find(output.String())
 	if !ok {
-		return "", fmt.Errorf("the new copy reported no version: %q", strings.TrimSpace(output.String()))
+		return "", installFailed(fmt.Sprintf("The new %s did not report its version.", cli), fmt.Errorf("the new copy reported no version: %q", strings.TrimSpace(output.String())))
 	}
 	return version.display, nil
 }

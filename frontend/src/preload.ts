@@ -57,10 +57,6 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
-import {
-	AGENT_SWITCH_VISIBILITY_IPC_CHANNEL,
-	type AgentSwitchVisibilitySignalBody,
-} from "./shared/agent-switch-observability";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -397,6 +393,17 @@ const api = {
 			if (bootstrap && currentTelemetryPolicy) currentTelemetryPolicy = { ...currentTelemetryPolicy, eventsEnabled: bootstrap.eventsEnabled, consentGeneration: bootstrap.consentGeneration };
 			return bootstrap;
 		},
+		getAnalyticsOptOut: () => ipcRenderer.invoke("telemetry:getAnalyticsOptOut") as Promise<boolean>,
+		setAnalyticsOptOut: (optedOut: boolean) => ipcRenderer.invoke("telemetry:setAnalyticsOptOut", optedOut) as Promise<boolean>,
+		onAnalyticsOptOut: (listener: (optedOut: boolean) => void) => {
+			const wrapped = (_event: unknown, optedOut: boolean) => listener(optedOut);
+			ipcRenderer.on("telemetry:analyticsOptOutChanged", wrapped);
+			return () => {
+				ipcRenderer.off("telemetry:analyticsOptOutChanged", wrapped);
+			};
+		},
+		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
+		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			currentTelemetryPolicy = view;
@@ -409,11 +416,6 @@ const api = {
 		capture: (input: RendererTelemetryCaptureInput) => {
 			if (!currentTelemetryPolicy) return Promise.resolve(false);
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
-		},
-		signalAgentSwitchVisibility: (signal: AgentSwitchVisibilitySignalBody) => {
-			if (!currentTelemetryPolicy) return false;
-			ipcRenderer.send(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, { consentGeneration: currentTelemetryPolicy.consentGeneration, signal });
-			return true;
 		},
 	},
 	browser: {

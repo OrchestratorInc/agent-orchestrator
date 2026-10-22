@@ -1,6 +1,7 @@
 package codexappserver
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,6 +60,12 @@ type conversation struct {
 	events     chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
+	// Guarded by sendMu: whether the last turn put the thread on the fast tier
+	// or in plan mode, and each model's fast tier id as last listed.
+	fastTier, planMode bool
+	// A reconnected thread may be on any tier and in either collaboration mode.
+	tierUnknown, planUnknown bool
+	fastTiers                map[string]string
 
 	mu      sync.Mutex
 	pending map[string]*parkedRequest
@@ -307,6 +314,25 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	}
 }
 
+// configuredServiceTier is the service_tier the user's Codex config sets, or
+// "" for none or when it cannot be read.
+func (c *conversation) configuredServiceTier(ctx context.Context) string {
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var resp struct {
+		Config struct {
+			ServiceTier string `json:"service_tier"`
+		} `json:"config"`
+	}
+	if err := c.conn.request(readCtx, "config/read", map[string]any{}, &resp); err != nil {
+		return ""
+	}
+	return resp.Config.ServiceTier
+}
+
+// codexFastServiceTier is the fast tier's id before a model list is read.
+const codexFastServiceTier = "priority"
+
 // SendTurn delivers one message to the provider.
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	if strings.TrimSpace(msg.Text) == "" {
@@ -328,6 +354,30 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
 	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
+	// A service tier sticks to the thread once set, so leaving the fast tier
+	// has to be said: an explicit null returns the thread to its default.
+	if msg.Settings.Fast {
+		params["serviceTier"] = cmp.Or(c.fastTiers[msg.Settings.Model], c.fastTiers[c.threadModel], codexFastServiceTier)
+	} else if c.fastTier || c.tierUnknown && c.configuredServiceTier(ctx) == "" {
+		params["serviceTier"] = nil
+	}
+
+	// Plan mode is a collaboration mode, sticky too, so leaving it sends the
+	// default mode. The mode names its model; with none known nothing is sent.
+	planMode := c.planMode
+	if model := cmp.Or(msg.Settings.Model, c.threadModel); (msg.Settings.Plan != c.planMode || c.planUnknown) && model != "" {
+		mode := "default"
+		if msg.Settings.Plan {
+			mode = "plan"
+		}
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if effort := cmp.Or(msg.Settings.Effort, c.threadEffort); effort != "" {
+			settings["reasoning_effort"] = effort
+		}
+		params["collaborationMode"] = map[string]any{"mode": mode, "settings": settings}
+		planMode = msg.Settings.Plan
+	}
+	planKnown := params["collaborationMode"] != nil
 
 	var resp struct {
 		Turn struct {
@@ -337,6 +387,9 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
 	}
+	c.fastTier = msg.Settings.Fast
+	c.planMode = planMode
+	c.tierUnknown, c.planUnknown = false, c.planUnknown && !planKnown
 
 	c.mu.Lock()
 	c.activeTurn = resp.Turn.ID
@@ -401,6 +454,15 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	if err != nil {
 		return nil, err
 	}
+	fastTiers := make(map[string]string, len(models))
+	for _, model := range models {
+		if model.FastTier != "" {
+			fastTiers[model.ID] = model.FastTier
+		}
+	}
+	c.sendMu.Lock()
+	c.fastTiers = fastTiers
+	c.sendMu.Unlock()
 	// Thread settings include the user's config; model/list only has generic defaults.
 	for i := range models {
 		// An omitted turn model inherits thread/start (including config.toml),
@@ -430,6 +492,10 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			Efforts     []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
+			ServiceTiers []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"serviceTiers"`
 		} `json:"data"`
 		NextCursor *string `json:"nextCursor"`
 	}
@@ -468,10 +534,19 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			if display == "" {
 				display = id
 			}
+			// The faster tier is named "Fast" and ids "priority"; the name identifies it.
+			fastTier := ""
+			for _, tier := range entry.ServiceTiers {
+				if strings.EqualFold(tier.Name, "fast") || tier.ID == "fast" {
+					fastTier = tier.ID
+					break
+				}
+			}
 			models = append(models, ports.ChatModel{
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
-				Inputs: entry.Inputs,
+				FastTier: fastTier,
+				Inputs:   entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {

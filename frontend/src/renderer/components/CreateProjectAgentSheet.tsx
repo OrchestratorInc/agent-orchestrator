@@ -47,6 +47,8 @@ export type CreateProjectAgentSelection = {
 const EMPTY_INTAKE: IntakeForm = { enabled: false, repo: "", assignee: "" };
 const AGENT_MENU_WIDTH = "w-56! min-w-56! max-w-56!";
 type CreateProjectAgentSheetProps = {
+	preparedClonePath?: string;
+	onKeepCheckout?: () => void;
 	error?: string | null;
 	action?: "create" | "clone";
 	connected?: boolean;
@@ -109,6 +111,8 @@ function projectSheetError(error: string, action: "create" | "clone"): SheetErro
 }
 
 export function CreateProjectAgentSheet({
+	preparedClonePath,
+	onKeepCheckout,
 	action = "create",
 	connected = true,
 	error,
@@ -268,6 +272,7 @@ export function CreateProjectAgentSheet({
 								: t("createProject.setupProject")
 						}
 					/>
+					{preparedClonePath ? <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t("createProject.cloneReady", { path: preparedClonePath })}</p> : null}
 					<ProjectSetupFormView
 						agentControls={{
 							worker: (
@@ -355,7 +360,7 @@ export function CreateProjectAgentSheet({
 								: null
 						}
 						submitLabel={
-							isInitializing
+							preparedClonePath && error && !isBusy ? t("createProject.cloneRetrySetup") : isInitializing
 								? t("createProject.settingUp")
 								: isCreating
 									? action === "clone"
@@ -372,6 +377,7 @@ export function CreateProjectAgentSheet({
 							(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
 						)}
 					/>
+					{onKeepCheckout ? <div className="px-4 pb-4"><Button type="button" variant="outline" disabled={isBusy} onClick={onKeepCheckout}>{t("createProject.cloneKeepCheckout")}</Button></div> : null}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>

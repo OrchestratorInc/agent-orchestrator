@@ -101,10 +101,13 @@ function worstWindow(
 export function ContextMeter({
 	usage,
 	rateLimits,
+	compactsAt,
 	className,
 }: {
 	usage?: ConversationUsage;
 	rateLimits?: ConversationRateLimits;
+	/** The size at which the agent compacts on its own, such as Claude Code's "200k". */
+	compactsAt?: string;
 	className?: string;
 }) {
 	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
@@ -121,31 +124,30 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
-				{usage && hasContext ? <ContextReadout usage={usage} /> : null}
+				{usage && hasContext ? <ContextReadout usage={usage} compactsAt={compactsAt} /> : null}
 				{showQuota && quota ? <QuotaWarning quota={quota} limits={rateLimits} /> : null}
 			</div>
 		</TooltipProvider>
 	);
 }
 
-function ContextReadout({ usage }: { usage: ConversationUsage }) {
+function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compactsAt?: string }) {
+	const compactsLine = compactsAt ? <p>Compacts on its own at {compactsAt.toUpperCase()}</p> : null;
 	const { contextUsed, contextWindow } = usage;
 	// A border separates the tooltip without the layered shadow's hover halos.
 	const tooltipSurface = "border border-border shadow-none";
 
-	// Failed turns can report 0 used with a valid model limit. Until there is a
-	// positive reading, drawing 0% would claim headroom we have not measured.
-	if (contextUsed <= 0 || contextWindow <= 0) {
-		const used = contextUsed > 0 ? contextUsed.toLocaleString() : "unknown";
-		const total = contextWindow > 0 ? contextWindow.toLocaleString() : "unknown";
-		const compactUsed = contextUsed > 0 ? formatTokenCount(contextUsed).replace(/ tok$/, "") : "unknown";
-		const compactTotal = contextWindow > 0 ? formatTokenCount(contextWindow).replace(/ tok$/, "") : "unknown";
+	// Failed turns can report 0 used with a valid model limit. That draws as an
+	// empty 0% ring until the next turn reports a real reading. Without a window
+	// there is no fraction to draw, so only the used count is shown.
+	if (contextWindow <= 0) {
+		const compactUsed = formatTokenCount(contextUsed).replace(/ tok$/, "");
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span
 						role="img"
-						aria-label={`Context ${used} / ${total}`}
+						aria-label={`Context ${contextUsed.toLocaleString()} / unknown`}
 						className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 						data-context-meter=""
 						tabIndex={0}
@@ -157,8 +159,9 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 					</span>
 				</TooltipTrigger>
 				<TooltipContent className={tooltipSurface}>
-					<p className="font-medium">Context {compactUsed} / {compactTotal}</p>
-					<p>{contextUsed <= 0 ? "The provider has not reported current context used." : "The provider has not reported a context window."} Conversation fullness is unknown.</p>
+					<p className="font-medium">Context {compactUsed} / unknown</p>
+					<p>The provider has not reported a context window. Conversation fullness is unknown.</p>
+					{compactsLine}
 				</TooltipContent>
 			</Tooltip>
 		);
@@ -194,7 +197,9 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 						<circle
 							cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3"
 							strokeLinecap="round" pathLength="100"
-							strokeDasharray={`${Math.max(fraction * 100, 8)} 100`}
+							// A nearly-empty conversation keeps a visible sliver; a zero reading
+							// stays an empty track so it does not look like measured usage.
+							strokeDasharray={`${fraction > 0 ? Math.max(fraction * 100, 8) : 0} 100`}
 							className="transition-[stroke-dasharray] duration-300"
 						/>
 					</svg>
@@ -203,6 +208,7 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 			<TooltipContent className={tooltipSurface}>
 				<p className="font-medium">Context window</p>
 				<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
+				{compactsLine}
 				{severity !== "normal" ? (
 					<p className="mt-1">
 						{severity === "critical"

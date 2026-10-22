@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -325,7 +326,7 @@ func (s *Service) EditMessage(
 						SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 						DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 						Model: cfg.Model, Effort: cfg.Effort,
-						Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+						Permissions: cfg.Permissions, SystemPrompt: withHandoffNote(cfg.SystemPrompt, sourceBranch.HandoffNote),
 						ProviderScopeID:       sourceBranch.ProviderScopeID,
 						ProviderIDsScoped:     sourceBranch.ProviderIDsScoped,
 						AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -365,7 +366,7 @@ func (s *Service) EditMessage(
 					SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort,
 					Permissions:  cfg.Permissions,
-					SystemPrompt: cfg.SystemPrompt, AdditionalDirectories: cfg.AdditionalDirectories,
+					SystemPrompt: withHandoffNote(cfg.SystemPrompt, sourceBranch.HandoffNote), AdditionalDirectories: cfg.AdditionalDirectories,
 					MCPServers: cfg.MCPServers, ProviderScopeID: providerScopeID, ProviderIDsScoped: true,
 				})
 				if err == nil {
@@ -425,6 +426,8 @@ func (s *Service) EditMessage(
 		CreatedAt: s.now(), Strategy: domain.ConversationBranchStrategyNative,
 		ProviderScopeID:   providerScopeID,
 		ProviderIDsScoped: providerScopeID != "" || sourceBranch.ProviderIDsScoped,
+		// An edit after a switch is still on the agent the switch brought in.
+		HandoffNote: sourceBranch.HandoffNote,
 	}
 	if replayContent.Type != "" {
 		branch.Strategy = domain.ConversationBranchStrategyApproximateContext
@@ -911,7 +914,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 		SessionID: cfg.SessionID, ProviderConversationID: branch.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cfg.Model, Effort: cfg.Effort,
-		Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		Permissions: cfg.Permissions, SystemPrompt: withHandoffNote(cfg.SystemPrompt, branch.HandoffNote),
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -1012,11 +1015,18 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("rotate source browser capability after failed native edit: %w", err)
 	}
+	// The source comes back with the settings it had when it stopped, not the
+	// ones it was launched with: the user may have changed them since.
+	conversation := source.conversation
+	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
-		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
-		Model: cfg.Model, Effort: cfg.Effort,
-		Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		// A switch target that never answered may have no native session to resume.
+		FreshIfMissing: s.switchBranchUnanswered(recoveryCtx, conversation.ID, branch),
+		DataDir:        cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
+		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort,
+		Permissions:           cmp.Or(conversation.Settings.ApprovalMode, cfg.Permissions),
+		SystemPrompt:          withHandoffNote(cfg.SystemPrompt, branch.HandoffNote),
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -1024,8 +1034,18 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("resume source after failed native edit: %w", err)
 	}
+	// A fresh start in place of the missing session has its own id, and the
+	// branch must name it before it can be activated.
+	if fresh := provider.ProviderConversationID(); fresh != "" && fresh != providerConversationID {
+		if rebinder, ok := s.store.(branchProviderRebinder); ok {
+			if err := rebinder.RebindUnansweredBranchProvider(recoveryCtx, conversation.ID, branch.ID, providerConversationID, fresh); err != nil {
+				_ = provider.Close()
+				return fmt.Errorf("rebind source after failed native edit: %w", err)
+			}
+		}
+		providerConversationID = fresh
+	}
 	generation := s.newID()
-	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
 		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)

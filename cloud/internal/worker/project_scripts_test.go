@@ -70,12 +70,15 @@ func TestSetupStopsAtTheFailingStepAndRetries(t *testing.T) {
 	}
 }
 
-// A step over its deadline is stopped together with what it started.
+// A step over its deadline is stopped together with what it started. Its
+// message names the limit it ran with (StepTimeout's 200ms reads as 1 minute;
+// a step without its own limit says Setup's 30-minute default, see
+// TestSetupTimeoutSummaryNamesTheStepsLimit).
 func TestSetupStepTimeout(t *testing.T) {
 	t.Parallel()
 	event, _ := SetupRunner{DataDir: t.TempDir(), FirstStart: true, StepTimeout: 200 * time.Millisecond}.Run(
 		context.Background(), []string{"sleep 30 & wait"}, t.TempDir(), scriptEnvironment(t.TempDir()))
-	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "stopped at step 1 after 30 minutes") {
+	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "stopped at step 1 after 1 minute") {
 		t.Fatalf("event = %+v", event)
 	}
 }
@@ -186,5 +189,66 @@ func TestSetupRunsOnlyForTheSessionsFirstPreparation(t *testing.T) {
 	}
 	if _, ran := (SetupRunner{DataDir: dataDir}).Run(context.Background(), []string{marker}, workspace, env); ran {
 		t.Fatal("Setup ran again after it succeeded")
+	}
+}
+
+// Setup and Cleanup of a project with additional repositories reach every
+// checkout through AO_REPOS_ROOT, the folder that holds them all.
+func TestScriptEnvironmentNamesTheReposRoot(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	root := t.TempDir()
+	workspace := filepath.Join(root, "repository")
+	if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	environment := scriptEnvironment(workspace)
+	if got := environment.Map()["AO_REPOS_ROOT"]; got != root {
+		t.Fatalf("AO_REPOS_ROOT = %q, want the workspace's parent %q", got, root)
+	}
+	environment.ReposRoot = root
+	dataDir := t.TempDir()
+	event, ran := SetupRunner{DataDir: dataDir, FirstStart: true}.Run(context.Background(),
+		[]string{`ls "$AO_REPOS_ROOT" > "$AO_REPOS_ROOT/api/listing"`}, workspace, environment)
+	if !ran || event.Status != SetupSucceeded {
+		t.Fatalf("event = %+v, ran = %v", event, ran)
+	}
+	listing, err := os.ReadFile(filepath.Join(root, "api", "listing"))
+	if err != nil || !strings.Contains(string(listing), "api") || !strings.Contains(string(listing), "repository") {
+		t.Fatalf("listing = %q (%v), want both checkouts", listing, err)
+	}
+	if err := WriteCleanupHook(dataDir, nil, workspace, environment); err != nil {
+		t.Fatal(err)
+	}
+	hook, err := os.ReadFile(filepath.Join(dataDir, CleanupHookFile))
+	if err != nil || !strings.Contains(string(hook), "export AO_REPOS_ROOT=") {
+		t.Fatalf("cleanup hook does not export AO_REPOS_ROOT: %s (%v)", hook, err)
+	}
+}
+
+// Cleanup sees the HOME Setup ran with (the worker's), not the one its runner
+// would set: sudo -H gives the hook owner's account home instead.
+func TestCleanupHookKeepsTheWorkersHome(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	dataDir, workspace, workerHome := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", workerHome)
+	if err := WriteCleanupHook(dataDir, []string{`echo "home=$HOME" > home-seen`}, workspace, scriptEnvironment(workspace)); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(filepath.Join(dataDir, CleanupHookFile))
+	command.Env = append(os.Environ(), "HOME=/home/someone-else")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run hook: %v: %s", err, output)
+	}
+	seen, err := os.ReadFile(filepath.Join(workspace, "home-seen"))
+	if err != nil || strings.TrimSpace(string(seen)) != "home="+workerHome {
+		t.Fatalf("Cleanup saw %q (%v), want home=%s", seen, err, workerHome)
 	}
 }

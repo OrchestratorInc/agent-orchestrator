@@ -1,5 +1,7 @@
 export type FileViewerPerformanceMark =
-	| "files-click"
+	| "file-menu-open-requested"
+ | "file-menu-painted"
+ | "files-click"
 	| "files-shell-painted"
 	| "manifest-ready"
 	| "tree-painted"
@@ -28,4 +30,8 @@ export function markFileViewerPerformance(name: FileViewerPerformanceMark, now =
 
 export function getFileViewerPerformanceEntries(): readonly FileViewerPerformanceEntry[] {
 	return entries.slice();
+}
+
+export function markFileMenuPainted() {
+ requestAnimationFrame(() => requestAnimationFrame(() => markFileViewerPerformance("file-menu-painted")));
 }

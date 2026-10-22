@@ -3,6 +3,7 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -44,6 +45,9 @@ type commandSpec struct {
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
 	signIn *signInCheck
+	// retryEmpty reruns a listing that exits cleanly with no output once.
+	// OpenCode 2 prints nothing the first time it runs in a new folder.
+	retryEmpty bool
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -110,7 +114,7 @@ var commandSpecs = map[string]commandSpec{
 	// (and still honors the provider-presence env used for cloud scoping) without
 	// betting on a flag that can be rejected.
 	"opencode":    {args: []string{"models"}, parser: parseProviderIDLines},
-	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines},
+	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines, retryEmpty: true},
 	"grok":        {args: []string{"models"}, parser: parseGrokModels},
 	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
@@ -233,7 +237,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -424,6 +428,14 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	}
 	if request.CredentialType == "" && (hasLocalProviderCatalog(request.AgentID) || browseProviderCredentials[request.AgentID] != nil) {
 		// Replace older task-only snapshots through the normal background refresh.
+		if listsRunnableModels(request.AgentID) {
+			// Snapshots from before RunnableModels lack it.
+			return fingerprint + ":shared-providers-v1:runnable-v1"
+		}
+		if request.AgentID == "pi" || request.AgentID == "kimchi" {
+			// Snapshots from before Pi's thinking levels were read lack them.
+			return fingerprint + ":shared-providers-v1:thinking-v2"
+		}
 		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
@@ -463,6 +475,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	defer cancel()
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
 	output, err := cmd.CombinedOutput()
+	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
+		cancel()
+		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
+		defer cancel()
+		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
 	}
@@ -472,6 +490,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
+		// The model command lists what it can run; the provider cache, every model.
+		if listsRunnableModels(agentID) {
+			for _, model := range normalize(models) {
+				base.RunnableModels = append(base.RunnableModels, model.ID)
+			}
+		}
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
 		base.Providers = append(base.Providers, reported.Providers...)
@@ -595,7 +619,8 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		normalized = append(normalized, ports.AgentModelInfo{
 			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
-			Inputs: modelInputs(item.Inputs),
+			SupportsFast: item.FastTier != "",
+			Inputs:       modelInputs(item.Inputs),
 		})
 	}
 	if len(normalized) == 0 {
@@ -789,7 +814,12 @@ const discoveryErrorDetailMax = 500
 // summary lands after any progress noise; whitespace is collapsed so the result
 // is a single log-friendly line.
 func discoveryErrorDetail(output []byte) string {
-	cleaned := strings.Join(strings.Fields(ansiPattern.ReplaceAllString(string(output), "")), " ")
+	plain := ansiPattern.ReplaceAllString(string(output), "")
+	// A Node CLI that crashed ends on its stack; the error is the line above it.
+	if line := thrownErrorLine(plain); line != "" {
+		plain = line
+	}
+	cleaned := strings.Join(strings.Fields(plain), " ")
 	if cleaned == "" {
 		return ""
 	}
@@ -797,6 +827,25 @@ func discoveryErrorDetail(output []byte) string {
 		cleaned = "…" + string(runes[len(runes)-discoveryErrorDetailMax:])
 	}
 	return cleaned
+}
+
+// thrownErrorPattern is the line a crashed Node or Python CLI names its error on.
+var thrownErrorPattern = regexp.MustCompile(`(?m)^\s*(?:Uncaught )?(?:[A-Z][A-Za-z]*)?(?:Error|Exception): .+$`)
+
+// stackFramePattern is a line of a stack trace.
+var stackFramePattern = regexp.MustCompile(`(?m)^\s+at \S`)
+
+// thrownErrorLine is the last such line of output that ends on a stack trace,
+// or "" when output is not a crash.
+func thrownErrorLine(output string) string {
+	if !stackFramePattern.MatchString(output) {
+		return ""
+	}
+	matches := thrownErrorPattern.FindAllString(output, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(matches[len(matches)-1])
 }
 
 // BinaryVersion returns a short non-sensitive executable-metadata fingerprint
@@ -1396,6 +1445,9 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			}
 			if len(previous.Inputs) == 0 {
 				previous.Inputs = item.Inputs
+			}
+			if len(previous.Efforts) == 0 {
+				previous.Efforts = item.Efforts
 			}
 			previous.IsDefault = previous.IsDefault || item.IsDefault
 			byID[item.ID] = previous

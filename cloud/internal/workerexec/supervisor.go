@@ -52,6 +52,9 @@ type Supervisor struct {
 	// A timed-out handoff releases its own fence so the source can keep running.
 	drainFences           atomic.Int32
 	workspaceStartupError atomic.Pointer[string]
+	// claimedTurn is set once this controller claimed a turn: the session's
+	// task (its first turn) has run in Chat.
+	claimedTurn atomic.Bool
 
 	activeMu    sync.Mutex
 	active      *activeExecution
@@ -61,9 +64,12 @@ type Supervisor struct {
 }
 
 // SetWorkspaceStartupError keeps Chat from running a prompt in a workspace
-// whose checkout or Setup failed. Queued turns stay queued, as a failed local
-// start keeps its messages: the desktop shows the failure with Retry, and the
-// turns run once a retry prepares the workspace and this is cleared.
+// whose checkout or Setup failed. While it is set the controller claims no
+// turn: queued turns (a new session's task first) stay queued, as a failed
+// local start keeps its messages. The desktop shows the failure with Retry,
+// and the turns run once a retry prepares the workspace and this is cleared.
+// A claimed turn would fail for good, so the task would never run after a
+// successful retry.
 func (s *Supervisor) SetWorkspaceStartupError(message string) {
 	if message == "" {
 		s.workspaceStartupError.Store(nil)
@@ -75,6 +81,13 @@ func (s *Supervisor) SetWorkspaceStartupError(message string) {
 type activeExecution struct {
 	cancel      context.CancelFunc
 	interrupted atomic.Bool
+}
+
+// ClaimedTurn reports whether this controller has claimed a turn, so the
+// session's task already ran in Chat and a terminal agent started later must
+// not get it on its command line again.
+func (s *Supervisor) ClaimedTurn() bool {
+	return s.claimedTurn.Load()
 }
 
 // Idle reports whether the Chat controller has no currently executing turn.
@@ -192,6 +205,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		s.claimedTurn.Store(true)
 		err = s.execute(ctx, *turn)
 		s.busy.Store(false)
 		if err != nil {

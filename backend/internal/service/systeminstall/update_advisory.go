@@ -266,7 +266,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, nil
 	}
 	scheme := versionSchemeFor(target)
-	current, ok := scheme.find(verified.Output)
+	current, ok := scheme.find(installedVersionText(target, verified.ResolvedPath, verified.Output))
 	if !ok {
 		advisory.Reason = UpdateReasonVersionUnparseable
 		advisory.probeFailed = true

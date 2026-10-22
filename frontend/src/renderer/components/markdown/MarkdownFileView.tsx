@@ -1,3 +1,4 @@
+import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
 /**
  * GitHub-accurate rendered view of a `.md` file's current worktree content.
  *
@@ -73,6 +74,7 @@ export function MarkdownFileView({
 	truncated,
 	version,
 	artifactOrigin,
+ snapshotSource,
 }: {
 	sessionId: string;
 	hostId?: string;
@@ -84,10 +86,11 @@ export function MarkdownFileView({
 	version: number;
 	/** Origin serving the artifact directory, for artifact markdown images. */
 	artifactOrigin?: string;
+ snapshotSource?: Extract<FilesSource,{kind:"snapshot"}>;
 }) {
 	const { t } = useTranslation();
 	const bodyRef = useRef<HTMLDivElement>(null);
-	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin }), [sessionId, hostId, filePath, version, artifactOrigin]);
+	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin, snapshotSource }), [sessionId, hostId, filePath, version, artifactOrigin,snapshotSource]);
 
 	// Heading slugs are unique per rendered file, not per document, and the Files
 	// tab expands many files at once — two open READMEs both containing

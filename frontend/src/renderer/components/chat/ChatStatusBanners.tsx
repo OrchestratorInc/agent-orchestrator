@@ -13,24 +13,42 @@
  * without displacing the conversation.
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert, X } from "lucide-react";
+import { CircleArrowUp, KeyRound, LoaderCircle, Plug, TriangleAlert, X } from "lucide-react";
+import {
+	agentAccountName,
+	agentAccountProviderFor,
+	useAgentAccountActions,
+	useAgentAccounts,
+	useSessionAgentAccounts,
+	type AgentAccount,
+	type AgentAccountLogin,
+} from "../../hooks/useAgentAccounts";
 import { useSettings } from "../../hooks/useSettings";
+import { AgentAccountLoginDialog } from "../settings/AgentAccountsSection";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { cn, truncateMiddle } from "../../lib/utils";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
-/** A current provider credential demand; dismissal affects presentation only. */
+/**
+ * A current provider credential demand; dismissal affects presentation only.
+ *
+ * A session on a saved account offers to sign that account in again here, in its
+ * own folder, and any session offers to continue on another signed-in account.
+ * Both leave the failed turn for the user to retry.
+ */
 export const ReauthBanner = memo(function ReauthBanner({
 	account,
 	harness,
+	sessionId,
 	reasonInTimeline = false,
 }: {
 	account: ConversationAccount;
 	harness: string;
+	sessionId: string;
 	reasonInTimeline?: boolean;
 }) {
 	const [dismissedFailure, setDismissedFailure] = useState<string>();
@@ -38,7 +56,96 @@ export const ReauthBanner = memo(function ReauthBanner({
 	const required = account.authenticationState === "required" ||
 		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
 	if (!required || dismissedFailure === failure) return null;
+	return <ReauthNotice account={account} harness={harness} sessionId={sessionId} reasonInTimeline={reasonInTimeline}
+		onDismiss={() => setDismissedFailure(failure)} />;
+});
+
+/** The shown notice. Its account reads run only while a failure is shown. */
+function ReauthNotice({ account, harness, sessionId, reasonInTimeline, onDismiss }: {
+	account: ConversationAccount;
+	harness: string;
+	sessionId: string;
+	reasonInTimeline: boolean;
+	onDismiss: () => void;
+}) {
+	const { t } = useTranslation();
+	const provider = agentAccountProviderFor(harness);
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
+	const accounts = useAgentAccounts(provider !== null);
+	const actions = useAgentAccountActions();
+	const actionsRef = useRef(actions);
+	actionsRef.current = actions;
+	const [login, setLogin] = useState<AgentAccountLogin>();
+	const openLogin = useRef<string | undefined>(undefined);
+	const verifying = useRef(false);
+	const [loginNote, setLoginNote] = useState("");
+	const [busy, setBusy] = useState<"login" | "verify" | "move" | null>(null);
+	const [error, setError] = useState("");
+	const [done, setDone] = useState<string>();
+	// A sign-in left open when the chat goes away is cancelled, not abandoned.
+	useEffect(() => () => {
+		if (openLogin.current) void actionsRef.current.cancelLogin(openLogin.current).catch(() => undefined);
+	}, []);
 	const command = signInCommand(harness);
+	const accountId = provider ? sessionAccounts.data?.[provider] : undefined;
+	const current = accounts.data?.find((candidate) => candidate.id === accountId);
+	const saved = current && !current.device ? current : undefined;
+	const other = accountId
+		? accounts.data?.find((candidate) => candidate.provider === provider && candidate.id !== accountId && candidate.signedIn)
+		: undefined;
+	const name = (target: AgentAccount) => agentAccountName(target, t);
+
+	const run = async (kind: "login" | "move", action: () => Promise<void>) => {
+		setBusy(kind);
+		setError("");
+		try {
+			await action();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(null);
+		}
+	};
+	const signIn = (target: AgentAccount) => run("login", async () => {
+		setLoginNote("");
+		const next = await actions.signInAgain(target.id);
+		openLogin.current = next.operationId;
+		setLogin(next);
+	});
+	const checkLogin = async (current: AgentAccountLogin) => {
+		// The CLI exiting checks on its own; a click racing it would find the
+		// sign-in already finished and report an error.
+		if (openLogin.current !== current.operationId || verifying.current) return;
+		verifying.current = true;
+		setBusy("verify");
+		try {
+			const result = await actions.verifyLogin(current.operationId);
+			if (result.status === "waiting") {
+				setLoginNote(t("settings.agentAccounts.loginWaiting"));
+				return;
+			}
+			openLogin.current = undefined;
+			setLogin(undefined);
+			if (result.status === "complete") setDone(t("chat.reauth.signedInAgain"));
+			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
+			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: result.account?.email ?? "" }));
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			verifying.current = false;
+			setBusy(null);
+		}
+	};
+	const closeLogin = (current: AgentAccountLogin) => {
+		openLogin.current = undefined;
+		setLogin(undefined);
+		void actions.cancelLogin(current.operationId).catch(() => undefined);
+	};
+	const moveTo = (target: AgentAccount) => run("move", async () => {
+		await actions.switchSession(sessionId, target.id);
+		await actions.refreshSession(sessionId);
+		setDone(t("chat.reauth.movedTo", { account: name(target) }));
+	});
 
 	return (
 		<div
@@ -48,7 +155,7 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
 			<div className="flex min-w-0 flex-col gap-1">
 				<strong className="text-xs font-semibold text-destructive">
-					Provider authentication needs attention
+					{saved && !saved.signedIn ? t("chat.reauth.accountSignedOut", { account: name(saved) }) : "Provider authentication needs attention"}
 				</strong>
 				{!reasonInTimeline ? (
 					<p className="text-xs leading-relaxed text-foreground">
@@ -56,6 +163,11 @@ export const ReauthBanner = memo(function ReauthBanner({
 							"The provider rejected this session's credentials."}
 					</p>
 				) : null}
+				{done ? (
+					<p role="status" className="text-xs leading-relaxed text-foreground">{done}</p>
+				) : saved ? (
+					<p className="text-xs leading-relaxed text-muted-foreground">{t("chat.reauth.savedAccountHint")}</p>
+				) : (
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					{command ? (
 						<>
@@ -71,15 +183,38 @@ export const ReauthBanner = memo(function ReauthBanner({
 						</>
 					)}
 				</p>
+				)}
+				{!done && (saved || other) ? (
+					<div className="flex flex-wrap items-center gap-2 pt-1">
+						{saved ? (
+							<Button type="button" size="sm" variant="outline" data-terminal-focus-handoff="true" disabled={busy !== null}
+								onClick={() => void signIn(saved)}>
+								{busy === "login" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
+								{t("settings.agentAccounts.signInAgain")}
+							</Button>
+						) : null}
+						{other ? (
+							<Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => void moveTo(other)}>
+								{busy === "move" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
+								{t("chat.reauth.continueOn", { account: name(other) })}
+							</Button>
+						) : null}
+					</div>
+				) : null}
+				{error ? <p role="alert" className="text-xs leading-relaxed text-destructive">{error}</p> : null}
 			</div>
 			<Button variant="ghost" size="icon" className="ml-auto size-6 shrink-0"
 				aria-label="Dismiss authentication notice" title="Hide this notice; authentication state is unchanged"
-				onClick={() => setDismissedFailure(failure)}>
+				onClick={onDismiss}>
 				<X aria-hidden="true" className="size-3.5" />
 			</Button>
+			{login ? (
+				<AgentAccountLoginDialog login={login} note={loginNote} pending={busy === "verify"}
+					onCheck={(current) => void checkLogin(current)} onClose={closeLogin} />
+			) : null}
 		</div>
 	);
-});
+}
 
 /**
  * The sign-in command for a harness, or nothing.

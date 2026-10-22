@@ -1,7 +1,10 @@
 import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActivityRow, AssistantMessage, ChatHostId, HumanMessage, ProviderSwitchMarker, TurnOutcome } from "./ChatTimelineItems";
+import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
+import { groupScriptRuns } from "../../lib/cloud-script-runs";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
@@ -408,6 +411,24 @@ describe("ActivityRow", () => {
 		expect(screen.getByText(/compose up/)).toBeInTheDocument();
 	});
 
+	it("draws a script run as the step log panel", () => {
+		const run = groupScriptRuns([{
+			sessionId: "s1", sequence: 1, type: "workspace.script.step", createdAt: "2026-10-13T00:00:00Z",
+			payload: { phase: "setup", runId: "r", step: 1, total: 1, command: "make", repository: "", status: "failed", exitCode: 2, durationMs: 1000, output: "boom" },
+		}])[0];
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "run", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "failed", summary: "Setup failed",
+				detail: { event: "workspace.script.run", scriptRun: run },
+			}} />,
+		);
+		expect(screen.getByTestId("script-run-panel")).toHaveAttribute("data-run-status", "failed");
+		expect(screen.getByText("Failed at step 1")).toBeInTheDocument();
+		expect(screen.getByText("boom")).toBeInTheDocument();
+		expect(screen.queryByTestId("project-setup-row")).toBeNull();
+	});
+
 	it("shows the failed setup step with its exit code", () => {
 		render(
 			<ActivityRow activity={{
@@ -418,6 +439,30 @@ describe("ActivityRow", () => {
 		);
 		expect(screen.getByText("Setup step 2 failed (exit 2)")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Show output" })).toBeNull();
+	});
+
+	it("shows why a setup step failed and, expanded, who ran it and where its full log is", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "failed", summary: "Setup failed",
+				detail: {
+					event: "workspace.setup", setupStatus: "failed", setupStep: 1, exitCode: 1, output: "permission denied: docker.sock",
+					setupHint: "This step ran as ao-worker, which cannot use Docker.",
+					setupFailure: {
+						command: "docker compose up -d", user: "ao-worker", groups: ["ao-worker"],
+						dir: "/home/coder/app", logPath: "/x/setup-logs/step-1.log",
+					},
+				},
+			}} />,
+		);
+		expect(screen.getByText("This step ran as ao-worker, which cannot use Docker.")).toBeInTheDocument();
+		act(() => screen.getByRole("button", { name: "Show output" }).click());
+		const output = screen.getByText(/Ran as ao-worker \(groups: ao-worker\)/);
+		expect(output).toHaveTextContent("Step 1: docker compose up -d");
+		expect(output).toHaveTextContent("Ran in /home/coder/app");
+		expect(output).toHaveTextContent("Full output: /x/setup-logs/step-1.log");
+		expect(output).toHaveTextContent("permission denied: docker.sock");
 	});
 
 	it("does not present a recovered historical activity as failed", () => {
@@ -456,5 +501,25 @@ describe("HumanMessage", () => {
 
 		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
 		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
+	});
+});
+
+describe("ProviderSwitchMarker", () => {
+	it("names a remote session's models from its host's catalog", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+		client.setQueryData(agentModelsQueryKey("codex", "", "host-1"), { models: [{ id: "gpt-6", label: "GPT Six" }] });
+		client.setQueryData(agentModelsQueryKey("codex", ""), { models: [{ id: "gpt-6", label: "Local name" }] });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatHostId.Provider value="host-1">
+					<ProviderSwitchMarker activity={{
+						kind: "activity", id: "switch", sequence: 1, revision: 1, activityKind: "system", status: "completed",
+						summary: "Switched provider", createdAt: "2026-01-01T00:00:00Z",
+						detail: { event: "provider_switch", sourceHarness: "claude-code", targetHarness: "codex", targetModel: "gpt-6" },
+					}} />
+				</ChatHostId.Provider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("GPT Six")).toBeInTheDocument();
 	});
 });

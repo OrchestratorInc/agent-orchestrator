@@ -581,8 +581,16 @@ type editDriverState struct {
 	startErr     error
 	resumeErr    error
 	beforeResume func(ports.ChatResumeConfig) error
-	fresh        *fakeConversation
-	resumed      map[string]*fakeConversation
+	// beforeStart runs, unlocked, before every start after the first.
+	beforeStart func(ports.ChatStartConfig)
+	// target, when set, is what the second start returns, wrapping fresh.
+	target  func(*fakeConversation) ports.ChatConversation
+	fresh   *fakeConversation
+	resumed map[string]*fakeConversation
+	// refusedMode is a permission mode the agent will not run in; onlyMode, when
+	// set, is the one mode it runs in.
+	refusedMode ports.PermissionMode
+	onlyMode    ports.PermissionMode
 }
 
 func newEditHarness(t *testing.T, supportsPromptReplay bool) (*harness, *historyRecorder, *editDriverState) {
@@ -662,7 +670,19 @@ func newEditHarnessWithOptions(
 		initial = source.fakeConversation
 	}
 	driver := fakeDriver{conv: initial}
+	driver.supports = func(mode ports.PermissionMode) bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return (state.refusedMode == "" || mode != state.refusedMode) && (state.onlyMode == "" || mode == state.onlyMode)
+	}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+		state.mu.Lock()
+		beforeStart := state.beforeStart
+		first := state.startCalls == 0
+		state.mu.Unlock()
+		if beforeStart != nil && !first {
+			beforeStart(cfg)
+		}
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		state.startConfigs = append(state.startConfigs, cfg)
@@ -674,6 +694,9 @@ func newEditHarnessWithOptions(
 			return nil, state.startErr
 		}
 		if state.startCalls == 2 {
+			if state.target != nil {
+				return state.target(state.fresh), nil
+			}
 			return state.fresh, nil
 		}
 		freshBranch := newFakeConversation()
