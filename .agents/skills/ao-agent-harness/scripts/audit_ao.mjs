@@ -1383,10 +1383,15 @@ export async function startManagedDaemon({
         cwd: join(resolve(repoRoot), "backend"),
         // A workspace go.work that includes ./cloud breaks the daemon build.
         env: { ...process.env, GOWORK: "off" },
-        timeoutMs: Math.max(timeoutMs, 120_000),
+        // A cold build downloads the Go toolchain and every module; it gets
+        // its own budget, separate from the daemon readiness timeout.
+        timeoutMs: Math.max(timeoutMs, 600_000),
       });
       if (!build.ok) {
-        const error = new Error(`could not build AO daemon: ${build.stderr || build.stdout}`);
+        const tail = (build.stderr || build.stdout).split("\n").filter((line) => line.trim() && !/^go: downloading /.test(line)).slice(-12).join("\n");
+        const error = new Error(build.timedOut
+          ? `AO build timed out after ${Math.round(build.durationMs / 1000)} s (a first build downloads the Go toolchain and modules; rerun, or prebuild and pass --ao)`
+          : `could not build AO daemon (go build exited ${build.code}): ${tail || "no output"}`);
         error.evidence = { command: ["go", "build", "-o", binary, "./cmd/ao"], build: commandEvidence(build) };
         throw error;
       }
@@ -2587,7 +2592,7 @@ async function main(argv = process.argv.slice(2)) {
     };
     report.results = results.map(result => ({ ...sanitizeEvidence(result), capabilities: capabilityMatrix(result) }));
     report.changes = compareAttempts(report, previousReport);
-    report.fixLoop = buildFixLoop(report, { previousReport, base, command: rerunPrefix });
+    report.fixLoop = buildFixLoop(report, { previousReport, base, command: rerunPrefix, agents: options.agents });
     return writeReports(report, base, root);
   };
   const startupAbort = new AbortController();

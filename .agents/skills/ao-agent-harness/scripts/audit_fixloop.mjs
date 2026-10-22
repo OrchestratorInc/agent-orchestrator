@@ -161,7 +161,7 @@ export function shellQuote(value) {
 // Builds the fix-loop plan for this attempt: one item per non-pass gate that
 // is actionable, with its class, the action, where to fix it, how to rerun it,
 // and whether its attempt budget is spent.
-export function buildFixLoop(report, { previousReport = null, base = "report", command = "node scripts/audit_ao.mjs" } = {}) {
+export function buildFixLoop(report, { previousReport = null, base = "report", command = "node scripts/audit_ao.mjs", agents = [] } = {}) {
   const { gates: before, loop: priorLoop } = previousIndex(previousReport);
   const items = [];
   const userActions = [];
@@ -218,13 +218,15 @@ export function buildFixLoop(report, { previousReport = null, base = "report", c
       agent: null, gate: error.stage, status: "FAIL", failureClass, capability: null, reason: error.message,
       action: ACTIONS[failureClass], fixTargets: [], likelyCauses: [], evidencePath: null,
       signature: failureSignature(item), attempt: 1, repeated: false, exhausted: false,
-      rerun: failureClass === "needs_user" ? null : command,
+      // A run-level failure stopped every agent: rerun the whole selection.
+      rerun: failureClass === "needs_user" ? null
+        : `${command} ${agents.length ? agents.map((agent) => `--agent ${agent}`).join(" ") : "--all"} --previous ${shellQuote(`${base}.json`)} --report ${shellQuote(`${base}-retry`)}`,
     });
   }
   const actionable = items.filter((entry) => !entry.exhausted && !["needs_user", "prerequisite", "unsupported_upstream"].includes(entry.failureClass));
   // One rerun per agent covering all of its actionable gates, for when the
   // agent fixed several things before rerunning.
-  const rerunAll = [...new Set(actionable.map((entry) => entry.agent))].map((agent) => ({
+  const rerunAll = [...new Set(actionable.filter((entry) => entry.agent).map((entry) => entry.agent))].map((agent) => ({
     agent, command: rerunCommand({ command, agent, gates: actionable.filter((entry) => entry.agent === agent).map((entry) => entry.gate), base }),
   }));
   return {
