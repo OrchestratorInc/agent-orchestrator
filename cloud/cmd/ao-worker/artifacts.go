@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -126,6 +127,10 @@ type artifactSyncer struct {
 	// restored; each sync tries again first, from restoreRetryAt.
 	restorePending bool
 	restoreRetryAt time.Time
+	// committedChanged asks the run loop to check the synced files against
+	// the committed ones, after the control plane said they changed without
+	// this worker.
+	committedChanged chan struct{}
 }
 
 // artifactScan is one walk of the artifact directory.
@@ -156,16 +161,17 @@ func (scan artifactScan) isPresent(path string) bool {
 
 func newArtifactSyncer(c *client, dir string, logger *slog.Logger) *artifactSyncer {
 	return &artifactSyncer{
-		client:    c,
-		dir:       dir,
-		logger:    logger,
-		upload:    &http.Client{},
-		trigger:   make(chan struct{}, 1),
-		previous:  map[string]artifactState{},
-		synced:    map[string]artifactState{},
-		uploaded:  map[string]uploadedArtifact{},
-		skipped:   map[string]bool{},
-		unsettled: map[string]int{},
+		client:           c,
+		dir:              dir,
+		logger:           logger,
+		upload:           &http.Client{},
+		trigger:          make(chan struct{}, 1),
+		committedChanged: make(chan struct{}, 1),
+		previous:         map[string]artifactState{},
+		synced:           map[string]artifactState{},
+		uploaded:         map[string]uploadedArtifact{},
+		skipped:          map[string]bool{},
+		unsettled:        map[string]int{},
 	}
 }
 
@@ -173,6 +179,15 @@ func newArtifactSyncer(c *client, dir string, logger *slog.Logger) *artifactSync
 func (s *artifactSyncer) poke() {
 	select {
 	case s.trigger <- struct{}{}:
+	default:
+	}
+}
+
+// pokeCommittedChanged asks the run loop, without blocking, to check the
+// synced files against the committed ones.
+func (s *artifactSyncer) pokeCommittedChanged() {
+	select {
+	case s.committedChanged <- struct{}{}:
 	default:
 	}
 }
@@ -194,6 +209,8 @@ func (s *artifactSyncer) run(ctx context.Context) error {
 		case <-s.trigger:
 		case <-ticker.C:
 		case <-settle.C:
+		case <-s.committedChanged:
+			s.reconcileCommitted(ctx)
 		}
 		if s.restorePending {
 			s.retryRestore(ctx)
@@ -230,6 +247,19 @@ func (s *artifactSyncer) restore(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer root.Close()
+	// A disk kept from an earlier worker holds the files it synced; one that
+	// is no longer committed was deleted while no worker ran.
+	if len(s.synced) == 0 {
+		committed := make(map[string]bool, len(list.Files))
+		for _, file := range list.Files {
+			committed[file.Path] = true
+		}
+		for path, saved := range s.loadSynced() {
+			if !committed[path] && removeIfUnchanged(root, path, saved.sha) {
+				s.logger.Info("artifacts: removed a file deleted while no worker ran", "path", path)
+			}
+		}
+	}
 	restored := 0
 	for _, file := range list.Files {
 		if _, done := s.synced[file.Path]; done {
@@ -264,7 +294,107 @@ func (s *artifactSyncer) restore(ctx context.Context) (int, error) {
 		restored++
 	}
 	s.restorePending = false
+	s.saveSynced()
 	return restored, nil
+}
+
+// reconcileCommitted removes from the directory each synced file that is no
+// longer committed, as when a user deleted it, unless the file changed since
+// it was synced; a changed file stays and is synced as a new one.
+func (s *artifactSyncer) reconcileCommitted(ctx context.Context) {
+	var list worker.ArtifactListResponse
+	if _, err := s.client.artifactJSON(ctx, artifactListPath, nil, &list); err != nil {
+		s.logger.Warn("artifacts: list committed files", "error", err)
+		return
+	}
+	committed := make(map[string]bool, len(list.Files))
+	for _, file := range list.Files {
+		committed[file.Path] = true
+	}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		s.logger.Warn("artifacts: open directory", "error", err)
+		return
+	}
+	defer root.Close()
+	changed := false
+	for path, synced := range s.synced {
+		if committed[path] {
+			continue
+		}
+		if removeIfUnchanged(root, path, synced.sha) {
+			s.logger.Info("artifacts: removed a deleted file", "path", path)
+		}
+		delete(s.synced, path)
+		delete(s.previous, path)
+		delete(s.uploaded, path)
+		changed = true
+	}
+	if changed {
+		s.saveSynced()
+	}
+}
+
+// removeIfUnchanged removes path when its content still has the SHA-256 sha,
+// and reports whether it did.
+func removeIfUnchanged(root *os.Root, path, sha string) bool {
+	file, err := root.Open(path)
+	if err != nil {
+		return false
+	}
+	hash := sha256.New()
+	_, err = io.Copy(hash, file)
+	_ = file.Close()
+	if err != nil || hex.EncodeToString(hash.Sum(nil)) != sha {
+		return false
+	}
+	return root.Remove(path) == nil
+}
+
+// syncedFile is where the synced files are kept across worker restarts: next
+// to the artifact directory, outside it, so a scan never sees it.
+func (s *artifactSyncer) syncedFile() string {
+	return filepath.Join(filepath.Dir(s.dir), "."+filepath.Base(s.dir)+".synced.json")
+}
+
+type savedArtifact struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// saveSynced records the synced files for the next worker on this disk.
+func (s *artifactSyncer) saveSynced() {
+	saved := make(map[string]savedArtifact, len(s.synced))
+	for path, state := range s.synced {
+		saved[path] = savedArtifact{Size: state.size, SHA256: state.sha}
+	}
+	encoded, err := json.Marshal(saved)
+	if err == nil {
+		temp := s.syncedFile() + ".tmp"
+		if err = os.WriteFile(temp, encoded, 0o600); err == nil {
+			err = os.Rename(temp, s.syncedFile())
+		}
+	}
+	if err != nil {
+		s.logger.Warn("artifacts: save synced files", "error", err)
+	}
+}
+
+// loadSynced returns the synced files an earlier worker on this disk saved.
+func (s *artifactSyncer) loadSynced() map[string]artifactState {
+	encoded, err := os.ReadFile(s.syncedFile())
+	if err != nil {
+		return nil
+	}
+	var saved map[string]savedArtifact
+	if json.Unmarshal(encoded, &saved) != nil {
+		return nil
+	}
+	states := make(map[string]artifactState, len(saved))
+	for path, file := range saved {
+		states[path] = artifactState{size: file.Size, sha: file.SHA256}
+	}
+	return states
 }
 
 // retryRestore runs a restore that has not finished, after any backoff.
@@ -467,6 +597,7 @@ func (s *artifactSyncer) sync(ctx context.Context) bool {
 			delete(s.synced, path)
 		}
 		s.logger.Info("artifacts: synced", "files", len(commit.Files), "deleted", len(commit.Deleted))
+		s.saveSynced()
 	}
 	if uploadErr != nil {
 		s.fail("upload", uploadStatus, uploadErr, fingerprint)
