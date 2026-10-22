@@ -378,8 +378,11 @@ export const ChatComposer = memo(function ChatComposer({
 	const boundarySessionId = draftSessionId ?? queuedDraftScope?.sessionId;
 	const [retainedAttachments, setRetainedAttachments] = useState<StoredComposerAttachment[]>(draftSeed?.attachments ?? []);
 	const visibleRetainedAttachments = editingQueuedTurnId ? retainedAttachments : [];
-	const [hasText, setHasText] = useState(false);
-	const hasTextRef = useRef(false);
+	// Seeded from the saved draft, so a remounted composer is not reported empty
+	// for the moment before its editor loads that text.
+	const [hasText, setHasText] = useState(() =>
+		Boolean(draftScope && !queuedDraftScope && readChatSessionDraft(draftScope).composer.text.trim()));
+	const hasTextRef = useRef(hasText);
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
 	/**
 	 * The trigger position the user dismissed with Escape. Held so the menu stays

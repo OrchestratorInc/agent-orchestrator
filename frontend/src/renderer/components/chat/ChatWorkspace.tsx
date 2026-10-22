@@ -1241,8 +1241,12 @@ function ChatWorkspaceContent({
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
-	// them, and clearing the draft brings them back.
-	const [composerEmpty, setComposerEmpty] = useState(true);
+	// them, and clearing the draft brings them back. A saved draft hides them from
+	// the first frame, so a remount (such as a project switch) never flashes them.
+	const [composerEmpty, setComposerEmpty] = useState(() => {
+		const { composer } = readChatSessionDraft(draftScope);
+		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
+	});
 	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
