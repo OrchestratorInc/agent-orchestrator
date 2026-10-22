@@ -1114,6 +1114,7 @@
 	"onboarding.step.cloud.next": "続ける",
 	"onboarding.githubConnectedDetail": "続行して最初のプロジェクトを選択",
 	"onboarding.githubInstallDetail": "GitHub でプルリクエストを作成し、Issue を読み取るために必要です。",
+	"onboarding.githubInstallFailed": "GitHub CLI を自動でインストールできませんでした。もう一度試すか、cli.github.com から手動でインストールしてください。",
 	"onboarding.githubSignInDetail": "一度サインインすればプルリクエストと Issue を使えます。",
 	"onboarding.githubCodeLabel": "ワンタイムコード",
 	"onboarding.githubCopyCode": "コードをコピー",

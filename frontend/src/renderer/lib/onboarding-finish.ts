@@ -1,4 +1,5 @@
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { agentLabel } from "./agent-options";
 import type { OnboardingFinishRequest } from "../stores/ui-store";
 import { rememberTaskComposerPreference } from "./task-composer-preferences";
 
@@ -29,13 +30,15 @@ export type OnboardingFinishDeps = {
 		path: string;
 		workerAgent: string;
 	}) => Promise<unknown>;
+	/** Spawns a standalone worker on the chosen harness and resolves to its session id. */
+	createStandaloneSession: (input: { displayName: string; harness: string }) => Promise<string>;
 };
 
-export type OnboardingFinishOutcome = { ok: true; standalone?: boolean } | { ok: false; message: string };
+export type OnboardingFinishOutcome = { ok: true; sessionId?: string } | { ok: false; message: string };
 
 /**
  * Runs the last onboarding step: register the chosen project and start its
- * orchestrator. Onboarding is only marked complete when this succeeds, so a
+ * orchestrator, or start a standalone agent when no project was chosen. Onboarding is only marked complete when this succeeds, so a
  * failure leaves the user in the flow with their choices intact instead of
  * dropping them on an empty board they cannot get back from.
  */
@@ -44,11 +47,20 @@ export async function runOnboardingFinish(
 	deps: OnboardingFinishDeps,
 ): Promise<OnboardingFinishOutcome> {
 	if (request.standalone) {
-		// No project to register. The Scratchpad composer opens on the agent they
-		// picked, since it preselects the last agent used in that context.
-		rememberTaskComposerPreference(STANDALONE_WORKSPACE_ID, request.orchestratorAgent, { mode: "", model: "" });
-		markOnboardingComplete();
-		return { ok: true, standalone: true };
+		// No project to register, and no prompt to wait for: the agent starts as
+		// soon as onboarding ends. The composer preference still follows the pick,
+		// so the next Scratchpad task preselects the same agent.
+		try {
+			const sessionId = await deps.createStandaloneSession({
+				displayName: agentLabel(request.orchestratorAgent),
+				harness: request.orchestratorAgent,
+			});
+			rememberTaskComposerPreference(STANDALONE_WORKSPACE_ID, request.orchestratorAgent, { mode: "", model: "" });
+			markOnboardingComplete();
+			return { ok: true, sessionId };
+		} catch (error) {
+			return { message: error instanceof Error ? error.message : "", ok: false };
+		}
 	}
 	try {
 		await deps.createProject({

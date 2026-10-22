@@ -1111,6 +1111,7 @@
 	"onboarding.step.cloud.next": "Continue",
 	"onboarding.githubConnectedDetail": "Continue to choose your first project",
 	"onboarding.githubInstallDetail": "Required to open pull requests and read issues on GitHub.",
+	"onboarding.githubInstallFailed": "GitHub CLI couldn't be installed automatically. Try again, or install it yourself from cli.github.com.",
 	"onboarding.githubSignInDetail": "Sign in once for pull requests and issues.",
 	"onboarding.githubCodeLabel": "Your one-time code",
 	"onboarding.githubCopyCode": "Copy code",

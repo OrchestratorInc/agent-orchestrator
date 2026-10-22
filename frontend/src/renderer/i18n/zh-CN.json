@@ -1114,6 +1114,7 @@
 	"onboarding.step.cloud.next": "继续",
 	"onboarding.githubConnectedDetail": "继续选择你的第一个项目",
 	"onboarding.githubInstallDetail": "用于在 GitHub 上创建拉取请求和读取议题。",
+	"onboarding.githubInstallFailed": "无法自动安装 GitHub CLI。请重试，或从 cli.github.com 自行安装。",
 	"onboarding.githubSignInDetail": "登录一次即可创建拉取请求和读取议题。",
 	"onboarding.githubCodeLabel": "一次性代码",
 	"onboarding.githubCopyCode": "复制代码",

@@ -1390,15 +1390,26 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		setActiveShellTerminal,
 	]);
 
-	// A standalone onboarding ends on the Scratchpad composer. The new-task
-	// dialog only reacts to requests raised after it mounts, so wait until the
-	// shell is showing before asking for it.
-	const [openScratchpadComposer, setOpenScratchpadComposer] = useState(false);
-	useEffect(() => {
-		if (!openScratchpadComposer || onboardingFinishRequest || isStartupLoading) return;
-		setOpenScratchpadComposer(false);
-		requestNewTask(STANDALONE_WORKSPACE_ID);
-	}, [isStartupLoading, onboardingFinishRequest, openScratchpadComposer, requestNewTask]);
+	const createOnboardingStandaloneSession = useCallback(
+		async (input: { displayName: string; harness: string }): Promise<string> => {
+			const status = await refreshDaemonStatus();
+			if (status.state !== "ready" || !status.port) {
+				throw new Error(status.message || "AO daemon is not ready.");
+			}
+			const { data, error } = await apiClient.POST("/api/v1/sessions", {
+				body: {
+					clientRequestId: globalThis.crypto?.randomUUID?.() ?? `onboarding-${Date.now()}`,
+					displayName: input.displayName,
+					harness: input.harness as components["schemas"]["SpawnSessionRequest"]["harness"],
+					kind: "worker",
+				},
+			});
+			if (error) throw new Error(apiErrorMessage(error));
+			if (!data?.session.id) throw new Error(t("newTask.noSession"));
+			return data.session.id;
+		},
+		[t],
+	);
 
 	useEffect(() => {
 		if (!onboardingFinishRequest) return;
@@ -1408,11 +1419,16 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		void (async () => {
 			const outcome = await runOnboardingFinish(onboardingFinishRequest, {
 				createProject,
+				createStandaloneSession: createOnboardingStandaloneSession,
 			});
 			if (outcome.ok) {
+				// Open the new session before releasing the loader so the board
+				// never flashes between the two.
+				if (outcome.sessionId) {
+					await navigate({ replace: true, ...sessionNavigateTarget(undefined, outcome.sessionId) });
+				}
 				clearOnboardingFinishError();
 				clearOnboardingFinishRequest(onboardingFinishRequest.nonce);
-				if (outcome.standalone) setOpenScratchpadComposer(true);
 				return;
 			}
 			// Hand the failure back to onboarding instead of quitting it: the user
@@ -1420,7 +1436,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			setOnboardingFinishError({ message: outcome.message, nonce: onboardingFinishRequest.nonce });
 			await navigate({ replace: true, to: "/onboarding" });
 		})();
-	}, [clearOnboardingFinishError, clearOnboardingFinishRequest, createProject, initializeProjectRepository, navigate, onboardingFinishRequest, setOnboardingFinishError]);
+	}, [clearOnboardingFinishError, clearOnboardingFinishRequest, createOnboardingStandaloneSession, createProject, initializeProjectRepository, navigate, onboardingFinishRequest, setOnboardingFinishError]);
 
 	// ao-app://billing (Stripe's return page) opens Upgrade only for a
 	// self-serve org; any other org has no plans and lands on general settings.

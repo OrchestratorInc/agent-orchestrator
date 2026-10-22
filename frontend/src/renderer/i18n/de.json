@@ -1114,6 +1114,7 @@
 	"onboarding.step.cloud.next": "Weiter",
 	"onboarding.githubConnectedDetail": "Weiter zum ersten Projekt",
 	"onboarding.githubInstallDetail": "Erforderlich, um Pull Requests zu öffnen und Issues auf GitHub zu lesen.",
+	"onboarding.githubInstallFailed": "Die GitHub CLI konnte nicht automatisch installiert werden. Versuche es erneut oder installiere sie selbst von cli.github.com.",
 	"onboarding.githubSignInDetail": "Einmal anmelden für Pull Requests und Issues.",
 	"onboarding.githubCodeLabel": "Dein einmaliger Code",
 	"onboarding.githubCopyCode": "Code kopieren",

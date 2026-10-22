@@ -19,7 +19,9 @@ const DEFAULT_VERIFICATION_URL = "https://github.com/login/device";
 export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGitHubSetup> }) {
 	const { t } = useTranslation();
 	const installFailed = setup.job?.status === "failed" || setup.job?.status === "unsupported" || setup.job?.status === "interrupted";
-	const installDetail = setup.installError ?? (installFailed ? setup.job?.error : undefined);
+	// The job's own error is a raw process result such as "exit status 1", which
+	// tells a first-time user nothing, so a failed install gets a plain sentence.
+	const installDetail = setup.installError ?? (installFailed ? t("onboarding.githubInstallFailed") : undefined);
 	// Linux cannot install gh for the user and says so with an unsupported job
 	// plus the command that would work. Retrying only repeats that answer, so the
 	// step has to hand the command over.
