@@ -1191,7 +1191,7 @@ describe("TaskComposer", () => {
 		await waitForTaskReady();
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("starts a cloud task in the terminal when the control plane has no Chat for its agent, as local does", async () => {
@@ -1205,7 +1205,7 @@ describe("TaskComposer", () => {
 		await waitForTaskReady();
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("offers to create a refused cloud Chat task in the terminal, as local does", async () => {
@@ -1220,7 +1220,7 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
 		fireEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
@@ -1237,12 +1237,12 @@ describe("TaskComposer", () => {
 		await userEvent.keyboard("{Escape}");
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" }), { idempotencyKey: expect.any(String) }));
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		fireEvent.change(task(), { target: { value: "Another task" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
 	});
 
 	it("starts a cloud task in the terminal when that is the default", async () => {
@@ -1258,7 +1258,7 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
 		// A task carries the interface it starts in, never the default an
 		// orchestrator create carries.
-		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }));
+		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) });
 		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
 
