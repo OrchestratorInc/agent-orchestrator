@@ -239,6 +239,32 @@ describe("NotificationsScreen", () => {
 		}
 	});
 
+	it("ignores a failure from an ack that a newer successful ack superseded", async () => {
+		let rejectFirst!: (cause: Error) => void;
+		fixtures.markAllNotificationsRead.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectFirst = reject; }));
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(1);
+
+		// The first ack is still in flight when a refresh re-acks the same rows, and that one succeeds.
+		const list = renderer!.root.findByType("SectionList" as never);
+		await act(async () => { await list.props.refreshControl.props.onRefresh(); });
+		expect(fixtures.markAllNotificationsRead).toHaveBeenCalledTimes(2);
+		expect(fixtures.markAllNotificationsRead).toHaveBeenLastCalledWith(fixtures.configs.dev, ["dev-1", "dev-2"]);
+
+		await act(async () => { rejectFirst(new Error("timed out")); });
+		// Leaving drops the visit highlight, so any dot left is a row the screen thinks is unread.
+		act(() => { fixtures.focus.set(false); });
+		expect(renderer!.root.findAllByType("Dot" as never)).toHaveLength(0);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && String(node.props.children).startsWith("Couldn't mark"))).toHaveLength(0);
+	});
+
+	it("keeps rows read when only the badge refresh fails", async () => {
+		fixtures.refreshHost.mockRejectedValueOnce(new Error("offline"));
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		act(() => { fixtures.focus.set(false); });
+		expect(renderer!.root.findAllByType("Dot" as never)).toHaveLength(0);
+	});
+
 	it("restores unread rows when the ack fails without retrying in a loop", async () => {
 		fixtures.markAllNotificationsRead.mockRejectedValue(new Error("offline"));
 		await act(async () => { renderer = create(<NotificationsScreen />); });

@@ -95,6 +95,10 @@ function NotificationsContent() {
 	// what was new.
 	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
 	const acknowledgedRef = useRef(new Set<string>());
+	// Which ack attempt last claimed each row. A reload re-acks the same rows, so
+	// an older attempt that fails late must not roll back a newer one.
+	const ackOwnerRef = useRef(new Map<string, number>());
+	const ackAttemptRef = useRef(0);
 	// A visit ends when the screen loses focus, not when it unmounts: tapping into
 	// a session leaves this screen mounted underneath, and coming back should
 	// show those rows as read, like reopening the desktop panel.
@@ -224,7 +228,11 @@ function NotificationsContent() {
 				.map((item) => item.id);
 			if (ids.length === 0) continue;
 			const keys = ids.map((id) => notificationIdentity(feed.hostId, id));
-			for (const key of keys) acknowledgedRef.current.add(key);
+			const attempt = ++ackAttemptRef.current;
+			for (const key of keys) {
+				acknowledgedRef.current.add(key);
+				ackOwnerRef.current.set(key, attempt);
+			}
 			setHighlightedIds((current) => new Set([...current, ...keys]));
 			const acked = new Set(ids);
 			updateFeeds((previous) => {
@@ -237,25 +245,29 @@ function NotificationsContent() {
 					unreadCount: Math.max(0, current.unreadCount - marked),
 				} };
 			});
-			markAllNotificationsRead(source, ids)
+			markAllNotificationsRead(source, ids).then(
 				// Refresh that machine so the bell badge is already clear on the way back.
-				.then(() => refreshHost(feed.hostId))
-				.catch(() => {
-					// Put the rows back to unread without forgetting the ack, so a
-					// machine that keeps refusing is not retried in a loop.
-					// Pull-to-refresh retries.
+				// Its failure says nothing about the ack, so it must not roll rows back.
+				() => { void refreshHost(feed.hostId).catch(() => {}); },
+				() => {
+					// Put back to unread only the rows this attempt still owns, without
+					// forgetting the ack, so a machine that keeps refusing is not retried
+					// in a loop. Pull-to-refresh retries.
+					const owned = new Set(ids.filter((id) => ackOwnerRef.current.get(notificationIdentity(feed.hostId, id)) === attempt));
+					if (owned.size === 0) return;
 					setNotice(`Couldn't mark notifications read on ${feed.hostName}.`);
 					updateFeeds((previous) => {
 						const current = previous[feed.hostId];
 						if (!current) return previous;
-						const restored = current.items.filter((item) => acked.has(item.id) && item.status === "read").length;
+						const restored = current.items.filter((item) => owned.has(item.id) && item.status === "read").length;
 						return { ...previous, [feed.hostId]: {
 							...current,
-							items: current.items.map((item) => acked.has(item.id) ? { ...item, status: "unread" } : item),
+							items: current.items.map((item) => owned.has(item.id) ? { ...item, status: "unread" } : item),
 							unreadCount: current.unreadCount + restored,
 						} };
 					});
-				});
+				},
+			);
 		}
 	}, [configForHost, feeds, focused, refreshHost, updateFeeds]);
 
