@@ -10,21 +10,40 @@ func TestMigrateMovesProviderSwitchingFromItsBranchNumbers(t *testing.T) {
 	for _, old := range []int64{201, 216} {
 		db := openMigratedDatabaseCopy(t, providerSwitchingVersion)
 		// As a database that ran a preview build, where the migration had this number.
-		if _, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ?`, old, providerSwitchingVersion); err != nil {
+		var providerHistoryID int64
+		if err := db.QueryRow(`
+SELECT id FROM goose_db_version
+WHERE version_id = ? AND is_applied = 1
+ORDER BY id DESC LIMIT 1`, providerSwitchingVersion).Scan(&providerHistoryID); err != nil {
+			t.Fatalf("find provider-switching history: %v", err)
+		}
+		if _, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE id = ?`, old, providerHistoryID); err != nil {
 			t.Fatalf("seed branch numbering: %v", err)
 		}
 		if err := migrate(db); err != nil {
 			t.Fatalf("migrate a database that ran it as %d: %v", old, err)
 		}
+		var repairedVersion int64
+		if err := db.QueryRow(`SELECT version_id FROM goose_db_version WHERE id = ?`, providerHistoryID).Scan(&repairedVersion); err != nil {
+			t.Fatal(err)
+		}
+		if repairedVersion != providerSwitchingVersion {
+			t.Fatalf("provider history version = %d, want %d", repairedVersion, providerSwitchingVersion)
+		}
 		var atOld, atNew int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ?`, old).Scan(&atOld); err != nil {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, old).Scan(&atOld); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion).Scan(&atNew); err != nil {
 			t.Fatal(err)
 		}
-		if atOld != 0 || atNew != 1 {
-			t.Fatalf("versions %d=%d new=%d, want the migration recorded once at its version", old, atOld, atNew)
+		wantOld := 0
+		if old == 216 {
+			// 0216_schema_app_version is a separate, valid main migration.
+			wantOld = 1
+		}
+		if atOld != wantOld || atNew != 1 {
+			t.Fatalf("versions %d=%d new=%d, want provider history repaired and %d legal old record", old, atOld, atNew, wantOld)
 		}
 		if err := migrate(db); err != nil {
 			t.Fatalf("second migrate: %v", err)

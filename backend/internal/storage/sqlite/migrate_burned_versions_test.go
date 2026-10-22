@@ -222,6 +222,10 @@ var shippedMigrations = map[int64]string{
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 }
 
+func init() {
+	shippedMigrations[216] = "0216_schema_app_version.sql"
+}
+
 // burnedVersion reports version numbers that must never be (re)used: they
 // shipped in a release and were then deleted, so real installs have them
 // recorded as applied while this repository ships no file with that number. A
