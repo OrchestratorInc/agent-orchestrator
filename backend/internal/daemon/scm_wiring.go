@@ -123,11 +123,11 @@ func newMultiSCMMerger(gitlabCfg config.GitLabConfig, logger *slog.Logger) *scmm
 // and the observer's regular poll picks the review up.
 type scmReviewRefresher struct {
 	mu     sync.RWMutex
-	target reviewsvc.ReviewRefresher
+	target reviewsvc.ThreadRefresher
 }
 
 // Bind attaches the running observer.
-func (r *scmReviewRefresher) Bind(target reviewsvc.ReviewRefresher) {
+func (r *scmReviewRefresher) Bind(target reviewsvc.ThreadRefresher) {
 	if r == nil {
 		return
 	}

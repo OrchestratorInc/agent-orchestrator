@@ -91,7 +91,7 @@ type Service struct {
 	codexOperationGate ports.CodexOperationGate
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
-	reviewRefresher    ReviewRefresher
+	reviewRefresher    ThreadRefresher
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -145,16 +145,16 @@ func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
 }
 
-// ReviewRefresher asks SCM observation to read one PR's review threads now
+// ThreadRefresher asks SCM observation to read one PR's review threads now
 // rather than on its next scheduled poll. It must not block.
-type ReviewRefresher interface {
+type ThreadRefresher interface {
 	RequestReviewRefresh(prURL string)
 }
 
-// WithReviewRefresher refreshes a PR's review threads as soon as an AO review
+// WithThreadRefresher refreshes a PR's review threads as soon as an AO review
 // posted to the provider is submitted, so its comments reach the worker
 // without waiting for the poller to notice them.
-func WithReviewRefresher(r ReviewRefresher) Option {
+func WithThreadRefresher(r ThreadRefresher) Option {
 	return func(s *Service) { s.reviewRefresher = r }
 }
 

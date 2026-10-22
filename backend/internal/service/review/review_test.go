@@ -1076,7 +1076,7 @@ func TestSubmitRequestsReviewRefreshForProviderPostedReview(t *testing.T) {
 		prs: []domain.PullRequest{{URL: prURL, Number: 42}},
 	}
 	refresher := &recordingReviewRefresher{}
-	svc := New(nil, st, WithReviewRefresher(refresher))
+	svc := New(nil, st, WithThreadRefresher(refresher))
 
 	for range 2 {
 		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
