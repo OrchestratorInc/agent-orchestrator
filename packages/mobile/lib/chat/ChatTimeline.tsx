@@ -6,18 +6,14 @@ import {
 	ActivityIndicator,
 	FlatList,
 	Image,
-	Modal,
 	Platform,
 	Pressable,
-	ScrollView,
 	StyleSheet,
 	Switch,
 	Text,
 	TextInput,
 	View,
-	useWindowDimensions,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { authHeaders, httpBase } from "../config";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
@@ -49,6 +45,7 @@ import {
 	validateInput,
 } from "./elicitationModel";
 import { previewFilePath } from "../api";
+import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
 import type {
 	ConversationActivity,
@@ -419,7 +416,7 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => { haptics.tap(); setViewerOpen(true); }} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
 				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
 			</Pressable>
-			<AttachmentViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
+			<ImageViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
 	}
 	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={6} onPress={() => { haptics.tap(); setFailedLoad(undefined); }} style={styles.attachmentChip}>
@@ -427,23 +424,6 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>
 	</Pressable>;
-}
-
-/** Full-screen image at its own aspect ratio; pinch-zoom where the platform scroll view supports it. */
-function AttachmentViewer({ visible, name, source, onClose }: { visible: boolean; name: string; source: AttachmentImageSource; onClose(): void }) {
-	const styles = useThemedStyles(makeStyles);
-	const insets = useSafeAreaInsets();
-	const { width, height } = useWindowDimensions();
-	return <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
-		<View style={styles.viewer}>
-			<ScrollView maximumZoomScale={4} minimumZoomScale={1} centerContent bouncesZoom showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
-				<Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="contain" style={{ width, height }} />
-			</ScrollView>
-			<Pressable accessibilityRole="button" accessibilityLabel="Close image" hitSlop={10} onPress={() => { haptics.tap(); onClose(); }} style={[styles.viewerClose, { top: insets.top + 12 }]}>
-				<Feather name="x" size={20} color="#fff" />
-			</Pressable>
-		</View>
-	</Modal>;
 }
 
 function deliveryCopy(state?: string): string | undefined {
@@ -1131,8 +1111,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	attachmentsSpaced: { marginTop: space.sm },
 	attachmentTile: { overflow: "hidden", borderRadius: 8, backgroundColor: t.bgColumn },
 	attachmentTileImage: { width: "100%", height: "100%" },
-	viewer: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.94)" },
-	viewerClose: { position: "absolute", right: 16, width: 36, height: 36, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255, 255, 255, 0.16)" },
 	// alignSelf keeps a chip its own height next to a tile: the row container's
 	// default stretch would otherwise blow it up to the tile's 104/160px.
 	attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },

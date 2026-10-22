@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendSpawnAttachments, readSpawnAttachments } from "./spawn-attachments";
+import { appendSpawnAttachments, readSpawnAttachments, spawnAttachmentPreview } from "./spawn-attachments";
 
 describe("appendSpawnAttachments", () => {
 	it("keeps accepted files and reports files that exceed the per-file limit", () => {
@@ -67,5 +67,18 @@ describe("readSpawnAttachments", () => {
 		]);
 		expect(emptyRead.attachments).toEqual([]);
 		expect(emptyRead.error).toBe("missing.mov is empty.");
+	});
+});
+
+describe("spawnAttachmentPreview", () => {
+	it("keeps the picked file for images and previews only those", async () => {
+		const readData = vi.fn(async () => "YQ==");
+		const result = await readSpawnAttachments([], [
+			{ name: "photo.jpg", mimeType: "image/jpeg", bytes: 3, previewUri: "file:///photo.jpg", readData },
+			{ name: "notes.pdf", mimeType: "application/pdf", bytes: 3, previewUri: "file:///notes.pdf", readData },
+			{ name: "plain.png", mimeType: "image/png", bytes: 3, readData },
+		]);
+
+		expect(result.attachments.map(spawnAttachmentPreview)).toEqual(["file:///photo.jpg", undefined, undefined]);
 	});
 });

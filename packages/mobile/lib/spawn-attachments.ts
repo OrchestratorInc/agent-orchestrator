@@ -3,6 +3,8 @@ export type SpawnAttachment = {
 	mimeType: string;
 	data: string;
 	bytes: number;
+	/** The picked local file, kept for images so the sheet can show a thumbnail. */
+	previewUri?: string;
 };
 
 export type PickedSpawnAttachment = Omit<SpawnAttachment, "data" | "bytes"> & {
@@ -62,7 +64,7 @@ export async function readSpawnAttachments(
 			error ??= `Could not determine the size of ${item.name}.`;
 			continue;
 		}
-		const candidate: SpawnAttachment = { name: item.name, mimeType: item.mimeType, bytes: item.bytes, data: "" };
+		const candidate: SpawnAttachment = { name: item.name, mimeType: item.mimeType, bytes: item.bytes, data: "", ...(item.previewUri ? { previewUri: item.previewUri } : {}) };
 		const next = appendSpawnAttachments(attachments, [candidate]);
 		if (next.error) {
 			error ??= next.error;
@@ -82,4 +84,9 @@ export async function readSpawnAttachments(
 	}
 
 	return { attachments, error };
+}
+
+/** Images the sheet can draw: a thumbnail in the row, full screen on tap. */
+export function spawnAttachmentPreview(item: SpawnAttachment): string | undefined {
+	return item.previewUri && item.mimeType.trim().toLowerCase().startsWith("image/") ? item.previewUri : undefined;
 }

@@ -9,7 +9,6 @@ import {
 	InteractionManager,
 	Platform,
 	Pressable,
-	ScrollView,
 	StyleSheet,
 	Text,
 	View,
@@ -25,6 +24,7 @@ import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequ
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
@@ -328,6 +328,7 @@ function SpawnModalContent() {
 				name: asset.name,
 				mimeType: asset.mimeType || "application/octet-stream",
 				bytes: asset.size ?? file.size,
+				previewUri: asset.uri,
 				readData: () => file.base64(),
 			};
 		});
@@ -352,6 +353,7 @@ function SpawnModalContent() {
 				name: asset.fileName || `photo-${index + 1}.${mimeType.split("/")[1] || "jpg"}`,
 				mimeType,
 				bytes: asset.fileSize ?? file.size,
+				previewUri: asset.uri,
 				readData: () => file.base64(),
 			};
 		});
@@ -425,29 +427,13 @@ function SpawnModalContent() {
 					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
 				</View>
 
-				{/* A ScrollView grows by default. Unpinned, the chip row split the
-				    sheet's spare height with the prompt and floated in the middle of
-				    it, far from the selectors. */}
-				{attachments.length ? (
-					<ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attachmentRow} contentContainerStyle={styles.attachments}>
-						{attachments.map((item, index) => (
-							<View key={`${item.name}-${index}`} style={styles.attachment}>
-								<Feather name="file-text" size={iconSize.sm} color={t.accent} />
-								<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text>
-								<Pressable
-									hitSlop={8}
-									accessibilityLabel={`Remove ${item.name}`}
-									onPress={() => {
-										attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
-										setAttachments(attachmentsRef.current);
-									}}
-								>
-									<Feather name="x" size={iconSize.xs} color={t.textTertiary} />
-								</Pressable>
-							</View>
-						))}
-					</ScrollView>
-				) : null}
+				<SpawnAttachmentRow
+					attachments={attachments}
+					onRemove={(item) => {
+						attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+						setAttachments(attachmentsRef.current);
+					}}
+				/>
 
 		{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
@@ -551,10 +537,6 @@ const makeStyles = (t: Theme) =>
 		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
 		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
-		attachmentRow: { flexGrow: 0, flexShrink: 0 },
-		attachments: { gap: space.sm },
-		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
 		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});
