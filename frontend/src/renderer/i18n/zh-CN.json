@@ -1,4 +1,7 @@
 {
+	"sideChat.closingTab": "正在关闭",
+	"sideChat.closing": "正在关闭侧边聊天。确认停止后将消失。",
+	"sideChat.retryClose": "重试关闭",
 	"awake.stopReason.low_battery": "电量已达到配置的安全限制，因此已停止。请为 Mac 充电，然后关闭并重新开启 Stay Awake 以重启。",
 	"awake.stopReason.critical_heat": "Mac 需要冷却，因此已停止。冷却后，请关闭并重新开启 Stay Awake 以重启。",
 	"awake.stopReason.battery_unknown": "无法读取电池状态，因此已停止。请关闭并重新开启 Stay Awake 以重试。",

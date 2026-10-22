@@ -1,4 +1,7 @@
 {
+	"sideChat.closingTab": "Fechando",
+	"sideChat.closing": "Fechando conversa lateral. Ela desaparecerá após a confirmação.",
+	"sideChat.retryClose": "Tentar fechar novamente",
 	"awake.stopReason.low_battery": "Interrompido porque a bateria atingiu o limite de segurança configurado. Carregue o Mac e desative e ative novamente o Stay Awake para reiniciar.",
 	"awake.stopReason.critical_heat": "Interrompido porque o Mac precisa esfriar. Depois que esfriar, desative e ative novamente o Stay Awake para reiniciar.",
 	"awake.stopReason.battery_unknown": "Interrompido porque não foi possível ler o estado da bateria. Desative e ative novamente o Stay Awake para tentar de novo.",

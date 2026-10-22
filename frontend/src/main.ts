@@ -1,3 +1,4 @@
+import { SideCloseRecovery } from "./main/side-close";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -680,15 +681,14 @@ let sideStateTimer: ReturnType<typeof setInterval> | undefined;
 let sideStatePolling = false;
 let sideStateRequest = 0;
 let sideStateApplied = 0;
-const closedSideChats = new Set<string>();
+const sideCloseRecovery = new SideCloseRecovery();
+function publishPendingSideCloses(): void {
+	getShellWebContents()?.send("sideChats:pendingClosesChanged");
+}
 function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }): void {
-	sideLaunchState = {
-		...state,
-		sides: state.sides.filter((record) => {
-			const id = (record as { side?: { id?: string } })?.side?.id;
-			return typeof id === "string" && ((record as { cleanupOnly?: boolean }).cleanupOnly || !closedSideChats.has(id));
-		}),
-	};
+	sideCloseRecovery.remember(state);
+	sideLaunchState = sideCloseRecovery.state;
+	publishPendingSideCloses();
 }
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
@@ -2599,10 +2599,17 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
-async function captureSideChatState(closedSideId?: string, cancelClose = false): Promise<void> {
+async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
 	if (closedSideId) {
-		if (cancelClose) closedSideChats.delete(closedSideId); else closedSideChats.add(closedSideId);
-		if (sideLaunchState) rememberSideLaunchState(sideLaunchState);
+		if (cancelClose) sideCloseRecovery.cancel(closedSideId);
+		else {
+			// Capture missing ownership before allowing DELETE. Once pinned, later
+			// snapshot failures must retain the cleanup record.
+			if (!sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) await captureSideChatState();
+			sideCloseRecovery.begin(closedSideId);
+		}
+		sideLaunchState = sideCloseRecovery.state;
+		publishPendingSideCloses();
 	}
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
 	const daemonIdentity = sideClaimedDaemonPID;
@@ -2615,6 +2622,7 @@ async function captureSideChatState(closedSideId?: string, cancelClose = false):
 	const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
 	if (daemonIdentity === sideClaimedDaemonPID && state.appRunId === appRunId && request > sideStateApplied) {
 		sideStateApplied = request;
+		if (alreadyClosedId) sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
 		rememberSideLaunchState(state);
 	}
 }
@@ -2626,6 +2634,17 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	}
 	if (typeof cancelClose !== "boolean") throw new Error("Invalid close cancellation.");
 	return captureSideChatState(closedSideId, cancelClose);
+});
+ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyClosed = false) => {
+	if (event.sender !== getShellWebContents() || typeof sideId !== "string" || !sideId || sideId.length > 255 || typeof alreadyClosed !== "boolean") throw new Error("Invalid side close confirmation.");
+	if (alreadyClosed) { await captureSideChatState(undefined, false, sideId); return; }
+	sideCloseRecovery.confirm(sideId);
+	publishPendingSideCloses();
+	await captureSideChatState();
+});
+ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");
+	return sideCloseRecovery.pending(sessionId);
 });
 
 ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
