@@ -43,6 +43,19 @@ npm run typecheck
 npm run build
 ```
 
+### Running typechecks
+
+- Run at most one typecheck at a time in a given working copy. Check for an existing run before starting another.
+- If Claude Code moves a check to the background, keep its task ID and wait for that task's result. Moving to the background does not mean the check finished; do not launch a replacement while it is still running.
+- Preserve the check's exit status when shortening its output. Use `pipefail` before a pipeline; without it, `tail` can report success even when the typecheck failed. Do not treat `echo $?` after such a pipeline as the compiler's exit status unless `pipefail` is enabled.
+
+From the repo root, in Bash or Zsh:
+
+```bash
+set -o pipefail
+npm run frontend:typecheck 2>&1 | tail -n 40
+```
+
 When showing or demoing frontend changes, run `ao preview [url]` from inside the session so the change renders in the desktop browser panel (the inspector rail's Browser tab); do not just describe it.
 
 ### Desktop lab (running the real Electron app for UI review)
