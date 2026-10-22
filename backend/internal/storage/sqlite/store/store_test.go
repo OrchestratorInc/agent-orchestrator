@@ -214,6 +214,52 @@ func TestSessionRoundTripsOpenCodeHarnessVersions(t *testing.T) {
 	}
 }
 
+func TestCardSummaryUpdatePreservesNewerSessionState(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "card-summary")
+	rec, err := s.CreateSession(ctx, sampleRecord("card-summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RenameSession(ctx, rec.ID, "New title", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := s.UpdateSessionCardSummary(ctx, rec.ID, "Inspecting navigation routes"); err != nil || !updated {
+		t.Fatalf("update card summary = %v, %v", updated, err)
+	}
+	got, ok, err := s.GetSession(ctx, rec.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session = %v, %v", ok, err)
+	}
+	if got.DisplayName != "New title" || got.Metadata.CardSummary != "Inspecting navigation routes" {
+		t.Fatalf("summary update changed unrelated state: title=%q summary=%q", got.DisplayName, got.Metadata.CardSummary)
+	}
+	if got.Metadata.LatestAssistantUpdate != "" {
+		t.Fatalf("summary update wrote the hook-owned assistant update: %q", got.Metadata.LatestAssistantUpdate)
+	}
+	// A Stop hook later records the final response in latest_assistant_update;
+	// the summary the agent chose must survive it.
+	got.Metadata.LatestAssistantUpdate = "All done, PR opened"
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	after, ok, err := s.GetSession(ctx, rec.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session after hook write = %v, %v", ok, err)
+	}
+	if after.Metadata.CardSummary != "Inspecting navigation routes" || after.Metadata.LatestAssistantUpdate != "All done, PR opened" {
+		t.Fatalf("hook write and summary collided: summary=%q update=%q", after.Metadata.CardSummary, after.Metadata.LatestAssistantUpdate)
+	}
+	events, err := s.EventsAfter(ctx, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || string(events[len(events)-1].Type) != "session_updated" || events[len(events)-1].SessionID != string(rec.ID) {
+		t.Fatalf("summary update did not emit a session invalidation: %+v", events)
+	}
+}
+
 func TestTaskPreparationPromotionPreservesWorkspace(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

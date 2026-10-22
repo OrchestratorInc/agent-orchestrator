@@ -470,6 +470,28 @@ describe("SessionsBoard", () => {
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});
 
+	it("renders a summary without a hover tooltip", async () => {
+		const summary =
+			"Implemented robust filename sanitization across export formats and added coverage for reserved names and unicode input";
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "s-summary", title: "summary worker", status: "mergeable", summary }),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("summary worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const summaryPreview = within(card).getByTestId("board-session-summary");
+
+		await userEvent.hover(summaryPreview);
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		expect(summaryPreview).not.toHaveAttribute("title");
+	});
+
 	it("styles a working card from its building lane without inferring from runtime activity", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
