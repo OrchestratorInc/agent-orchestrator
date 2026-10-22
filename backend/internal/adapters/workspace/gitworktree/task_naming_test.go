@@ -77,22 +77,8 @@ func TestRenameTaskBranch(t *testing.T) {
 }
 
 func TestRenameTaskBranchRollsBackEveryRepository(t *testing.T) {
-	git := requireGit(t)
-	tmp := t.TempDir()
-	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
-	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
-	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	git, ws, info := newTwoRepoTask(t)
 	ctx := context.Background()
-	info, err := ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(info.Worktrees) < 2 {
-		t.Fatalf("expected root and child worktrees: %+v", info.Worktrees)
-	}
 	actualRun := ws.run
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
@@ -209,18 +195,7 @@ func TestRenameTaskBranchToItsOwnName(t *testing.T) {
 // When undoing a partial multi-repository rename also fails, the result still
 // says which branches Git holds.
 func TestRenameTaskBranchReportsFailedUndo(t *testing.T) {
-	git := requireGit(t)
-	tmp := t.TempDir()
-	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
-	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
-	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	git, ws, info := newTwoRepoTask(t)
 	root, last := info.Worktrees[0].Path, info.Worktrees[len(info.Worktrees)-1].Path
 	actualRun := ws.run
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -234,26 +209,16 @@ func TestRenameTaskBranchReportsFailedUndo(t *testing.T) {
 		return actualRun(ctx, binary, args...)
 	}
 	got, err := ws.RenameTaskBranch(context.Background(), info, "ao/fix-login/root")
-	if err == nil || got.Root.Branch != gitOutput(t, git, root, "branch", "--show-current") || got.Worktrees[0].Branch != got.Root.Branch {
-		t.Fatalf("result %+v disagrees with Git, err=%v", got, err)
+	if err == nil {
+		t.Fatal("undo failure not reported")
 	}
+	requireBranchesMatchGit(t, git, got)
 }
 
 // When the undo stops partway, the result says which branches Git holds.
 func TestRevertTaskBranchReportsFailedUndo(t *testing.T) {
-	git := requireGit(t)
-	tmp := t.TempDir()
-	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
-	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
-	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	git, ws, original := newTwoRepoTask(t)
 	ctx := context.Background()
-	original, err := ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	renamed, err := ws.RenameTaskBranch(ctx, original, "ao/fix-login/root")
 	if err != nil {
 		t.Fatal(err)
@@ -270,8 +235,32 @@ func TestRevertTaskBranchReportsFailedUndo(t *testing.T) {
 	if err == nil {
 		t.Fatal("undo failure not reported")
 	}
-	if got.Root.Branch != gitOutput(t, git, original.Root.Path, "branch", "--show-current") {
-		t.Fatalf("root = %q disagrees with Git", got.Root.Branch)
+	requireBranchesMatchGit(t, git, got)
+}
+
+// newTwoRepoTask creates a workspace-project task with a root and one child
+// repository on the temporary branch ao/proj-1.
+func newTwoRepoTask(t *testing.T) (string, *Workspace, ports.WorkspaceProjectInfo) {
+	t.Helper()
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
+	if err != nil || len(info.Worktrees) < 2 {
+		t.Fatalf("workspace project = %+v, %v", info, err)
+	}
+	return git, ws, info
+}
+
+func requireBranchesMatchGit(t *testing.T, git string, got ports.WorkspaceProjectInfo) {
+	t.Helper()
+	if actual := gitOutput(t, git, got.Root.Path, "branch", "--show-current"); got.Root.Branch != actual {
+		t.Fatalf("root = %q, Git holds %q", got.Root.Branch, actual)
 	}
 	for _, wt := range got.Worktrees {
 		if actual := gitOutput(t, git, wt.Path, "branch", "--show-current"); wt.Branch != actual {

@@ -1274,8 +1274,6 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 				continue
 			}
 			rank := func(length int) int { return 2*length + 1 - temporary }
-			alias := sr
-			alias.branch = owned
 			if owned == sourceBranch {
 				consider(sr, rank(len(sourceBranch)+1))
 			}
@@ -1284,7 +1282,7 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 					consider(sr, rank(len(prefix)))
 				}
 			}
-			if workspaceHyphenBranch(alias) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
+			if workspaceHyphenBranch(sr, owned) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
 				consider(sr, rank(len(owned)))
 			}
 		}
@@ -1292,15 +1290,15 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 	return best, bestLen >= 0 && !ambiguous
 }
 
-func workspaceHyphenBranch(sr sessionRepo) bool {
+func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
 	base := "ao/" + string(sr.session.ID)
-	if sr.branch == base {
+	if branch == base {
 		return true
 	}
-	suffix, ok := strings.CutPrefix(sr.branch, base+"-")
+	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
 	}

@@ -172,28 +172,21 @@ func (s *Store) SetSessionProvisionedWorkspace(
 func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	tx, err := s.writeDB.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("record task branch for %s: %w", id, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
-	rows, err := q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
-		ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
-	})
-	for repo, repoBranch := range repoBranches {
-		if err != nil || rows == 0 {
-			break
+	var rows int64
+	err := s.inTx(ctx, fmt.Sprintf("record task branch for %s", id), func(q *gen.Queries) error {
+		var err error
+		rows, err = q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+			ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
+		})
+		for repo, repoBranch := range repoBranches {
+			if err != nil || rows == 0 {
+				return err
+			}
+			err = q.SetSessionWorktreeBranch(ctx, gen.SetSessionWorktreeBranchParams{SessionID: id, RepoName: repo, Branch: repoBranch})
 		}
-		err = q.SetSessionWorktreeBranch(ctx, gen.SetSessionWorktreeBranchParams{SessionID: id, RepoName: repo, Branch: repoBranch})
-	}
-	if err == nil {
-		err = tx.Commit()
-	}
-	if err != nil {
-		return false, fmt.Errorf("record task branch for %s: %w", id, err)
-	}
-	return rows > 0, nil
+		return err
+	})
+	return err == nil && rows > 0, err
 }
 
 // SetSessionBranchNaming marks whether a task's generated branch name is still
@@ -211,7 +204,7 @@ func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID,
 func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if _, err := s.qw.ClearSessionBranchNaming(ctx); err != nil {
+	if err := s.qw.ClearSessionBranchNaming(ctx); err != nil {
 		return fmt.Errorf("clear interrupted branch naming: %w", err)
 	}
 	return nil

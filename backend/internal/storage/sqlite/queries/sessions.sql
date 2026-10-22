@@ -481,7 +481,7 @@ WHERE id = sqlc.arg(id) AND branch = sqlc.arg(expected_branch);
 UPDATE sessions SET branch_naming = sqlc.arg(branch_naming)
 WHERE id = sqlc.arg(id) AND branch_naming <> sqlc.arg(branch_naming);
 
--- name: ClearSessionBranchNaming :execrows
+-- name: ClearSessionBranchNaming :exec
 -- No branch naming survives a daemon restart.
 UPDATE sessions SET branch_naming = FALSE WHERE branch_naming;
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -128,10 +127,12 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
-	if _, statErr := os.Stat(in.record.Metadata.WorkspacePath); reusePublishedWorkspace && errors.Is(statErr, os.ErrNotExist) {
-		// A saved worktree that no longer exists (removed by hand, or left
-		// mid-move by an older build) is created again, with every step shown.
-		reusePublishedWorkspace, in.record.ProvisionSteps = false, nil
+	if reusePublishedWorkspace {
+		if missing, _ := workspacePathMissing(in.record.Metadata.WorkspacePath); missing {
+			// A saved worktree that no longer exists (removed by hand, or left
+			// mid-move by an older build) is created again, with every step shown.
+			reusePublishedWorkspace, in.record.ProvisionSteps = false, nil
+		}
 	}
 	plan := provisionPlan(in, reusePublishedWorkspace)
 	progress := m.startProvisionProgress(ctx, id, plan)

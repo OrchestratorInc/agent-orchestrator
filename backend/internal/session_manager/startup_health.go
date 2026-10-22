@@ -23,7 +23,7 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		return err
 	}
 	if legacyInterruptedClientSetup(rec) {
-		settled, current, err := m.rollbackLegacyClientSetup(ctx, rec, project)
+		settled, current, err := m.rollbackLegacyClientSetup(ctx, rec)
 		if err != nil || settled {
 			return err
 		}
@@ -172,7 +172,7 @@ func legacyInterruptedClientSetup(rec domain.SessionRecord) bool {
 
 // rollbackLegacyClientSetup reports settled when the session is gone or was
 // rolled back; otherwise it returns the current record for the normal check.
-func (m *Manager) rollbackLegacyClientSetup(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (bool, domain.SessionRecord, error) {
+func (m *Manager) rollbackLegacyClientSetup(ctx context.Context, rec domain.SessionRecord) (bool, domain.SessionRecord, error) {
 	release := sync.OnceFunc(m.acquireWorkspaceGate(rec.ProjectID))
 	defer release()
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, release)
@@ -184,14 +184,17 @@ func (m *Manager) rollbackLegacyClientSetup(ctx context.Context, rec domain.Sess
 	if !current.CreatedAt.Equal(rec.CreatedAt) || !legacyInterruptedClientSetup(current) {
 		return false, current, nil
 	}
+	rows, isProject, err := m.workspaceProjectRows(ctx, current)
+	if err != nil {
+		return true, current, err
+	}
 	var info *ports.WorkspaceProjectInfo
-	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
-		rows, _, err := m.workspaceProjectRows(ctx, current)
-		if err != nil {
-			return true, current, err
-		}
+	if isProject {
 		info = &ports.WorkspaceProjectInfo{Root: workspaceInfo(current), Worktrees: rows}
 	}
+	// The old build saved this unacknowledged path; clear it so the seed row
+	// can be deleted once the worktree is gone.
+	m.clearProvisionedWorkspace(ctx, current.ID, current.Metadata.WorkspacePath)
 	m.rollbackSeedSpawnWorkspace(ctx, current, workspaceInfo(current), info, false, false)
 	return true, current, nil
 }

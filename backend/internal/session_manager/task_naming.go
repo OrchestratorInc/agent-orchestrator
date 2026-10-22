@@ -170,12 +170,11 @@ func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRec
 	})
 }
 
-// The rename deadline starts once the project gate is held. Variables so tests
-// can shorten them.
-var (
-	taskBranchRenameTimeout = 30 * time.Second
-	taskNamingWriteTimeout  = 10 * time.Second
-)
+// taskBranchRenameTimeout starts once the project gate is held. A variable so
+// tests can shorten it.
+var taskBranchRenameTimeout = 30 * time.Second
+
+const taskNamingWriteTimeout = 10 * time.Second
 
 // renameTaskBranch returns the branch Git holds afterwards, and records it.
 func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, slug string) (string, error) {

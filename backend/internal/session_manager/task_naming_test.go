@@ -12,7 +12,6 @@ import (
 
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	chatregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
@@ -341,7 +340,7 @@ func TestTaskNamingWaitsForGateBeforeDeadline(t *testing.T) {
 	if naming := <-store.writes; naming {
 		t.Fatal("waiting on the gate kept the branch hidden")
 	}
-	time.Sleep(2 * taskBranchRenameTimeout)
+	time.Sleep(taskBranchRenameTimeout + 100*time.Millisecond)
 	release()
 	<-done
 	if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/fix-login/root" || actual.DisplayName != "Fix login" {
@@ -409,28 +408,29 @@ func TestTaskNamingKeepsMatchingTemporaryName(t *testing.T) {
 	}
 }
 
-type taskBranchMovedStore struct{ *fakeStore }
+type taskBranchMovedStore struct {
+	*fakeStore
+	repo string
+	t    *testing.T
+}
 
-func (s taskBranchMovedStore) SetSessionTaskBranch(context.Context, domain.SessionID, string, string, map[string]string, time.Time) (bool, error) {
+// SetSessionTaskBranch rejects the rename after the agent made a ref under the
+// temporary namespace.
+func (s taskBranchMovedStore) SetSessionTaskBranch(_ context.Context, _ domain.SessionID, expected, _ string, _ map[string]string, _ time.Time) (bool, error) {
+	runManagerGit(s.t, s.repo, "branch", strings.TrimSuffix(expected, "/root")+"/fix")
 	return false, nil
 }
 
 // Git and the row must agree: when the row no longer carries the temporary
-// branch, the Git rename is put back.
+// branch, the Git rename is put back exactly, past the agent's new ref.
 func TestTaskNamingUndoesRenameTheRowRejects(t *testing.T) {
-	m, st, ws, _ := newGitTaskPreparationManager(t)
+	m, st, ws, repo := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
-	m.store = taskBranchMovedStore{st}
+	m.store = taskBranchMovedStore{st, repo, t}
 	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
 	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != root.Branch || st.sessions[rec.ID].Metadata.Branch != root.Branch {
 		t.Fatalf("git branch = %q, row = %+v", got, st.sessions[rec.ID].Metadata)
 	}
-}
-
-type revertFailsWorkspace struct{ *gitworktree.Workspace }
-
-func (revertFailsWorkspace) RevertTaskBranch(_ context.Context, renamed, _ ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
-	return renamed, errors.New("ref locked")
 }
 
 type flakyTaskBranchStore struct {
@@ -446,18 +446,6 @@ func (s *flakyTaskBranchStore) SetSessionTaskBranch(ctx context.Context, id doma
 	return s.Store.SetSessionTaskBranch(ctx, id, expected, branch, repos, now)
 }
 
-// When neither the row write nor the undo lands, the row is written again so it
-// names the branch Git holds.
-func TestTaskNamingRecordsRenameItCannotUndo(t *testing.T) {
-	m, st, ws, _ := newGitTaskPreparationManager(t)
-	rec, root := launchedTaskSession(t, m, st, ws)
-	m.workspace, m.store = revertFailsWorkspace{ws}, &flakyTaskBranchStore{Store: st, failures: 1}
-	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
-	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != "ao/fix-login/root" || st.sessions[rec.ID].Metadata.Branch != got {
-		t.Fatalf("git branch = %q, row = %q", got, st.sessions[rec.ID].Metadata.Branch)
-	}
-}
-
 type scriptedTaskNamer struct {
 	renamed, reverted    ports.WorkspaceProjectInfo
 	renameErr, revertErr error
@@ -471,21 +459,19 @@ func (n scriptedTaskNamer) RevertTaskBranch(context.Context, ports.WorkspaceProj
 	return n.reverted, n.revertErr
 }
 
-// When a rename or its undo stops partway, each repository row records the
-// branch its checkout holds, and the session row the root's.
+// When a rename or its undo fails, each repository row records the branch its
+// checkout holds, and the session row the root's.
 func TestTaskNamingRecordsSplitBranches(t *testing.T) {
+	locked := errors.New("ref locked")
 	for _, tc := range []struct {
-		name               string
-		failedWrites       int
-		rootNamed, renamed bool // what the root and the child hold afterwards
-		namer              func(split func(root, child bool) ports.WorkspaceProjectInfo) scriptedTaskNamer
+		name                    string
+		failedWrites            int
+		renamed, reverted, held [2]bool // whether the root and the child carry the generated name
+		renameErr, revertErr    error
 	}{
-		{"undo stopped after the root", 1, false, true, func(split func(bool, bool) ports.WorkspaceProjectInfo) scriptedTaskNamer {
-			return scriptedTaskNamer{renamed: split(true, true), reverted: split(false, true), revertErr: errors.New("ref locked")}
-		}},
-		{"rename and undo stopped after the root", 0, true, false, func(split func(bool, bool) ports.WorkspaceProjectInfo) scriptedTaskNamer {
-			return scriptedTaskNamer{renamed: split(true, false), renameErr: errors.New("ref locked")}
-		}},
+		{"undo failed", 1, [2]bool{true, true}, [2]bool{true, true}, [2]bool{true, true}, nil, locked},
+		{"undo stopped after the root", 1, [2]bool{true, true}, [2]bool{false, true}, [2]bool{false, true}, nil, locked},
+		{"rename and undo stopped after the root", 0, [2]bool{true, false}, [2]bool{}, [2]bool{true, false}, locked, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -499,22 +485,22 @@ func TestTaskNamingRecordsSplitBranches(t *testing.T) {
 				t.Fatal(err)
 			}
 			temporary := "ao/" + string(rec.ID)
-			split := func(root, child bool) ports.WorkspaceProjectInfo {
-				name := func(named bool) string {
-					if named {
-						return "ao/fix-login/root"
+			split := func(named [2]bool) ports.WorkspaceProjectInfo {
+				branch := [2]string{temporary, temporary}
+				for i := range named {
+					if named[i] {
+						branch[i] = "ao/fix-login/root"
 					}
-					return temporary
 				}
 				return ports.WorkspaceProjectInfo{
-					Root: ports.WorkspaceInfo{ProjectID: "mer", SessionID: rec.ID, Path: "/w/root", Branch: name(root)},
+					Root: ports.WorkspaceInfo{ProjectID: "mer", SessionID: rec.ID, Path: "/w/root", Branch: branch[0]},
 					Worktrees: []ports.WorkspaceRepoInfo{
-						{RepoName: domain.RootWorkspaceRepoName, Path: "/w/root", Branch: name(root)},
-						{RepoName: "child", Path: "/w/root/child", Branch: name(child)},
+						{RepoName: domain.RootWorkspaceRepoName, Path: "/w/root", Branch: branch[0]},
+						{RepoName: "child", Path: "/w/root/child", Branch: branch[1]},
 					},
 				}
 			}
-			original := split(false, false)
+			original := split([2]bool{})
 			rec.Metadata.Branch, rec.Metadata.WorkspacePath = temporary, original.Root.Path
 			if err := st.UpdateSession(ctx, rec); err != nil {
 				t.Fatal(err)
@@ -525,10 +511,11 @@ func TestTaskNamingRecordsSplitBranches(t *testing.T) {
 				}
 			}
 			m.store = &flakyTaskBranchStore{Store: st, failures: tc.failedWrites}
-			if _, err := m.renameTaskBranch(tc.namer(split), rec, original.Root, &original, "fix-login"); err == nil {
-				t.Fatal("partial rename not reported")
+			namer := scriptedTaskNamer{renamed: split(tc.renamed), reverted: split(tc.reverted), renameErr: tc.renameErr, revertErr: tc.revertErr}
+			if _, err := m.renameTaskBranch(namer, rec, original.Root, &original, "fix-login"); err == nil {
+				t.Fatal("failure not reported")
 			}
-			want := split(tc.rootNamed, tc.renamed)
+			want := split(tc.held)
 			if got, _, _ := st.GetSession(ctx, rec.ID); got.Metadata.Branch != want.Root.Branch {
 				t.Fatalf("session branch = %q, want %q", got.Metadata.Branch, want.Root.Branch)
 			}
@@ -543,29 +530,6 @@ func TestTaskNamingRecordsSplitBranches(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-type siblingDuringWriteStore struct {
-	*fakeStore
-	repo string
-	t    *testing.T
-}
-
-func (s siblingDuringWriteStore) SetSessionTaskBranch(_ context.Context, _ domain.SessionID, expected, _ string, _ map[string]string, _ time.Time) (bool, error) {
-	runManagerGit(s.t, s.repo, "branch", strings.TrimSuffix(expected, "/root")+"/fix")
-	return false, nil
-}
-
-// The undo restores the exact temporary branch even when the agent made a ref
-// under that namespace in the meantime.
-func TestTaskNamingUndoIsExact(t *testing.T) {
-	m, st, ws, repo := newGitTaskPreparationManager(t)
-	rec, root := launchedTaskSession(t, m, st, ws)
-	m.store = siblingDuringWriteStore{st, repo, t}
-	m.nameTaskBranchLater(context.Background(), rec, root, nil, nameNow(generatedTaskName{Slug: "fix-login"}), func() {})
-	if got := strings.TrimSpace(runManagerGit(t, root.Path, "branch", "--show-current")); got != root.Branch || st.sessions[rec.ID].Metadata.Branch != root.Branch {
-		t.Fatalf("git branch = %q, row = %q", got, st.sessions[rec.ID].Metadata.Branch)
 	}
 }
 

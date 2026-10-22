@@ -79,17 +79,14 @@ func (q *Queries) ClaimChatControllerGeneration(ctx context.Context, arg ClaimCh
 	return result.RowsAffected()
 }
 
-const clearSessionBranchNaming = `-- name: ClearSessionBranchNaming :execrows
+const clearSessionBranchNaming = `-- name: ClearSessionBranchNaming :exec
 UPDATE sessions SET branch_naming = FALSE WHERE branch_naming
 `
 
 // No branch naming survives a daemon restart.
-func (q *Queries) ClearSessionBranchNaming(ctx context.Context) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearSessionBranchNaming)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) ClearSessionBranchNaming(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearSessionBranchNaming)
+	return err
 }
 
 const commitClientRequestSession = `-- name: CommitClientRequestSession :execrows

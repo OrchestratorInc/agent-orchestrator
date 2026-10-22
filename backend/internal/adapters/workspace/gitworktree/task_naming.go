@@ -87,19 +87,16 @@ func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original port
 		moves[i] = branchMove{repo.Path, repo.Branch, to[i].Branch}
 	}
 	n, err := w.moveBranches(ctx, moves)
-	return withTaskBranches(renamed, n, func(i int) string { return to[i].Branch }), err
+	return withTaskBranches(renamed, moves[:n]), err
 }
 
 func (w *Workspace) taskRepos(info ports.WorkspaceProjectInfo) ([]ports.WorkspaceRepoInfo, error) {
 	if len(info.Worktrees) > 0 {
-		return append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...), nil
+		return info.Worktrees, nil
 	}
-	repo := info.Root.RepoPath
-	if repo == "" {
-		var err error
-		if repo, err = w.repoPath(info.Root.ProjectID); err != nil {
-			return nil, err
-		}
+	repo, err := w.repoPathForInfo(info.Root)
+	if err != nil {
+		return nil, err
 	}
 	return []ports.WorkspaceRepoInfo{{RepoPath: repo, Path: info.Root.Path, Branch: info.Root.Branch}}, nil
 }
@@ -111,7 +108,7 @@ func (w *Workspace) renameTaskCandidate(ctx context.Context, info ports.Workspac
 	}
 	n, err := w.moveBranches(ctx, moves)
 	if err == nil {
-		return withTaskBranches(info, n, func(int) string { return branch }), false, nil
+		return withTaskBranches(info, moves), false, nil
 	}
 	// All repositories share one task name, so undo the ones already renamed,
 	// last first.
@@ -122,24 +119,24 @@ func (w *Workspace) renameTaskCandidate(ctx context.Context, info ports.Workspac
 	}
 	if undone, undoErr := w.moveBranches(ctx, undo); undoErr != nil {
 		// Report what Git now holds: the first repositories kept the new name.
-		return withTaskBranches(info, n-undone, func(int) string { return branch }), false, errors.Join(err, undoErr)
+		return withTaskBranches(info, moves[:n-undone]), false, errors.Join(err, undoErr)
 	}
 	// Another project sharing this repository may have claimed the name.
-	if _, probeErr := w.run(ctx, w.binary, "-C", repos[n].RepoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); probeErr == nil {
+	if claimed, _ := w.refExists(ctx, repos[n].RepoPath, "refs/heads/"+branch); claimed {
 		return info, true, nil
 	}
 	return info, false, err
 }
 
-// withTaskBranches puts the first n repositories (and the root with the first)
-// on the branches branchFor gives them.
-func withTaskBranches(info ports.WorkspaceProjectInfo, n int, branchFor func(i int) string) ports.WorkspaceProjectInfo {
-	if n > 0 {
-		info.Root.Branch = branchFor(0)
+// withTaskBranches puts the first repositories (and the root with the first)
+// on the branches the landed moves gave them.
+func withTaskBranches(info ports.WorkspaceProjectInfo, landed []branchMove) ports.WorkspaceProjectInfo {
+	if len(landed) > 0 {
+		info.Root.Branch = landed[0].to
 	}
 	info.Worktrees = append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
-	for i := range info.Worktrees[:min(n, len(info.Worktrees))] {
-		info.Worktrees[i].Branch = branchFor(i)
+	for i := range info.Worktrees[:min(len(landed), len(info.Worktrees))] {
+		info.Worktrees[i].Branch = landed[i].to
 	}
 	return info
 }
