@@ -2718,6 +2718,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 		if err := m.terminateNativeSession(ctx, rec); err != nil {
 			return fmt.Errorf("retire replacement %s: native session: %w", id, err)
 		}
+		m.stopChatForRetirement(ctx, rec)
 		if handle.ID != "" {
 			if err := m.runtime.Destroy(ctx, handle); err != nil {
 				return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
@@ -2747,6 +2748,12 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if err := m.importAttachments(ctx, rec); err != nil {
 		return fmt.Errorf("retire replacement %s: preserve attachments: %w", id, err)
 	}
+	// A Chat controller owns a provider process whose cwd is the worktree about
+	// to be force-removed. Stop it first, as Kill does; otherwise the process
+	// outlives the retired session and, on Windows, blocks the removal. The
+	// provider may be unresponsive (for example out of quota), so a stop failure
+	// does not abort the replacement.
+	m.stopChatForRetirement(ctx, rec)
 
 	if rows, ok, rowErr := m.workspaceProjectRows(ctx, rec); rowErr != nil {
 		return fmt.Errorf("retire replacement %s: workspace rows: %w", id, rowErr)
@@ -2783,6 +2790,21 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	}
 	m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 	return nil
+}
+
+// chatRetireStopBudget bounds the controller stop during a replacement, so an
+// unresponsive provider cannot use up the request.
+const chatRetireStopBudget = 15 * time.Second
+
+func (m *Manager) stopChatForRetirement(ctx context.Context, rec domain.SessionRecord) {
+	if m.chat == nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		return
+	}
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatRetireStopBudget)
+	defer cancel()
+	if err := m.chat.StopChat(stopCtx, rec.ID); err != nil {
+		m.logger.Warn("retire replacement: close chat controller", "sessionID", rec.ID, "error", err)
+	}
 }
 
 func (m *Manager) stopPreviewBestEffort(ctx context.Context, id domain.SessionID) {

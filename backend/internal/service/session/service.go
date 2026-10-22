@@ -682,7 +682,13 @@ func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.Proj
 
 const orchestratorRetireNotice = "AO is replacing this project orchestrator. Stop coordinating new work now; a fresh orchestrator will take over in a new workspace."
 
+// retireNoticeBudget bounds the courtesy notice. The retiring orchestrator may
+// be out of quota or wedged; its answer must not hold up the replacement.
+var retireNoticeBudget = 10 * time.Second
+
 func (s *Service) sendRetireNotice(ctx context.Context, id domain.SessionID) error {
+	ctx, cancel := context.WithTimeout(ctx, retireNoticeBudget)
+	defer cancel()
 	if err := s.manager.Send(ctx, id, orchestratorRetireNotice, nil); err != nil {
 		return fmt.Errorf("send retire notice to %s: %w", id, err)
 	}
