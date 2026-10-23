@@ -157,7 +157,9 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "Filter by project" }));
 		await user.click(screen.getByRole("menuitemradio", { name: "Scratchpad" }));
 		expect(screen.queryByRole("region", { name: "agent-orchestrator" })).not.toBeInTheDocument();
-		expect(within(screen.getByRole("region", { name: "Recent" })).getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.queryByRole("region", { name: "Recent" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "no such thing");
 		await user.click(screen.getByRole("button", { name: "Clear filters" }));
 		expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toHaveValue("");
@@ -170,7 +172,7 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "pricing");
-		expect(screen.getAllByText("pricing.md")).toHaveLength(2);
+		expect(screen.getAllByText("pricing.md")).toHaveLength(1);
 		expect(screen.queryByText("artifacts-user-flow.html")).not.toBeInTheDocument();
 		expect(screen.queryByText("Scratchpad")).not.toBeInTheDocument();
 
@@ -194,9 +196,22 @@ describe("ArtifactsView", () => {
 		await user.clear(search);
 		await user.type(search, "Scratchpad");
 
-		expect(screen.getAllByRole("listitem")).toHaveLength(2);
-		expect(screen.getAllByText("caching-options.md")).toHaveLength(2);
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getAllByText("caching-options.md")).toHaveLength(1);
 		expect(screen.queryByText("pricing.md")).not.toBeInTheDocument();
+	});
+
+	it("shows a single project once without collapsible headers in either view", async () => {
+		const user = userEvent.setup();
+		mocks.workspaces = [withArtifacts[0]];
+		useArtifactsViewStore.setState({ collapsedSections: ["project:ao"] });
+		renderView();
+		expect(screen.queryByRole("region", { name: "Recent" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+		await user.click(screen.getByRole("button", { name: "List view" }));
+		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
