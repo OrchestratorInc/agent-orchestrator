@@ -120,3 +120,12 @@ func TestArtifactDirectoryReachesHarnessCommands(t *testing.T) {
 		t.Fatalf("parent-start additionalDirectories = %v", got)
 	}
 }
+
+func TestOrchestratorPromptPointsToWorkerArtifacts(t *testing.T) {
+	prompt := orchestratorSystemPrompt("/skills")
+	for _, want := range []string{"`artifactFiles`", "cannot read", "ao list --json"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("orchestrator prompt does not mention %q", want)
+		}
+	}
+}
