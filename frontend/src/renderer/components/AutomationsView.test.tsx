@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,15 +26,16 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
+const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
-vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [codexSnapshot, cursorSnapshot] } }) }));
+vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
 vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectDefaultWorker: () => "codex" }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "demo", name: "Demo" }] }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
 		queryKey: ["agent-models", agentId, projectId],
-		queryFn: async () => ({
+		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : ({
 			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "capable", label: "Capable", efforts: ["low", "high"], defaultEffort: "high" }, { id: "plain", label: "Plain", efforts: [] }],
 			allowCustom: false,
 			customModelEntry: "none",
@@ -155,6 +156,22 @@ describe("AutomationsView", () => {
 		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ model: "plain", effort: "" }) });
+	});
+
+	it("enables saving after switching an invalid effort to a mode-based agent", async () => {
+		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Review", prompt: "Review", kind: "worker", harness: "codex", model: "capable", effort: "unsupported", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true }];
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Edit Review" }));
+		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeDisabled());
+		await user.click(within(dialog).getByRole("combobox", { name: "Agent" }));
+		await user.click(screen.getByRole("option", { name: /Amp/ }));
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Smart"));
+		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled();
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "amp", model: "", effort: "" }) });
 	});
 
 	it("creates a weekly automation on the chosen weekday", async () => {

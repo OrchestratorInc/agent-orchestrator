@@ -424,7 +424,7 @@ function AutomationFormDialog({
 								invalid={Boolean(validationErrors.projectId)}
 								describedBy={validationErrors.projectId ? `${AUTOMATION_FIELD_IDS.projectId}-error` : undefined}
 								value={projectId}
-								onValueChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); clearValidationError("projectId"); }}
+								onValueChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
 								options={projectOptions}
 							/>
 						</Field>
@@ -455,7 +455,7 @@ function AutomationFormDialog({
 								disabled={busy}
 								onChange={(value) => {
 									setHarness(value);
-									setModel(""); setMode(""); setEffort("");
+									setModel(""); setMode(""); setEffort(""); setModelValid(true);
 								}}
 							/>
 							{open ? (
