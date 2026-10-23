@@ -9,8 +9,8 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
-import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
@@ -334,6 +334,70 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 			{updates.map((update) => (
 				<WorkerUpdateRow key={update.key} update={update} />
 			))}
+		</div>
+	);
+}
+
+/**
+ * In a worker's chat, a message from its orchestrator, drawn the way the
+ * orchestrator chat draws a worker: avatar, linked name and time, with what it
+ * sent open beneath at the row's indent. Any other message draws as `children`.
+ */
+export function FromOrchestrator({ item, children }: { item: ConversationItem; children: ReactNode }) {
+	const updates = workerUpdatesOf(item);
+	const update = updates.length === 1 && !updates[0]!.state ? updates[0] : undefined;
+	const session = useWorkerSession(update?.sessionId, update?.projectId);
+	if (!update || session?.kind !== "orchestrator") return <>{children}</>;
+	return <OrchestratorMessage update={update} session={session} />;
+}
+
+function OrchestratorMessage({ update, session }: { update: WorkerUpdate; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const [folds, setFolds] = useState(false);
+	const body = useRef<HTMLDivElement>(null);
+	// Re-measured as the chat resizes, so text the fold hides always comes with a way to open it.
+	useLayoutEffect(() => {
+		const element = body.current;
+		if (!element || open) return;
+		const measure = () => setFolds(element.scrollHeight > element.clientHeight + 1);
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [open, update.body]);
+	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
+	return (
+		<div className="relative min-w-0 pl-6" data-testid="orchestrator-message">
+			<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />
+			{/* The name and time float into the message's first line; the rest wraps under the name. */}
+			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
+				<div>
+					<span className="float-right ml-3 text-xs leading-[calc(var(--chat-readable-font-size)*1.58)] tabular-nums text-muted-foreground">
+						{formatTime(update.createdAt)}
+					</span>
+					{href ? (
+						<SessionLabelLink
+							href={href}
+							className="float-left mr-2 text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground decoration-foreground/40 underline-offset-2 hover:underline"
+						>
+							{t("shell.orchestrator")}
+						</SessionLabelLink>
+					) : null}
+					<ChatMarkdown text={update.body} safeOrigin />
+				</div>
+			</div>
+			{folds || open ? (
+				<button
+					type="button"
+					aria-expanded={open}
+					onClick={() => setOpen((current) => !current)}
+					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					{t(open ? "shell.showLess" : "shell.showMore")}
+					<ChevronDown aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-180")} />
+				</button>
+			) : null}
 		</div>
 	);
 }

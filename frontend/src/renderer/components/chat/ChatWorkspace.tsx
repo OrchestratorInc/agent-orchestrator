@@ -128,6 +128,7 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
+	FromOrchestrator,
 	isTaskTitleUpdate,
 	isWorkerLead,
 	OrchestratorReply,
@@ -4734,7 +4735,7 @@ function TimelineItem({
 				/>
 			);
 		}
-		return <OriginMessage message={item} />;
+		return <FromOrchestrator item={item}><OriginMessage message={item} /></FromOrchestrator>;
 	}
 	if (item.activityKind === "approval") {
 		// Pending approval owns the composer. Keeping it in the grouping model still
@@ -4755,7 +4756,11 @@ function TimelineItem({
 	// because that is AO's only durable write that can attach to a turn in flight,
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
-		return <SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />;
+		return (
+			<FromOrchestrator item={item}>
+				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+			</FromOrchestrator>
+		);
 	}
 	// A plan whose turn AO never correlated — one from before this controller
 	// started. The turn-level checklist cannot show it, so the row carries it.
