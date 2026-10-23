@@ -42,8 +42,8 @@ export function SessionTabMenu({
 	const [pending, setPending] = useState<PendingAgentSwitch>();
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	// Agent switching ships behind Developer Mode for its first week.
-	const switching = useUiStore((state) => state.developerMode) && switchTarget === "chat";
+	// The agent picker belongs to a terminal; a chat switches agent from its composer.
+	const switching = switchTarget === "chat";
 	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
 	if (!switchAction && (switchControl || !switching)) return switchControl ? <div className="inline-flex shrink-0 items-center">{switchControl}</div> : null;
 	const switchNow = () => {
