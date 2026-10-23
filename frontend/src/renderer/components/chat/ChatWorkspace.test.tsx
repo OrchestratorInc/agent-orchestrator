@@ -1142,6 +1142,50 @@ describe("ChatWorkspace timeline", () => {
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
 	});
 
+	it("keeps a steer visible outside the folded work once the turn settles", async () => {
+		const user = userEvent.setup();
+		const turnId = "settled-turn-with-steer";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "ready" },
+			latestSequence: 5,
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:02:00Z" }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Run the unit tests",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "tool", turnId, sequence: 2, revision: 0,
+					activityKind: "command", status: "completed", summary: "go test ./...",
+					detail: { command: "go test ./..." }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "steer", turnId, sequence: 3, revision: 0,
+					activityKind: "system", status: "completed", summary: "Only the unit ones, please",
+					detail: { event: "steer", text: "Only the unit ones, please", origin: "human" },
+					createdAt: at,
+				},
+				{
+					kind: "message", id: "reply", turnId, sequence: 4, revision: 0,
+					role: "assistant", origin: "provider", text: "Switching to the unit tests.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByText("Only the unit ones, please")).toBeVisible();
+		const worked = screen.getByRole("button", { name: /Worked for/ });
+		await user.click(worked);
+		expect(screen.getAllByText("Only the unit ones, please")).toHaveLength(1);
+		await user.click(worked);
+		expect(screen.getByText("Only the unit ones, please")).toBeVisible();
+	});
+
 	it("replaces the generic working label with Claude's live retry count and backoff", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
