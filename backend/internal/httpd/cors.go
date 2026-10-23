@@ -117,7 +117,7 @@ func isCodexAccountPath(path string) bool {
 	return false
 }
 
-// browserRequestAllowed is shared by REST and the mux upgrade. Local HTTP
+// browserRequestAllowed guards browser access to REST routes. Local HTTP
 // origins are not principals: previews and unrelated local servers can serve
 // hostile content. Only exact renderer origins grant access to the daemon.
 func browserRequestAllowed(r *http.Request, allowed map[string]struct{}) bool {
