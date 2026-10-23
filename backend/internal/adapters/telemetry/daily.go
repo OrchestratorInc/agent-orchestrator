@@ -36,13 +36,14 @@ type DailySummarySink struct {
 type dailyUsageState struct {
 	Day    string         `json:"day"`
 	Counts map[string]int `json:"counts"`
+	Kinds  map[string]int `json:"kinds"`
 	Sent   bool           `json:"sent"`
 }
 
 // NewDailySummarySink loads any unsent day from path. An empty path keeps the
 // summary in memory only.
 func NewDailySummarySink(next ports.EventSink, path string) *DailySummarySink {
-	sink := &DailySummarySink{next: next, path: path, state: dailyUsageState{Counts: map[string]int{}}}
+	sink := &DailySummarySink{next: next, path: path, state: dailyUsageState{Counts: map[string]int{}, Kinds: map[string]int{}}}
 	if path == "" {
 		return sink
 	}
@@ -56,6 +57,9 @@ func NewDailySummarySink(next ports.EventSink, path string) *DailySummarySink {
 	}
 	if stored.Counts == nil {
 		stored.Counts = map[string]int{}
+	}
+	if stored.Kinds == nil {
+		stored.Kinds = map[string]int{}
 	}
 	sink.state = stored
 	return sink
@@ -74,8 +78,8 @@ func (s *DailySummarySink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 	s.mu.Lock()
 	s.rollLocked(ctx, ev.OccurredAt)
-	path := commandPath(ev)
-	s.state.Counts[path]++
+	s.state.Counts[commandPath(ev)]++
+	s.state.Kinds[errorKind(ev)]++
 	s.persistLocked()
 	s.mu.Unlock()
 }
@@ -99,22 +103,16 @@ func (s *DailySummarySink) Close(ctx context.Context) error {
 
 func (s *DailySummarySink) flushCompleted(ctx context.Context, now time.Time) {
 	s.mu.Lock()
-	ev, ok := s.completedLocked(now)
+	ev, ok := s.takeCompletedLocked(now)
 	s.mu.Unlock()
-	if !ok {
+	if !ok || s.next == nil {
 		return
 	}
 	s.next.Emit(ctx, ev)
-	s.mu.Lock()
-	if s.state.Day == ev.Payload["day"] {
-		s.state.Sent = true
-		s.persistLocked()
-	}
-	s.mu.Unlock()
 }
 
 func (s *DailySummarySink) rollLocked(ctx context.Context, now time.Time) {
-	ev, ok := s.completedLocked(now)
+	ev, ok := s.takeCompletedLocked(now)
 	if !ok {
 		s.ensureDayLocked(now)
 		return
@@ -126,7 +124,7 @@ func (s *DailySummarySink) rollLocked(ctx context.Context, now time.Time) {
 	s.persistLocked()
 }
 
-func (s *DailySummarySink) completedLocked(now time.Time) (ports.TelemetryEvent, bool) {
+func (s *DailySummarySink) takeCompletedLocked(now time.Time) (ports.TelemetryEvent, bool) {
 	day := utcDay(now)
 	if s.state.Day == "" || s.state.Day >= day || s.state.Sent || len(s.state.Counts) == 0 {
 		return ports.TelemetryEvent{}, false
@@ -140,20 +138,25 @@ func (s *DailySummarySink) completedLocked(now time.Time) (ports.TelemetryEvent,
 	if total == 0 {
 		return ports.TelemetryEvent{}, false
 	}
-	return ports.TelemetryEvent{
+	summarized := s.state.Day
+	ev := ports.TelemetryEvent{
 		Name:       cliUsageEventName,
 		Source:     "cli",
-		OccurredAt: now.UTC(),
+		OccurredAt: endOfUTCDay(summarized),
 		Level:      ports.TelemetryLevelWarn,
 		Payload: map[string]any{
 			"component":      "cli",
 			"operation":      "command_parse",
 			"error_kind":     "usage",
-			"day":            s.state.Day,
+			"day":            summarized,
 			"count":          total,
 			"command_counts": formatCommandCounts(s.state.Counts),
+			"error_counts":   formatCommandCounts(s.state.Kinds),
 		},
-	}, true
+	}
+	s.state.Sent = true
+	s.persistLocked()
+	return ev, true
 }
 
 func (s *DailySummarySink) ensureDayLocked(now time.Time) {
@@ -162,9 +165,32 @@ func (s *DailySummarySink) ensureDayLocked(now time.Time) {
 		if s.state.Counts == nil {
 			s.state.Counts = map[string]int{}
 		}
+		if s.state.Kinds == nil {
+			s.state.Kinds = map[string]int{}
+		}
 		return
 	}
-	s.state = dailyUsageState{Day: day, Counts: map[string]int{}}
+	s.state = dailyUsageState{Day: day, Counts: map[string]int{}, Kinds: map[string]int{}}
+}
+
+func endOfUTCDay(day string) time.Time {
+	parsed, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return time.Now().UTC()
+	}
+	return parsed.UTC().Add(24 * time.Hour)
+}
+
+func errorKind(ev ports.TelemetryEvent) string {
+	kind, _ := ev.Payload["error_kind"].(string)
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		kind = "usage"
+	}
+	if len(kind) > 80 {
+		kind = kind[:80]
+	}
+	return kind
 }
 
 func (s *DailySummarySink) persistLocked() {

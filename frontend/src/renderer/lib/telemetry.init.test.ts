@@ -112,13 +112,11 @@ describe("initTelemetry recovery", () => {
 		expect(() => applyRendererTelemetryPolicy(false)).not.toThrow();
 	});
 
-	it("deduplicates updater failures at the real capture boundary and rejects obsolete names", async () => {
+	it("deduplicates updater failures at the real capture boundary", async () => {
 		const captureRendererEvent = await initializedUpdateCapture();
 		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
 		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
 		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
-		expect(await captureRendererEvent("ao.renderer.task_create_requested")).toBe(false);
-		expect(await captureRendererEvent("tools.call")).toBe(false);
 		expect(await captureRendererEvent("ao.renderer.update_downloaded", failure)).toBe(true);
 		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
 		expect(posthogStub.capture.mock.calls.map(([name]) => name)).toEqual([

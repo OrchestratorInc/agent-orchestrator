@@ -58,9 +58,9 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// job for every event name that isn't aggregated.
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Keep the full local error stream. One percent of remote HTTP 5xx
-	// occurrences enter the minute rollup, which carries the sampling rate.
-	// CLI usage errors are one durable daily summary per install instead.
+	// Keep the full local error stream. Remote HTTP 5xx keeps the first
+	// occurrence of each error per install per UTC day, then one in one
+	// hundred. CLI usage errors are one durable daily summary per install.
 	sampled := telemetryadapter.NewSamplingSink(aggregated, map[string]float64{
 		"ao.http.5xx": 0.01,
 	})

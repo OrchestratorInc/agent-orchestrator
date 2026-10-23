@@ -49,6 +49,7 @@ import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
+import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -786,12 +787,16 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						return;
 					}
 				}
+				captureProjectAddFailed(
+					(event, properties) => { void captureRendererEvent(event, properties); },
+					failure.code,
+				);
 				void captureRendererException(failure, {
 					source: "project-add",
 					operation: "project_add",
 					surface: "project_board",
-					});
-					throw failure;
+				});
+				throw failure;
 			}
 			if (!data?.project) throw new Error("Project creation returned no project");
 			await completeProjectCreation(data.project, input, "project_add");
@@ -834,6 +839,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				failure.code = apiErrorCode(error);
 				failure.details = apiErrorDetails(error);
 				failure.requestId = apiErrorRequestId(error);
+				void captureRendererEvent("ao.renderer.project_clone_failed", {
+					error_code: failure.code || "unknown",
+				});
 				void captureRendererException(failure, {
 					source: "project-clone",
 					operation: "project_clone",

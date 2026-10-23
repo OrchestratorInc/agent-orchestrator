@@ -27,18 +27,6 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 	"ao.renderer.session_management_summary": "ao.v2.renderer.session_management_summary",
 };
 
-const OBSOLETE_REQUEST_EVENTS = new Set([
-	"project_add", "task_create", "settings_save", "session_kill", "notification_mark_read",
-	"open_in_editor", "orchestrator_spawn", "artifact_create", "automation_create",
-	"session_restart", "project_clone",
-].map((action) => `ao.renderer.${action}_requested`));
-
-export function isProductionRendererEvent(event: string): boolean {
-	return event.startsWith("ao.") && event !== "ao.unset_test" &&
-		!event.endsWith(".heartbeat_stale") && !event.endsWith(".nudged") &&
-		!OBSOLETE_REQUEST_EVENTS.has(event);
-}
-
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
@@ -83,9 +71,39 @@ export function reserveCapture(name: string, now = Date.now()): boolean {
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
 }
 
-export function sampleApiError(random: () => number = Math.random): boolean {
-	const value = random();
-	return Number.isFinite(value) && value >= 0 && value < API_ERROR_SAMPLE_RATE;
+const ERROR_SAMPLE_STORAGE_KEY = "ao.telemetry.errorSample.v1";
+
+// First occurrence of an error per UTC day is always reported. Every 100th
+// occurrence after that is reported. Same error is name + operation + code.
+export function shouldReportRepeatingError(
+	storage: DailyActiveStorage,
+	name: string,
+	properties: TelemetryProperties,
+	now = Date.now(),
+): { report: boolean; sampleRate: number } {
+	const operation = typeof properties.operation === "string" ? properties.operation : "";
+	const code = properties.error_code ?? properties.code ?? properties.status ?? "";
+	const key = `${name}|${operation}|${String(code)}|${utcDay(now)}`;
+	let counts: Record<string, number> = {};
+	try {
+		const parsed = JSON.parse(storage.getItem(ERROR_SAMPLE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		for (const [item, value] of Object.entries(parsed)) {
+			if (typeof value === "number" && Number.isFinite(value)) counts[item] = value;
+		}
+	} catch {
+		counts = {};
+	}
+	const next = (counts[key] ?? 0) + 1;
+	counts[key] = next;
+	try {
+		storage.setItem(ERROR_SAMPLE_STORAGE_KEY, JSON.stringify(counts));
+	} catch {
+		// A storage failure still reports the occurrence.
+		return { report: true, sampleRate: 1 };
+	}
+	if (next === 1) return { report: true, sampleRate: 1 };
+	if ((next - 1) % 100 === 0) return { report: true, sampleRate: API_ERROR_SAMPLE_RATE };
+	return { report: false, sampleRate: API_ERROR_SAMPLE_RATE };
 }
 
 type UpdateFailureState = {
@@ -120,8 +138,8 @@ export function claimUpdateFailure(
 	storage: DailyActiveStorage,
 	properties: TelemetryProperties,
 	now = Date.now(),
-): { emit: boolean; extra: TelemetryProperties; rollback: () => void } {
-	const none = { emit: false, extra: {}, rollback: () => undefined };
+): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; rollback: () => void } {
+	const none = { emit: false, extra: {}, streak: false, rollback: () => undefined };
 	const snapshot = storage.getItem(UPDATE_FAILURE_STORAGE_KEY);
 	const rollback = () => {
 		if (snapshot === null) storage.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
@@ -132,7 +150,7 @@ export function claimUpdateFailure(
 		state.streaks ??= {};
 		const day = utcDay(now);
 		if (state.day && state.day !== day) {
-			if ((state.dayCount ?? 0) > 0) {
+			if ((state.dayCount ?? 0) > 0 && !state.pendingDay) {
 				state.pendingDay = state.day;
 				state.pendingCount = state.dayCount;
 			}
@@ -146,17 +164,17 @@ export function claimUpdateFailure(
 		if (!streakOpen) state.streaks[key] = now;
 		const pendingDay = state.pendingDay;
 		const pendingCount = state.pendingCount ?? 0;
-		const emitDaily = streakOpen && pendingDay !== undefined;
+		const emitDaily = pendingDay !== undefined && (state.pendingCount ?? 0) > 0;
+		const daily = emitDaily ? { report: "daily" as const, day: pendingDay, failure_count: pendingCount } : undefined;
 		if (emitDaily) {
 			delete state.pendingDay;
 			delete state.pendingCount;
 		}
 		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
-		if (!streakOpen) return { emit: true, extra: {}, rollback };
-		if (emitDaily) return { emit: true, extra: { report: "daily", failure_count: pendingCount }, rollback };
-		return none;
+		if (streakOpen && !emitDaily) return none;
+		return { emit: true, extra: {}, streak: !streakOpen, daily, rollback };
 	} catch {
-		return { emit: true, extra: {}, rollback: () => undefined };
+		return { emit: true, extra: {}, streak: true, rollback: () => undefined };
 	}
 }
 
@@ -172,6 +190,18 @@ export function clearUpdateFailures(storage: DailyActiveStorage, version: unknow
 		const suffix = `|${version ?? ""}`;
 		for (const key of Object.keys(state.streaks ?? {})) {
 			if (key.endsWith(suffix)) delete state.streaks?.[key];
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
+}
+
+export function clearCheckUpdateFailures(storage: DailyActiveStorage): void {
+	try {
+		const state = readUpdateFailureState(storage);
+		for (const key of Object.keys(state.streaks ?? {})) {
+			if (key.startsWith("check|")) delete state.streaks?.[key];
 		}
 		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
 	} catch {
@@ -521,7 +551,13 @@ export function reserveRouteViewCapture(
 	}
 }
 
-function telemetryStorage(): DailyActiveStorage | undefined {
+const memorySampleState = new Map<string, string>();
+const memorySampleStorage = (): DailyActiveStorage => ({
+	getItem: (key) => memorySampleState.get(key) ?? null,
+	setItem: (key, value) => { memorySampleState.set(key, value); },
+});
+
+export function telemetryStorage(): DailyActiveStorage | undefined {
 	try {
 		return window.localStorage;
 	} catch {
@@ -953,6 +989,7 @@ export async function sanitizeRendererProperties(
 			// raw error message is deliberately absent: it can carry feed URLs and
 			// local paths, so update-telemetry.ts maps it to error_category first.
 			if (properties?.report === "daily") safe.report = "daily";
+			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
 			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
 				safe.failure_count = properties.failure_count;
 			}
@@ -1224,8 +1261,14 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	// Checked before the reservations so a silenced stream does not consume a
 	// rate-limit slot on its way to being discarded, matching the daemon, where
 	// the denylist sits outermost.
-	if (!isProductionRendererEvent(event) || isDeniedEvent(event)) return false;
-	if (event === "ao.renderer.api_error" && !sampleApiError()) return false;
+	if (isDeniedEvent(event)) return false;
+	const storageForSample = telemetryStorage();
+	let apiErrorSampleRate: number | undefined;
+	if (event === "ao.renderer.api_error" || event === "ao.v2.renderer.api_error") {
+		const decision = shouldReportRepeatingError(storageForSample ?? memorySampleStorage(), event, properties ?? {}, Date.now());
+		if (!decision.report) return false;
+		apiErrorSampleRate = decision.sampleRate;
+	}
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
 	if (event === "ao.renderer.route_viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
@@ -1241,13 +1284,16 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 		if (storage) {
 			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
 			if (!decision.emit) return false;
-			Object.assign(sanitizedProperties, decision.extra);
 			releaseUpdateFailureClaim = decision.rollback;
+			if (decision.daily) {
+				posthog.capture(postHogEventName(event), withTelemetryContext(await sanitizeRendererProperties(event, decision.daily)));
+			}
+			if (!decision.streak) return true;
 		}
 	}
 	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
 	const safeProperties = withTelemetryContext(sanitizedProperties);
-	if (event === "ao.renderer.api_error") safeProperties.sample_rate = API_ERROR_SAMPLE_RATE;
+	if (apiErrorSampleRate !== undefined) safeProperties.sample_rate = apiErrorSampleRate;
 	let captured = false;
 	try {
 		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));

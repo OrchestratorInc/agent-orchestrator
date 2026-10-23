@@ -61,6 +61,12 @@ func TestDailySummaryOneEventPerInstallDay(t *testing.T) {
 	if got.Payload["day"] != "2026-10-20" {
 		t.Fatalf("day = %#v", got.Payload["day"])
 	}
+	if got.Payload["error_counts"] != "usage=4" {
+		t.Fatalf("error_counts = %#v", got.Payload["error_counts"])
+	}
+	if !got.OccurredAt.Equal(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("occurred = %s, want end of summarized day", got.OccurredAt)
+	}
 
 	restarted.Emit(context.Background(), usageEvent(next.Add(time.Hour), "ao preview"))
 	if len(rec.events) != 1 {

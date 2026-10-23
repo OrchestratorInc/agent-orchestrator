@@ -36,16 +36,6 @@ var remoteEventNameAliases = map[string]string{
 	"ao.renderer.daemon_failure": "ao.v2.renderer.daemon_failure",
 }
 
-// The remote product sink accepts only AO's event namespace. Local telemetry
-// remains unrestricted for diagnostics. SDK identity operations do not pass
-// through this sink.
-func isProductionTelemetryName(name string) bool {
-	if !strings.HasPrefix(name, "ao.") || name == "ao.unset_test" {
-		return false
-	}
-	return !strings.HasSuffix(name, ".heartbeat_stale") && !strings.HasSuffix(name, ".nudged")
-}
-
 var remoteCommandTokens = map[string]struct{}{
 	"add":              {},
 	"agent":            {},
@@ -125,8 +115,8 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		// stripped before it ever reaches PostHog.
 		"count":          {},
 		"command_counts": {},
+		"error_counts":   {},
 		"day":            {},
-		"sample_rate":    {},
 		"window_start":   {},
 		"window_end":     {},
 	},
@@ -332,9 +322,6 @@ func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.Expor
 // nothing, so the stream stops the moment the user flips the switch.
 func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 	if s.suppressed() {
-		return
-	}
-	if !isProductionTelemetryName(ev.Name) {
 		return
 	}
 	s.queueMu.RLock()

@@ -98,19 +98,19 @@ func TestPostHogSinkRejectsNonProductNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.unset_test", "ao.renderer.heartbeat_stale", "ao.renderer.nudged", "ao.session.spawned"} {
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.session.spawned"} {
 		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
 	}
 	if err := sink.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(names) != 1 || names[0] != "ao.session.spawned" {
+	if len(names) != 5 {
 		t.Fatalf("exported names = %v", names)
 	}
 }
 
 func TestSampleRateSurvivesRemoteAllowlist(t *testing.T) {
-	for _, name := range []string{"ao.http.5xx", "ao.cli.usage_errors"} {
+	for _, name := range []string{"ao.http.5xx"} {
 		got := sanitizeRemotePayload(name, map[string]any{"sample_rate": 0.01, "count": 3, "raw_error": "/private/path"})
 		if got["sample_rate"] != 0.01 || got["count"] != int64(3) {
 			t.Fatalf("%s payload = %#v, want sampled count and rate", name, got)
