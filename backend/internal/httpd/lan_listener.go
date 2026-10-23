@@ -60,7 +60,8 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // the telemetry routes under /internal/, and the Connect Mobile control
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
 // host-mutating installer routes under /api/v1/system/install, desktop control
-// through Cua Driver under /api/v1/computer-use, and personal
+// through Cua Driver under /api/v1/computer-use and the switch that hands it to
+// new chat sessions at /api/v1/settings/computer-use, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
 // /api/v1/agents/codex/account-switches, and agent accounts under
 // /api/v1/agents/accounts (the harmless read-only Codex model
@@ -81,6 +82,7 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/side-chats/launch",
 	"/api/v1/system/install",
 	"/api/v1/computer-use",
+	"/api/v1/settings/computer-use",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
 	"/api/v1/agents/accounts",
