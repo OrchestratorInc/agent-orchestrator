@@ -140,11 +140,6 @@ jobs:
       - name: Typecheck E2E suite
         run: npm run typecheck:e2e
 
-      - name: Run vitest suite
-        env:
-          AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
-        run: npx vitest run
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -166,6 +161,11 @@ jobs:
         working-directory: backend
         run: |
           AO_MOBILE_CONTROL_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestMobileControlOriginElectron$' ./internal/httpd
+
+      - name: Run vitest suite
+        env:
+          AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
+        run: npx vitest run
 
       - name: Run guarded-navigation browser integration
         run: npm run test:browser-postcondition-integration
