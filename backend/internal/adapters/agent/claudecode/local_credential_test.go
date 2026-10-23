@@ -16,7 +16,7 @@ import (
 const testSetupToken = "sk-ant-oat01-local-setup-token"
 
 // withSavedSetupToken isolates Claude's native credential sources and saves a
-// setup-token under a fresh AO data directory.
+// setup-token login under a fresh AO data directory.
 func withSavedSetupToken(t *testing.T) string {
 	t.Helper()
 	clearClaudeCredentialEnv(t)
@@ -29,41 +29,64 @@ func withSavedSetupToken(t *testing.T) string {
 	return dataDir
 }
 
-func TestAugmentRuntimeEnvInjectsSavedTokenWithoutNativeLogin(t *testing.T) {
-	dataDir := withSavedSetupToken(t)
-	env := map[string]string{}
-	(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
-	if env["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
-		t.Fatal("saved setup token was not injected for a machine with no native login")
-	}
-}
-
-func TestAugmentRuntimeEnvDefersToNativeCredentials(t *testing.T) {
+// Choosing the setup token in AO's login menu is an explicit sign-in, so it
+// signs sessions in even when Claude Code has a login of its own.
+func TestAugmentRuntimeEnvSignsInWithChosenSetupToken(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		setup func(t *testing.T, env map[string]string)
+		setup func(t *testing.T)
 	}{
-		{"process environment", func(t *testing.T, _ map[string]string) {
+		{"no other login", func(*testing.T) {}},
+		{"native credential in the daemon environment", func(t *testing.T) {
 			t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-native")
 		}},
-		{"Claude settings env", func(t *testing.T, _ map[string]string) {
+		{"native credential in Claude settings", func(t *testing.T) {
 			writeClaudeAuthSettings(t, filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "settings.json"), map[string]string{
 				"ANTHROPIC_API_KEY": "sk-ant-api03-from-settings",
 			})
 		}},
-		{"account config folder", func(_ *testing.T, env map[string]string) {
-			env[claudeConfigDirEnv] = "/accounts/work"
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := withSavedSetupToken(t)
+			tc.setup(t)
 			env := map[string]string{}
-			tc.setup(t, env)
 			(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
-			if _, injected := env["CLAUDE_CODE_OAUTH_TOKEN"]; injected {
-				t.Fatal("saved setup token shadowed a native Claude credential")
+			if env["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
+				t.Fatal("the chosen setup token was not used to sign in")
 			}
 		})
+	}
+}
+
+func TestAugmentRuntimeEnvKeepsLaunchSpecificCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{"project credential", map[string]string{"ANTHROPIC_API_KEY": "sk-ant-api03-project"}},
+		{"account config folder", map[string]string{claudeConfigDirEnv: "/accounts/work"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := withSavedSetupToken(t)
+			(&Plugin{}).AugmentRuntimeEnv(tc.env, dataDir)
+			if _, injected := tc.env["CLAUDE_CODE_OAUTH_TOKEN"]; injected {
+				t.Fatal("the machine-wide setup token replaced a credential chosen for this launch")
+			}
+		})
+	}
+}
+
+func TestRemoveLocalOAuthTokenForgetsSetupToken(t *testing.T) {
+	dataDir := withSavedSetupToken(t)
+	for range 2 { // a second removal finds nothing and still succeeds
+		if err := RemoveLocalOAuthToken(dataDir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := map[string]string{}
+	(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+	if _, injected := env["CLAUDE_CODE_OAUTH_TOKEN"]; injected {
+		t.Fatal("a removed setup token still signed sessions in")
 	}
 }
 

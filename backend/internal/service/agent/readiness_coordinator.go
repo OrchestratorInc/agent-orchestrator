@@ -607,7 +607,8 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var account domain.AgentAccountIdentity
 	var err error
 	if runtimeChecker, ok := item.Agent.(ports.AgentRuntimeAuthChecker); ok && c.dataDir != "" {
-		// Verify the same credential fallback used by local session launch.
+		// Verify the credential local session launch will use, including a
+		// login AO saved itself (Claude's setup token).
 		status, account, diagnostics, err = runtimeChecker.AuthStatusForRuntime(ctx, c.dataDir)
 	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)

@@ -162,9 +162,9 @@ type AgentAuthDiagnosticsChecker interface {
 	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }
 
-// AgentRuntimeAuthChecker checks sign-in with the credential fallback AO adds
-// when it launches a session from dataDir, so a readiness or switch check
-// agrees with what that session would actually use.
+// AgentRuntimeAuthChecker checks sign-in with the credentials AO adds when it
+// launches a session from dataDir (such as a login AO saved itself), so a
+// readiness or switch check agrees with what that session would actually use.
 type AgentRuntimeAuthChecker interface {
 	AuthStatusForRuntime(ctx context.Context, dataDir string) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }

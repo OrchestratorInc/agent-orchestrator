@@ -178,8 +178,8 @@ func TestSwitchTargetThatMissesItsPromptLeavesTheSessionToTheRollback(t *testing
 
 func ptr(s string) *string { return &s }
 
-// runtimeAuthSwitchTarget is signed in only through AO's launch credential
-// fallback, like Claude Code with a saved setup-token and no native login.
+// runtimeAuthSwitchTarget is signed in only through a login AO saved itself,
+// like Claude Code with a setup-token login and no native login.
 type runtimeAuthSwitchTarget struct {
 	fakeAgent
 	dataDir string
@@ -196,10 +196,10 @@ func (a runtimeAuthSwitchTarget) AuthStatusForRuntime(_ context.Context, dataDir
 	return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{}, nil, nil
 }
 
-func TestPreflightTUISwitchTargetAcceptsRuntimeCredentialFallback(t *testing.T) {
+func TestPreflightTUISwitchTargetAcceptsAOSavedLogin(t *testing.T) {
 	target := runtimeAuthSwitchTarget{dataDir: "/daemon/data"}
 	if err := preflightTUISwitchTarget(context.Background(), domain.HarnessClaudeCode, target, "/daemon/data"); err != nil {
-		t.Fatalf("preflight refused a target signed in through the launch fallback: %v", err)
+		t.Fatalf("preflight refused a target signed in through an AO-saved login: %v", err)
 	}
 	if err := preflightTUISwitchTarget(context.Background(), domain.HarnessClaudeCode, target, ""); !errors.Is(err, ports.ErrAgentAuthRequired) {
 		t.Fatalf("preflight without a data directory = %v, want the native sign-in refusal", err)

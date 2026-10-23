@@ -1,21 +1,18 @@
 package claudecode
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
-// LocalOAuthTokenPath is where AO persists a captured Claude setup-token so the
-// SAME credential authenticates both local sessions and the cloud copy pushed to
-// the control plane ("one login for local + cloud"). It lives under the AO data
-// dir, never the user's ~/.claude. Written by AO's local login menu or desktop
-// provider login; read here at launch.
+// LocalOAuthTokenPath is where AO persists the setup-token a user signs in with
+// through AO's Claude login menu, so the SAME credential authenticates both
+// local sessions and the cloud copy pushed to the control plane ("one login for
+// local + cloud"). It lives under the AO data dir, never the user's ~/.claude.
+// Written by the login menu; read here at launch.
 func LocalOAuthTokenPath(dataDir string) string {
 	return filepath.Join(dataDir, "harnesses", "claude-code", "oauth-token")
 }
@@ -63,43 +60,35 @@ func SaveLocalOAuthToken(dataDir string, token []byte) (err error) {
 	return nil
 }
 
-// HasNativeCredential reports whether Claude Code already has its own
-// first-party credential (environment, Claude settings env, credentials file,
-// or keychain). When it does, AO's saved setup-token is never injected.
-func HasNativeCredential(ctx context.Context, env map[string]string) bool {
-	opts := (agentcreds.ResolveOptions{
-		AllowKeychain: true,
-		CommandEnv:    env,
-	}).WithClaudeSettings(ctx)
-	_, found := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
-	return found
+// RemoveLocalOAuthToken forgets a saved setup-token. AO's other Claude sign-in
+// methods call it so the most recent login is the one sessions use.
+func RemoveLocalOAuthToken(dataDir string) error {
+	if err := os.Remove(LocalOAuthTokenPath(dataDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove saved Claude setup token: %w", err)
+	}
+	return nil
 }
 
-// AugmentRuntimeEnv injects AO's captured setup-token as CLAUDE_CODE_OAUTH_TOKEN
-// for local sessions -- but ONLY when the machine has no native Claude login, so
-// it can NEVER shadow a user's existing keychain / ~/.claude/.credentials.json
-// login (CLAUDE_CODE_OAUTH_TOKEN sits at the top of agentcreds' resolution
-// ladder, so an unconditional inject would beat a healthy native login -- the
-// #5878 stale-credential-wins failure mode).
+// AugmentRuntimeEnv signs local sessions in with the setup-token the user chose
+// in AO's Claude login menu, injected as CLAUDE_CODE_OAUTH_TOKEN. Choosing the
+// token is an explicit login, so it applies even when Claude Code also has its
+// own login; signing in through another menu option removes the token again.
 //
-// The whole method is inert unless the user opted into the unified flow: no
-// captured token on disk -> immediate return, zero change for existing users.
+// The whole method is inert unless the user picked the setup-token login: no
+// token on disk -> immediate return, zero change for existing users.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	// An account launch signs in through its own config folder only.
 	if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(env[claudeConfigDirEnv]) != "" {
 		return
 	}
-	token := readLocalOAuthToken(dataDir)
-	if token == "" {
-		return
+	// A credential set explicitly for this launch (project environment) is
+	// more specific than the machine-wide login.
+	for _, name := range claudeCredentialEnv {
+		if strings.TrimSpace(env[name]) != "" {
+			return
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	// A cheap presence resolve (no network): env vars, Claude settings env,
-	// ~/.claude/.credentials.json, and the keychain. If any native first-party
-	// credential is present, defer to it and do not inject.
-	if HasNativeCredential(ctx, env) {
-		return
+	if token := readLocalOAuthToken(dataDir); token != "" {
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
 	}
-	env["CLAUDE_CODE_OAUTH_TOKEN"] = token
 }

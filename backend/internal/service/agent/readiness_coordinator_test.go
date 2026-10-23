@@ -1278,7 +1278,7 @@ type readinessClaudeTokenAgent struct {
 }
 
 func (a *readinessClaudeTokenAgent) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
-	a.t.Error("readiness used an auth probe without the runtime credential fallback")
+	a.t.Error("readiness used an auth probe without the runtime credentials")
 	return ports.AgentAuthStatusUnauthorized, nil
 }
 
@@ -1289,9 +1289,9 @@ func (a *readinessClaudeTokenAgent) AuthStatusForRuntime(_ context.Context, data
 	return a.status, domain.AgentAccountIdentity{}, []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("setup token probe", "token_probe_completed")}, nil
 }
 
-// The adapter owns the setup-token fallback and native-credential precedence
-// (see claudecode's local credential tests); readiness only has to route the
-// check through it with the daemon's data directory.
+// The adapter owns which credential a launch uses (see claudecode's local
+// credential tests); readiness only has to route the check through it with the
+// daemon's data directory.
 func TestReadinessChecksAuthenticationWithRuntimeCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

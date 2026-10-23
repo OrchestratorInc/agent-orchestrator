@@ -281,9 +281,8 @@ func (m *Manager) confirmTUISwitchTargetAlive(ctx context.Context, rec domain.Se
 // preflightTUISwitchTarget refuses a target with no binary or sign-in while the
 // source still runs, so the user's agent is not stopped for nothing. A probe
 // that cannot answer does not block: the launch itself still validates.
-// The sign-in check includes the credential fallback the relaunch will get, so
-// a harness signed in only through AO (Claude's saved setup-token) can be a
-// target.
+// The sign-in check uses the credentials the relaunch will get, so a harness
+// signed in through AO itself (Claude's setup-token login) can be a target.
 func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, target ports.Agent, dataDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

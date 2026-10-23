@@ -113,9 +113,9 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return status, report.account(), steps, err
 }
 
-// AuthStatusForRuntime is AuthStatusWithDiagnostics with the setup-token
-// fallback AugmentRuntimeEnv applies at launch. AO's saved token is not a native
-// CLI login, so without it a token-only machine reads as signed out.
+// AuthStatusForRuntime is AuthStatusWithDiagnostics for the credential a local
+// session launched from dataDir will actually use: with a setup-token login
+// chosen in AO, that token, which the native CLI check alone cannot see.
 func (p *Plugin) AuthStatusForRuntime(ctx context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	env := make(map[string]string)
 	p.AugmentRuntimeEnv(env, dataDir)

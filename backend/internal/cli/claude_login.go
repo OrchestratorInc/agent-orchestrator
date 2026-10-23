@@ -7,7 +7,6 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,10 +15,6 @@ import (
 )
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
-
-// claudeHasNativeCredential is replaced in tests so they never read the
-// developer's real Claude login or keychain.
-var claudeHasNativeCredential = claudecode.HasNativeCredential
 
 // newClaudeLoginCommand is an internal, trusted terminal entry point that
 // exposes every login mode supported by Claude Code without accepting raw
@@ -63,18 +58,27 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	case "3":
 		args = append(args, "--sso")
 	case "4":
-		return c.saveClaudeSetupToken(ctx, in, out, style)
+		return c.saveClaudeSetupToken(in, out, style)
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
 	if err := c.deps.RunInteractiveCommand(ctx, claude, args, in, out, stderr); err != nil {
 		return fmt.Errorf("claude login failed: %w", err)
 	}
+	// The newest sign-in wins: a setup token saved earlier would otherwise keep
+	// signing sessions in over the login the user just completed.
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("resolve AO data directory: %w", err)
+	}
+	if err := claudecode.RemoveLocalOAuthToken(cfg.DataDir); err != nil {
+		return err
+	}
 	_, err = fmt.Fprintf(out, "\n%s\n", style.success("Claude Code sign-in complete."))
 	return err
 }
 
-func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader, out io.Writer, style codexLoginStyle) error {
+func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style codexLoginStyle) error {
 	if _, err := fmt.Fprintf(out, "\nRun claude setup-token in another terminal, then paste its token here.\n%s: ", style.bold("Setup token")); err != nil {
 		return err
 	}
@@ -97,20 +101,11 @@ func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader,
 	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out, style.success("Claude setup token saved for local sessions.")); err != nil {
+	if _, err := fmt.Fprintln(out, style.success("Claude Code will sign in to local sessions with this setup token.")); err != nil {
 		return err
 	}
 	// Name the file so a data directory other than the daemon's is visible.
-	if _, err := fmt.Fprintln(out, style.dim("Saved to "+claudecode.LocalOAuthTokenPath(cfg.DataDir))); err != nil {
-		return err
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	if !claudeHasNativeCredential(checkCtx, nil) {
-		return nil
-	}
-	// AO never injects the token over a native login, so say it is unused.
-	_, err = fmt.Fprintln(out, style.bold("Claude Code is already signed in on this computer, so sessions keep using that login. Sign out of Claude Code (claude auth logout) to use this token instead."))
+	_, err = fmt.Fprintln(out, style.dim("Saved to "+claudecode.LocalOAuthTokenPath(cfg.DataDir)))
 	return err
 }
 
@@ -122,7 +117,7 @@ func writeClaudeLoginMenu(out io.Writer, style codexLoginStyle) error {
 		fmt.Sprintf("  %s  %s  %s", style.accent("1"), style.bold("Claude subscription"), style.success("Recommended")),
 		fmt.Sprintf("  %s  %s %s", style.accent("2"), style.bold("Anthropic Console"), style.dim("· API usage billing")),
 		fmt.Sprintf("  %s  %s %s", style.accent("3"), style.bold("SSO"), style.dim("· Organization sign-in")),
-		fmt.Sprintf("  %s  %s", style.accent("4"), style.bold("Setup token")),
+		fmt.Sprintf("  %s  %s %s", style.accent("4"), style.bold("Setup token"), style.dim("· Token from claude setup-token")),
 		"",
 		style.bold("Enter 1-4 and press Return"),
 		style.dim("Ctrl+C to cancel"),

@@ -6,11 +6,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 )
 
 func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
@@ -25,6 +26,12 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// A setup token from an earlier sign-in must not outrank this one.
+			dataDir := t.TempDir()
+			t.Setenv("AO_DATA_DIR", dataDir)
+			if err := claudecode.SaveLocalOAuthToken(dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
+				t.Fatal(err)
+			}
 			var gotName string
 			var gotArgs []string
 			deps := Deps{
@@ -55,6 +62,9 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 			if !slices.Equal(gotArgs, tt.wantArgs) {
 				t.Errorf("args = %q, want %q", gotArgs, tt.wantArgs)
 			}
+			if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !os.IsNotExist(err) {
+				t.Errorf("earlier setup token survived a new sign-in, stat error = %v", err)
+			}
 		})
 	}
 }
@@ -69,13 +79,6 @@ func TestClaudeLoginMenuListsEverySupportedMethod(t *testing.T) {
 			t.Fatalf("menu missing %q:\n%s", fragment, stdout.String())
 		}
 	}
-}
-
-func stubClaudeNativeCredential(t *testing.T, present bool) {
-	t.Helper()
-	previous := claudeHasNativeCredential
-	claudeHasNativeCredential = func(context.Context, map[string]string) bool { return present }
-	t.Cleanup(func() { claudeHasNativeCredential = previous })
 }
 
 func runClaudeSetupTokenLogin(t *testing.T, token string) string {
@@ -103,10 +106,9 @@ func runClaudeSetupTokenLogin(t *testing.T, token string) string {
 func TestClaudeLoginSavesSetupTokenForLocalSessions(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AO_DATA_DIR", dataDir)
-	stubClaudeNativeCredential(t, false)
 	const token = "sk-ant-oat01-local-setup-token"
 	output := runClaudeSetupTokenLogin(t, token)
-	path := filepath.Join(dataDir, "harnesses", "claude-code", "oauth-token")
+	path := claudecode.LocalOAuthTokenPath(dataDir)
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != token {
 		t.Fatalf("saved setup token = %q, err = %v", got, err)
@@ -123,18 +125,6 @@ func TestClaudeLoginSavesSetupTokenForLocalSessions(t *testing.T) {
 	}
 	if !strings.Contains(output, path) {
 		t.Fatalf("output does not name the saved file %q:\n%s", path, output)
-	}
-	if strings.Contains(output, "already signed in") {
-		t.Fatalf("warned about a native login that does not exist:\n%s", output)
-	}
-}
-
-func TestClaudeLoginWarnsWhenNativeLoginKeepsPrecedence(t *testing.T) {
-	t.Setenv("AO_DATA_DIR", t.TempDir())
-	stubClaudeNativeCredential(t, true)
-	output := runClaudeSetupTokenLogin(t, "sk-ant-oat01-local-setup-token")
-	if !strings.Contains(output, "already signed in") {
-		t.Fatalf("missing native-login precedence warning:\n%s", output)
 	}
 }
 
@@ -153,7 +143,7 @@ func TestClaudeLoginRejectsInvalidSetupToken(t *testing.T) {
 	if err := cmd.Execute(); err == nil || ExitCode(err) != 2 {
 		t.Fatalf("Execute error = %v, want usage error", err)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "harnesses", "claude-code", "oauth-token")); !os.IsNotExist(err) {
+	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !os.IsNotExist(err) {
 		t.Fatalf("invalid token must not be saved, stat error = %v", err)
 	}
 }
