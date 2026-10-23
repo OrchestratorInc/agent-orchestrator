@@ -150,6 +150,20 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: /team/i })).not.toBeInTheDocument();
 	});
 
+	it("filters project sections and recents together, then clears both filters", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Filter by project" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Scratchpad" }));
+		expect(screen.queryByRole("region", { name: "agent-orchestrator" })).not.toBeInTheDocument();
+		expect(within(screen.getByRole("region", { name: "Recent" })).getAllByRole("listitem")).toHaveLength(1);
+		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "no such thing");
+		await user.click(screen.getByRole("button", { name: "Clear filters" }));
+		expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toHaveValue("");
+		expect(screen.getByRole("region", { name: "agent-orchestrator" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Filter by project" })).toHaveTextContent("All projects");
+	});
+
 	it("searches by file name and session title, then clears filters", async () => {
 		const user = userEvent.setup();
 		renderView();

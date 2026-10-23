@@ -23,7 +23,16 @@ import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 import { Button } from "./ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -41,13 +50,14 @@ export function ArtifactsView() {
 	const workspaces = workspaceQuery.data;
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
 	const [query, setQuery] = useState("");
+	const [projectId, setProjectId] = useState("");
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
 	const scratchpadName = t("standalone.workspaceName");
 	const visibleGroups = useMemo(
-		() => filterArtifactGroups(groups, query, "", scratchpadName),
-		[groups, query, scratchpadName],
+		() => filterArtifactGroups(groups, query, projectId, scratchpadName),
+		[groups, query, projectId, scratchpadName],
 	);
 	const hasArtifacts = artifactCount(groups) > 0;
 	const cards = useMemo(
@@ -69,6 +79,7 @@ export function ArtifactsView() {
 	const createArtifact = useCreateArtifactSession();
 	const clearFilters = () => {
 		setQuery("");
+		setProjectId("");
 	};
 
 	return (
@@ -95,6 +106,22 @@ export function ArtifactsView() {
 								value={query}
 							/>
 						</label>
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
+									<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
+									<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
+									<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
+								</TopbarButton>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
+								<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
+									<DropdownMenuRadioItem value="">{t("artifacts.allProjects")}</DropdownMenuRadioItem>
+									<DropdownMenuSeparator />
+									{groups.map((group) => <DropdownMenuRadioItem key={group.id} value={group.id}>{group.isScratchpad ? scratchpadName : group.name}</DropdownMenuRadioItem>)}
+								</DropdownMenuRadioGroup>
+							</DropdownMenuContent>
+						</DropdownMenu>
 						<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
 							{([
 								{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
