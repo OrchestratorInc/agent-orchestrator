@@ -370,6 +370,34 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 	}
 }
 
+func TestBoundInstallKeepsAnonymousDistinctIDAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.SetCloudUserID(context.Background(), "user_A"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Startup events can export before the desktop restores the Cloud user.
+	second, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := second.Snapshot().DistinctID()
+	if want == first.InstallID() {
+		t.Fatal("bound install reused the install ID before Cloud identity was restored")
+	}
+	third, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := third.Snapshot().DistinctID(); got != want {
+		t.Fatalf("anonymous distinct ID changed across restart: got %q, want %q", got, want)
+	}
+}
+
 func TestOptOutSinkKeepsOptedOutEventsOutOfAggregateBuckets(t *testing.T) {
 	rec := &syncRecordingSink{}
 	agg := NewAggregatingSink(rec, []string{"ao.http.5xx"}, time.Hour)

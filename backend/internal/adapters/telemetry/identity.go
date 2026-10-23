@@ -71,8 +71,11 @@ func NewIdentity(dataDir string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bound != "" {
+	if bound != "" && anon == id {
 		anon = "anon_" + uuid.NewString()
+		if err := writeFileAtomic(filepath.Join(dataDir, anonymousIDFile), []byte(anon+"\n")); err != nil {
+			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
+		}
 	}
 	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
 }
