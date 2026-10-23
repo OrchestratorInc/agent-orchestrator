@@ -259,7 +259,7 @@ func TestLiveFrameCarriesTheComposer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"type":"session.live","viewers":[],"composer":{"holder":{"userId":"user-1","name":"Alice"},"epoch":3,"waitlist":[],"draft":null},"canTakeOver":false,"you":""}`
+	want := `{"type":"session.live","viewers":[],"composer":{"holder":{"userId":"user-1","name":"Alice"},"epoch":3,"waitlist":[],"draft":null},"canTakeOver":false,"you":"","chatSettings":{},"canConfigure":false}`
 	if string(payload) != want {
 		t.Fatalf("frame = %s\nwant    %s", payload, want)
 	}
@@ -293,5 +293,67 @@ func TestComposerDraftReachesTheLiveFrame(t *testing.T) {
 	}
 	if recorder := composerRequest(t, composerRouter(&composerTestStore{}), http.MethodPost, "/composer/draft", `{"text":"no grant"}`); recorder.Code != http.StatusBadRequest {
 		t.Fatalf("draft without an epoch: status %d", recorder.Code)
+	}
+}
+
+type chatSettingsTestStore struct {
+	Store
+	got domain.ChatTurnSettings
+	err error
+}
+
+func (s *chatSettingsTestStore) SetSessionChatSettings(_ context.Context, _ domain.Principal, _, _ string, settings domain.ChatTurnSettings) (domain.ChatTurnSettings, error) {
+	s.got = settings
+	return settings, s.err
+}
+
+func chatSettingsRequest(t *testing.T, store Store, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	server := testServer(store)
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, domain.Principal{UserID: composerTestUser})))
+		})
+	})
+	router.Put("/orgs/{orgId}/sessions/{sessionId}/chat-settings", server.setSessionChatSettings)
+	request := httptest.NewRequest(http.MethodPut, "/orgs/"+composerTestOrg+"/sessions/"+composerTestSession+"/chat-settings", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// The owner sets the session's chat settings; they are validated like a
+// message's, and anyone else is refused.
+func TestSetSessionChatSettingsRoute(t *testing.T) {
+	t.Parallel()
+	store := &chatSettingsTestStore{}
+	recorder := chatSettingsRequest(t, store, `{"model":"opus","reasoningEffort":"high","approvalMode":"auto"}`)
+	if recorder.Code != http.StatusOK || store.got != (domain.ChatTurnSettings{Model: "opus", ReasoningEffort: "high", ApprovalMode: "auto"}) {
+		t.Fatalf("status %d, stored %+v", recorder.Code, store.got)
+	}
+	if !strings.Contains(recorder.Body.String(), `"chatSettings":{"model":"opus","reasoningEffort":"high","approvalMode":"auto"}`) {
+		t.Fatalf("body = %s", recorder.Body)
+	}
+	if recorder := chatSettingsRequest(t, &chatSettingsTestStore{}, `{"reasoningEffort":"enormous"}`); recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid effort: status %d", recorder.Code)
+	}
+	if recorder := chatSettingsRequest(t, &chatSettingsTestStore{err: postgres.ErrForbidden}, `{"model":"opus"}`); recorder.Code != http.StatusForbidden {
+		t.Fatalf("a guest changing the model: status %d", recorder.Code)
+	}
+}
+
+// Live frames carry the owner's settings and whether this person may change them.
+func TestLiveFrameCarriesTheSessionChatSettings(t *testing.T) {
+	t.Parallel()
+	payload, err := json.Marshal(toSessionLiveResponse(domain.SessionLiveState{
+		ChatSettings: domain.ChatTurnSettings{Model: "opus", ReasoningEffort: "high"}, CanConfigure: true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"chatSettings":{"model":"opus","reasoningEffort":"high"},"canConfigure":true`) {
+		t.Fatalf("frame = %s", payload)
 	}
 }

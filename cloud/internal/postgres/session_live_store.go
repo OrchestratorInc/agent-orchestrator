@@ -83,7 +83,11 @@ func (s *Store) SessionLiveState(
 		if state.Composer, err = composerStateTx(ctx, tx, orgID, sessionID); err != nil {
 			return err
 		}
-		state.CanTakeOver, err = mayTakeOverComposerTx(ctx, tx, orgID, sessionID, principal.UserID)
+		if state.CanTakeOver, err = mayManageSessionTx(ctx, tx, orgID, sessionID, principal.UserID); err != nil {
+			return err
+		}
+		state.CanConfigure = state.CanTakeOver
+		state.ChatSettings, err = sessionChatSettingsTx(ctx, tx, orgID, sessionID)
 		return err
 	})
 	return state, err

@@ -50,4 +50,9 @@ type SessionLiveState struct {
 	// CanTakeOver reports whether the person reading the state may take the
 	// composer lease from its holder.
 	CanTakeOver bool
+	// ChatSettings is what the session's turns run with, set by its owner.
+	ChatSettings ChatTurnSettings
+	// CanConfigure reports whether the person reading the state may change
+	// ChatSettings: the session's owner may, everyone else only sees them.
+	CanConfigure bool
 }

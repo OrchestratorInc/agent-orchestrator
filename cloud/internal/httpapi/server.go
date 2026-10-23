@@ -618,6 +618,7 @@ func New(options Options) *Server {
 			router.Delete("/sessions/{sessionId}/composer/queue", server.leaveComposerQueue)
 			router.Post("/sessions/{sessionId}/composer/takeover", server.takeOverComposerLease)
 			router.Post("/sessions/{sessionId}/composer/draft", server.publishComposerDraft)
+			router.Put("/sessions/{sessionId}/chat-settings", server.setSessionChatSettings)
 			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)

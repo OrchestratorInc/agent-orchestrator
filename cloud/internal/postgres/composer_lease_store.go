@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -435,7 +436,7 @@ func (s *Store) LeaveComposerQueue(ctx context.Context, principal domain.Princip
 // the session's creator and the organization's owners and admins may.
 func (s *Store) TakeOverComposerLease(ctx context.Context, principal domain.Principal, orgID, sessionID string) (domain.ComposerLease, error) {
 	return s.composerOperation(ctx, principal, orgID, sessionID, func(tx pgx.Tx, lease *composerLease) error {
-		allowed, err := mayTakeOverComposerTx(ctx, tx, orgID, sessionID, principal.UserID)
+		allowed, err := mayManageSessionTx(ctx, tx, orgID, sessionID, principal.UserID)
 		if err != nil {
 			return err
 		}
@@ -451,10 +452,10 @@ func (s *Store) TakeOverComposerLease(ctx context.Context, principal domain.Prin
 	})
 }
 
-// mayTakeOverComposerTx reports whether userID may take the composer lease
-// from its holder: the session's creator and the organization's owners and
-// admins may.
-func mayTakeOverComposerTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, userID string) (bool, error) {
+// mayManageSessionTx reports whether userID manages the session: its
+// creator, or an owner or admin of its organization. Managers may take the
+// composer lease from its holder and set the session's chat settings.
+func mayManageSessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, userID string) (bool, error) {
 	var allowed bool
 	err := tx.QueryRow(ctx,
 		`SELECT session.created_by_user_id = $3::uuid OR EXISTS (
@@ -600,4 +601,71 @@ func (s *Store) ComposerTerminalInput(ctx context.Context, orgID, sessionID, use
 		return lease.save(ctx, tx)
 	})
 	return allowed, err
+}
+
+// sessionChatSettingsTx reads the chat settings the session's owner set.
+func sessionChatSettingsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (domain.ChatTurnSettings, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx,
+		`SELECT chat_settings FROM ao_sessions WHERE org_id = $1 AND id = $2`,
+		orgID, sessionID,
+	).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ChatTurnSettings{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ChatTurnSettings{}, err
+	}
+	var settings domain.ChatTurnSettings
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return domain.ChatTurnSettings{}, err
+	}
+	return settings, nil
+}
+
+// SetSessionChatSettings records the chat settings the session's turns run
+// with. Only the session's owner may (see mayManageSessionTx); everyone else
+// in a shared session sees them and their turns use them.
+func (s *Store) SetSessionChatSettings(ctx context.Context, principal domain.Principal, orgID, sessionID string, settings domain.ChatTurnSettings) (domain.ChatTurnSettings, error) {
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return ErrForbidden
+		}
+		manager, err := mayManageSessionTx(ctx, tx, orgID, sessionID, principal.UserID)
+		if err != nil {
+			return err
+		}
+		if !manager {
+			return ErrForbidden
+		}
+		raw, err := json.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx,
+			`UPDATE ao_sessions SET chat_settings = $3 WHERE org_id = $1 AND id = $2`,
+			orgID, sessionID, raw,
+		)
+		return err
+	})
+	return settings, err
+}
+
+// turnSettingsForSenderTx decides the settings a person's message runs with.
+// The session's owner sends with their own choice. Anyone else gets the
+// settings the owner set, or, while the owner has set none, their own choice
+// only if they belong to the organization: a share guest never picks.
+func turnSettingsForSenderTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, userID string, access sessionAccess, requested domain.ChatTurnSettings) (domain.ChatTurnSettings, error) {
+	manager, err := mayManageSessionTx(ctx, tx, orgID, sessionID, userID)
+	if err != nil || manager {
+		return requested, err
+	}
+	stored, err := sessionChatSettingsTx(ctx, tx, orgID, sessionID)
+	if err != nil {
+		return domain.ChatTurnSettings{}, err
+	}
+	if stored != (domain.ChatTurnSettings{}) || access.Role != "member" {
+		return stored, nil
+	}
+	return requested, nil
 }

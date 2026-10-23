@@ -1051,6 +1051,33 @@ paths:
                 $ref: "#/components/schemas/ComposerLeaseAnswer"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-settings:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    put:
+      operationId: sessionSetChatSettings
+      tags: [Sessions]
+      description: Set the model, reasoning effort, mode and approval mode the session's turns run with. Only the session's owner may; everyone else gets 403 and sees the change on their live stream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionChatSettings"
+      responses:
+        "200":
+          description: The session's chat settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chatSettings]
+                properties:
+                  chatSettings:
+                    $ref: "#/components/schemas/SessionChatSettings"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -5790,10 +5817,15 @@ components:
       type: object
       additionalProperties: false
       description: Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log.
-      required: [type, viewers, composer, canTakeOver, you]
+      required: [type, viewers, composer, canTakeOver, you, chatSettings, canConfigure]
       properties:
         type:
           const: session.live
+        chatSettings:
+          $ref: "#/components/schemas/SessionChatSettings"
+        canConfigure:
+          type: boolean
+          description: Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings).
         you:
           type: string
           format: uuid
@@ -5808,6 +5840,22 @@ components:
             $ref: "#/components/schemas/SessionViewer"
         composer:
           $ref: "#/components/schemas/ComposerLeaseState"
+    SessionChatSettings:
+      type: object
+      additionalProperties: false
+      description: The settings a session's turns run with, set by its owner (its creator, or an organization owner or admin). Everyone else's messages run with them whatever they ask for. Empty fields mean the defaults.
+      properties:
+        model:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          $ref: "#/components/schemas/SessionMode"
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
     ComposerParticipant:
       type: object
       additionalProperties: false

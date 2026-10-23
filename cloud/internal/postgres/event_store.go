@@ -97,6 +97,11 @@ func (s *Store) SendMessageWithLease(
 			if err := claimComposerForSendTx(ctx, tx, orgID, sessionID, principal.UserID, composerEpoch); err != nil {
 				return err
 			}
+			// The session's owner sets the model and its settings; anyone else's
+			// message runs with theirs.
+			if settings, err = turnSettingsForSenderTx(ctx, tx, orgID, sessionID, principal.UserID, access, settings); err != nil {
+				return err
+			}
 		}
 		// A message wakes a paused session, which a billed session may do
 		// only within its plan: refuse it here so the sender sees why.

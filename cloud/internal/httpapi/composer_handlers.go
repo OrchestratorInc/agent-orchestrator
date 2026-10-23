@@ -156,3 +156,43 @@ func (s *Server) publishComposerDraft(w http.ResponseWriter, r *http.Request) {
 		return store.PublishComposerDraft(r.Context(), principal, orgID, sessionID, request.Epoch, request.Text, request.Cursor)
 	})
 }
+
+// sessionChatSettingsStore is the store surface for the session's owner-set
+// chat settings.
+type sessionChatSettingsStore interface {
+	SetSessionChatSettings(ctx context.Context, principal domain.Principal, orgID, sessionID string, settings domain.ChatTurnSettings) (domain.ChatTurnSettings, error)
+}
+
+// setSessionChatSettings sets the model, reasoning effort, mode and approval
+// mode a session's turns run with. Only its owner may; everyone else in a
+// shared session sees the change on their live stream.
+func (s *Server) setSessionChatSettings(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	var request chatSettingsResponse
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
+		return
+	}
+	if err := validateChatTurnSettings(request.Model, request.ReasoningEffort, request.Mode, request.ApprovalMode); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
+	store, ok := s.store.(sessionChatSettingsStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Session chat settings are not available.")
+		return
+	}
+	settings, err := store.SetSessionChatSettings(r.Context(), principalFrom(r), orgID, sessionID, domain.ChatTurnSettings{
+		Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode,
+	})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chatSettings": toChatSettingsResponse(settings)})
+}

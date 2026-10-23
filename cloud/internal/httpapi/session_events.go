@@ -87,14 +87,31 @@ type sessionLiveResponse struct {
 	// You is the user this stream is authenticated as, so a client compares
 	// against the identity the server acts on, not one it remembers.
 	You string `json:"you"`
+	// ChatSettings is what the session's turns run with, set by its owner;
+	// CanConfigure says whether this person is that owner.
+	ChatSettings chatSettingsResponse `json:"chatSettings"`
+	CanConfigure bool                 `json:"canConfigure"`
+}
+
+type chatSettingsResponse struct {
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	ApprovalMode    string `json:"approvalMode,omitempty"`
+}
+
+func toChatSettingsResponse(settings domain.ChatTurnSettings) chatSettingsResponse {
+	return chatSettingsResponse{Model: settings.Model, ReasoningEffort: settings.ReasoningEffort, Mode: settings.Mode, ApprovalMode: settings.ApprovalMode}
 }
 
 func toSessionLiveResponse(state domain.SessionLiveState) sessionLiveResponse {
 	response := sessionLiveResponse{
-		Type:        "session.live",
-		Viewers:     make([]sessionViewerResponse, 0, len(state.Viewers)),
-		Composer:    toComposerLiveResponse(state.Composer),
-		CanTakeOver: state.CanTakeOver,
+		Type:         "session.live",
+		Viewers:      make([]sessionViewerResponse, 0, len(state.Viewers)),
+		Composer:     toComposerLiveResponse(state.Composer),
+		CanTakeOver:  state.CanTakeOver,
+		ChatSettings: toChatSettingsResponse(state.ChatSettings),
+		CanConfigure: state.CanConfigure,
 	}
 	for _, viewer := range state.Viewers {
 		response.Viewers = append(response.Viewers, sessionViewerResponse{UserID: viewer.UserID, Name: viewer.Name, Role: viewer.Role})
