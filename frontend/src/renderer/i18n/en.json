@@ -3685,6 +3685,8 @@
 	"settings.harness.troubleshoot.noHelper": "No supported helper is ready. Sign in to Codex or Claude Code and refresh its Health checks, or copy the prompt to an agent you can run outside AO.",
 	"settings.harness.troubleshoot.disclosure": "Starting sends the reviewed diagnostics to your selected agent provider. Account identities, paths, credentials, raw errors and installer output are excluded. The helper runs with Accept Edits permissions in a standalone workspace. Review requests for commands and broader changes in the terminal.",
 	"settings.harness.troubleshoot.start": "Troubleshoot with agent",
+	"settings.harness.troubleshoot.retryLaunch": "Retry helper launch",
+	"settings.harness.troubleshoot.pendingLaunch": "Launch outcome unknown. Retry the original helper and prompt to reconnect safely.",
 	"settings.harness.troubleshoot.stop": "Stop helper",
 	"settings.harness.troubleshoot.stopped": "Helper stopped",
 	"settings.harness.troubleshoot.sessionLifetime": "The helper remains a standalone task when you leave Settings. Stop it here or open it from the task list. Click Verify again after repairs; helper messages do not update harness health.",
