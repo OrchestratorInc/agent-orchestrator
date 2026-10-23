@@ -2610,7 +2610,6 @@
 	"settings.harness.usingApiKey": "正在使用 API 密钥",
 	"settings.harness.signedInWithAccount": "已使用账户登录",
 	"settings.harness.usingToken": "正在使用令牌",
-	"settings.harness.configured": "Connected",
 	"settings.harness.loginUnknown": "Login status unavailable",
 	"settings.harness.configurationUnknown": "Setup status unavailable",
 	"settings.harness.login": "Login",

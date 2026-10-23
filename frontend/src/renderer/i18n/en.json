@@ -1630,7 +1630,6 @@
 	"settings.harness.usingApiKey": "Using an API key",
 	"settings.harness.signedInWithAccount": "Signed in with an account",
 	"settings.harness.usingToken": "Using a token",
-	"settings.harness.configured": "Connected",
 	"settings.harness.loginUnknown": "Login status unavailable",
 	"settings.harness.configurationUnknown": "Setup status unavailable",
 	"settings.harness.login": "Login",

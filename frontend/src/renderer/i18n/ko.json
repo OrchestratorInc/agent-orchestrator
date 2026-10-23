@@ -2544,7 +2544,6 @@
 	"settings.harness.usingApiKey": "API 키 사용 중",
 	"settings.harness.signedInWithAccount": "계정으로 로그인됨",
 	"settings.harness.usingToken": "토큰 사용 중",
-	"settings.harness.configured": "Connected",
 	"settings.harness.loginUnknown": "Login status unavailable",
 	"settings.harness.configurationUnknown": "Setup status unavailable",
 	"settings.harness.login": "Login",

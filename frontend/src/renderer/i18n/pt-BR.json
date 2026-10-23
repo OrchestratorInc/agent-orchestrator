@@ -2585,7 +2585,6 @@
 	"settings.harness.usingApiKey": "Usando uma chave de API",
 	"settings.harness.signedInWithAccount": "Conectado com uma conta",
 	"settings.harness.usingToken": "Usando um token",
-	"settings.harness.configured": "Connected",
 	"settings.harness.loginUnknown": "Login status unavailable",
 	"settings.harness.configurationUnknown": "Setup status unavailable",
 	"settings.harness.login": "Login",

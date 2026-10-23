@@ -2585,7 +2585,6 @@
 	"settings.harness.usingApiKey": "Avec une clé d’API",
 	"settings.harness.signedInWithAccount": "Connecté avec un compte",
 	"settings.harness.usingToken": "Avec un jeton",
-	"settings.harness.configured": "Connected",
 	"settings.harness.loginUnknown": "Login status unavailable",
 	"settings.harness.configurationUnknown": "Setup status unavailable",
 	"settings.harness.login": "Login",
