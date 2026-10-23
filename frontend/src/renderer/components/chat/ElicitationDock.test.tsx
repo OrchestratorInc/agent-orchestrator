@@ -144,13 +144,11 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		await user.click(screen.getByRole("radio", { name: /Native/ }));
 		await user.type(screen.getByLabelText("Other approach"), "Hybrid");
 		await user.click(screen.getByRole("button", { name: "Next" }));
 		expect(screen.getByRole("group", { name: /Language/ })).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Back" }));
-		expect(screen.getByRole("radio", { name: /Native/ })).toBeChecked();
 		expect(screen.getByLabelText("Other approach")).toHaveValue("Hybrid");
 	});
 
@@ -168,16 +166,13 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
+		// Each question is answered once: by a choice or by its Other field.
 		await user.click(screen.getByRole("radio", { name: /Native/ }));
-		await user.type(screen.getByLabelText("Other approach"), "Hybrid");
 		await user.click(screen.getByRole("button", { name: "Next" }));
-		await user.click(screen.getByRole("radio", { name: "Go" }));
 		await user.type(screen.getByLabelText("Other language"), "Rust");
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 		expect(onResolve).toHaveBeenCalledWith("request-1", "accept", {
 			question_0: "Native",
-			question_0_custom: "Hybrid",
-			question_1: "Go",
 			question_1_custom: "Rust",
 		});
 	});
@@ -283,6 +278,23 @@ describe("ElicitationDock", () => {
 		expect(screen.getAllByRole("radio")[1]).toBeChecked();
 		await user.keyboard("0");
 		expect(screen.getByLabelText("Other approach")).toHaveFocus();
+	});
+
+	it("sends with Enter on a choice and clears Other when a choice is picked", async () => {
+		const user = userEvent.setup();
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		await user.type(screen.getByLabelText("Other approach"), "Something custom");
+		screen.getAllByRole("radio")[0]?.focus();
+		await user.keyboard("1");
+		expect(screen.getByLabelText("Other approach")).toHaveValue("");
+		await user.keyboard("{Enter}");
+		expect(screen.getByLabelText("Other language")).toBeInTheDocument();
 	});
 
 	it("opens an external URL only after the user explicitly consents", async () => {
