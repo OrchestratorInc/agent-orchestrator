@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "请求轮到我",
 	"chat.shared.leaveLine": "离开队列",
 	"chat.shared.takeOver": "接管",
+	"chat.shared.draftOf": "{{name}} 的草稿",
 	"chat.shared.terminalRefused": "其他人正在向智能体输入。请在聊天中请求轮到你后再输入。",
 	"share.open": "共享会话",
 	"share.title": "共享会话",

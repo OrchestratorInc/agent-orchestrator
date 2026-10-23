@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "Anfragen",
 	"chat.shared.leaveLine": "Reihe verlassen",
 	"chat.shared.takeOver": "Übernehmen",
+	"chat.shared.draftOf": "Entwurf von {{name}}",
 	"chat.shared.terminalRefused": "Jemand anderes schreibt gerade an den Agenten. Fordere im Chat eine Runde an, um zu tippen.",
 	"share.open": "Sitzung teilen",
 	"share.title": "Sitzung teilen",

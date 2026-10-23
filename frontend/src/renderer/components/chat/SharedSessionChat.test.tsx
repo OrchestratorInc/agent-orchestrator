@@ -5,7 +5,7 @@ import type { CloudCpClientEvent, CloudCpSessionLive, CloudCpSessionViewer } fro
 import type { ComposerLeaseState } from "../../hooks/useComposerLease";
 import type { WorkspaceSession } from "../../types/workspace";
 import { CloudSessionChatSurface, toSnapshot } from "./CloudSessionChatSurface";
-import { SharedComposerNotice } from "./SharedComposerNotice";
+import { RemoteDraft, SharedComposerNotice } from "./SharedComposerNotice";
 
 const mocks = vi.hoisted(() => ({
 	live: undefined as CloudCpSessionLive | undefined,
@@ -171,5 +171,27 @@ describe("SharedComposerNotice", () => {
 		const status = screen.getByRole("status").textContent ?? "";
 		expect(status).toContain("Your turn to write to the agent");
 		expect(status).toContain("Waiting: Alice");
+	});
+});
+
+describe("RemoteDraft", () => {
+	it("shows the writer's text read-only with their caret and name where they type", () => {
+		render(<RemoteDraft text="fix the flaky test" cursor={7} name="Bob" />);
+		const draft = screen.getByRole("region", { name: "Bob's draft" });
+		expect(draft.textContent).toBe("fix theBob flaky test");
+		const caret = draft.querySelector("[data-remote-caret]");
+		expect(caret?.previousSibling?.textContent ?? draft.firstChild?.textContent).toBe("fix the");
+		expect(draft.querySelector("input, textarea, [contenteditable]")).toBeNull();
+	});
+
+	it("keeps a caret past the end at the end", () => {
+		render(<RemoteDraft text="hi" cursor={99} name="Bob" />);
+		expect(screen.getByRole("region").textContent).toBe("hiBob");
+	});
+
+	it("appears inside the strip while someone else holds the lease and has typed", () => {
+		const state = lease({ locked: true, holder: { userId: "user-alice", name: "Alice" }, remoteDraft: { holder: { userId: "user-alice", name: "Alice" }, text: "deploy it", cursor: 9 } });
+		render(<SharedComposerNotice live={liveState({ holder: { userId: "user-alice", name: "Alice" }, epoch: 3 })} lease={state} userId="user-me" />);
+		expect(screen.getByRole("region", { name: "Alice's draft" }).textContent).toBe("deploy itAlice");
 	});
 });

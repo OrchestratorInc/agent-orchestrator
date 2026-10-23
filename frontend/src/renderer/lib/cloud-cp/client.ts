@@ -399,6 +399,8 @@ export interface CloudCpClient {
 	leaveComposerQueue(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	/** Takes the lease from its holder (session creator, org owners and admins). */
 	takeOverComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Shares the holder's draft and caret live with the session; counts as a keystroke. */
+	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
 	listShareLinks(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ links: CloudCpShareLink[] }>;
 	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions): Promise<void>;
@@ -913,6 +915,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/queue`, { signal: o?.signal }),
 		takeOverComposer: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/takeover`, { signal: o?.signal }),
+		publishComposerDraft: (orgId, sessionId, epoch, text, cursor, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/draft`, { body: { epoch, text, cursor }, signal: o?.signal }),
 		createShareLink: (orgId, projectId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { body, signal: o?.signal }),
 		listShareLinks: (orgId, projectId, o) =>

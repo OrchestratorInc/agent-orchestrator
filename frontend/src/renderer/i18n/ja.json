@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "順番を待つ",
 	"chat.shared.leaveLine": "列を離れる",
 	"chat.shared.takeOver": "引き継ぐ",
+	"chat.shared.draftOf": "{{name}} の下書き",
 	"chat.shared.terminalRefused": "ほかの人がエージェントに書き込み中です。入力するにはチャットで順番を待ってください。",
 	"share.open": "セッションを共有",
 	"share.title": "セッションを共有",

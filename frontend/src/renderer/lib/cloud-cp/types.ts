@@ -1479,6 +1479,14 @@ export interface CloudCpComposerLease {
 	epoch: number;
 	/** Everyone waiting for the lease, first in line first. */
 	waitlist: CloudCpComposerParticipant[];
+	/** What the holder is typing, read-only for everyone else; null while they have typed nothing. */
+	draft?: CloudCpComposerDraft | null;
+}
+
+/** The lease holder's draft; cursor is the caret's offset into text. */
+export interface CloudCpComposerDraft {
+	text: string;
+	cursor: number;
 }
 
 /** Answer to every composer request; a refusal is this answer with `granted` false. */

@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "Pedir a vez",
 	"chat.shared.leaveLine": "Sair da fila",
 	"chat.shared.takeOver": "Assumir",
+	"chat.shared.draftOf": "Rascunho de {{name}}",
 	"chat.shared.terminalRefused": "Outra pessoa está escrevendo para o agente. Peça a vez no chat para digitar.",
 	"share.open": "Compartilhar sessão",
 	"share.title": "Compartilhar sessão",

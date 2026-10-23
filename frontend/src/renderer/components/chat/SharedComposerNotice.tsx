@@ -45,25 +45,58 @@ export function SharedComposerNotice({ live, lease, userId }: {
 
 	return (
 		<div
-			role="status"
 			data-shared-composer-notice
-			className="-mb-2 flex min-w-0 items-center gap-2 rounded-t-(--radius-chat-composer) border-b border-border bg-muted/60 px-3 py-1.5 text-xs"
+			className="-mb-2 flex min-w-0 flex-col rounded-t-(--radius-chat-composer) border-b border-border bg-muted/60 text-xs"
 		>
-			<Users aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-			<p className="min-w-0 flex-1 truncate">
-				<span className="text-foreground">{status}</span>
-				{detail ? <span className="text-muted-foreground"> · {detail}</span> : null}
-				{lease.error ? <span className="text-destructive"> · {lease.error}</span> : null}
-			</p>
-			{canAsk ? (
-				<Button type="button" variant="ghost" size="sm" onClick={lease.requestTurn}>{t("chat.shared.requestTurn")}</Button>
+			<div role="status" className="flex min-w-0 items-center gap-2 px-3 py-1.5">
+				<Users aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+				<p className="min-w-0 flex-1 truncate">
+					<span className="text-foreground">{status}</span>
+					{detail ? <span className="text-muted-foreground"> · {detail}</span> : null}
+					{lease.error ? <span className="text-destructive"> · {lease.error}</span> : null}
+				</p>
+				{canAsk ? (
+					<Button type="button" variant="ghost" size="sm" onClick={lease.requestTurn}>{t("chat.shared.requestTurn")}</Button>
+				) : null}
+				{lease.position ? (
+					<Button type="button" variant="ghost" size="sm" onClick={lease.leaveLine}>{t("chat.shared.leaveLine")}</Button>
+				) : null}
+				{lease.holder && lease.canTakeOver ? (
+					<Button type="button" variant="ghost" size="sm" onClick={lease.takeOver}>{t("chat.shared.takeOver")}</Button>
+				) : null}
+			</div>
+			{lease.remoteDraft ? (
+				<RemoteDraft text={lease.remoteDraft.text} cursor={lease.remoteDraft.cursor} name={lease.remoteDraft.holder.name || someone} />
 			) : null}
-			{lease.position ? (
-				<Button type="button" variant="ghost" size="sm" onClick={lease.leaveLine}>{t("chat.shared.leaveLine")}</Button>
-			) : null}
-			{lease.holder && lease.canTakeOver ? (
-				<Button type="button" variant="ghost" size="sm" onClick={lease.takeOver}>{t("chat.shared.takeOver")}</Button>
-			) : null}
+		</div>
+	);
+}
+
+/**
+ * The lease holder's draft as they type it, read-only, with their caret and
+ * name where they are typing, the way a document editor shows a collaborator.
+ */
+export function RemoteDraft({ text, cursor, name }: { text: string; cursor: number; name: string }) {
+	const { t } = useTranslation();
+	const at = Math.min(Math.max(cursor, 0), text.length);
+	return (
+		<div
+			role="region"
+			aria-label={t("chat.shared.draftOf", { name })}
+			data-remote-draft
+			className="max-h-40 overflow-y-auto px-3 pt-3 pb-2 text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground"
+		>
+			{text.slice(0, at)}
+			<span className="relative inline-block h-[1.15em] w-0 align-text-bottom" data-remote-caret>
+				<span aria-hidden="true" className="absolute inset-y-0 left-0 w-[2px] rounded-full bg-accent motion-safe:animate-pulse" />
+				<span
+					aria-hidden="true"
+					className="absolute bottom-full left-0 mb-0.5 rounded-xs bg-accent px-1 text-[10px] leading-4 font-medium whitespace-nowrap text-accent-foreground"
+				>
+					{name}
+				</span>
+			</span>
+			{text.slice(at)}
 		</div>
 	);
 }

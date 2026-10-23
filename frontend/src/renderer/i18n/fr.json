@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "Demander la main",
 	"chat.shared.leaveLine": "Quitter la file",
 	"chat.shared.takeOver": "Prendre la main",
+	"chat.shared.draftOf": "Brouillon de {{name}}",
 	"chat.shared.terminalRefused": "Quelqu'un d'autre écrit à l'agent. Demandez la main dans le chat pour taper.",
 	"share.open": "Partager la session",
 	"share.title": "Partager la session",

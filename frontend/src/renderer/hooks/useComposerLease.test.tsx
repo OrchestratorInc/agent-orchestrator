@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpComposerAnswer, CloudCpComposerLease, CloudCpSessionLive, CloudCpSessionViewer } from "../lib/cloud-cp";
-import { COMPOSER_RENEW_MS, useComposerLease } from "./useComposerLease";
+import { COMPOSER_DRAFT_PUBLISH_MS, COMPOSER_RENEW_MS, useComposerLease } from "./useComposerLease";
 
 const ME = "user-me";
 const ALICE = { userId: "user-alice", name: "Alice" };
@@ -26,6 +26,7 @@ function fakeClient() {
 		requestComposerTurn: vi.fn(async () => answer(false, 7)),
 		leaveComposerQueue: vi.fn(async () => answer(false, 7)),
 		takeOverComposer: vi.fn(async () => answer(true, 8)),
+		publishComposerDraft: vi.fn(async () => answer(true, 7)),
 	};
 }
 
@@ -145,5 +146,45 @@ describe("useComposerLease", () => {
 		const { result } = render(client, live([me, aliceEditor]));
 		act(() => result.current.noteDraft("h"));
 		await waitFor(() => expect(result.current.error).toBe("offline"));
+	});
+
+	it("shares the holder's draft and caret, gathering quick keystrokes into one update", async () => {
+		const client = fakeClient();
+		const { result } = render(client, live([me, aliceEditor]));
+		act(() => result.current.noteDraft("h", 1));
+		await waitFor(() => expect(result.current.epoch).toBe(7));
+		act(() => result.current.noteDraft("he", 2));
+		act(() => result.current.noteDraft("hel", 3));
+		act(() => result.current.noteDraft("help", 2));
+		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS + 10); });
+		await waitFor(() => expect(client.publishComposerDraft).toHaveBeenLastCalledWith("org-1", "session-1", 7, "help", 2));
+		expect(client.publishComposerDraft.mock.calls.length).toBeLessThanOrEqual(2);
+	});
+
+	it("shares a caret move without a text change", async () => {
+		const client = fakeClient();
+		const { result } = render(client, live([me, aliceEditor]));
+		act(() => result.current.noteDraft("hello", 5));
+		await waitFor(() => expect(result.current.epoch).toBe(7));
+		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS + 10); });
+		act(() => result.current.noteDraft("hello", 1));
+		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS + 10); });
+		await waitFor(() => expect(client.publishComposerDraft).toHaveBeenLastCalledWith("org-1", "session-1", 7, "hello", 1));
+	});
+
+	it("never shares a draft while nobody else is in the session", async () => {
+		const client = fakeClient();
+		const { result } = render(client, live([me]));
+		act(() => result.current.noteDraft("private", 7));
+		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS * 5); });
+		expect(client.publishComposerDraft).not.toHaveBeenCalled();
+	});
+
+	it("shows someone else's draft, but never the person's own", () => {
+		const client = fakeClient();
+		const theirs = render(client, live([me, aliceEditor], { holder: ALICE, epoch: 3, draft: { text: "run the tests", cursor: 4 } }));
+		expect(theirs.result.current.remoteDraft).toEqual({ holder: ALICE, text: "run the tests", cursor: 4 });
+		const mine = render(client, live([me, aliceEditor], { holder: { userId: ME, name: "Me" }, epoch: 3, draft: { text: "mine", cursor: 4 } }));
+		expect(mine.result.current.remoteDraft).toBeUndefined();
 	});
 });

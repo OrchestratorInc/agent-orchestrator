@@ -39,6 +39,7 @@
 	"chat.shared.requestTurn": "차례 요청",
 	"chat.shared.leaveLine": "대기 취소",
 	"chat.shared.takeOver": "가져오기",
+	"chat.shared.draftOf": "{{name}} 님의 초안",
 	"chat.shared.terminalRefused": "다른 사람이 에이전트에게 쓰는 중입니다. 입력하려면 채팅에서 차례를 요청하세요.",
 	"share.open": "세션 공유",
 	"share.title": "세션 공유",
