@@ -15339,6 +15339,7 @@ components:
           - mcp_tool
           - auto_review
           - user_input
+          - ao_action
           type: string
         createdAt:
           type: string

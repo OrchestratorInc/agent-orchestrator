@@ -1097,6 +1097,18 @@ func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectI
 	return conversationToDomain(row), nil
 }
 
+// SessionForActivityProviderItem finds the session holding an action activity.
+func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	sessionID, err := s.qr.SelectSessionForActivityProviderItem(ctx, providerItemID)
+	if errors.Is(err, sql.ErrNoRows) || sessionID == nil {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return *sessionID, true, nil
+}
+
 // ConversationForSession looks up a session's conversation.
 func (s *Store) ConversationForSession(
 	ctx context.Context,
@@ -2834,7 +2846,35 @@ func (s *Store) SettleAssistantMessage(
 	return nil
 }
 
+// ActivityStatusByProviderItem reports the status of one provider item.
+// Missing rows return ok=false.
+func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	row, err := s.qr.SelectConversationActivityByProviderItem(ctx, gen.SelectConversationActivityByProviderItemParams{
+		ConversationID: conversationID,
+		ProviderItemID: providerItemID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return row.Status, true, nil
+}
+
+func aoActionStatusSettled(status domain.ActivityStatus) bool {
+	switch status {
+	case domain.ActivityStatusCompleted, domain.ActivityStatusFailed, domain.ActivityStatusCancelled, domain.ActivityStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // UpsertActivity records or updates a non-message timeline entry.
+// A running ao_action does not replace a completed, failed, cancelled, or
+// resolved row. The admission write and the terminal callback take this lock
+// separately, so the decision uses the row read in this call.
 func (s *Store) UpsertActivity(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -2847,12 +2887,17 @@ func (s *Store) UpsertActivity(
 	detail := string(activity.Detail)
 
 	if activity.ProviderItemID != "" {
-		_, err := q.SelectConversationActivityByProviderItem(ctx,
+		row, err := q.SelectConversationActivityByProviderItem(ctx,
 			gen.SelectConversationActivityByProviderItemParams{
 				ConversationID: conversationID,
 				ProviderItemID: activity.ProviderItemID,
 			})
 		if err == nil {
+			if activity.Kind == domain.ActivityKindAOAction &&
+				activity.Status == domain.ActivityStatusRunning &&
+				aoActionStatusSettled(row.Status) {
+				return nil
+			}
 			if settleErr := q.SettleConversationActivity(ctx,
 				gen.SettleConversationActivityParams{
 					Status:         activity.Status,

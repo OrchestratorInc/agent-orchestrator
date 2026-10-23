@@ -4149,6 +4149,23 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 	return i, err
 }
 
+const selectSessionForActivityProviderItem = `-- name: SelectSessionForActivityProviderItem :one
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1
+`
+
+func (q *Queries) SelectSessionForActivityProviderItem(ctx context.Context, providerItemID string) (*domain.SessionID, error) {
+	row := q.db.QueryRowContext(ctx, selectSessionForActivityProviderItem, providerItemID)
+	var current_session_id *domain.SessionID
+	err := row.Scan(&current_session_id)
+	return current_session_id, err
+}
+
 const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one
 SELECT t.id, t.conversation_id, t.handled_by_session_id, t.provider_turn_id, t.controller_generation, t.state, t.error_message, t.requested_at, t.started_at, t.completed_at, t.diff_json, t.rolled_back_at, t.plan_json, t.branch_id, t.promotion_started_at, t.promoted_to_turn_id, t.retry_of_turn_id, t.handled_by_review_id, t.usage_limit_resets_at, t.usage_limit_auto_resume, t.usage_limit_resume_error FROM conversation_turns t
 JOIN conversations c ON c.id = t.conversation_id

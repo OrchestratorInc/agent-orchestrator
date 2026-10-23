@@ -45,7 +45,8 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 /**
  * `cancelled` means the enclosing turn stopped before the provider completed the
@@ -431,6 +432,25 @@ export interface ArtifactRef {
 }
 
 /**
+ * A daemon-confirmed AO mutation. `action` is the only classifier. Command
+ * text and tool prose never promote an attempt into one of these.
+ */
+export interface AOActionDetail {
+	action?: string;
+	operationId?: string;
+	sourceSessionId?: string;
+	targetSessionId?: string;
+	displayName?: string;
+	previousDisplayName?: string;
+	harness?: string;
+	previousHarness?: string;
+	href?: string;
+	prNumber?: number;
+	prTitle?: string;
+	error?: string;
+}
+
+/**
  * A `system` activity's discriminator and the fields that belong to it.
  *
  * The kind is a general bucket, so the daemon stamps the event rather than leaving
@@ -616,7 +636,8 @@ export interface ConversationActivity {
 		AutoReviewDetail &
 		UserInputDetail &
 		SystemEventDetail &
-		PlanDetail;
+		PlanDetail &
+		AOActionDetail;
 	/**
 	 * The provider's identifier for an approval. Resolving matches on this, so a
 	 * card left on screen cannot answer a request that replaced it.
