@@ -4,6 +4,7 @@ import { buttonVariants } from "fumadocs-ui/components/ui/button";
 import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "fumadocs-ui/components/ui/popover";
 import { useI18n } from "fumadocs-ui/contexts/i18n";
 import type { LanguageSelectProps } from "fumadocs-ui/layouts/shared/slots/language-select";
+import type { ComponentProps } from "react";
 import { msg } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react";
 
@@ -39,11 +40,23 @@ export function LanguageSelect({ className, variant = "ghost", children, ...rest
                 : "text-fd-muted-foreground hover:bg-fd-accent hover:text-fd-accent-foreground"
             }`}
             onClick={() => context.onChange?.(item.locale)}
+            // Each name is in its own language; say so for screen readers.
+            lang={item.locale}
           >
             {item.name}
           </PopoverClose>
         ))}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The current language's name, marked with its own language. */
+export function LanguageSelectText(props: ComponentProps<"span">) {
+  const { locales, locale } = useI18n();
+  return (
+    <span lang={locale} {...props}>
+      {locales?.find((item) => item.locale === locale)?.name}
+    </span>
   );
 }

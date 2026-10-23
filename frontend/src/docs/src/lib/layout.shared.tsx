@@ -1,8 +1,7 @@
 import type { I18n } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
-import { LanguageSelectText } from "fumadocs-ui/layouts/shared/slots/language-select";
-import { LanguageSelect } from "@/components/language-select";
+import { LanguageSelect, LanguageSelectText } from "@/components/language-select";
 import { COMPANY } from "./constants";
 
 export function baseOptions(i18n: I18n): BaseLayoutProps {
