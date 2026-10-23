@@ -99,8 +99,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetMemcode, TargetCodeBuddy,
-	TargetCommandCode, TargetMemcode, TargetHermes,
+	TargetCommandCode, TargetMemcode, TargetCodeBuddy, TargetHermes,
 }
 
 var agentTargetSet = func() map[Target]bool {

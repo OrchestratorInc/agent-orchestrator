@@ -74,7 +74,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		base = filepath.Join(home, ".ao")
 	}
 	base = filepath.Join(base, "auth-probes")
-	if err := os.MkdirAll(base, 0700); err != nil {
+	if err := os.MkdirAll(base, 0o700); err != nil {
 		return finish(fallback, "check_failed", started)
 	}
 	dir, err := os.MkdirTemp(base, "codebuddy-")
@@ -129,7 +129,8 @@ func authProbeEnv() []string {
 				filtered = append(filtered, existing)
 			}
 		}
-		env = append(filtered, binding)
+		filtered = append(filtered, binding)
+		env = filtered
 	}
 	return env
 }
