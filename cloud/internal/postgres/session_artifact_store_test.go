@@ -546,3 +546,53 @@ func TestUserDeletesASessionArtifact(t *testing.T) {
 		t.Fatalf("output type after the last delete = %q, want none", got)
 	}
 }
+
+func TestDeletingAProjectDeletesItsArtifacts(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	report := testArtifact("report.html", 10)
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{report, testArtifact("notes.md", 5)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A newer report replaces the first, and one upload is still open.
+	updated := report
+	updated.Size, updated.VersionID = 11, "v-report-2"
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{updated}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, "orgs/o/sessions/s/draft.md", "v-draft", 3); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ArchiveProject(ctx, principal, fixture.orgID, fixture.projectID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("artifacts after the project was deleted = %+v, %v", listed, err)
+	}
+	var queued, notDue int
+	if err := admin.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE collect_after > now())
+		FROM ao_artifact_object_versions WHERE session_id = $1`,
+		fixture.sessionID).Scan(&queued, &notDue); err != nil {
+		t.Fatal(err)
+	}
+	// report v1 (replaced), report v2, notes.md, and the open draft upload.
+	if queued != 4 || notDue != 0 {
+		t.Fatalf("queued versions = %d, %d not due now; want 4, all due", queued, notDue)
+	}
+	if got := sessionOutputType(t, admin, fixture.sessionID); got != domain.SessionOutputNone {
+		t.Fatalf("output type = %q, want none", got)
+	}
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("late.md", 2)}, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a commit after the project was deleted = %v, want ErrNotFound", err)
+	}
+	// Deleting it again changes nothing and does not fail.
+	if err := store.ArchiveProject(ctx, principal, fixture.orgID, fixture.projectID); err != nil {
+		t.Fatal(err)
+	}
+}
