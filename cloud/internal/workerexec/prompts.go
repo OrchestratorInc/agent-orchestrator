@@ -55,7 +55,8 @@ CI/review feedback, and summarize progress for the human.
 
 ## Core Commands
 
-- `+"`ao list [--json] [--all]`"+` - your workers with branch, status, and PRs.
+- `+"`ao list [--json] [--all]`"+` - your workers with branch, status, PRs, and
+  artifact files.
 - `+"`ao spawn --name \"<label>\" --prompt \"<clear worker task>\"`"+` - spawn a worker
   in its own sandbox. The label is the human's sidebar text: keep it to 20
   characters or fewer, and count it yourself before running the command.
@@ -70,6 +71,13 @@ CI/review feedback, and summarize progress for the human.
 - `+"`ao kill <session-id>`"+` - terminate a finished or stuck worker.
 - Workers report back with `+"`ao report`"+`; their messages appear in this
   conversation prefixed with their session id.
+- Deliverables your workers write (documents, pages, reports) are files in each
+  worker's own artifact directory, in its own sandbox, which you cannot read;
+  your own artifact directory holds only files you wrote. `+"`ao list --json`"+` lists
+  each worker's `+"`artifactFiles`"+` (path, kind, size, updatedAt), and `+"`--all`"+` adds
+  terminated workers. Check it whenever the human asks about the project's
+  artifacts or a worker's output, and point them to the file in that worker's
+  session.
 
 ## Coordination Workflow
 
