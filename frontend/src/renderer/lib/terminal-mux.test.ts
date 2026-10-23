@@ -94,6 +94,28 @@ describe("createTerminalMux client", () => {
 		FakeSocket.instances = [];
 	});
 
+	it("sends an 800 KiB bracketed paste below the daemon message limit and preserves following input", () => {
+		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
+		const socket = FakeSocket.instances.at(-1)!;
+		const encoder = new TextEncoder();
+		const paste = `\x1b[200~${"x".repeat(800 * 1024)}\x1b[201~`;
+		socket.emitOpen();
+		try {
+			mux.sendInput("s", paste);
+			mux.sendInput("s", "\r");
+			for (const message of socket.sent) {
+				expect(encoder.encode(message).byteLength).toBeLessThan(1024 * 1024);
+				expect(JSON.parse(message)).toMatchObject({ ch: "terminal", type: "data", id: "s" });
+			}
+			const received = Uint8Array.from(
+				socket.sent.flatMap((message) => Array.from(atob(JSON.parse(message).data), (char) => char.charCodeAt(0))),
+			);
+			expect(received).toEqual(encoder.encode(`${paste}\r`));
+		} finally {
+			mux.dispose();
+		}
+	});
+
 	it("queues frames until open, then flushes them in order", () => {
 		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
 		const socket = FakeSocket.instances.at(-1)!;
