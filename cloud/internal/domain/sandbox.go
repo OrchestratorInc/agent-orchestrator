@@ -158,4 +158,6 @@ type WorkerLaunch struct {
 	DeniedCommands  []string
 	RepositoryURL   string
 	DefaultBranch   string
+	// RequestedOutput is empty or RequestedOutputArtifact.
+	RequestedOutput string
 }

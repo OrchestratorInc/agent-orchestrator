@@ -2,7 +2,11 @@ import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { BrowserRuntimeState } from "./browser-view-host";
 
-const PROTOCOL_VERSION = 2;
+// v3 answers broker liveness pings. Unlike the supervisor link — where the
+// open socket IS the liveness signal — the browser runtime embeds a
+// third-party automation stack whose host process wedges often enough that an
+// open socket says nothing about responsiveness, so the daemon probes us.
+const PROTOCOL_VERSION = 3;
 const BACKOFF_INIT_MS = 200;
 const BACKOFF_MAX_MS = 2_000;
 const MAX_COMMAND_BYTES = 1 << 20;
@@ -19,6 +23,10 @@ export type BrowserRuntimeCommand = {
 type BrowserRuntimeCancel = {
 	type: "cancel";
 	requestId: string;
+};
+
+type BrowserRuntimePing = {
+	type: "ping";
 };
 
 // The daemon's answer to the hello (backend/internal/browserruntime/broker.go).
@@ -204,9 +212,17 @@ export function connectBrowserRuntime(
 
 	const consumeLine = (line: string, target: net.Socket, epoch: number, handshake: Handshake) => {
 		if (!line.trim()) return;
-		let message: BrowserRuntimeCommand | BrowserRuntimeCancel | BrowserRuntimeHelloReply;
+		let message:
+			| BrowserRuntimeCommand
+			| BrowserRuntimeCancel
+			| BrowserRuntimeHelloReply
+			| BrowserRuntimePing;
 		try {
-			message = JSON.parse(line) as BrowserRuntimeCommand | BrowserRuntimeCancel | BrowserRuntimeHelloReply;
+			message = JSON.parse(line) as
+				| BrowserRuntimeCommand
+				| BrowserRuntimeCancel
+				| BrowserRuntimeHelloReply
+				| BrowserRuntimePing;
 		} catch {
 			return;
 		}
@@ -214,10 +230,18 @@ export function connectBrowserRuntime(
 			handshake.refuse(message.error);
 			return;
 		}
-		// An older daemon never sends hello-ok, but it writes commands only to a
-		// runtime it accepted, so any other frame accepts the link as well.
+		// An older daemon never sends hello-ok, but it writes commands (and pings)
+		// only to a runtime it accepted, so any other frame accepts the link as well.
 		handshake.accept();
 		if (message.type === "hello-ok") return;
+		if (message.type === "ping") {
+			// Liveness is answered outside the per-session command chains so a
+			// wedged operation can never starve the heartbeat.
+			void send({ type: "pong" }, target, epoch).catch(() => {
+				// Socket already torn down; the daemon will observe disconnect.
+			});
+			return;
+		}
 		if (message.type === "cancel" && typeof message.requestId === "string") {
 			commandControllers.get(message.requestId)?.abort();
 			return;

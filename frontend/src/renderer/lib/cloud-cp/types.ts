@@ -72,6 +72,11 @@ export interface CloudCpOffering {
 	 */
 	customCoder?: boolean;
 	/**
+	 * Cloud sessions keep artifact files. When false or absent the artifact
+	 * routes do not exist and requestedOutput "artifact" is refused.
+	 */
+	artifacts?: boolean;
+	/**
 	 * A Coder session run as the dedicated ao-worker user checks out in the
 	 * project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Absent
 	 * from older control planes, which is read as off: a working folder then
@@ -386,6 +391,8 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+	/** "artifact" asks the agent for a file deliverable; needs offering.artifacts. */
+	requestedOutput?: "artifact";
 	/** Interface the session starts in. Omitted, or a harness without Chat, starts in the terminal. */
 	interfaceMode?: CloudCpInterfaceMode;
 	/**
@@ -626,8 +633,39 @@ export interface CloudCpSession {
 	 * worker has connected yet.
 	 */
 	workerEpoch?: number;
+	/** The deliverable the session was created for. */
+	requestedOutput?: "artifact";
+	/** What the session owns. Absent from older control planes. */
+	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
+	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
+	artifactCount?: number;
+	/** When the newest artifact file was committed; changes only when the files do. */
+	artifactsUpdatedAt?: string;
+	/**
+	 * Committed artifact files: on a session read, and filled in by
+	 * useCloudSessionsQuery for a listed session that has any.
+	 */
+	artifactFiles?: CloudCpSessionArtifact[];
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** One committed artifact file of a cloud session. */
+export interface CloudCpSessionArtifact {
+	path: string;
+	name: string;
+	kind: "html" | "markdown" | "file";
+	contentType: string;
+	size: number;
+	sha256: string;
+	updatedAt: string;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
+export interface CloudCpArtifactAccessResponse {
+	/** Control-plane path ending in "/"; append a file's escaped path. */
+	filesPrefix: string;
+	expiresAt: string;
 }
 
 /**

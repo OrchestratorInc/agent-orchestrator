@@ -62,6 +62,9 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["kind"] != "worker" {
 			t.Fatalf("properties.kind = %#v, want worker", props["kind"])
 		}
+		if props["install_id"] != sink.Identity().InstallID() {
+			t.Fatalf("install_id = %#v, want persisted installation id", props["install_id"])
+		}
 		if props["project_id_hash"] == "" || props["session_id_hash"] == "" {
 			t.Fatalf("hashed ids missing from properties: %#v", props)
 		}

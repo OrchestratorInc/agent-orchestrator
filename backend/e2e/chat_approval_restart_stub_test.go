@@ -124,7 +124,7 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 		return ok
 	})
 	approval, _ := before.pendingApproval()
-	if approval.RequestID == "" || len(approval.decisions()) != 2 || len(before.Turns) != 1 || len(before.Activities) != 1 {
+	if approval.RequestID == "" || len(approval.decisions()) != 2 || len(before.Turns) != 1 || len(providerActivities(before)) != 1 {
 		t.Fatalf("invalid pending approval before restart:\n%s", describe(before))
 	}
 	var read struct {
@@ -145,7 +145,7 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 	restarted.awaitLiveController(session, 30*time.Second)
 	after := restarted.conversation(session)
 	replayed, pending := after.pendingApproval()
-	if !pending || replayed.RequestID != approval.RequestID || len(after.Turns) != 1 || len(after.Activities) != 1 ||
+	if !pending || replayed.RequestID != approval.RequestID || len(after.Turns) != 1 || len(providerActivities(after)) != 1 ||
 		after.Turns[0].ID != before.Turns[0].ID || terminal(after.Turns[0].State) {
 		t.Fatalf("pending approval changed across restart:\n%s", describe(after))
 	}
@@ -159,8 +159,9 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 		return len(s.Turns) == 1 && terminal(s.Turns[0].State) &&
 			(s.Turns[0].State != "completed" || contains(s.assistantText(), "approved once"))
 	})
+	resolved := providerActivities(finished)
 	if finished.Turns[0].State != "completed" || !contains(finished.assistantText(), "approved once") ||
-		len(finished.Activities) != 1 || finished.Activities[0].Status != "resolved" {
+		len(resolved) != 1 || resolved[0].Status != "resolved" {
 		t.Fatalf("approved turn failed:\n%s", describe(finished))
 	}
 	if got := persistentHostPID(t, dataDir, session); got != hostPID {
@@ -176,6 +177,17 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 		}
 	}
 	restarted.mustCall("POST", "/sessions/"+session+"/kill", http.StatusOK, nil, nil)
+}
+
+func providerActivities(s snapshot) []activity {
+	out := make([]activity, 0, len(s.Activities))
+	for _, item := range s.Activities {
+		if item.Kind == "ao_action" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // An unacknowledged first task can be retried with the same clientRequestId

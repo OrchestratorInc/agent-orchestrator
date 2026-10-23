@@ -10,10 +10,10 @@ import { sameJson } from "../keepUnchanged";
 import { newlyFinishedSteps } from "./sessionStartup";
 import { STARTUP_POLL_MS } from "./startupPoll";
 
-type ProvisionFields = Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch">;
+type ProvisionFields = Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch" | "branchNaming">;
 
 function provisionFields(session: DashboardSession): ProvisionFields {
-	return { provisionState: session.provisionState, provisionSteps: session.provisionSteps, provisionError: session.provisionError, branch: session.branch };
+	return { provisionState: session.provisionState, provisionSteps: session.provisionSteps, provisionError: session.provisionError, branch: session.branch, branchNaming: session.branchNaming };
 }
 
 /**

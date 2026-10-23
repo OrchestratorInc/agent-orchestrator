@@ -21,6 +21,7 @@ import {
 	commandCategory,
 	isNonzeroCommandExit,
 } from "./activity-command";
+import { aoActionName, summarizeAOActions } from "./activity-action";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
@@ -192,6 +193,9 @@ function activityGroupKey(activity: ConversationActivity): string {
 	if (activity.activityKind === "command") {
 		return `command:${commandCategory(activity.detail?.command ?? activity.summary)}${parentSuffix}`;
 	}
+	if (activity.activityKind === "ao_action") {
+		return `ao_action:${aoActionName(activity) || "unknown"}${parentSuffix}`;
+	}
 	return `${activity.activityKind}${parentSuffix}`;
 }
 
@@ -296,6 +300,7 @@ function summarizeSubgroup(activities: ConversationActivity[]): string {
 	if (first.activityKind === "auto_review") {
 		return `Checked ${activities.length} ${activities.length === 1 ? "decision" : "decisions"}`;
 	}
+	if (first.activityKind === "ao_action") return summarizeAOActions(activities);
 	if (first.activityKind === "plan") return "Updated plan";
 	const category = commandCategory(first.detail?.command ?? first.summary);
 	const verb = category === "read" || category === "search" ? "Explored" : "Ran";
@@ -392,6 +397,7 @@ function nodeRunning(node: ActivityNode): boolean {
 
 function summarize(activities: ConversationActivity[]): string {
 	let toolCalls = 0;
+	let aoActions = 0;
 	let changedFiles = 0;
 	let exploratory = true;
 	let hasPlan = false;
@@ -399,6 +405,11 @@ function summarize(activities: ConversationActivity[]): string {
 	for (const activity of activities) {
 		if (activity.activityKind === "plan") {
 			hasPlan = true;
+			continue;
+		}
+		if (activity.activityKind === "ao_action") {
+			aoActions += 1;
+			exploratory = false;
 			continue;
 		}
 		toolCalls += 1;
@@ -414,12 +425,16 @@ function summarize(activities: ConversationActivity[]): string {
 		}
 	}
 
-	if (toolCalls === 0) return hasPlan ? "Updated plan" : `${activities.length} steps`;
+	if (toolCalls === 0) {
+		if (aoActions > 0) return summarizeAOActions(activities.filter((activity) => activity.activityKind === "ao_action"));
+		return hasPlan ? "Updated plan" : `${activities.length} steps`;
+	}
 	const label = `${exploratory ? "Explored" : "Ran"} ${toolCalls} ${toolCalls === 1 ? "tool call" : "tool calls"}`;
 	const details = [
 		changedFiles > 0
 			? `${changedFiles} ${changedFiles === 1 ? "file changed" : "files changed"}`
 			: undefined,
+		aoActions > 0 ? summarizeAOActions(activities.filter((activity) => activity.activityKind === "ao_action")) : undefined,
 		hasPlan ? "updated plan" : undefined,
 	].filter(Boolean);
 	return details.length ? `${label} · ${details.join(" · ")}` : label;

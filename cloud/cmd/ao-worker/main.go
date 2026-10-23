@@ -66,6 +66,7 @@ var workerCapabilities = []string{
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
 	worker.CapabilityMultiRepo,
+	worker.CapabilityArtifacts,
 	worker.CapabilityChatStart,
 }
 
@@ -295,6 +296,27 @@ func run(logger *slog.Logger) error {
 		logger.Info("agent browser off", "reason", err)
 	}
 	var agentCommandFactory workertransport.AgentCommandFactory
+	var artifacts *artifactSyncer
+	if bootstrap.Launch.Artifacts {
+		artifactsDir := worker.ArtifactsDir(dataDir, bootstrap.SessionID)
+		if err := os.MkdirAll(artifactsDir, 0o700); err != nil {
+			// Without the directory the agent must not be told to use it.
+			bootstrap.Launch.Artifacts = false
+			logger.Warn("create artifact directory; artifacts are not synced", "error", err)
+		} else {
+			artifacts = newArtifactSyncer(client, artifactsDir, logger)
+			changed := artifacts.pokeCommittedChanged
+			client.artifactsChanged.Store(&changed)
+			// A new sandbox starts with the files the session already has.
+			restoreCtx, cancelRestore := context.WithTimeout(ctx, artifactRestoreTimeout)
+			if restored, err := artifacts.restore(restoreCtx); err != nil {
+				logger.Warn("artifacts: restore; retrying in the background", "error", err)
+			} else if restored > 0 {
+				logger.Info("artifacts: restored", "files", restored)
+			}
+			cancelRestore()
+		}
+	}
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
@@ -334,6 +356,9 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
 		b.Env["AO_PULL_REQUEST_HELP"] = pullRequestHelp(bootstrap.Launch)
 		b.Env[worker.SessionRepositoriesEnv] = sessionRepositories(bootstrap.Launch, workspace, dataDir)
+		if artifacts != nil {
+			b.Env[worker.ArtifactsDirEnv] = artifacts.dir
+		}
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -371,8 +396,15 @@ func run(logger *slog.Logger) error {
 		}
 		chatRunner = &workerexec.Supervisor{
 			Control: client, Builder: b, Runner: workerexec.OSRunner{},
-			PullRequestClaimer:  client.claimPullRequest,
-			GitRefReporter:      gitRefReporter,
+			PullRequestClaimer: client.claimPullRequest,
+			GitRefReporter:     gitRefReporter,
+			// A Chat turn's end syncs artifacts at once, as the terminal's
+			// Stop hook does.
+			TurnEnded: func() {
+				if artifacts != nil {
+					artifacts.poke()
+				}
+			},
 			UseProviderProtocol: true,
 			// Use the supervisor's 100 ms default. A one-second worker-command
 			// poll makes every phase of a TUI <-> Chat handoff visibly laggy,
@@ -505,7 +537,7 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 6)
+	results := make(chan error, 7)
 	backgroundWorkers := 4
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
@@ -515,6 +547,10 @@ func run(logger *slog.Logger) error {
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
 	}()
+	if artifacts != nil {
+		backgroundWorkers++
+		go func() { results <- artifacts.run(runCtx) }()
+	}
 	if outbox, err := notificationoutbox.Open(filepath.Join(dataDir, "notification-outbox.db")); err != nil {
 		logger.Warn("open notification outbox", "error", err)
 	} else {
@@ -679,7 +715,14 @@ func run(logger *slog.Logger) error {
 		// turn-completion (Stop) hook via this unix socket, not a timer. Bound to
 		// runCtx: it stops on shutdown.
 		cp := newCheckpointer(client, bootstrap, workspace, dataDir, logger)
-		if err := runCheckpointBridge(runCtx, checkpointSocketPath, cp.checkpoint, logger); err != nil &&
+		onCheckpoint := cp.checkpoint
+		if artifacts != nil {
+			onCheckpoint = func(ctx context.Context) {
+				artifacts.poke()
+				cp.checkpoint(ctx)
+			}
+		}
+		if err := runCheckpointBridge(runCtx, checkpointSocketPath, onCheckpoint, logger); err != nil &&
 			runCtx.Err() == nil {
 			logger.Warn("checkpoint bridge stopped", "error", err)
 		}
@@ -1138,6 +1181,10 @@ type client struct {
 	// busy reports sandbox activity for the next heartbeat; set once the
 	// transport supervisor exists.
 	busy atomic.Pointer[func() bool]
+	// artifactsChanged is called when WaitForWork reports that the session's
+	// committed artifacts changed without this worker; set once the artifact
+	// syncer exists.
+	artifactsChanged atomic.Pointer[func()]
 	// busyAccepted records that the control plane's last heartbeat response
 	// advertised worker.HeartbeatFeatureBusy. Until then (and after a
 	// control-plane rollback) the field is not sent: an older control plane
@@ -1607,10 +1654,19 @@ func (c *client) ClaimTransport(ctx context.Context) (*worker.TransportRequest, 
 // WaitForWork long-polls the control plane until a turn or transport request is
 // enqueued for this session (or a short server-side timeout), replacing the old
 // ~100ms busy-poll of the claim routes. It returns no work; the caller re-runs
-// the claim RPCs. An older control plane without the endpoint returns an error,
+// the claim RPCs. A wake that reports changed artifacts pokes the artifact
+// syncer. An older control plane without the endpoint returns an error,
 // which the transport supervisor treats as a bounded back-off.
 func (c *client) WaitForWork(ctx context.Context) error {
-	return c.doMethod(ctx, http.MethodGet, "/worker/work/wait", nil, nil)
+	var response worker.WorkWaitResponse
+	// An empty body reports no artifact change.
+	if err := c.doMethod(ctx, http.MethodGet, "/worker/work/wait", nil, &response); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if changed := c.artifactsChanged.Load(); response.ArtifactsChanged && changed != nil {
+		(*changed)()
+	}
+	return nil
 }
 
 func (c *client) CompleteTransport(

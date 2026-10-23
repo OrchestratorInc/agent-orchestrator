@@ -518,7 +518,7 @@ function ShellLayout() {
 				const project = queryClient.getQueryData<components["schemas"]["Project"]>(projectQueryKey);
 				const defaultWorkerAgent = project?.config?.worker?.agent || project?.agent || "";
 				if (defaultWorkerAgent) {
-					void queryClient.prefetchQuery(agentModelsQueryOptions(defaultWorkerAgent, scopedProjectId));
+					void queryClient.prefetchQuery(agentModelsQueryOptions(defaultWorkerAgent, ""));
 				}
 			});
 	}, [queryClient, scopedProjectId]);
@@ -558,6 +558,7 @@ function ShellLayout() {
 	const startingSteps = startingOrchestratorSession?.provisionSteps;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
+const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const isStartupLoading =
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
@@ -1523,6 +1524,7 @@ function ShellLayout() {
 				</SidebarProvider>
 				<OrchestratorReplacementDialog
 					pending={Boolean(replacementErrorProjectId && restartingProjectIds.has(replacementErrorProjectId))}
+					pendingCount={replacementErrorCount}
 					error={replacementErrorProjectId ? orchestratorReplacementErrors[replacementErrorProjectId] : undefined}
 					onOpenChange={(open) => {
 						if (!open && replacementErrorProjectId) setOrchestratorReplacementError(replacementErrorProjectId, null);

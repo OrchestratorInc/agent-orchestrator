@@ -64,6 +64,12 @@ type LaunchContext struct {
 	// Cleanup runs before the workspace is deleted.
 	PostCreate []string `json:"postCreate,omitempty"`
 	PreRemove  []string `json:"preRemove,omitempty"`
+	// RequestedOutput is "artifact" when the session asks the agent for a file
+	// deliverable; empty for the ordinary task flow.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// Artifacts asks the worker to sync the session's artifact directory to
+	// the control plane.
+	Artifacts bool `json:"artifacts,omitempty"`
 	// PostCreateTimeoutMinutes and PreRemoveTimeoutMinutes are each Setup and
 	// Cleanup command's own time limit in minutes, by index; 0 or a missing
 	// entry is the kind's default (domain.DefaultSetupStepTimeoutMinutes or
@@ -366,6 +372,13 @@ type TransportRequest struct {
 	Kind    string `json:"kind"`
 	Attempt int    `json:"attempt"`
 	Payload any    `json:"payload"`
+}
+
+// WorkWaitResponse is the answer to a WaitForWork long-poll. ArtifactsChanged
+// is set when the session's committed artifacts changed without the worker,
+// as when a user deleted one, so it checks its files against them.
+type WorkWaitResponse struct {
+	ArtifactsChanged bool `json:"artifactsChanged,omitempty"`
 }
 
 type ClaimTransportResponse struct {

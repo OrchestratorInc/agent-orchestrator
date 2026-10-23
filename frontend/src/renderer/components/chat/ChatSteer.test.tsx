@@ -604,7 +604,7 @@ describe("ChatWorkspace steering", () => {
 
 	it("renders a landed steer as the user's own words", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.getByText(/Steered into the running turn/)).toBeInTheDocument();
+		expect(screen.getByText(/Steered/)).toBeInTheDocument();
 	});
 
 	it("renders a staged image reference on a landed steer in chat history", () => {

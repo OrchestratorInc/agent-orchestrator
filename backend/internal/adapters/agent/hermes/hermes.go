@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -61,8 +62,19 @@ var (
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 	// A tagless clean checkout; a ".dirty" suffix never matches.
 	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
-	stableReleaseTag        = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	// A Homebrew bottle is built from the release tarball, which has no git
+	// metadata, so Hermes's git-derived banner version reads "unknown".
+	nativeUnknownVersionLine = regexp.MustCompile(`^Hermes Agent vunknown(?: .*)?$`)
+	// A Homebrew keg directory names the formula version, plus `_N` when the
+	// formula was revised without a new upstream release.
+	homebrewKegDir   = regexp.MustCompile(`^(\d+\.\d+\.\d+)(?:_\d+)?$`)
+	stableReleaseTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 )
+
+// systemLaunchers are the package-manager install locations ResolveBinary
+// probes before the per-user ones. Tests clear it so a host's own Hermes
+// install cannot take precedence over a fixture.
+var systemLaunchers = []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}
 
 // New creates the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
@@ -113,7 +125,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	}
 	// Probe only the official installers' locations. A PATH-first --version probe
 	// would execute an unrelated earlier binary during passive agent discovery.
-	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{
+	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: systemLaunchers, UnixHomePaths: [][]string{
 		{".local", "bin", "hermes"},
 		{".hermes", "hermes-agent", ".hermes", "bin", "hermes"},
 		{".hermes", "hermes-agent", ".venv", "bin", "hermes"},
@@ -468,6 +480,9 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	if err == nil && qualifiedSourceCheckout(ctx, path, firstLine) {
 		return true, "", false
 	}
+	if err == nil && qualifiedHomebrewKeg(path, firstLine) {
+		return true, "", false
+	}
 	if len(firstLine) > 120 {
 		firstLine = firstLine[:120]
 	}
@@ -491,6 +506,58 @@ var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
 func qualifiedSourceCheckout(ctx context.Context, launcher, line string) bool {
 	tag := SourceReleaseTag(ctx, launcher, line)
 	return tag != "" && supportedNativeVersion("Hermes Agent "+tag)
+}
+
+// qualifiedHomebrewKeg accepts the `vunknown` banner a Homebrew bottle prints
+// when the launcher resolves into a hermes-agent keg on a qualified line. The
+// banner names no release, so Homebrew's own record must: the keg directory
+// and its INSTALL_RECEIPT.json have to agree on it. installedVersionText in
+// systeminstall already takes a Homebrew install's version from the same keg.
+func qualifiedHomebrewKeg(launcher, banner string) bool {
+	if !nativeUnknownVersionLine.MatchString(banner) {
+		return false
+	}
+	version := homebrewKegVersion(launcher)
+	return version != "" && supportedNativeVersion("Hermes Agent v"+version)
+}
+
+// homebrewKegVersion returns the release of the hermes-agent keg a launcher
+// resolves into (…/Cellar/hermes-agent/<version>[_<revision>]/…). It returns
+// "" when the launcher is not inside such a keg or the keg's
+// INSTALL_RECEIPT.json records a different release.
+func homebrewKegVersion(launcher string) string {
+	target, err := filepath.EvalSymlinks(launcher)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(target), "/")
+	// The executable lives below the keg directory, never as the keg itself.
+	for i := 0; i+3 < len(parts); i++ {
+		if parts[i] != "Cellar" || parts[i+1] != "hermes-agent" {
+			continue
+		}
+		m := homebrewKegDir.FindStringSubmatch(parts[i+2])
+		if m == nil {
+			return ""
+		}
+		keg := filepath.FromSlash(strings.Join(parts[:i+3], "/"))
+		b, err := os.ReadFile(filepath.Join(keg, "INSTALL_RECEIPT.json"))
+		if err != nil {
+			return ""
+		}
+		var receipt struct {
+			Source struct {
+				Versions struct {
+					Stable string `json:"stable"`
+				} `json:"versions"`
+			} `json:"source"`
+		}
+		if json.Unmarshal(b, &receipt) != nil || receipt.Source.Versions.Stable != m[1] {
+			return ""
+		}
+		return m[1]
+	}
+	return ""
 }
 
 // SourceReleaseTag names the release a tagless `vgit.<sha>` banner was built
