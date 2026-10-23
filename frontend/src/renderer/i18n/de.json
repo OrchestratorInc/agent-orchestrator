@@ -70,6 +70,8 @@
 	"shareLink.placeholder": "ao-app://share/…",
 	"shareLink.open": "Öffnen",
 	"shareLink.invalid": "Das ist kein Freigabelink.",
+	"shareLink.expired": "Dieser Link ist abgelaufen oder wurde widerrufen. Bitte um einen neuen.",
+	"shareLink.notForYou": "Dieser Link ist für andere Personen. Bitte den Absender, ihn für dein Konto freizugeben.",
 	"shareLink.signInFirst": "Melde dich bei AO Cloud an, um geteilte Sitzungen zu öffnen.",
 	"command.openSharedLink": "Geteilte Sitzung öffnen",
 	"chat.projectSetup.succeeded": "Setup erfolgreich",

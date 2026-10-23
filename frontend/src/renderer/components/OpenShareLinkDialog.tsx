@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { sharedCloudWorkspacesQueryKey } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { parseShareLink } from "../lib/share-links";
 import { Button } from "./ui/button";
@@ -23,6 +24,17 @@ import {
 import { Input } from "./ui/input";
 
 const OPEN_SHARE_LINK_EVENT = "ao:open-share-link";
+
+/**
+ * What went wrong opening a link, in terms the person can act on: a link that
+ * no longer works, or one for someone else, rather than the control plane's
+ * generic access error.
+ */
+export function shareLinkErrorMessage(error: unknown, t: (key: string) => string): string {
+	if (error instanceof CloudCpError && error.status === 404) return t("shareLink.expired");
+	if (error instanceof CloudCpError && error.status === 403) return t("shareLink.notForYou");
+	return error instanceof Error ? error.message : String(error);
+}
 
 /** Asks the shell to open a shared session's link: with one, opens it; without, asks for it. */
 export function requestOpenShareLink(link?: string): void {
@@ -85,7 +97,7 @@ export function ShareLinkHost() {
 		};
 	}, [ready]);
 
-	const error = !ready ? t("shareLink.signInFirst") : redeem.error instanceof Error ? redeem.error.message : undefined;
+	const error = !ready ? t("shareLink.signInFirst") : redeem.error ? shareLinkErrorMessage(redeem.error, t) : undefined;
 	return (
 		<Dialog open={open} onOpenChange={(next) => { if (!redeem.isPending) setOpen(next); }}>
 			<DialogContent

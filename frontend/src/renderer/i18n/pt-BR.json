@@ -70,6 +70,8 @@
 	"shareLink.placeholder": "ao-app://share/…",
 	"shareLink.open": "Abrir",
 	"shareLink.invalid": "Isso não é um link de compartilhamento.",
+	"shareLink.expired": "Este link expirou ou foi revogado. Peça um novo.",
+	"shareLink.notForYou": "Este link é para outras pessoas. Peça a quem enviou que o compartilhe com sua conta.",
 	"shareLink.signInFirst": "Entre no AO Cloud para abrir sessões compartilhadas.",
 	"command.openSharedLink": "Abrir uma sessão compartilhada",
 	"chat.projectSetup.succeeded": "Configuração bem-sucedida",

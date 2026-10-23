@@ -70,6 +70,8 @@
 	"shareLink.placeholder": "ao-app://share/…",
 	"shareLink.open": "打开",
 	"shareLink.invalid": "这不是共享链接。",
+	"shareLink.expired": "此链接已过期或已被撤销。请索取新链接。",
+	"shareLink.notForYou": "此链接是给其他人的。请让发送者与你的账户共享。",
 	"shareLink.signInFirst": "请登录 AO Cloud 以打开共享会话。",
 	"command.openSharedLink": "打开共享会话",
 	"chat.projectSetup.succeeded": "设置成功",

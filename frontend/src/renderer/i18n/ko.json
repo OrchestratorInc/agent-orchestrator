@@ -70,6 +70,8 @@
 	"shareLink.placeholder": "ao-app://share/…",
 	"shareLink.open": "열기",
 	"shareLink.invalid": "공유 링크가 아닙니다.",
+	"shareLink.expired": "이 링크는 만료되었거나 취소되었습니다. 새 링크를 요청하세요.",
+	"shareLink.notForYou": "이 링크는 다른 사람용입니다. 보낸 사람에게 내 계정으로 공유해 달라고 요청하세요.",
 	"shareLink.signInFirst": "공유 세션을 열려면 AO Cloud에 로그인하세요.",
 	"command.openSharedLink": "공유 세션 열기",
 	"chat.projectSetup.succeeded": "설정에 성공했습니다",
