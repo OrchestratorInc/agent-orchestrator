@@ -179,6 +179,9 @@ jobs:
       - name: Test SQLite filesystem path identity
         run: go test -race -count=1 -run 'Test(OpenPreservesDataDirectoryCharacters|FragmentPathsKeepDatabasesIsolated|OpenRefusesToHideLegacyDatabase|OpenPrefersExistingIntendedDatabase|DatabaseURIPreservesWindowsPaths)$' ./internal/storage/sqlite
 
+      - name: Test data-dir lock (LockFileEx)
+        run: go test -race -count=1 ./internal/datadirlock/
+
       - name: Test workspace teardown and session kill
         run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate|TaskNaming|RenameTaskBranch' ./internal/adapters/workspace/... ./internal/session_manager/
 
