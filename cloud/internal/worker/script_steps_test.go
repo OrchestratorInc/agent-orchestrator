@@ -191,7 +191,10 @@ func TestSetupStepEventsLiveUpdates(t *testing.T) {
 func TestSetupStepEventsHeartbeatWhileOutputKeepsArriving(t *testing.T) {
 	t.Parallel()
 	_, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond, LiveHeartbeat: 100 * time.Millisecond},
-		[]string{"echo start; i=0; while [ $i -lt 12 ]; do printf 'progress %s\\r' $i; sleep 0.05; i=$((i+1)); done; echo"})
+		// The step ends by redrawing the progress line as "done", so the only
+		// finished lines are "start" and "done": a published "progress" is a
+		// line that had not finished.
+		[]string{"echo start; i=0; while [ $i -lt 12 ]; do printf 'progress %s\\r' $i; sleep 0.05; i=$((i+1)); done; printf '\\rdone\\n'"})
 	heartbeats := 0
 	for _, event := range events {
 		if event.Status != ScriptStepRunning || event.OutputAgeMS == nil {
