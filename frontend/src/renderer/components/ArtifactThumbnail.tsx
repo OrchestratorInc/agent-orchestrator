@@ -10,6 +10,7 @@ import { isMermaidPath, isRasterImagePath, isSvgPath } from "../lib/image-files"
 import { isDelimitedTextPath } from "../lib/delimited-text";
 import { isMarkdownPreviewPath, stripMarkdownFrontmatter } from "../lib/markdown-frontmatter";
 import { MermaidBlock } from "./chat/MermaidBlock";
+import { cn } from "../lib/utils";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { PdfPreview } from "./PdfPreview";
 import { TableFileView } from "./TableFileView";
@@ -30,7 +31,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	const contentUrl = artifactContentUrl(row.sessionId, row.path, row.rawUrl);
 	const image = isRasterImagePath(row.path) || isSvgPath(row.path)
 		? contentUrl : undefined;
-	const plainText = /\.txt$/i.test(row.path);
+	const plainText = /\.(?:txt|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch)$/i.test(row.path);
 	const table = isDelimitedTextPath(row.path);
 	const mermaid = isMermaidPath(row.path);
 	const isMarkdown = row.kind === "markdown" || isMarkdownPreviewPath(row.path);
@@ -96,7 +97,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 		|| (!page && !image && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	return (
-		<span inert ref={container} className="pointer-events-none absolute inset-0 block overflow-hidden bg-[var(--solid-muted,var(--muted))]" aria-hidden="true">
+		<span inert ref={container} className={cn("pointer-events-none absolute inset-0 block overflow-hidden", isMarkdown || plainText ? "ao-document-surface" : "bg-[var(--solid-muted,var(--muted))]")} aria-hidden="true">
 			{unavailable ? (
 				<span className="absolute inset-0 grid place-items-center text-passive" title={t("artifactLink.noPreview")}>
 					<Icon className="size-7" />

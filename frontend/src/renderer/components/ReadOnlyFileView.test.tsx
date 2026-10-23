@@ -142,7 +142,7 @@ describe("ReadOnlyFileView", () => {
 		expect(screen.getByText("hello world")).toBeInTheDocument();
 		expect(container.querySelector(".ao-pierre-surface")).toHaveClass("select-text");
 		expect(container.querySelector("[data-overflow]")).toHaveAttribute("data-overflow", "wrap");
-		expect(container.querySelector("[data-overflow]")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
+		expect(container.querySelector("[data-overflow]")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--ao-file-canvas, var(--color-bg-primary))"));
 	});
 
 	it("passes the opened path to Shiki for language inference", () => {
