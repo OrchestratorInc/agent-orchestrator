@@ -684,6 +684,40 @@ func TestArtifactShareReplacedVersionOutlivesRepublish(t *testing.T) {
 	}
 }
 
+// Two documents whose project and feature only collide in the lossy URL slug
+// get two links; the second never replaces the first.
+func TestArtifactShareSlugCollisionsStaySeparateDocuments(t *testing.T) {
+	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 3})
+	first := h.mustPublish(artifactTokenA, "index.html", "a-b", "c", []byte("first"))
+	second := h.publish(artifactTokenA, "index.html", "a", "b-c", []byte("second"))
+	body := decodeBody[struct {
+		Share    artifactShareResponse `json:"share"`
+		Replaced bool                  `json:"replaced"`
+	}](t, second)
+	if second.Code != http.StatusCreated || body.Replaced || body.Share.ID == first.ID {
+		t.Fatalf("second document = %d %+v, want a new link", second.Code, body)
+	}
+	if body.Share.Slug != first.Slug+"-2" {
+		t.Fatalf("second slug = %q, want %q", body.Share.Slug, first.Slug+"-2")
+	}
+	if page := h.visit(first.URL, nil); page.Body.String() != "first" {
+		t.Fatalf("first link now serves %q", page.Body.String())
+	}
+	if replaced := h.rows.queued("replaced"); len(replaced) != 0 {
+		t.Fatalf("a separate document queued %d versions for deletion", len(replaced))
+	}
+	// Publishing the first document again still replaces only its own link.
+	again := h.publish(artifactTokenA, "index.html", "a-b", "c", []byte("first v2"))
+	if decodeBody[struct {
+		Share artifactShareResponse `json:"share"`
+	}](t, again).Share.ID != first.ID {
+		t.Fatal("republishing the first document did not update its own link")
+	}
+	if page := h.visit(body.Share.URL, nil); page.Body.String() != "second" {
+		t.Fatalf("second link now serves %q", page.Body.String())
+	}
+}
+
 // A link's file name is part of its document, so PUT cannot rename it: the
 // renamed file is a new document, and the old name still names this link.
 func TestArtifactSharePutRejectsAnotherFileName(t *testing.T) {

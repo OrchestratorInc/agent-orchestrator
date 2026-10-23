@@ -79,7 +79,7 @@ func TestArtifactShareLimitHoldsUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			created[index], _, results[index] = store.PublishArtifactShare(ctx, shares[index], "proj-feat-dev-example-com",
-				domain.ArtifactShareDocumentKey("proj-feat-dev-example-com", shares[index].ID+".html"), 3)
+				domain.ArtifactShareDocumentKey("proj", "feat", shares[index].ID+".html"), 3)
 		}()
 	}
 	wg.Wait()

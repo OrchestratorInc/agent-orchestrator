@@ -5,8 +5,8 @@
 -- not: revoking sets revoked_at, which stops the link serving, and keeps the
 -- row so the slot stays used.
 -- The bytes live in the artifact bucket at s3_key and version_id names the
--- object version the link serves. document_key identifies the published
--- document (its project, feature and file name), so publishing the same
+-- object version the link serves. document_key is a hash of the published
+-- document's exact project, feature and file name, so publishing the same
 -- document again replaces the version its one link serves.
 CREATE TABLE ao_artifact_shares (
     id UUID PRIMARY KEY,

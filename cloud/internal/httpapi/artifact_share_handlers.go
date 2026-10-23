@@ -176,7 +176,7 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseSlug := domain.ArtifactShareSlug(query.Get("project"), query.Get("feature"), principal.Email)
-	documentKey := domain.ArtifactShareDocumentKey(baseSlug, upload.name)
+	documentKey := domain.ArtifactShareDocumentKey(query.Get("project"), query.Get("feature"), upload.name)
 	allowed, err := s.shareRows.ArtifactSharePublishAllowed(r.Context(), principal.UserID, documentKey, s.shareConfig.limit)
 	if err != nil {
 		s.writeStoreError(w, r, err)

@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"time"
@@ -68,11 +70,20 @@ func ArtifactShareSlug(project, feature, email string) string {
 	return strings.Join(parts, "-")
 }
 
-// ArtifactShareDocumentKey identifies a published document by its base slug
-// (project, feature and owner) and file name. Publishing a document with the
-// same key replaces the file its existing link serves.
-func ArtifactShareDocumentKey(baseSlug, name string) string {
-	return baseSlug + "/" + name
+// ArtifactShareDocumentKey identifies one of a user's published documents by
+// its exact project, feature and file name. Publishing a document with the
+// same key replaces the file its existing link serves. It hashes a
+// length-prefixed encoding of the three values, so values that only the lossy
+// URL slug would merge ("a-b"/"c" and "a"/"b-c", case, punctuation, or names
+// past the slug's length budget) stay separate documents.
+func ArtifactShareDocumentKey(project, feature, name string) string {
+	hash := sha256.New()
+	for _, part := range []string{project, feature, name} {
+		hash.Write([]byte(strconv.Itoa(len(part))))
+		hash.Write([]byte{':'})
+		hash.Write([]byte(part))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 // ArtifactShareSlugCandidate returns the slug for one collision attempt:
