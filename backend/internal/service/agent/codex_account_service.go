@@ -57,7 +57,7 @@ func (s *Service) savedDefaultAuthentication(ctx context.Context, agentID string
 		observation = successfulAuthentication(now, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, "New sessions start on a saved account that is signed in.")
 		observation.Account = domain.AgentAccountIdentity{Email: identity.Email, Plan: identity.Plan, Method: domain.AgentAccountMethodAccount}.Sanitized()
 	} else {
-		observation = successfulAuthentication(now, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "The default account is signed out. Sign it in again, or make another account the default.")
+		observation = successfulAuthentication(now, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "The default account is signed out, and no other account is signed in. Sign one in again in Settings.")
 	}
 	// Marks the verdict as the saved account's: a sign-in or sign-out of the
 	// CLI's own login does not change it, so clients check that login itself.

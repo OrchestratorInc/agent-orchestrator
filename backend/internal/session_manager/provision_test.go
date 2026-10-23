@@ -374,6 +374,92 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 	}
 }
 
+// refreshRecordingCatalog serves a saved catalog and a rediscovered one, and
+// records which a launch asked for.
+type refreshRecordingCatalog struct {
+	saved, fresh ports.AgentModelCatalog
+	refreshes    *[]bool
+}
+
+func (c refreshRecordingCatalog) Models(_ context.Context, _, _ string, refresh bool) (ports.AgentModelCatalog, error) {
+	*c.refreshes = append(*c.refreshes, refresh)
+	if refresh {
+		return c.fresh, nil
+	}
+	return c.saved, nil
+}
+
+func TestResolveAgentConfigValidatesAgainstSavedCatalogFirst(t *testing.T) {
+	spawn := ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: ports.AgentConfig{Model: "sonnet", Effort: "high"}, EffortOverride: true,
+	}
+	var refreshes []bool
+	m := &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes, saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "sonnet", Efforts: []string{"high"}},
+	}}}}
+	if _, err := m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshes) != 1 || refreshes[0] {
+		t.Fatalf("catalog reads = %v, want one saved read and no rediscovery", refreshes)
+	}
+
+	// A model the saved catalog does not list yet is checked against a live
+	// rediscovery before the launch is rejected.
+	refreshes = nil
+	m = &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes,
+		saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus", Efforts: []string{"high"}}}},
+		fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", Efforts: []string{"high"}}}},
+	}}
+	resolved, err := m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Effort != "high" || len(refreshes) != 2 || refreshes[0] || !refreshes[1] {
+		t.Fatalf("resolved=%#v reads=%v, want a saved read then a rediscovery", resolved, refreshes)
+	}
+}
+
+func TestResolveAgentConfigRediscoversUnusableSavedCatalog(t *testing.T) {
+	for _, state := range []string{"queued", "refreshing", "error"} {
+		t.Run(state, func(t *testing.T) {
+			var refreshes []bool
+			m := &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes,
+				saved: ports.AgentModelCatalog{RefreshState: state, Models: []ports.AgentModelInfo{{ID: "sonnet"}}},
+				fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "bedrock-sonnet"}}},
+			}}
+			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: "sonnet"},
+			}, domain.ProjectConfig{})
+			if !errors.Is(err, ErrUnsupportedModel) {
+				t.Fatalf("error = %v, want provider catalog to reject old model", err)
+			}
+			if len(refreshes) != 2 || refreshes[0] || !refreshes[1] {
+				t.Fatalf("catalog reads = %v, want saved then fresh", refreshes)
+			}
+		})
+	}
+	for _, model := range []string{"sonnet", ""} {
+		t.Run("new effort/model="+model, func(t *testing.T) {
+			var refreshes []bool
+			m := &Manager{modelCatalog: refreshRecordingCatalog{refreshes: &refreshes,
+				saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", IsDefault: true, Efforts: []string{"high"}}}},
+				fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", IsDefault: true, Efforts: []string{"high", "max"}}}},
+			}}
+			resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: model, Effort: "max"}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if err != nil || resolved.Effort != "max" {
+				t.Fatalf("new effort = %#v, %v", resolved, err)
+			}
+			if len(refreshes) != 2 || refreshes[0] || !refreshes[1] {
+				t.Fatalf("catalog reads = %v, want saved then fresh", refreshes)
+			}
+		})
+	}
+}
+
 func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	catalogCalls := 0
 	m := &Manager{modelCatalog: tuningCatalog{calls: &catalogCalls, catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
@@ -436,7 +522,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, and command-code") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and hermes") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the
@@ -546,6 +632,22 @@ func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing
 	m.modelCatalog = tuningCatalog{err: context.Canceled}
 	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
 		t.Fatal("cancelled spawn launched")
+	}
+}
+
+func TestResolveHermesAgentConfigPassesReasoningThrough(t *testing.T) {
+	// Hermes takes effort as native --reasoning for any model, including typed
+	// IDs its configuration catalog does not list, so the level is forwarded.
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("discovery failed")}}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessHermes,
+		AgentConfig: ports.AgentConfig{Model: "MiniMax-M2", Effort: "high"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model != "MiniMax-M2" || resolved.Effort != "high" {
+		t.Fatalf("resolved = %#v, want model MiniMax-M2 effort high", resolved)
 	}
 }
 

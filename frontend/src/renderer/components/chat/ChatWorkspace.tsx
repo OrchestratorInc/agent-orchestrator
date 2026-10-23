@@ -139,6 +139,7 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
@@ -784,6 +785,10 @@ function ChatWorkspaceContent({
 	if (snapshot.controller.state === "ready" || snapshot.controller.state === "busy") wakingFromHibernate.current = false;
 	if (snapshot.controller.state === "stopped" && !resumingAgent) wakingFromHibernate.current = false;
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
+	// After a restart the daemon is still verifying this session and reconnects
+	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
+	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent &&
+		session?.statusReadiness === "checking";
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -1734,7 +1739,7 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
@@ -1747,6 +1752,7 @@ function ChatWorkspaceContent({
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
+						reconnecting={startupReconnecting}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
@@ -1755,7 +1761,12 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
-					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
+					<VersionSwitchBanner
+						staleBinary={session?.staleBinary}
+						hostId={activeRemoteHostId}
+						// Only a resume starts a stopped agent, on the new release.
+						agentStopped={snapshot.controller.state === "stopped" && !(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting)}
+					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -1923,7 +1934,9 @@ function ChatWorkspaceContent({
 												? ""
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
-													: undefined
+													: startupReconnecting
+														? "Reconnecting to the agent…"
+														: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -2050,21 +2063,9 @@ type TimelineRun =
 function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
-		const runnable =
-			item.kind === "activity" &&
-			item.activityKind !== "approval" &&
-			item.activityKind !== "user_input" &&
-			item.activityKind !== "error" &&
-			// Reasoning only reaches the timeline when the reader asked for it, so
-			// folding it into "Explored 4 files" would answer that request with the
-			// summary they were trying to get past.
-			item.activityKind !== "reasoning" &&
-			// A compaction is a boundary in the conversation, not a step in one. Folding
-			// it into a run of tool calls would hide that everything above it is no
-			// longer what the agent sees verbatim. The same holds for every other
-			// stamped system event: a reroute, a credential demand and the user's own
-			// steer are all things a run summary would swallow.
-			item.detail?.event === undefined;
+		// Approvals, user input, errors, reasoning, and stamped system events stay
+		// boundaries. Confirmed AO actions have no event stamp, so they batch.
+		const runnable = isOrdinaryActivity(item);
 		const last = runs.at(-1);
 		if (runnable && last?.kind === "activities") {
 			last.items.push(item);
@@ -2349,6 +2350,7 @@ function ControllerBanner({
 	provisionState,
 	transitioning,
 	automaticWakePending,
+	reconnecting,
 	onResume,
 	resuming,
 	resumeError,
@@ -2360,6 +2362,8 @@ function ControllerBanner({
 	provisionState?: WorkspaceSession["provisionState"];
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
+	/** The daemon is still reconnecting this session after a restart. */
+	reconnecting?: boolean;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -2370,6 +2374,9 @@ function ControllerBanner({
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
+	// Nothing to act on yet: offering Resume here invites a click the daemon is
+	// about to make unnecessary.
+	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
 	const resumeClick = () => {
 		void Promise.resolve().then(() => onResume?.()).catch(() => {});
 	};
@@ -2390,17 +2397,18 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking ? "Waking agent…" : "The agent controller stopped",
-			tone: waking ? "text-muted-foreground" : "text-destructive",
+			title: waking ? "Waking agent…" : restarting ? "Reconnecting to the agent…" : "The agent controller stopped",
+			tone: waking || restarting ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
 	if (!shown) return null;
-	const loading = controller.state === "connecting" || waking;
+	const loading = controller.state === "connecting" || waking || restarting;
+	const actionable = controller.state === "stopped" && !waking && !restarting;
 
 	return (
 		<div
-			role={controller.state === "stopped" && !waking ? "alert" : "status"}
+			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -2416,10 +2424,12 @@ function ControllerBanner({
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
 				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
+				) : restarting ? (
+					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
 				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{controller.state === "stopped" && !waking ? (
+				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
@@ -2982,20 +2992,26 @@ export function Timeline({
 		});
 	}, [minimapEnabled, uiSessionId]);
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
-	const retryableTurns = useMemo(
-		() =>
-			new Map(
-				snapshot.turns
-					.filter(
-						(turn) =>
-							turn.state === "failed" &&
-							Boolean(turn.providerTurnId) &&
-							!consumedRetrySources.has(turn.id),
-					)
-					.map((turn) => [turn.id, turn]),
-			),
-		[snapshot.turns, consumedRetrySources],
-	);
+	const retryableTurns = useMemo(() => {
+		// A steer can split one logical turn into several visual groups. Its prompt
+		// still makes the final failed group retryable, even when it is in an earlier one.
+		const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
+			item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
+				? [item.turnId]
+				: [],
+		));
+		return new Map(
+			snapshot.turns
+				.filter(
+					(turn) =>
+						turn.state === "failed" &&
+						Boolean(turn.providerTurnId) &&
+						!consumedRetrySources.has(turn.id) &&
+						(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
+				)
+				.map((turn) => [turn.id, turn]),
+		);
+	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -3972,7 +3988,7 @@ export function Timeline({
 							retryControl &&
 							retryableTurn &&
 							group.turnId !== composerRecoveryTurnId &&
-							(groupHasHumanPrompt(group) || Boolean(retryableTurn.usageLimit && retryableTurn.hasHumanPrompt))
+								group.outcome?.state === "failed"
 								? {
 										onRetry: () => {
 											void Promise.resolve(retryTurn(group.turnId as string)).catch(
@@ -4302,11 +4318,16 @@ const TurnGroup = memo(function TurnGroup({
 			),
 		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
 	);
-	const copyableMessageId = group.live || group.outcome
-		? [...group.items]
-				.reverse()
-				.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id
-		: undefined;
+	const lastAssistantId = [...group.items]
+		.reverse()
+		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
+	// A running turn offers copy only while its newest item is the reply itself, so the
+	// action does not flash under prose the agent is about to follow with more work.
+	const copyableMessageId = group.outcome
+		? lastAssistantId
+		: group.live && group.items.at(-1)?.id === lastAssistantId
+			? lastAssistantId
+			: undefined;
 	let finalAssistantRunIndex = -1;
 	if (group.outcome) {
 		for (let index = runs.length - 1; index >= 0; index -= 1) {
@@ -4327,8 +4348,12 @@ const TurnGroup = memo(function TurnGroup({
 		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
 	);
 	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
-	// Questions, errors, and system warnings stay readable after the turn settles.
-	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
+	// Questions, errors, and system warnings stay readable after the turn settles, and
+	// so does anything the user said mid-turn: folding a steer away would leave the
+	// reply under the Worked row answering a message the reader can no longer see.
+	const noticeRuns = group.outcome
+		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run))
+		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
 	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
@@ -5075,7 +5100,64 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups;
+	return groups.flatMap(splitAtSteers);
+}
+
+/**
+ * A steer is the user speaking, so it opens a new visual turn even though the
+ * provider keeps running the same one: everything before it settles into its own
+ * "Worked for" row, and the steer starts a fresh Working row and reply. Only the
+ * last segment carries the live state, outcome, diff and plan of the real turn.
+ */
+function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
+	const starts = group.items.flatMap((item, index) =>
+		index > 0 && item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId ? [index] : [],
+	);
+	if (starts.length === 0) return [group];
+	const bounds = [0, ...starts, group.items.length];
+	const segmentStarts = bounds.slice(0, -1).map((from, index) =>
+		index === 0 ? Date.parse(group.liveStartedAt ?? "") : Date.parse(group.items[from]!.createdAt),
+	);
+	const lastIndex = starts.length;
+	return starts.concat(group.items.length).map((_end, index) => {
+		const items = group.items.slice(bounds[index], bounds[index + 1]);
+		const first = items[0]!;
+		const key = index === 0 ? group.key : `${group.key}:steer:${first.id}`;
+		const startedAt = segmentStarts[index]!;
+		if (index === lastIndex) {
+			const priorMs = Number.isFinite(startedAt) ? startedAt - segmentStarts[0]! : 0;
+			return {
+				...group,
+				key,
+				anchor: first.sequence,
+				items,
+				liveStartedAt: Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : group.liveStartedAt,
+				outcome: group.outcome
+					? {
+						...group.outcome,
+						durationMs:
+							group.outcome.durationMs === undefined || !Number.isFinite(priorMs)
+								? group.outcome.durationMs
+								: Math.max(1_000, group.outcome.durationMs - priorMs),
+					}
+					: undefined,
+			};
+		}
+		const endedAt = segmentStarts[index + 1]!;
+		return {
+			key,
+			turnId: group.turnId,
+			anchor: first.sequence,
+			items,
+			outcome: {
+				state: "completed" as const,
+				durationMs:
+					Number.isFinite(startedAt) && Number.isFinite(endedAt)
+						? Math.max(1_000, endedAt - startedAt)
+						: undefined,
+			},
+		};
+	});
 }
 
 function isHumanRun(item: ConversationItem | undefined): boolean {

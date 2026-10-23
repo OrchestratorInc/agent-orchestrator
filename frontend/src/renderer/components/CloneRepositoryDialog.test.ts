@@ -14,6 +14,9 @@ function cloneDialogProps(
 		onClose: vi.fn(),
 		onContinue: vi.fn(),
 		onError: vi.fn(),
+		onCheckDestination: vi.fn(async (input) => ({ remoteUrl: input.remoteUrl, path: joinCloneDestination(input.destinationParent, repositoryNameFromGitUrl(input.remoteUrl) ?? ""), exists: false, canUseExisting: false })),
+		onUseExisting: vi.fn(),
+		onCancel: vi.fn(),
 		open: true,
 		value: { remoteUrl: "https://github.com/acme/web-app.git", destinationParent: "/code" },
 		...overrides,
@@ -200,7 +203,7 @@ describe("clone repository input", () => {
 			value: { remoteUrl: "https://github.com/acme/web-app.git", destinationParent: "" },
 		});
 
-		await waitFor(() => expect(window.ao!.app.checkGitRepository).toHaveBeenCalledOnce());
+		expect(window.ao!.app.checkGitRepository).not.toHaveBeenCalled();
 		const continueButton = screen.getByRole("button", { name: "Continue" });
 		expect(continueButton).toBeDisabled();
 		fireEvent.submit(continueButton.closest("form")!);
@@ -208,58 +211,63 @@ describe("clone repository input", () => {
 		expect(onError).toHaveBeenCalledWith("Choose a destination folder.");
 	});
 
-	it("ignores an older remote check after the URL changes", async () => {
-		let resolveFirst: ((exists: boolean) => void) | undefined;
-		let resolveSecond: ((exists: boolean) => void) | undefined;
-		window.ao!.app.checkGitRepository = vi.fn((url: string) => new Promise<boolean>((resolve) => {
-			if (url.includes("first")) resolveFirst = resolve;
-			else resolveSecond = resolve;
-		}));
-		const onError = vi.fn();
-		const { props: firstProps, view } = renderCloneDialog({
-			onError,
-			value: { remoteUrl: "https://git.example.com/first.git", destinationParent: "/code" },
-		});
-
-		await waitFor(() => expect(window.ao!.app.checkGitRepository).toHaveBeenCalledWith("https://git.example.com/first.git"));
-		view.rerender(React.createElement(CloneRepositoryDialog, {
-			...firstProps,
-			value: { remoteUrl: "https://git.example.com/second.git", destinationParent: "/code" },
-		}));
-		await waitFor(() => expect(window.ao!.app.checkGitRepository).toHaveBeenCalledWith("https://git.example.com/second.git"));
-
-		await act(async () => resolveSecond?.(true));
+	it("ignores an older destination check after the URL changes", async () => {
+		let resolveFirst: ((value: Awaited<ReturnType<React.ComponentProps<typeof CloneRepositoryDialog>["onCheckDestination"]>>) => void) | undefined;
+		const check = vi.fn<React.ComponentProps<typeof CloneRepositoryDialog>["onCheckDestination"]>()
+			.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+			.mockResolvedValue({ remoteUrl: "https://git.example.com/second.git", path: "/code/second", exists: false, canUseExisting: false });
+		const { props, view } = renderCloneDialog({ onCheckDestination: check });
+		await waitFor(() => expect(check).toHaveBeenCalledOnce());
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, value: { ...props.value, remoteUrl: "https://git.example.com/second.git" } }));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-		await act(async () => resolveFirst?.(false));
-
+		await act(async () => resolveFirst?.({ remoteUrl: props.value.remoteUrl, path: "/code/web-app", exists: true, canUseExisting: false }));
 		expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
-		expect(onError).not.toHaveBeenCalled();
 	});
 
-	it("checks the remote again each time the dialog opens", async () => {
-		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+	it("checks the destination again when the dialog reopens", async () => {
 		const { props, view } = renderCloneDialog();
-
 		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, open: false }));
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, open: true }));
-
 		expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
-		await waitFor(() => expect(window.ao!.app.checkGitRepository).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(props.onCheckDestination).toHaveBeenCalledTimes(2));
+	});
+
+	it("lets users retry a failed destination check without editing their inputs", async () => {
+		const check = vi.fn<React.ComponentProps<typeof CloneRepositoryDialog>["onCheckDestination"]>()
+			.mockRejectedValueOnce(new Error("Destination check unavailable"))
+			.mockResolvedValue({ remoteUrl: "https://github.com/acme/web-app.git", path: "/code/web-app", exists: false, canUseExisting: false });
+		renderCloneDialog({ onCheckDestination: check });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Destination check unavailable");
+		expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
 	});
 
-	it("announces an unavailable repository and shakes the dialog", async () => {
-		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(false);
-		const onError = vi.fn();
-		renderCloneDialog({ onError });
+	it.each([false, true])("blocks an existing destination and offers reuse only for the same repository, matching=%s", async (matching) => {
+		const { props } = renderCloneDialog({ onCheckDestination: vi.fn().mockResolvedValue({ remoteUrl: "https://github.com/acme/web-app.git", path: "/code/web-app", exists: true, canUseExisting: matching }) });
+		expect(await screen.findByRole("status")).toHaveTextContent("A folder already exists at /code/web-app");
+		expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+		if (matching) {
+			fireEvent.click(screen.getByRole("button", { name: "Use existing checkout" }));
+			expect(props.onUseExisting).toHaveBeenCalledWith("/code/web-app");
+		} else expect(screen.queryByRole("button", { name: "Use existing checkout" })).not.toBeInTheDocument();
+	});
 
-		await waitFor(() => expect(onError).toHaveBeenCalledWith("This isn't a repository or you don't have access"));
-		const input = screen.getByRole("textbox", { name: "Repository URL" });
-		expect(input).toHaveAttribute("aria-invalid", "true");
-		expect(input).toHaveAttribute("aria-describedby", expect.stringContaining("cloneRepositoryUrlError"));
-		expect(screen.getByRole("alert")).toHaveTextContent("This isn't a repository or you don't have access");
-		await waitFor(() => expect(screen.getByRole("dialog", { name: "Clone a Git repository" })).toHaveClass("modal-shake"));
+	it("submits the normalized URL returned by the daemon without asking the user to edit it", async () => {
+		const { props } = renderCloneDialog({ value: { remoteUrl: "https://github.com/acme/web-app", destinationParent: "/code" }, onCheckDestination: vi.fn().mockResolvedValue({ remoteUrl: "https://github.com/acme/web-app.git", path: "/code/web-app", exists: false, canUseExisting: false }) });
+		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+		fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+		expect(props.onContinue).toHaveBeenCalledWith(expect.objectContaining({ remoteUrl: "https://github.com/acme/web-app.git" }));
+	});
+
+	it("shows clone status and provides Cancel while other controls are disabled", () => {
+		const { props } = renderCloneDialog({ disabled: true, cloning: true, activity: "cloning" });
+		expect(screen.getByRole("status")).toHaveTextContent("Cloning repository · 0s");
+		expect(screen.getByText("Cloning into /code/web-app. Large repositories can take a few minutes.")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel clone" }));
+		expect(props.onCancel).toHaveBeenCalledOnce();
+		expect(screen.getByRole("button", { name: "Close clone repository dialog" })).toBeDisabled();
 	});
 
 	it("discards a destination picker result after the dialog closes", async () => {

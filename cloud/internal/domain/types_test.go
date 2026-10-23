@@ -101,6 +101,23 @@ func TestCloudSessionStatusUsesWorkerHeartbeatInsteadOfSessionUpdate(t *testing.
 
 // The create's idempotency payload marshals CreateSession whole; the coder
 // capability comes from a cache and must not be part of it.
+func TestCreateSessionIdempotencyPayloadOmitsEmptyRequestedOutput(t *testing.T) {
+	payload, err := json.Marshal(CreateSession{Kind: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "RequestedOutput") {
+		t.Fatalf("payload = %s, want no requested output", payload)
+	}
+	payload, err = json.Marshal(CreateSession{Kind: "worker", RequestedOutput: RequestedOutputArtifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"RequestedOutput":"artifact"`) {
+		t.Fatalf("payload = %s, want the requested output", payload)
+	}
+}
+
 func TestCreateSessionIdempotencyPayloadOmitsCoderCapability(t *testing.T) {
 	payload, err := json.Marshal(CreateSession{Kind: "worker", Provider: "coder", CoderCapability: true})
 	if err != nil {

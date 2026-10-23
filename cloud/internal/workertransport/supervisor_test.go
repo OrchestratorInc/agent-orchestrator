@@ -1275,3 +1275,50 @@ func TestFallBackToTUIRunsOnTheSerialLoop(t *testing.T) {
 		t.Fatal("transport did not stop")
 	}
 }
+
+func TestModelDiscoveryCommandBuildsTheAgentCommandBeforeAnyTurn(t *testing.T) {
+	var built bool
+	supervisor := &Supervisor{
+		AgentCommandFactory: func(_ context.Context, nativeConversationID, model, effort string) (workerexec.Command, error) {
+			built = true
+			if model != "picked" || effort != "low" {
+				t.Fatalf("factory selection = %q/%q", model, effort)
+			}
+			return workerexec.Command{Path: "codex", Env: map[string]string{"CODEX_HOME": "/data/codex"}, Cleanup: func() {}}, nil
+		},
+	}
+	// A Chat session before its first turn has no agent command yet: the
+	// catalog is read with one built like the turn's, credential included.
+	command, err := supervisor.modelDiscoveryCommand(context.Background(), "", "picked", "low")
+	if err != nil {
+		t.Fatalf("model discovery command: %v", err)
+	}
+	if !built || command.Path != "codex" || command.Env["CODEX_HOME"] != "/data/codex" || command.Cleanup == nil {
+		t.Fatalf("command = %+v, built = %v", command, built)
+	}
+}
+
+func TestModelDiscoveryCommandReusesTheRunningAgentWithoutItsCleanup(t *testing.T) {
+	cleaned := false
+	supervisor := &Supervisor{
+		AgentCommand: workerexec.Command{Path: "codex", Env: map[string]string{"CODEX_HOME": "/data/codex"}, Cleanup: func() { cleaned = true }},
+		AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
+			t.Fatal("built a command beside the running agent")
+			return workerexec.Command{}, nil
+		},
+	}
+	command, err := supervisor.modelDiscoveryCommand(context.Background(), "native", "", "")
+	if err != nil {
+		t.Fatalf("model discovery command: %v", err)
+	}
+	if command.Path != "codex" || command.Env["CODEX_HOME"] != "/data/codex" {
+		t.Fatalf("command = %+v", command)
+	}
+	// The running agent's cleanup is not the request's to run.
+	if command.Cleanup != nil {
+		command.Cleanup()
+	}
+	if cleaned {
+		t.Fatal("model discovery would clean up the running agent")
+	}
+}

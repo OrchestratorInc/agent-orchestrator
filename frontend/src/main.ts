@@ -52,7 +52,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
-import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
@@ -117,7 +117,7 @@ import {
 	resolveDaemonFromPort,
 	resolveDaemonFromRunFile,
 } from "./shared/daemon-attach";
-import { browserDaemonOwnershipDecision, shouldReplacePortHolder } from "./shared/daemon-takeover";
+import { browserDaemonOwnershipDecision, portHolderPidToReplace } from "./shared/daemon-takeover";
 import {
 	buildDaemonEnv,
 	devDaemonAllowedOrigins,
@@ -161,6 +161,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -189,6 +190,7 @@ import type {
 	BrowserRemoteTabAction,
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { readProcessStartMs } from "./main/process-start";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -915,6 +917,18 @@ async function createWindowInternal(): Promise<void> {
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// A cloud artifact frame's page can open another file of its session; the
+	// renderer follows it (the file's name, a refused link) by its URL.
+	shellWebContents.on("did-frame-navigate", (_event, url, httpResponseCode, _statusText, isMainFrame) => {
+		if (isMainFrame) return;
+		try {
+			if (cloudArtifactPrefix(new URL(url)) === undefined) return;
+		} catch {
+			return;
+		}
+		shellWebContents.send("cloudArtifact:frameNavigated", { url, status: httpResponseCode });
 	});
 
 	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
@@ -2049,47 +2063,46 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
-	// may still be holding the port. The only reachable case here is a hung/wedged
-	// holder whose run-file PID is still alive but is not answering /healthz (e.g.
-	// our own daemon that bound the port and then deadlocked). Two cases are
-	// intentionally NOT handled: an identity-mismatched but healthy AO daemon is
-	// already surfaced as an error status upstream by resolveDaemonFromPort (not
-	// killed here), and a foreign non-AO process holding the port with a dead
-	// run-file PID is not replaced (out of scope). When no holder is detectable,
-	// skip straight to spawn.
+	// may still be holding the port: a hung daemon that bound it and then stopped
+	// answering /healthz (e.g. one that deadlocked), or one that started answering
+	// since the checks above. A run-file PID that is merely alive is not enough to
+	// signal: after a crash or reboot the OS hands that PID to an unrelated
+	// process, so portHolderPidToReplace names only a daemon it can identify. Two
+	// cases are intentionally NOT handled: an identity-mismatched but healthy AO
+	// daemon is already surfaced as an error status upstream by
+	// resolveDaemonFromPort (not killed here), and a foreign non-AO process holding
+	// the port is not replaced (out of scope). When no holder is identified, skip
+	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
+	// process that is left alone is logged below.
 	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
 	const runFilePath_ = runFilePath();
-	let runFilePid: number | null = null;
+	let runFile: ReturnType<typeof parseRunFile> = null;
 	if (runFilePath_) {
 		try {
-			runFilePid = parseRunFile(await readFile(runFilePath_, "utf8"))?.pid ?? null;
+			runFile = parseRunFile(await readFile(runFilePath_, "utf8"));
 		} catch {
 			// run-file absent or unreadable; proceed without a PID.
 		}
 	}
-	// process.kill(pid, 0) does not kill; it throws iff the PID is not live.
-	let holderPidAlive = false;
-	if (runFilePid) {
-		try {
-			process.kill(runFilePid, 0);
-			holderPidAlive = true;
-		} catch {
-			holderPidAlive = false;
-		}
+	const holder = await portHolderPidToReplace({
+		probe: orphanProbe,
+		runFile,
+		processStartMs: readProcessStartMs,
+	});
+	// Declining to signal is otherwise silent, so say why a live process named by
+	// running.json is left alone (a hung daemon that is not replaced shows up here).
+	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
+		console.warn(`AO: not stopping process ${runFile.pid} named by running.json: ${holder.reason}`);
 	}
-	if (shouldReplacePortHolder(orphanProbe, holderPidAlive)) {
-		// Use the run-file PID when available; fall back to the probe's reported
-		// PID as a last resort (a wedged daemon may not have written a fresh run-file).
-		const pidToKill = runFilePid ?? orphanProbe?.pid ?? null;
-		if (pidToKill) {
+	const holderPid = holder.pid;
+	if (holderPid !== null) {
+		try {
+			process.kill(-holderPid, "SIGTERM");
+		} catch {
 			try {
-				process.kill(-pidToKill, "SIGTERM");
+				process.kill(holderPid, "SIGTERM");
 			} catch {
-				try {
-					process.kill(pidToKill, "SIGTERM");
-				} catch {
-					// process already gone; proceed
-				}
+				// process already gone; proceed
 			}
 		}
 		// Poll until the port is free (probe returns null) or 8 s elapses.
@@ -2904,6 +2917,7 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
+registerCloudArtifactIpc({ ipcMain });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

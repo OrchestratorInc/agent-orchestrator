@@ -317,6 +317,19 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	if r == nil || (r.identityErr != "" && !r.mismatch) {
 		return identity, false // not known: leave it to the CLI's own readiness
 	}
+	if !r.identity.SignedIn {
+		// New sessions start on another signed-in account instead, if there is one.
+		next, err := s.newSessionAccount(ctx, p)
+		switch {
+		case err == nil && next.Device():
+			return identity, false
+		case err == nil:
+			account = next
+			if r = s.cachedReading(next.ID); r == nil {
+				return identity, false
+			}
+		}
+	}
 	identity = r.identity
 	// A mismatched folder names another login; the account is still its own.
 	if account.Email != "" {
@@ -351,13 +364,78 @@ func (s *Service) RunsOnComputerLogin(ctx context.Context, harness domain.AgentH
 		return true
 	}
 	if accountID == "" {
-		def, err := s.defaultID(ctx, p)
+		account, err := s.newSessionAccount(ctx, p)
 		if err != nil {
 			return true
 		}
-		accountID = def
+		accountID = account.ID
 	}
 	return accountID == domain.DeviceAgentAccountID(p)
+}
+
+// newSessionAccount is the account a new session of p starts on: the default,
+// or, when the default is known to be signed out or to hold another login, the
+// first other account that is signed in. The session's account shows which.
+// Only a bad default costs CLI calls; a good one is answered from the cache.
+func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
+	def, err := s.defaultID(ctx, p)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	account, err := s.find(ctx, def)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	r := s.cachedReading(account.ID)
+	if !r.knownUnusable() {
+		return account, nil
+	}
+	// The user may have signed it in outside AO since an old reading.
+	if s.now().Sub(r.at) > freshFor {
+		if r = s.read(ctx, account); !r.knownUnusable() {
+			return account, nil
+		}
+	}
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	for _, other := range accounts {
+		if other.Provider != p || other.ID == account.ID || s.beingRemoved(other.ID) {
+			continue
+		}
+		r := s.cachedReading(other.ID)
+		if r == nil || r.identityErr != "" || s.now().Sub(r.at) > freshFor {
+			r = s.read(ctx, other)
+		}
+		if r != nil && r.identity.SignedIn {
+			return other, nil
+		}
+	}
+	return domain.AgentAccount{}, ports.ErrAgentAccountDefaultUnusable
+}
+
+func (s *Service) cachedReading(id string) *reading {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readings[id]
+}
+
+// RecheckSessionAccount reads the account a session runs on again, after its
+// agent was refused for its credentials. Claude clears a folder's login when
+// its refresh token is refused, so the account reads as signed out at once and
+// new sessions stop starting on it, instead of after the cache window.
+func (s *Service) RecheckSessionAccount(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return
+	}
+	account, _, err := s.SessionAccount(ctx, id, p)
+	if err != nil {
+		s.log.Debug("recheck session account", "session", id, "error", err)
+		return
+	}
+	s.read(ctx, account)
 }
 
 // SetDefault makes accountID the account new sessions of its provider start on.
@@ -695,27 +773,17 @@ func (s *Service) BindSession(ctx context.Context, id domain.SessionID, harness 
 		return nil
 	}
 	if accountID == "" {
-		def, err := s.defaultID(ctx, p)
+		// A default known to be signed out would start the task signed out, or as
+		// someone else: it starts on another signed-in account instead, and is
+		// refused only when there is none.
+		account, err := s.newSessionAccount(ctx, p)
 		if err != nil {
 			return err
-		}
-		account, err := s.find(ctx, def)
-		if err != nil {
-			return err
-		}
-		// The task would start on the wrong login, or none. Refuse rather than
-		// run it there or quietly on another account, which bills someone else.
-		// The cached reading decides, so a new task costs no CLI call.
-		s.mu.Lock()
-		r := s.readings[account.ID]
-		s.mu.Unlock()
-		if r.knownUnusable() {
-			return ports.ErrAgentAccountDefaultUnusable
 		}
 		if err := s.prepare(s.providers[p], account.Home); err != nil {
 			return err
 		}
-		return s.store.BindSessionAgentAccount(ctx, id, p, def, s.now())
+		return s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now())
 	}
 	account, err := s.pick(ctx, harness, accountID)
 	if err != nil {

@@ -387,7 +387,10 @@ func TestRemovingAnAccountKeepsNewLaunchesOffIt(t *testing.T) {
 // A new task on a default account that is known to be signed out, or now holds
 // another login, is refused rather than started there or quietly elsewhere.
 // Not knowing (no reading yet) is not a reason to refuse.
-func TestNewTaskOnAKnownBadDefaultIsRefused(t *testing.T) {
+// A new task on a default that is known to be signed out, or to hold another
+// login, starts on another account that is signed in, and is refused only when
+// there is none.
+func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
@@ -418,8 +421,12 @@ func TestNewTaskOnAKnownBadDefaultIsRefused(t *testing.T) {
 			if _, err := svc.List(ctx, true); err != nil {
 				t.Fatal(err)
 			}
-			if err := svc.BindSession(ctx, domain.SessionID("bad-"+tc.name), domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
-				t.Fatalf("bind on a bad default: %v", err)
+			id := domain.SessionID("bad-" + tc.name)
+			if err := svc.BindSession(ctx, id, domain.HarnessClaudeCode, ""); err != nil || store.bindings[id] != "device-claude" {
+				t.Fatalf("bind on a bad default: %q %v", store.bindings[id], err)
+			}
+			if !svc.RunsOnComputerLogin(ctx, domain.HarnessClaudeCode, "") {
+				t.Fatal("a new task on a bad default does not run on the computer's login it starts on")
 			}
 		})
 	}
@@ -428,12 +435,90 @@ func TestNewTaskOnAKnownBadDefaultIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	delete(claude.signedInAs, "")
+	claude.signedInAs[b] = "b@example.com"
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.BindSession(ctx, "device-out", domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
-		t.Fatalf("bind on a signed-out CLI login default: %v", err)
+	if err := svc.BindSession(ctx, "device-out", domain.HarnessClaudeCode, ""); err != nil || store.bindings["device-out"] != start.OperationID {
+		t.Fatalf("bind on a signed-out CLI login default: %q %v", store.bindings["device-out"], err)
 	}
+	// With no account signed in, the task is refused rather than started signed out.
+	delete(claude.signedInAs, b)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindSession(ctx, "none", domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
+		t.Fatalf("bind with every account signed out: %v", err)
+	}
+}
+
+// A signed-out reading of the default that is older than the cache window is
+// read again first: the user may have signed it in outside AO since.
+func TestAnOldSignedOutDefaultIsReadAgainBeforeMovingOn(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	delete(claude.signedInAs, b)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[b] = "b@example.com"
+	now = now.Add(freshFor + time.Minute)
+	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s1"] != start.OperationID {
+		t.Fatalf("bind after the default was signed in again: %q %v", store.bindings["s1"], err)
+	}
+}
+
+// When a session's agent is refused for its credentials, its account is read
+// again at once: it shows as signed out, and new tasks stop starting on it.
+func TestRecheckSessionAccountSeesALoginThatDied(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Claude clears a folder's login when its refresh token is refused.
+	delete(claude.signedInAs, b)
+	svc.RecheckSessionAccount(ctx, "s1", domain.HarnessClaudeCode)
+	views, err := svc.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range views {
+		if view.Account.ID == start.OperationID && view.SignedIn {
+			t.Fatal("the account still reads as signed in after its session was refused")
+		}
+	}
+	if err := svc.BindSession(ctx, "s2", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s2"] != "device-claude" {
+		t.Fatalf("new task after the default's login died: %q %v", store.bindings["s2"], err)
+	}
+	// A harness without accounts has nothing to read.
+	svc.RecheckSessionAccount(ctx, "s1", domain.HarnessGemini)
 }
 
 func TestRunsOnComputerLoginFollowsTheDefaultAndThePick(t *testing.T) {
@@ -508,15 +593,57 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	if identity, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || !identity.SignedIn || identity.Email != "b@example.com" {
 		t.Fatalf("saved default = %+v handled %v, want b@example.com signed in", identity, handled)
 	}
+	// A signed-out default sends new sessions to the computer's own login, whose
+	// readiness the CLI reports itself.
 	delete(claude.signedInAs, b)
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
 	}
+	if _, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); handled {
+		t.Fatal("answered for a signed-out default whose sessions start on the computer's login")
+	}
+	delete(claude.signedInAs, "")
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
 	if identity, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || identity.SignedIn || identity.Email != "b@example.com" {
-		t.Fatalf("saved default signed out = %+v handled %v", identity, handled)
+		t.Fatalf("every account signed out = %+v handled %v", identity, handled)
 	}
 	if len(changed) < 2 {
 		t.Fatalf("readiness was told %v, want at least the sign-in and the new default", changed)
+	}
+}
+
+// With the default signed out and another saved account signed in, readiness
+// describes that account, which new sessions start on.
+func TestDefaultSignInFollowsTheAccountNewSessionsStartOn(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	add := func(email string) string {
+		t.Helper()
+		start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+		claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = email
+		if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+			t.Fatal(err)
+		}
+		return start.OperationID
+	}
+	b, c := add("b@example.com"), add("c@example.com")
+	if err := svc.SetDefault(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	delete(claude.signedInAs, filepath.Join(root, "claude", b))
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if identity, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || !identity.SignedIn || identity.Email != "c@example.com" {
+		t.Fatalf("readiness on a signed-out default = %+v handled %v, want c@example.com signed in", identity, handled)
+	}
+	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s1"] != c {
+		t.Fatalf("new task = %q %v, want %q", store.bindings["s1"], err, c)
 	}
 }
 

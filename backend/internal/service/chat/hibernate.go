@@ -175,9 +175,10 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if o.forUpdate && candidate.Kind == domain.KindOrchestrator {
-		// Idle hibernation keeps orchestrators running. An update must stop
-		// them too, under the same turn, queue and approval checks.
+	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+		// Idle hibernation keeps orchestrators running. An update or a move to
+		// a new release stops them only to start them again, so they go too,
+		// under the same turn, queue and approval checks.
 		candidate.Kind = ""
 	}
 	if !candidate.EligibleForChatHibernation() || rec.Activity.LastActivityAt.Add(o.minIdle).After(s.now()) {

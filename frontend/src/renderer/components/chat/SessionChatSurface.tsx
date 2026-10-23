@@ -241,6 +241,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (!chatInFront) setChosenSwitch(undefined);
 	}, [chatInFront]);
 	const queryClient = useQueryClient();
+	// After a daemon restart the daemon reattaches surviving Chats on its own, and
+	// that reattach emits no change event. The session's recovery check settling
+	// on "ready" is the signal to refresh the controller state this view shows.
+	const statusReadiness = session.statusReadiness;
+	const lastReadiness = useRef({ id: session.id, readiness: statusReadiness });
+	useEffect(() => {
+		const previous = lastReadiness.current;
+		lastReadiness.current = { id: session.id, readiness: statusReadiness };
+		if (hostId || previous.id !== session.id || statusReadiness !== "ready" ||
+			!previous.readiness || previous.readiness === "ready") return;
+		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
+	}, [hostId, queryClient, session.id, statusReadiness]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
@@ -368,12 +380,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models: controllerModels } = useConversationModels(
+	const { models: controllerModels, loaded: controllerModelsLoaded } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
-	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId);
+	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),

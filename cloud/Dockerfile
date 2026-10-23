@@ -4,6 +4,7 @@ ARG BUILDPLATFORM
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG EXPAT_BUILD_IMAGE=debian:trixie-slim
+ARG BROTLI_BUILD_IMAGE=debian:trixie-slim
 
 FROM --platform=${BUILDPLATFORM} golang:1.27.1-bookworm AS build
 ARG TARGETOS
@@ -57,6 +58,43 @@ RUN dpkg-source -x expat_2.9.0-1.dsc source && \
     cp libexpat1_2.9.0-1_*.deb /out/libexpat1.deb && \
     cc -Wall -Wextra -Werror expat-buffer-bounds.c -lexpat -o /out/expat-buffer-bounds && \
     /out/expat-buffer-bounds
+
+# Trixie has no fix for CVE-2026-111497 yet. Rebuild Debian's pinned Brotli
+# 1.1.0 source on Trixie with upstream's decoder fix, the only change in
+# upstream 1.1.1, and version the package 1.1.1 to match that release.
+# Remove this stage once Trixie's libbrotli1 includes the upstream fix.
+FROM ${BROTLI_BUILD_IMAGE} AS brotli-build
+WORKDIR /build
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        build-essential cmake debhelper fakeroot && \
+    rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:39b06802a852629132d549a7f7449dee7f435e801706714a4bc2ea2f15b28f36 \
+    https://deb.debian.org/debian/pool/main/b/brotli/brotli_1.1.0-2.dsc ./
+ADD --checksum=sha256:10973f4b4199eafa1d5735ef661ddb2ec2f97319ee9fd1824d4aabe08cff5265 \
+    https://deb.debian.org/debian/pool/main/b/brotli/brotli_1.1.0.orig.tar.gz ./
+ADD --checksum=sha256:3d913a3740bcad9a294007575a6beb1846beadbd62b44fb2bf9fdaeddea3236f \
+    https://deb.debian.org/debian/pool/main/b/brotli/brotli_1.1.0-2.debian.tar.xz ./
+ADD --checksum=sha256:d6f962509000223def7062958229bd08457e5e032e7ed0d1d94fb790b054b1fc \
+    https://github.com/google/brotli/commit/0ed4268a4401abcb4472096340477cf4af7d1a2b.patch?full_index=1 \
+    ./0ed4268a44-detect-invalid-stream-earlier.patch
+RUN dpkg-source -x brotli_1.1.0-2.dsc source && \
+    cd source && \
+    mv /build/0ed4268a44-detect-invalid-stream-earlier.patch debian/patches/ && \
+    echo 0ed4268a44-detect-invalid-stream-earlier.patch >> debian/patches/series && \
+    { printf '%s\n' \
+        'brotli (1.1.1-0+ao1) trixie; urgency=high' \
+        '' \
+        '  * Apply upstream commit 0ed4268a44 (CVE-2026-111497).' \
+        '' \
+        ' -- Agent Orchestrator <root@localhost>  Fri, 23 Oct 2026 00:00:00 +0000' \
+        '' && cat debian/changelog; } > debian/changelog.new && \
+    mv debian/changelog.new debian/changelog && \
+    dpkg-buildpackage -b -us -uc -Pnopython --jobs=2 && \
+    cd /build && \
+    test "$(dpkg-deb -f libbrotli1_1.1.1-0+ao1_*.deb Version)" = 1.1.1-0+ao1 && \
+    mkdir /out && \
+    cp libbrotli1_1.1.1-0+ao1_*.deb /out/libbrotli1.deb
 
 FROM node:22-trixie-slim AS worker
 ARG TARGETARCH
@@ -149,6 +187,10 @@ RUN --mount=type=bind,from=expat-build,source=/out,target=/tmp/expat-fix \
     dpkg -i /tmp/expat-fix/libexpat1.deb && \
     /tmp/expat-fix/expat-buffer-bounds && \
     test "$(dpkg-query -W -f='${Version}' libexpat1)" = 2.9.0-1
+RUN --mount=type=bind,from=brotli-build,source=/out,target=/tmp/brotli-fix \
+    dpkg -i /tmp/brotli-fix/libbrotli1.deb && \
+    test "$(dpkg-query -W -f='${Version}' libbrotli1)" = 1.1.1-0+ao1 && \
+    curl --version | grep -q brotli
 COPY --from=build --chown=ao-worker:ao-worker /out/ao-worker /ao-worker
 COPY --from=build --chown=ao-worker:ao-worker /out/ao /usr/local/bin/ao
 USER ao-worker

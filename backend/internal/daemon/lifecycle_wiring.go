@@ -81,7 +81,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithDataDir(dataDir),
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
@@ -408,9 +408,21 @@ type runtimeMessageSender interface {
 // runtimeMessenger sends the user's message directly to the session's live
 // runtime pane. The HTTP controller has already validated and sanitized the
 // message body; this adapter only resolves the stored runtime handle.
+type terminalMessageAdmission struct {
+	sync.Mutex
+	pending  string
+	baseline string
+	handleID string
+	launchID string
+}
+
+const terminalAdmissionCaptureLines = 200
+
 type runtimeMessenger struct {
-	store   *sqlite.Store
-	runtime runtimeMessageSender
+	store      *sqlite.Store
+	runtime    runtimeMessageSender
+	agents     ports.AgentResolver
+	inputLocks *sync.Map
 }
 
 func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
@@ -424,6 +436,83 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 	if rec.IsTerminated {
 		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrTerminated)
 	}
+	if m.agents != nil {
+		agent, found := m.agents.Agent(rec.Harness)
+		if policy, supports := agent.(interface{ ValidateTerminalMessage(string, string) error }); found && supports {
+			lock, _ := m.inputLocks.LoadOrStore(id, &terminalMessageAdmission{})
+			admission, validAdmission := lock.(*terminalMessageAdmission)
+			if !validAdmission {
+				return fmt.Errorf("session %s: invalid input admission state", id)
+			}
+			admission.Lock()
+			defer admission.Unlock()
+			reader, supports := m.runtime.(interface {
+				GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
+			})
+			if !supports {
+				return fmt.Errorf("session %s: current rendered terminal unavailable", id)
+			}
+			screen, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, terminalAdmissionCaptureLines)
+			if err != nil {
+				return err
+			}
+			witness, hasWitness := agent.(interface {
+				TerminalMessageObserved(string, string, string) bool
+			})
+			if admission.pending != "" && (admission.handleID != rec.Metadata.RuntimeHandleID || admission.launchID != rec.Metadata.RuntimeLaunchID) {
+				admission.pending = ""
+			}
+			if admission.pending != "" {
+				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
+					// Admission resets only on a new runtime handle or launch, so name the
+					// recovery instead of looking like a transient failure.
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
+				}
+				admission.pending = ""
+			}
+			if err := policy.ValidateTerminalMessage(message, screen); err != nil {
+				return err
+			}
+			current, exists, err := m.store.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			if !exists || current.IsTerminated || current.Metadata.RuntimeHandleID != rec.Metadata.RuntimeHandleID || current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID {
+				return fmt.Errorf("session %s: runtime changed before input", id)
+			}
+			admission.pending = message
+			admission.baseline = screen
+			admission.handleID = rec.Metadata.RuntimeHandleID
+			admission.launchID = rec.Metadata.RuntimeLaunchID
+			if err := m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, message); err != nil {
+				// A runtime may report an error after applying input, so a failed write
+				// stays pending until a native witness or a new runtime generation.
+				return fmt.Errorf("session %s: terminal submission may have been written: %w", id, err)
+			}
+			// A socket write acknowledgement precedes native acceptance. Hold admission
+			// until the adapter witnesses submission through busy chrome or a committed
+			// transcript echo; an unrelated idle redraw cannot release admission.
+			deadline := time.NewTimer(2 * time.Second)
+			defer deadline.Stop()
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				frame, captureErr := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, terminalAdmissionCaptureLines)
+				if captureErr == nil && hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame) {
+					admission.pending = ""
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("session %s: terminal submission written but unconfirmed: %w", id, ctx.Err())
+				case <-deadline.C:
+					return fmt.Errorf("session %s: terminal submission written but native echo unconfirmed; do not automatically retry", id)
+				case <-ticker.C:
+				}
+			}
+
+		}
+	}
 	handleID := rec.Metadata.RuntimeHandleID
 	if handleID == "" {
 		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrIncompleteHandle)
@@ -433,8 +522,12 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 
 // newSessionMessenger assembles the per-daemon agent messenger. For now, ao
 // send is intentionally minimal: submit the message to the live runtime pane.
-func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger) ports.AgentMessenger {
-	return runtimeMessenger{store: store, runtime: runtime}
+func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger, resolvers ...ports.AgentResolver) ports.AgentMessenger {
+	var agents ports.AgentResolver
+	if len(resolvers) > 0 {
+		agents = resolvers[0]
+	}
+	return runtimeMessenger{store: store, runtime: runtime, agents: agents, inputLocks: &sync.Map{}}
 }
 
 // modeAwareMessenger lets lifecycle start before the session manager while

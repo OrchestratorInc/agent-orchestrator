@@ -553,6 +553,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	};
 }
 
+function isWorkerUnavailable(error: unknown): boolean {
+	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
+}
+
+function isTransportTimeout(error: unknown): boolean {
+	return error instanceof CloudCpError && error.code === "TRANSPORT_TIMEOUT";
+}
+
 export function CloudSessionChatSurface({
 	session,
 	headerActions,
@@ -638,6 +646,11 @@ export function CloudSessionChatSurface({
 	if (settingsRef.current.key !== settingsKey) settingsRef.current = { key: settingsKey, settings };
 	const manualSelectionRef = useRef({ key: settingsKey, version: 0 });
 	if (manualSelectionRef.current.key !== settingsKey) manualSelectionRef.current = { key: settingsKey, version: 0 };
+	// The selection version when the worker's catalog was last read. A choice
+	// made after it (while the worker was still starting, or during the
+	// request) wins over the worker's native model when the catalog arrives.
+	const catalogSyncRef = useRef({ key: settingsKey, version: 0 });
+	if (catalogSyncRef.current.key !== settingsKey) catalogSyncRef.current = { key: settingsKey, version: 0 };
 	const updateSettings = (next: CloudTurnSettings) => {
 		manualSelectionRef.current.version++;
 		settingsRef.current = { key: settingsKey, settings: next };
@@ -648,48 +661,69 @@ export function CloudSessionChatSurface({
 			// The choice still applies for this mounted session when storage is unavailable.
 		}
 	};
+	// The model catalog comes from the session's worker, so it is asked for only
+	// while a worker is connected. Until then (a sandbox still starting, an
+	// idle-paused one waking, a restore) there is nothing to report: the picker
+	// keeps the saved choice, and the query runs by itself once the session
+	// list reports the worker connected, however long that takes. The catalog is
+	// always stale, so a reconnect the session list sees refreshes it too.
+	const workerConnected = session.runtimeConnected === true;
+	const liveRef = useRef({ connected: workerConnected, terminated: session.isTerminated === true });
+	liveRef.current = { connected: workerConnected, terminated: session.isTerminated === true };
 	const modelsQuery = useQuery({
 		// A deleted session has no worker and cannot be resumed (only restored),
 		// so it is not asked. Keying on the worker generation reloads the
 		// catalog for each new worker, including the one a restore starts,
 		// instead of keeping an answer from a worker that is gone.
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.terminalGeneration ?? ""],
-		enabled: Boolean(cloud && ready && session.isTerminated !== true &&
+		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
 			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",
-		retry: false,
+		// The session list can still call a worker connected for a few seconds
+		// after it left (a pause), or after a quick pause and resume it never saw.
+		// Keep asking only while it does; once it reports the worker gone, the
+		// query waits for the next connection instead. A worker's first catalog
+		// read can outlast one request (it prepares the agent's tools first), so
+		// a timed-out request is asked again a few times before it shows.
+		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
+			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3)),
 		queryFn: async ({ signal }) => {
-			const selectionVersionAtFetch = manualSelectionRef.current.version;
-			const orgId = cloud!.orgId;
-			try {
-				const catalog = await client.listChatModels(orgId, session.id, { signal });
-				return { ...catalog, selectionVersionAtFetch };
-			} catch (error) {
-				if (!(error instanceof CloudCpError) || error.code !== "WORKER_UNAVAILABLE") throw error;
-			}
-			// A paused sandbox cannot answer a worker-backed catalog request. Wake
-			// this session and wait for its worker before hiding the model picker.
-			await client.resumeSession(orgId, session.id, { signal });
-			for (let attempt = 0; attempt < 20; attempt++) {
-				await new Promise((resolve) => setTimeout(resolve, 500));
-				try {
-					const catalog = await client.listChatModels(orgId, session.id, { signal });
-					return { ...catalog, selectionVersionAtFetch };
-				} catch (error) {
-					if (!(error instanceof CloudCpError) || error.code !== "WORKER_UNAVAILABLE" || attempt === 19) throw error;
-				}
-			}
-			throw new Error("The Cloud worker did not become available.");
+			const selectionVersionAtFetch = catalogSyncRef.current.version;
+			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
+			return { ...catalog, selectionVersionAtFetch };
 		},
 	});
+	// Opening Chat wakes an idle-paused session once, the way opening its
+	// terminal does. It is not repeated while Chat stays open, so an open tab
+	// does not keep an idle session from pausing.
+	const [wakeError, setWakeError] = useState<CloudCpError>();
+	useEffect(() => {
+		setWakeError(undefined);
+		if (!cloud || !ready || liveRef.current.connected || liveRef.current.terminated) return;
+		const abort = new AbortController();
+		client.resumeSession(cloud.orgId, session.id, { signal: abort.signal }).catch((error: unknown) => {
+			// A session deleted under this view says so; any other refusal leaves
+			// the session's own lifecycle state to explain itself.
+			if (!abort.signal.aborted && error instanceof CloudCpError && error.code === "SESSION_TERMINATED") setWakeError(error);
+		});
+		return () => abort.abort();
+	}, [client, cloud?.orgId, ready, session.id]);
 	useEffect(() => {
 		const native = modelsQuery.data;
-		if (!modelsQuery.isFetchedAfterMount || !native || native.selectionVersionAtFetch !== manualSelectionRef.current.version || (!native.model && !native.reasoningEffort)) return;
+		if (!modelsQuery.isFetchedAfterMount || !native) return;
+		const chosenSince = native.selectionVersionAtFetch !== manualSelectionRef.current.version;
+		catalogSyncRef.current = { key: settingsKey, version: manualSelectionRef.current.version };
 		const current = settingsRef.current.key === settingsKey ? settingsRef.current.settings : readSettings();
+		// A model picked from the local list before the catalog arrived is kept
+		// only if this worker can run it; otherwise the worker's own model applies.
+		const catalog = native.models ?? [];
+		const runnable = !current.model || catalog.length === 0 || catalog.some((model) => model.id === current.model);
+		if (runnable && (chosenSince || (!native.model && !native.reasoningEffort))) return;
 		const next: CloudTurnSettings = {
 			...current,
+			...(runnable ? {} : { model: undefined, reasoningEffort: undefined }),
 			...(native.model ? { model: native.model } : {}),
 			...(native.model || native.reasoningEffort ? { reasoningEffort: native.reasoningEffort || undefined } : {}),
 		};
@@ -808,6 +842,18 @@ export function CloudSessionChatSurface({
 				],
 			}]
 			: undefined;
+	// A session deleted under this view says so in its own words, which say how
+	// to recover. A worker that is not connected is not an error: the catalog
+	// loads once one is.
+	const deletedError = modelsQuery.error instanceof CloudCpError && modelsQuery.error.code === "SESSION_TERMINATED"
+		? modelsQuery.error
+		: workerConnected ? undefined : wakeError;
+	const modelsError = deletedError
+		? deletedError.message
+		// An error kept from an earlier worker is not this one's.
+		: workerConnected && modelsQuery.error instanceof Error && !isWorkerUnavailable(modelsQuery.error)
+			? `Model choices unavailable: ${modelsQuery.error.message}`
+			: undefined;
 	const workerModels = modelsQuery.data?.models ?? [];
 	const selectedModel = workerModels.find((model) => model.id === settings.model) ?? workerModels.find((model) => model.default);
 	// Claude's model and effort as provider options, the shape local Claude Chat gets from its agent.
@@ -867,12 +913,7 @@ export function CloudSessionChatSurface({
 							? eventsQuery.error.message
 						: send.error instanceof Error
 							? send.error.message
-							: modelsQuery.error instanceof CloudCpError && modelsQuery.error.code === "SESSION_TERMINATED"
-								// The session was deleted under this view; its own words say how to recover.
-								? modelsQuery.error.message
-							: modelsQuery.error instanceof Error
-								? `Model choices unavailable: ${modelsQuery.error.message}`
-								: undefined
+							: modelsError
 			}
 			headerActions={headerActions}
 			onOpenFiles={onOpenFiles}

@@ -176,6 +176,7 @@ func officialChannelFits(kind officialSourceKind, layout string) bool {
 // installedBaseline is the harness binary as it was before an update, used to
 // confirm the update changed the copy sessions actually run.
 type installedBaseline struct {
+	target   Target
 	path     string
 	version  string
 	latest   string
@@ -205,8 +206,8 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 			!s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 			return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 		}
-		version, _ := scheme.find(job.Output)
-		baseline = &installedBaseline{path: verified.ResolvedPath, version: version.display, scheme: scheme}
+		version, _ := scheme.find(installedVersionText(target, verified.ResolvedPath, job.Output))
+		baseline = &installedBaseline{target: target, path: verified.ResolvedPath, version: version.display, scheme: scheme}
 	case err != nil:
 		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 	case verified.ResolvedPath == "":
@@ -215,8 +216,8 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 			return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
 		}
-		version, _ := scheme.find(verified.Output)
-		baseline = &installedBaseline{path: verified.ResolvedPath, version: version.display, scheme: scheme}
+		version, _ := scheme.find(installedVersionText(target, verified.ResolvedPath, verified.Output))
+		baseline = &installedBaseline{target: target, path: verified.ResolvedPath, version: version.display, scheme: scheme}
 	}
 	s.mu.Lock()
 	if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
@@ -256,7 +257,7 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	if baseline.path != "" && result.ResolvedPath != "" && baseline.path != result.ResolvedPath {
 		note = fmt.Sprintf("AO now runs %s (was %s).", result.ResolvedPath, baseline.path)
 	}
-	after, afterOK := baseline.scheme.find(result.Output)
+	after, afterOK := baseline.scheme.find(installedVersionText(baseline.target, result.ResolvedPath, result.Output))
 	before, beforeOK := baseline.scheme.parse(baseline.version)
 	if !afterOK {
 		return "The update finished, but AO could not read the new version.", note
