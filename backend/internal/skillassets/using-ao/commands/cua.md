@@ -37,10 +37,11 @@ Invalidated snapshots s0000002e: their element_tokens are stale.
    colon, and the row number. Row `[12]` of snapshot `s00000019` is
    `{"element_token":"s00000019:12"}`; the token carries the pid and window, so
    `click`, `type_text`, `press_key`, and the `run_steps` actions need nothing
-   else to find the element. Acting by element works on background windows and
-   does not move the user's mouse. Use `x`/`y` pixels only for canvases and
-   other surfaces missing from the tree; they are in the screenshot's pixels,
-   so pass that window's `pid` and `window_id` with them.
+   else to find the element. Acting by element does not move the user's mouse
+   and usually works on background windows (see below for when it does
+   not). Use `x`/`y` pixels only for canvases and other surfaces missing
+   from the tree; they are in the screenshot's pixels, so pass that window's
+   `pid` and `window_id` with them.
 4. Check the result before the next step. AO reads the window after every
    action and returns it under the action's summary: the screenshot, the
    window line with a new `snapshot_id`, and the rows that changed since your
@@ -50,6 +51,16 @@ Invalidated snapshots s0000002e: their element_tokens are stale.
    and live apps reorder their lists, so act next with the new `snapshot_id`,
    as the diff says. If the result says `observation skipped`, AO could not
    tell the window: read it with `get_window_state`.
+
+Background windows do not always render. Chromium-based browsers and apps
+(Chrome, Brave, Edge, Electron), on Windows especially, throttle or stop
+painting windows that are hidden behind others, so `get_window_state` can
+return a blank page, or a lazily loaded dialog that never gets past its
+loading skeleton. If a window reads blank or stuck loading twice, stop
+retrying: ask the user to bring it to the front and leave it visible, then
+read it again. You have no tool that raises a window, and an action's
+`delivery_mode: "foreground"` fronts the window only for that one action, so
+it does not keep a page painting.
 
 `run_steps` runs several actions in one call and returns one line per step
 (`2. click failed (find): ...` names the step that stopped the batch), then the
