@@ -1969,7 +1969,8 @@ describe("XtermTerminal", () => {
 	it.each([
 		["Cmd+Left", { key: "ArrowLeft", metaKey: true }, "\x01"],
 		["Cmd+Right", { key: "ArrowRight", metaKey: true }, "\x05"],
-	])("normalizes macOS %s into beginning/end-of-line input", (_name, init, expected) => {
+		["Cmd+Backspace", { key: "Backspace", metaKey: true }, "\x15"],
+	])("normalizes macOS %s into readline input", (_name, init, expected) => {
 		setNavigatorPlatform("MacIntel");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
@@ -1991,14 +1992,14 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith(expected, "shortcut");
 	});
 
-	it("does not re-fire macOS Cmd+Left on the following keyup", () => {
+	it.each(["ArrowLeft", "Backspace"])("does not re-fire macOS Cmd+%s on the following keyup", (key) => {
 		setNavigatorPlatform("MacIntel");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		const keyDown = {
 			type: "keydown",
-			key: "ArrowLeft",
+			key,
 			metaKey: true,
 			ctrlKey: false,
 			shiftKey: false,
@@ -2036,6 +2037,28 @@ describe("XtermTerminal", () => {
 		}
 	});
 
+	it.each([
+		["Option/Alt+Backspace", { key: "Backspace", altKey: true }, "\x1b\x7f"],
+		["Ctrl+Backspace", { key: "Backspace", ctrlKey: true }, "\x1b\x7f"],
+	])("keeps macOS %s as word-backwards deletion", (_name, init, expected) => {
+		setNavigatorPlatform("MacIntel");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		const event = {
+			type: "keydown",
+			metaKey: false,
+			ctrlKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+			...init,
+		} as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(event)).toBe(false);
+		expect(onInput).toHaveBeenCalledWith(expected, "shortcut");
+	});
+
 	it("keeps Windows Ctrl+Left and Ctrl+Right as word movement", () => {
 		setNavigatorPlatform("Win32");
 		const onInput = vi.fn();
@@ -2059,25 +2082,47 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith("\x1b[1;5C", "shortcut");
 	});
 
-	it("does not treat the Windows key plus arrows as macOS line-boundary shortcuts", () => {
+	it("keeps Windows Ctrl+Backspace as word-backwards deletion", () => {
 		setNavigatorPlatform("Win32");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		const event = {
 			type: "keydown",
-			key: "ArrowLeft",
-			metaKey: true,
-			ctrlKey: false,
+			key: "Backspace",
+			ctrlKey: true,
+			metaKey: false,
 			shiftKey: false,
 			altKey: false,
 			preventDefault: vi.fn(),
 			stopPropagation: vi.fn(),
 		} as unknown as KeyboardEvent;
-		expect(state.lastTerminal!.keyHandler!(event)).toBe(true);
-		expect(event.preventDefault).not.toHaveBeenCalled();
-		expect(onInput).not.toHaveBeenCalled();
+		expect(state.lastTerminal!.keyHandler!(event)).toBe(false);
+		expect(onInput).toHaveBeenCalledWith("\x1b\x7f", "shortcut");
 	});
+
+	it.each(["ArrowLeft", "Backspace"])(
+		"does not treat the Windows key plus %s as a macOS readline shortcut",
+		(key) => {
+			setNavigatorPlatform("Win32");
+			const onInput = vi.fn();
+			render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+			const event = {
+				type: "keydown",
+				key,
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+				preventDefault: vi.fn(),
+				stopPropagation: vi.fn(),
+			} as unknown as KeyboardEvent;
+			expect(state.lastTerminal!.keyHandler!(event)).toBe(true);
+			expect(event.preventDefault).not.toHaveBeenCalled();
+			expect(onInput).not.toHaveBeenCalled();
+		},
+	);
 
 	it("does not re-fire a shortcut on the keyup that follows its keydown", () => {
 		// xterm.js invokes attachCustomKeyEventHandler on keydown, keyup, AND
