@@ -157,12 +157,16 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
@@ -273,7 +277,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return { id, name, createdAt: now, updatedAt: now };
 					},
 					clear: async () => undefined,
-					delete: async () => undefined,
+					usage: async () => ({ sessions: [] }),
+					delete: async () => ({}),
 					setDefault: async () => undefined,
 					discoverImportSources: async () => ({ sources: [] }),
 					import: async () => ({ sourceName: "", entries: [] }),
@@ -454,6 +459,8 @@ export type FakeAgentController = {
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
 	setTerminalHandle: (id: string, handleId: string) => void;
+	/** Moves a session to another agent, as a provider switch does. */
+	setProvider: (id: string, provider: string) => void;
 	setPreview: (id: string, previewUrl: string, previewRevision?: number) => void;
 	setBrowserError: (message: string | null) => void;
 	reconnectEventsWithReplayBacklog: (count: number) => void;
@@ -852,6 +859,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					touch(s);
 					pushWorkspaces();
 				},
+				setProvider: (id, provider) => {
+					const s = findSession(id);
+					if (!s) return;
+					s.provider = provider;
+					touch(s);
+					pushWorkspaces();
+				},
 				setPreview: (id, previewUrl, previewRevision) => {
 					const s = findSession(id);
 					if (!s) return;
@@ -1031,12 +1045,16 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
@@ -1148,7 +1166,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return { id, name, createdAt: now, updatedAt: now };
 					},
 					clear: async () => undefined,
-					delete: async () => undefined,
+					usage: async () => ({ sessions: [] }),
+					delete: async () => ({}),
 					setDefault: async () => undefined,
 					discoverImportSources: async () => ({ sources: [] }),
 					import: async () => ({ sourceName: "", entries: [] }),

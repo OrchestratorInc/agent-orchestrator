@@ -112,7 +112,7 @@ test("long unbroken user messages stay inside their chat bubble @T0", async ({ p
 		.locator(".cursor-chat-human-message")
 		.filter({ hasText: "LABEL OCR OUTPUT" });
 	const steerBubble = page
-		.getByText("Steered into the running turn", { exact: true })
+		.getByText("Steered", { exact: true })
 		.locator("..")
 		.locator(":scope > div")
 		.first();

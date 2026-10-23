@@ -33,18 +33,26 @@ import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 //
 // Input sheets are registered separately below so their heights can respond to
 // the keyboard.
-const SHEET_ROUTES = [
+//
+// `androidDetents` pins an action sheet to one height on Android. With two
+// detents Material's BottomSheetBehavior treats the lower one as "collapsed",
+// and from there it only hides once the sheet has been dragged past half of
+// that height or flung hard; a normal swipe snaps back. With one detent it
+// skips the collapsed state and closes on any decisive swipe down, which is
+// what an action sheet needs. iOS keeps both detents: UIKit's sheet dismisses
+// from the lower one with an ordinary swipe.
+const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitToContents"; androidDetents?: readonly [number] }[] = [
 	{ name: "sheets/project", detents: [0.5, 0.95] },
 	{ name: "sheets/agent", detents: [0.5, 0.95] },
 	{ name: "sheets/model", detents: [0.5, 0.95] },
 	{ name: "sheets/chat-settings", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-map", detents: [0.5, 0.95] },
-	{ name: "sheets/conversation-actions", detents: [0.6, 0.95] },
+	{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "sheets/conversation-rename", detents: [0.35, 0.65] },
 	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
-	{ name: "sheets/review-actions", detents: [0.6, 0.95] },
+	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "sheets/store-update", detents: "fitToContents" },
-] as const;
+];
 
 // The manual-connect form — the only sheet with text inputs, and the only one
 // that has to move for the keyboard.
@@ -253,21 +261,13 @@ function Shell() {
 				    being re-implemented on top of RN's `Modal` (which has no gesture
 				    support at all — that's why the hand-rolled version never felt
 				    right). Heights come from SHEET_ROUTES. */}
-				{SHEET_ROUTES.map(({ name, detents }) => (
+				{SHEET_ROUTES.map(({ name, detents, androidDetents }) => (
 					<Stack.Screen
 						key={name}
 						name={name}
-						options={name === "sheets/conversation-actions" && Platform.OS === "android" ? {
+						options={{
 							presentation: "formSheet",
-							sheetAllowedDetents: [0.6],
-							sheetInitialDetentIndex: 0,
-							sheetGrabberVisible: true,
-							sheetCornerRadius: 20,
-							headerShown: false,
-							contentStyle: { backgroundColor: t.bgSurface },
-						} : {
-							presentation: "formSheet",
-							sheetAllowedDetents: detents === "fitToContents" ? "fitToContents" : [...detents],
+							sheetAllowedDetents: Platform.OS === "android" && androidDetents ? [...androidDetents] : detents === "fitToContents" ? "fitToContents" : [...detents],
 							sheetInitialDetentIndex: 0,
 							sheetGrabberVisible: true,
 							sheetCornerRadius: 20,

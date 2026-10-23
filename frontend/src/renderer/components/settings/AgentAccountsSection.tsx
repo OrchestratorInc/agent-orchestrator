@@ -8,6 +8,7 @@ import { useResolvedTheme } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { HarnessDetailGroup } from "./harness/harness-ui";
 import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
@@ -18,11 +19,20 @@ const providerNames = agentAccountProviderNames;
 // lose a browser sign-in in progress.
 let pendingLogins: Partial<Record<AgentAccountProvider, AgentAccountLogin>> = {};
 
+/** The CLI's own login signs in and out through the harness's login terminal. */
+export type CliLoginControls = {
+	/** A login or logout terminal is open, or the harness is busy. */
+	disabled: boolean;
+	canLogout: boolean;
+	onSignIn: () => void;
+	onLogout: () => void;
+};
+
 /** Every Claude Code and Codex account with all of its limits. Each account is
  * a config folder of the CLI itself; "This computer" is the CLI's own login. */
 /** One CLI's subscription accounts on its Harness Account tab: the CLI's own
  * login and the accounts added in AO, with their limits, default and sign-in. */
-export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvider }) {
+export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls }) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts();
 	const usage = useAgentAccountUsage();
@@ -98,6 +108,7 @@ export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvide
 				account={account}
 				aoTokens={tokensByAccount.get(account.id)}
 				busy={busy}
+				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
@@ -116,10 +127,12 @@ export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvide
 	</>;
 }
 
-function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
+function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
 	account: AgentAccount;
 	aoTokens: number | undefined;
 	busy: string | null;
+	/** Only on the CLI's own login, which has no folder of its own to remove. */
+	cliLogin?: CliLoginControls;
 	onMakeDefault: () => void;
 	onUseReset: () => void;
 	onSignInAgain: () => void;
@@ -129,7 +142,6 @@ function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onSign
 	const plan = formatPlanName(account.plan);
 	const resets = account.limits?.resetCredits ?? 0;
 	const meta = [
-		account.device ? t("settings.agentAccounts.cliLogin") : null,
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
 		account.signedIn ? null : t("settings.agentAccounts.signedOut"),
 		aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null,
@@ -141,14 +153,18 @@ function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onSign
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">
-				{!account.signedIn && !account.device
-					? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
-					: null}
+				{cliLogin
+					? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.agentAccounts.signInAgain")}</Button>
+					: !account.signedIn && !account.device
+						? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
+						: null}
 				{account.default
 					? <span className="text-xs text-muted-foreground">{t("settings.agentAccounts.default")}</span>
 					: account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
-				{account.device ? null : <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
+				{account.device
+					? cliLogin?.canLogout && account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null
+					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>
 		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
@@ -197,6 +213,24 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 		<div role="progressbar" aria-label={t("settings.codexAccounts.remainingForLimit", { label: window.label, value })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${fill}`} style={{ width: `${remaining}%` }} /></div>
 		<p className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{t("settings.codexAccounts.percentLeft", { value })}</p>
 	</>;
+}
+
+/** The sign-in terminal on its own, for signing a saved account in again from
+ * outside Settings, such as a chat whose agent was refused. Closing cancels. */
+export function AgentAccountLoginDialog({ login, note, pending, onCheck, onClose }: {
+	login: AgentAccountLogin;
+	note: string;
+	pending: boolean;
+	onCheck: (login: AgentAccountLogin) => void;
+	onClose: (login: AgentAccountLogin) => void;
+}) {
+	const { t } = useTranslation();
+	return <Dialog open onOpenChange={(open) => { if (!open) onClose(login); }}>
+		<DialogContent aria-describedby={undefined} showCloseButton={false} className="z-overlay w-[min(560px,calc(100vw-24px))] max-w-none p-0">
+			<DialogTitle className="sr-only">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</DialogTitle>
+			<LoginTerminal login={login} note={note} pending={pending} onCheck={onCheck} onClose={onClose} />
+		</DialogContent>
+	</Dialog>;
 }
 
 function LoginTerminal({ login, note, pending, onCheck, onClose }: {

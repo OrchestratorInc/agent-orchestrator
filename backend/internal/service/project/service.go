@@ -43,6 +43,7 @@ type Manager interface {
 	// local repository as a project.
 	Clone(ctx context.Context, in CloneInput) (Project, error)
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
+	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
 	// InitializeRepository prepares a selected folder for project registration.
@@ -52,6 +53,8 @@ type Manager interface {
 	// and per-project config, returning the updated read-model.
 	UpdateSettings(ctx context.Context, id domain.ProjectID, in UpdateSettingsInput) (Project, error)
 	SetPermissions(ctx context.Context, id domain.ProjectID, in SetPermissionsInput) (Project, error)
+	// ForgetPermissions clears the remembered policy, so new sessions use the agent's own default.
+	ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error)
 
 	// SetConfig replaces a project's per-project config, returning the updated
 	// read-model.
@@ -70,13 +73,12 @@ type SessionTeardowner interface {
 
 // Service implements project registration and lookup use-cases for controllers.
 type Service struct {
-	store               Store
-	sessions            SessionTeardowner
-	clock               func() time.Time
-	telemetry           ports.EventSink
-	defaultHarness      domain.AgentHarness
-	logger              *slog.Logger
-	onModelScopeChanged func(projectID string)
+	store          Store
+	sessions       SessionTeardowner
+	clock          func() time.Time
+	telemetry      ports.EventSink
+	defaultHarness domain.AgentHarness
+	logger         *slog.Logger
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -100,9 +102,6 @@ type Deps struct {
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
-	// OnModelScopeChanged schedules non-blocking model-catalog invalidation
-	// after a project is created or its agent-relevant config changes.
-	OnModelScopeChanged func(projectID string)
 }
 
 // New returns a project service backed by the given durable store.
@@ -117,13 +116,12 @@ func NewWithDeps(d Deps) *Service {
 		defaultHarness = domain.AgentHarness(config.DefaultAgent)
 	}
 	s := &Service{
-		store:               d.Store,
-		sessions:            d.Sessions,
-		clock:               d.Clock,
-		telemetry:           d.Telemetry,
-		defaultHarness:      defaultHarness,
-		logger:              d.Logger,
-		onModelScopeChanged: d.OnModelScopeChanged,
+		store:          d.Store,
+		sessions:       d.Sessions,
+		clock:          d.Clock,
+		telemetry:      d.Telemetry,
+		defaultHarness: defaultHarness,
+		logger:         d.Logger,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -206,15 +204,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
-	if in.ClonePreparationID != "" {
-		markerID, exists, markerErr := readClonePreparationID(path)
-		if markerErr != nil {
-			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
-		}
-		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
-			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
-		}
-	}
 
 	activeProjects, err := m.store.ListProjects(ctx)
 	if err != nil {
@@ -263,6 +252,16 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		})
 	}
 
+	if in.ClonePreparationID != "" {
+		markerID, exists, markerErr := readClonePreparationID(path)
+		if markerErr != nil {
+			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
+		}
+		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
+			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
+		}
+	}
+
 	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {
 		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	} else if ok && existing.ArchivedAt.IsZero() && existing.Path != path {
@@ -308,7 +307,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
-		m.modelScopeChanged(row.ID)
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
 		}
@@ -360,7 +358,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
-	m.modelScopeChanged(row.ID)
 	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
 	return m.projectFromRow(ctx, row), nil
 }
@@ -739,14 +736,7 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	}
 	row.DisplayName = inDisplayName
 	row.Config = in.Config
-	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
-}
-
-func (m *Service) modelScopeChanged(projectID string) {
-	if m.onModelScopeChanged != nil {
-		m.onModelScopeChanged(projectID)
-	}
 }
 
 // SetConfig replaces the project's stored config. The typed config is validated
@@ -777,7 +767,6 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
 	}
-	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -1090,6 +1079,18 @@ func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in Se
 	if in.SourceHarness == domain.HarnessCodex && permissions == domain.PermissionModeDefault {
 		permissions = domain.PermissionModeBypassPermissions
 	}
+	return m.storePermissions(ctx, id, permissions)
+}
+
+// ForgetPermissions clears the remembered approval policy. Existing sessions keep theirs.
+func (m *Service) ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error) {
+	if err := validateProjectID(id); err != nil {
+		return Project{}, err
+	}
+	return m.storePermissions(ctx, id, "")
+}
+
+func (m *Service) storePermissions(ctx context.Context, id domain.ProjectID, permissions domain.PermissionMode) (Project, error) {
 	row, ok, err := m.store.SetProjectPermissions(ctx, string(id), permissions)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_PERMISSIONS_UPDATE_FAILED", "Failed to update project permissions")

@@ -65,6 +65,7 @@ export function OptionMenuContent({
 	return (
 		<DropdownMenuPrimitive.Portal>
 			<DropdownMenuPrimitive.Content
+				data-browser-native-overlay="true"
 				sideOffset={sideOffset}
 				collisionPadding={16}
 				className={cn(
@@ -182,6 +183,7 @@ export function OptionMenuSubContent({
 	return (
 		<DropdownMenuPrimitive.Portal>
 			<DropdownMenuPrimitive.SubContent
+				data-browser-native-overlay="true"
 				sideOffset={sideOffset}
 				alignOffset={alignOffset}
 				collisionPadding={16}

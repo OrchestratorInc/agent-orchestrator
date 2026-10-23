@@ -20,10 +20,6 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
-import {
-	agentSwitchStatusVisual,
-	deriveSessionAgentSwitchPresentation,
-} from "../lib/agent-switch-presentation";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
@@ -44,10 +40,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
-	t?: TFunction,
 ): BoardSessionPresentation {
-	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
-	const switchVisual = switchPresentation ? agentSwitchStatusVisual(switchPresentation) : undefined;
 	const provisioningStatus =
 		session.provisionState === "provisioning"
 			? {
@@ -76,16 +69,7 @@ export function toBoardSessionPresentation(
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
-		statusPresentation:
-			provisioningStatus ?? failedStartStatus ??
-			(t && switchPresentation && switchVisual
-				? {
-						className: switchVisual.className,
-						indicatorClassName: `${switchVisual.indicatorClassName}${switchVisual.breathe ? " animate-status-pulse" : ""}`,
-						label: t(switchPresentation.compactLabelKey, switchPresentation.values),
-						tone: switchVisual.tone,
-					}
-				: undefined),
+		statusPresentation: provisioningStatus ?? failedStartStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,
@@ -312,8 +296,8 @@ function DesktopSessionCard({
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
 			session={
 				hideTerminatedStatus
-					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
-					: toBoardSessionPresentation(session, t)
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
+					: toBoardSessionPresentation(session)
 			}
 			translate={translate}
 		/>

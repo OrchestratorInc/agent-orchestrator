@@ -103,6 +103,17 @@ func (f *fakeArtifactVersions) RecordSave(_ context.Context, _ domain.SessionRec
 	return nil
 }
 
+func (f *fakeArtifactVersions) DeleteVersions(_ context.Context, _ domain.SessionRecord, relPath string) error {
+	kept := f.versions[:0]
+	for _, v := range f.versions {
+		if v.Path != relPath {
+			kept = append(kept, v)
+		}
+	}
+	f.versions = kept
+	return nil
+}
+
 func artifactVersionServer(t *testing.T) (*httptest.Server, *fakeArtifactVersions, string) {
 	t.Helper()
 	dir := t.TempDir()

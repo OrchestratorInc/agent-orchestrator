@@ -633,6 +633,7 @@ export function CloudSessionChatSurface({
 	};
 	const [selected, setSelected] = useState<{ key: string; settings: CloudTurnSettings }>(() => ({ key: settingsKey, settings: readSettings() }));
 	const settings = selected.key === settingsKey ? selected.settings : readSettings();
+	const [rememberedMode, setRememberedMode] = useState<{ key: string; mode?: ApprovalMode }>(() => ({ key: projectKey, mode: readRememberedApprovalMode(projectKey) }));
 	const settingsRef = useRef({ key: settingsKey, settings });
 	if (settingsRef.current.key !== settingsKey) settingsRef.current = { key: settingsKey, settings };
 	const manualSelectionRef = useRef({ key: settingsKey, version: 0 });
@@ -843,9 +844,14 @@ export function CloudSessionChatSurface({
 			showApprovalMode={approvalModes.length > 0}
 			approvalModes={approvalModes}
 			onRememberPermissions={approvalModes.length > 0 ? (mode) => {
-				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode, approvalModeChosen: true })); } catch { /* keep this session's choice */ }
-				updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
+				try {
+					if (mode) localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode, approvalModeChosen: true }));
+					else localStorage.removeItem(projectKey);
+				} catch { /* keep this session's choice */ }
+				setRememberedMode({ key: projectKey, mode: mode ?? undefined });
+				if (mode) updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
+			rememberedPermissionMode={rememberedMode.key === projectKey ? rememberedMode.mode : readRememberedApprovalMode(projectKey)}
 			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
 			busy={send.isPending}
 			controllerTransitioning={controllerTransitioning}

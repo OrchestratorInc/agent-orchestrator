@@ -8,12 +8,15 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -85,8 +88,8 @@ type WorkspaceFiles struct {
 	// Sections splits the same working tree into git-state groups (staged,
 	// unstaged, untracked, committed-since-base), independent of the
 	// base..worktree Files list above. Only populated for single-repo
-	// sessions; workspace-project (multi-repo) and scratch sessions leave it
-	// zero-valued.
+	// sessions; workspace-project (multi-repo) and scratch sessions fill only
+	// Uncommitted.
 	Sections WorkspaceFileSections
 	// Commits are the commits between the compare base and HEAD, newest first.
 	Commits []CommitSummary
@@ -108,14 +111,16 @@ type WorkspaceFiles struct {
 }
 
 // WorkspaceFileSections groups the session worktree's changed files by git
-// state: staged (index vs HEAD), unstaged (worktree vs index), untracked, and
-// committed (HEAD vs the compare base). A partially staged file can appear in
-// both Staged and Unstaged.
+// state: uncommitted (worktree vs HEAD, untracked files included), staged
+// (index vs HEAD), unstaged (worktree vs index), untracked, and committed
+// (HEAD vs the compare base). A partially staged file can appear in both
+// Staged and Unstaged, but only once in Uncommitted.
 type WorkspaceFileSections struct {
-	Staged    []WorkspaceFileSummary
-	Unstaged  []WorkspaceFileSummary
-	Untracked []WorkspaceFileSummary
-	Committed []WorkspaceFileSummary
+	Uncommitted []WorkspaceFileSummary
+	Staged      []WorkspaceFileSummary
+	Unstaged    []WorkspaceFileSummary
+	Untracked   []WorkspaceFileSummary
+	Committed   []WorkspaceFileSummary
 }
 
 // WorkspaceFileSection identifies which of WorkspaceFileSections a
@@ -126,10 +131,11 @@ type WorkspaceFileSection string
 
 // Git-state sections a workspace file row can belong to.
 const (
-	WorkspaceFileSectionStaged    WorkspaceFileSection = "staged"
-	WorkspaceFileSectionUnstaged  WorkspaceFileSection = "unstaged"
-	WorkspaceFileSectionUntracked WorkspaceFileSection = "untracked"
-	WorkspaceFileSectionCommitted WorkspaceFileSection = "committed"
+	WorkspaceFileSectionUncommitted WorkspaceFileSection = "uncommitted"
+	WorkspaceFileSectionStaged      WorkspaceFileSection = "staged"
+	WorkspaceFileSectionUnstaged    WorkspaceFileSection = "unstaged"
+	WorkspaceFileSectionUntracked   WorkspaceFileSection = "untracked"
+	WorkspaceFileSectionCommitted   WorkspaceFileSection = "committed"
 )
 
 // CommitSummary is one commit between the compare base and HEAD.
@@ -174,11 +180,19 @@ type WorkspaceManifest struct {
 // latency-sensitive manifest. It deliberately avoids enumerating every file
 // in the repository.
 type WorkspaceHistory struct {
-	SessionID        domain.SessionID
+	SessionID domain.SessionID
+	// View describes whose history this is: the checked-out worktree, another
+	// local branch, or a pull request that is not checked out.
+	View             WorkspaceViewInfo
 	Commits          []CommitSummary
 	CommitsTruncated bool
-	Ahead            *int
-	Behind           *int
+	// RangeSummary totals the view's whole range (All commits). Only branch and
+	// pull request views fill it; the checked-out view sums its committed
+	// section instead.
+	RangeSummary *WorkspaceSummary
+	// Ahead and Behind are only filled for the checked-out view.
+	Ahead  *int
+	Behind *int
 }
 
 // WorkspaceFileSummary is one file row in the session workspace browser.
@@ -297,7 +311,8 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 		if err != nil {
 			return WorkspaceFiles{}, err
 		}
-		return finalizeWorkspaceFiles(WorkspaceFiles{SessionID: id, Files: files, Truncated: truncated}), nil
+		// Every scratch file is uncommitted: there is no Git history to compare.
+		return finalizeWorkspaceFiles(WorkspaceFiles{SessionID: id, Files: files, Sections: WorkspaceFileSections{Uncommitted: slices.Clone(files)}, Truncated: truncated}), nil
 	}
 	if projectKind == domain.ProjectKindWorkspace {
 		result, err := s.listWorkspaceProjectFiles(ctx, rec, project)
@@ -352,41 +367,31 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 }
 
 // GetWorkspaceHistory loads commit and upstream metadata without paying for
-// the legacy all-files inventory used by the full workspace browser.
-func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (WorkspaceHistory, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+// the legacy all-files inventory used by the full workspace browser. The zero
+// view reads the checked-out worktree; a branch or pull request view reads
+// that view's revisions only.
+func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view WorkspaceView) (WorkspaceHistory, error) {
+	resolved, err := s.resolveWorkspaceView(ctx, id, view)
 	if err != nil {
 		return WorkspaceHistory{}, err
 	}
-	project, projectOK, err := s.sessionProject(ctx, rec)
-	if err != nil {
-		return WorkspaceHistory{}, err
+	if resolved.Kind != WorkspaceViewCheckedOut {
+		return workspaceViewHistory(ctx, id, resolved)
 	}
-	if isStandaloneScratchWorkspace(rec) || (projectOK && project.Kind.WithDefault() == domain.ProjectKindWorkspace) {
-		return WorkspaceHistory{SessionID: id, Commits: []CommitSummary{}}, nil
-	}
-	prs, err := s.workspaceComparePRs(ctx, rec.ID)
-	if err != nil {
-		return WorkspaceHistory{}, err
-	}
-	resolve := func(rctx context.Context) workspaceCompareTarget {
-		return resolveWorkspaceCompare(rctx, rec.Metadata.WorkspacePath, rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef, defaultBranchForProject(project, projectOK), prs)
-	}
-	compare, _, err := s.resolveWorkspaceChanges(ctx, id, rec.Metadata.WorkspacePath, resolve)
-	if err != nil {
-		return WorkspaceHistory{}, err
+	if resolved.root == "" {
+		return WorkspaceHistory{SessionID: id, View: resolved.WorkspaceViewInfo, Commits: []CommitSummary{}}, nil
 	}
 	var commits workspaceCommits
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
-	if base := strings.TrimSpace(compare.gitBase()); base != "" && base != "HEAD" {
+	if resolved.rangeBefore != "" {
 		g.Go(func() (err error) {
-			commits.list, commits.truncated, err = gitCommitLog(gctx, rec.Metadata.WorkspacePath, base)
+			commits.list, commits.truncated, err = gitCommitLog(gctx, resolved.root, resolved.rangeBefore)
 			return err
 		})
 	}
 	g.Go(func() error {
-		ahead, behind = gitAheadBehind(gctx, rec.Metadata.WorkspacePath)
+		ahead, behind = gitAheadBehind(gctx, resolved.root)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
@@ -395,7 +400,7 @@ func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) 
 	if commits.list == nil {
 		commits.list = []CommitSummary{}
 	}
-	return WorkspaceHistory{SessionID: id, Commits: commits.list, CommitsTruncated: commits.truncated, Ahead: ahead, Behind: behind}, nil
+	return WorkspaceHistory{SessionID: id, View: resolved.WorkspaceViewInfo, Commits: commits.list, CommitsTruncated: commits.truncated, Ahead: ahead, Behind: behind}, nil
 }
 
 func workspaceDegradedCode(err error) string {
@@ -980,7 +985,13 @@ func gitCommitExists(ctx context.Context, root, rev string) bool {
 }
 
 func gitMergeBase(ctx context.Context, root, ref string) (string, bool) {
-	out, err := gitWorkspaceOutput(ctx, root, "merge-base", "HEAD", ref)
+	return gitMergeBaseOf(ctx, root, "HEAD", ref)
+}
+
+// gitMergeBaseOf is gitMergeBase for two arbitrary revisions rather than
+// HEAD and one, so a view that is not checked out can find its own base.
+func gitMergeBaseOf(ctx context.Context, root, a, b string) (string, bool) {
+	out, err := gitWorkspaceOutput(ctx, root, "merge-base", a, b)
 	if err != nil {
 		return "", false
 	}
@@ -1036,13 +1047,25 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 			return WorkspaceFiles{}, err
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-		return WorkspaceFiles{SessionID: rec.ID, CompareBaseSHA: compare.BaseSHA, CompareBaseRef: compare.BaseRef, CompareMode: compare.Mode, Files: files, Truncated: truncated}, nil
+		result := WorkspaceFiles{SessionID: rec.ID, CompareBaseSHA: compare.BaseSHA, CompareBaseRef: compare.BaseRef, CompareMode: compare.Mode, Files: files, Truncated: truncated}
+		uncommitted, err := workspaceUncommittedFiles(ctx, rec.Metadata.WorkspacePath, "", nil)
+		if err != nil {
+			if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+				return WorkspaceFiles{}, err
+			}
+			result.Degraded = true
+			result.DegradedCode = workspaceDegradedCode(err)
+			return result, nil
+		}
+		result.Sections.Uncommitted = uncommitted
+		return result, nil
 	}
 
 	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
 	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
 	defaultBranch := defaultBranchForProject(project, true)
-	var files []WorkspaceFileSummary
+	var files, uncommitted []WorkspaceFileSummary
+	var uncommittedErr error
 	truncated := false
 	compares := make([]workspaceCompareTarget, 0, len(rows))
 	for _, row := range rows {
@@ -1073,17 +1096,33 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
+		if uncommittedErr == nil {
+			var repoUncommitted []WorkspaceFileSummary
+			repoUncommitted, uncommittedErr = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+			uncommitted = append(uncommitted, repoUncommitted...)
+		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	compare := aggregateWorkspaceCompare(compares)
-	return WorkspaceFiles{
+	result := WorkspaceFiles{
 		SessionID:      rec.ID,
 		CompareBaseSHA: compare.BaseSHA,
 		CompareBaseRef: compare.BaseRef,
 		CompareMode:    compare.Mode,
 		Files:          files,
 		Truncated:      truncated,
-	}, nil
+	}
+	if uncommittedErr != nil {
+		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
+			return WorkspaceFiles{}, uncommittedErr
+		}
+		result.Degraded = true
+		result.DegradedCode = workspaceDegradedCode(uncommittedErr)
+		return result, nil
+	}
+	sort.Slice(uncommitted, func(i, j int) bool { return uncommitted[i].Path < uncommitted[j].Path })
+	result.Sections.Uncommitted = uncommitted
+	return result, nil
 }
 
 func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, rel string, withCompare bool) (workspaceFileTarget, error) {
@@ -1830,6 +1869,10 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
+		if base == "HEAD" {
+			// An unborn HEAD diffs against the empty tree instead of failing.
+			base = headRevOrEmptyTree(gctx, root)
+		}
 		diffStatuses, diffPrevious, counts, err = workspaceDiffStats(gctx, root, base)
 		return err
 	})
@@ -1900,9 +1943,14 @@ type workspaceCommits struct {
 // git subprocesses and run concurrently.
 func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSections, workspaceCommits, *int, *int, error) {
 	var sections WorkspaceFileSections
+	var uncommittedTracked []WorkspaceFileSummary
 	var commits workspaceCommits
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		uncommittedTracked, err = workspaceUncommittedTracked(gctx, root)
+		return err
+	})
 	g.Go(func() error {
 		statuses, previous, counts, err := workspaceDiffStats(gctx, root, "--cached")
 		if err != nil {
@@ -1948,7 +1996,122 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	if err := g.Wait(); err != nil {
 		return WorkspaceFileSections{}, workspaceCommits{}, nil, nil, err
 	}
+	sections.Uncommitted = mergeUncommittedFiles(uncommittedTracked, sections.Untracked)
 	return sections, commits, ahead, behind, nil
+}
+
+// workspaceUncommittedTracked lists the tracked changes between HEAD and the
+// worktree, staged or not, so a partially staged file is one row. HEAD is
+// tried first so the common case costs one Git process; an unborn HEAD then
+// diffs against the empty tree, which counts a staged new file's later
+// worktree edits too.
+func workspaceUncommittedTracked(ctx context.Context, root string) ([]WorkspaceFileSummary, error) {
+	statuses, previous, counts, err := workspaceDiffStats(ctx, root, "HEAD")
+	if err != nil {
+		head := headRevOrEmptyTree(ctx, root)
+		if head == "HEAD" {
+			return nil, err
+		}
+		statuses, previous, counts, err = workspaceDiffStats(ctx, root, head)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buildSectionSummaries(root, statuses, counts, previous), nil
+}
+
+// mergeUncommittedFiles combines tracked HEAD..worktree rows with untracked
+// rows into one path-sorted Uncommitted section. Git keeps the two sets
+// disjoint; should a path appear in both, the tracked row wins, as the
+// combined change maps prefer git diff over git status.
+func mergeUncommittedFiles(tracked, untracked []WorkspaceFileSummary) []WorkspaceFileSummary {
+	files := make([]WorkspaceFileSummary, 0, len(tracked)+len(untracked))
+	seen := make(map[string]struct{}, len(tracked))
+	for _, file := range tracked {
+		seen[file.Path] = struct{}{}
+		files = append(files, file)
+	}
+	for _, file := range untracked {
+		if _, ok := seen[file.Path]; !ok {
+			files = append(files, file)
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files
+}
+
+// workspaceUncommittedFiles computes one workspace-project worktree's
+// Uncommitted section, with paths carrying the repository's display prefix.
+// Workspace projects have no other sections, so this runs its own untracked
+// listing instead of sharing workspaceGitSections' one.
+func workspaceUncommittedFiles(ctx context.Context, root, prefix string, excludePrefixes []string) ([]WorkspaceFileSummary, error) {
+	var tracked, untracked []WorkspaceFileSummary
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		tracked, err = workspaceUncommittedTracked(gctx, root)
+		return err
+	})
+	g.Go(func() error {
+		paths, err := gitUntrackedFiles(gctx, root)
+		if err != nil {
+			return err
+		}
+		untracked = buildUntrackedSummaries(root, paths)
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	merged := mergeUncommittedFiles(tracked, untracked)
+	files := make([]WorkspaceFileSummary, 0, len(merged))
+	for _, file := range merged {
+		if workspacePathExcluded(file.Path, excludePrefixes) {
+			continue
+		}
+		file.Path = joinWorkspaceRelative(prefix, file.Path)
+		file.PreviousPath = joinWorkspaceRelative(prefix, file.PreviousPath)
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+// workspaceEmptyTrees caches each repository's empty-tree object name, which
+// depends only on the repository's immutable hash algorithm.
+var workspaceEmptyTrees sync.Map
+
+// workspaceEmptyTree names the empty tree in root's object format (SHA-1 or
+// SHA-256). hash-object without -w computes the name and writes nothing; git
+// resolves the empty tree without it existing in the object store.
+func workspaceEmptyTree(ctx context.Context, root string) (string, bool) {
+	if cached, ok := workspaceEmptyTrees.Load(root); ok {
+		if tree, ok := cached.(string); ok {
+			return tree, true
+		}
+	}
+	out, err := gitWorkspaceOutput(ctx, root, "hash-object", "-t", "tree", os.DevNull)
+	if err != nil {
+		return "", false
+	}
+	tree := strings.TrimSpace(out)
+	if tree == "" {
+		return "", false
+	}
+	workspaceEmptyTrees.Store(root, tree)
+	return tree, true
+}
+
+// headRevOrEmptyTree is the "before" side of the uncommitted scope: HEAD, or
+// the empty tree while HEAD is unborn so every file in the worktree is an
+// addition. It falls back to "HEAD" when neither resolves, which lets the
+// caller's own Git command report the failure.
+func headRevOrEmptyTree(ctx context.Context, root string) string {
+	if _, ok := gitRevision(ctx, root, "HEAD"); ok {
+		return "HEAD"
+	}
+	if tree, ok := workspaceEmptyTree(ctx, root); ok {
+		return tree
+	}
+	return "HEAD"
 }
 
 // buildSectionSummaries turns a diff's name-status/numstat maps into sorted
@@ -2032,24 +2195,32 @@ func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, bool
 	return commits, truncated, nil
 }
 
-// gitCommitLogChanges lists up to maxCommits commits in revRange, newest
-// first, with each commit's name-status changes and numstat counts. Both are
-// collected in two Git passes, rather than spawning Git once or twice for every
-// commit, and each pass keeps at most maxBytes of output. A commit either
-// fits whole in both passes or is left out, never listed with part of its
-// files. truncated reports that older commits were left out.
+// gitCommitLogChanges is gitCommitLogChangesArgs for one revision range.
 func gitCommitLogChanges(ctx context.Context, root, revRange string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
+	return gitCommitLogChangesArgs(ctx, root, []string{revRange}, maxCommits, maxBytes)
+}
+
+// gitCommitLogChangesArgs lists up to maxCommits commits selected by revArgs
+// (a range, or e.g. --first-parent and a tip), newest first, with each
+// commit's name-status changes and numstat counts. Both are collected in two
+// Git passes, rather than spawning Git once or twice for every commit, and
+// each pass keeps at most maxBytes of output. A commit either fits whole in
+// both passes or is left out, never listed with part of its files. truncated
+// reports that older commits were left out.
+func gitCommitLogChangesArgs(ctx context.Context, root string, revArgs []string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
 	// Reading one commit past the cap tells a full list from a truncated one.
 	maxCount := "--max-count=" + strconv.Itoa(maxCommits+1)
+	statusArgs := append([]string{"log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z"}, revArgs...)
+	numstatArgs := append([]string{"log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z"}, revArgs...)
 	var statusOutput, numstatOutput string
 	var statusCapped, numstatCapped bool
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		statusOutput, statusCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", revRange)
+		statusOutput, statusCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, statusArgs...)
 		return err
 	})
 	g.Go(func() (err error) {
-		numstatOutput, numstatCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z", revRange)
+		numstatOutput, numstatCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, numstatArgs...)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -2410,10 +2581,13 @@ func workspaceFileDiff(ctx context.Context, root, base, rel string, status Works
 	}
 	// staged mirrors the `--cached` diff sections.Staged is built from (index
 	// vs HEAD); unstaged mirrors the bare diff sections.Unstaged is built from
-	// (worktree vs index). Anything else falls back to base..worktree, the
-	// combined change shown before per-section diffs existed.
+	// (worktree vs index); uncommitted mirrors sections.Uncommitted (worktree
+	// vs HEAD). Anything else falls back to base..worktree, the combined
+	// change shown before per-section diffs existed.
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--unified=3"}
 	switch section {
+	case WorkspaceFileSectionUncommitted:
+		args = append(args, headRevOrEmptyTree(ctx, root))
 	case WorkspaceFileSectionStaged:
 		args = append(args, "--cached")
 	case WorkspaceFileSectionUnstaged:
@@ -2600,11 +2774,25 @@ func truncateUTF8(in string, limit int) (string, bool) {
 	return in[:end], true
 }
 
-func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (string, error) {
+// workspaceGitCommand builds the non-interactive, hook-free Git command every
+// workspace read runs, before any output handling.
+func workspaceGitCommand(ctx context.Context, root string, args ...string) *exec.Cmd {
 	globalArgs := make([]string, 0, 10+len(args))
 	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
 	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	return cmd
+}
+
+func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (string, error) {
+	return gitWorkspaceOutputEnv(ctx, root, nil, args...)
+}
+
+// gitWorkspaceOutputEnv is gitWorkspaceOutput with extra environment entries,
+// such as a scratch GIT_INDEX_FILE.
+func gitWorkspaceOutputEnv(ctx context.Context, root string, env []string, args ...string) (string, error) {
+	cmd := workspaceGitCommand(ctx, root, args...)
+	cmd.Env = append(cmd.Env, env...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -2652,10 +2840,7 @@ func (w *cappedWorkspaceOutput) Write(p []byte) (int, error) {
 // gitWorkspaceOutputCapped drains all output while retaining only a bounded
 // prefix, preventing large diffs from becoming an unbounded in-memory buffer.
 func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args ...string) (string, bool, error) {
-	globalArgs := make([]string, 0, 10+len(args))
-	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
-	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	cmd := workspaceGitCommand(ctx, root, args...)
 	stdout := &cappedWorkspaceOutput{limit: limit}
 	stderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	cmd.Stdout = stdout
