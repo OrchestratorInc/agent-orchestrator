@@ -100,6 +100,39 @@ func TestMiMoDoesNotVerifyAmbiguousOrUnsupportedConfig(t *testing.T) {
 	}
 }
 
+func TestMiMoReportsUnsupportedProviderValidation(t *testing.T) {
+	for _, cfg := range []string{
+		`{"model":"other/model"}`,
+		`{"model":"zai/model","provider":{"zai":{"npm":"custom-sdk"}}}`,
+	} {
+		t.Run(cfg, func(t *testing.T) {
+			oldRun, oldVerify := runAuthProbe, verifyConnection
+			t.Cleanup(func() { runAuthProbe, verifyConnection = oldRun, oldVerify })
+			runAuthProbe = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch strings.Join(args, " ") {
+				case "debug config":
+					return []byte(cfg), nil
+				case "models":
+					return []byte("other/model\nzai/model"), nil
+				default:
+					return nil, nil
+				}
+			}
+			verifyConnection = func(context.Context, authprobe.Connection, *http.Client) (ports.AgentAuthStatus, domain.AgentAuthDiagnostic) {
+				t.Fatal("unsupported route must not send a provider request")
+				return "", domain.AgentAuthDiagnostic{}
+			}
+			ctx, evidence := ports.WithAuthEvidence(t.Context())
+			if got := verifySelectedConnection(ctx, "mimo"); got != ports.AgentAuthStatusConfigured {
+				t.Fatalf("status=%s", got)
+			}
+			if steps := evidence.Diagnostics(); len(steps) != 1 || steps[0].Method != "provider_validation" || steps[0].Code != "provider_unsupported" {
+				t.Fatalf("diagnostics=%+v", steps)
+			}
+		})
+	}
+}
+
 func TestMiMoReportsAnUnavailableRecentModelWithoutProbingAnotherProvider(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "model.json"), []byte(`{"recent":[{"providerID":"zai-coding-plan","modelID":"glm-5.2"}]}`), 0o600); err != nil {

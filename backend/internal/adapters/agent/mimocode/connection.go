@@ -98,12 +98,14 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 			baseURL = "https://open.bigmodel.cn/api/coding/paas/v4"
 		}
 	default:
+		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported"))
 		return ports.AgentAuthStatusConfigured
 	}
 	options := cfg.Provider[provider]
 	// Custom model definitions can change the model id, URL or SDK. Do not
 	// approximate their effective route or custom authentication headers.
 	if len(options.Models) > 0 || len(options.Options.Headers) > 0 || len(options.Env) > 0 || (options.NPM != "" && options.NPM != "@ai-sdk/openai-compatible") {
+		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported"))
 		return ports.AgentAuthStatusConfigured
 	}
 	if options.Options.BaseURL != "" {
