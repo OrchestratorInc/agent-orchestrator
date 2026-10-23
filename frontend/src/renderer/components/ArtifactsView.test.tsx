@@ -363,7 +363,7 @@ describe("ArtifactsView", () => {
 		await user.click(within(screen.getByRole("region", { name: "Recent" })).getByRole("button", { name: /^pricing\.md/ }));
 		expect(screen.getByRole("dialog", { name: "pricing.md" })).toBeInTheDocument();
 		expect(mocks.navigate).not.toHaveBeenCalled();
-		await user.click(screen.getByRole("button", { name: "Close", exact: true }));
+		await user.click(screen.getByRole("button", { name: "Close" }));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
