@@ -107,6 +107,9 @@ export class Bridge {
 	private onHostMessage(message: unknown): void {
 		if (!isRecord(message)) return;
 		switch (message.type) {
+			case "ping":
+				this.port?.postMessage({ type: "pong" });
+				return;
 			case "ready":
 				this.ready = true;
 				this.lastError = undefined;

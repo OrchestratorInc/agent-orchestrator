@@ -60,7 +60,11 @@ PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 PRAGMA synchronous = NORMAL;
+PRAGMA journal_size_limit = 33554432; -- 32 MiB
 ```
+
+`journal_size_limit` is per connection: the writer cuts the `-wal` file back to
+that size when it resets the log.
 
 ### Config model
 

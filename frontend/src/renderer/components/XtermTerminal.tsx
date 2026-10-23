@@ -1476,7 +1476,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			emitUserInput(report, "protocol");
 		});
 		const protocolInput = term.onData((data) => {
-			oscColorForwarder.push(data);
+			// xterm answers old colour queries in a replayed scrollback, and the agent, no longer
+			// waiting, takes the answer as typed text ("11;rgb:…" in Droid's prompt).
+			if (pendingReplayWrites === 0) oscColorForwarder.push(data);
 			cursorPositionForwarder.push(data);
 		});
 		const keyInput = term.onKey(({ key }) => emitUserInput(key, "keyboard"));

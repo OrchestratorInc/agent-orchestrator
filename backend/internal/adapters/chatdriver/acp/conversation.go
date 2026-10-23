@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,10 @@ import (
 const (
 	eventBuffer  = 4096
 	approvalWait = 30 * time.Minute
+	// sessionCloseWait bounds the session/close sent before a provider is
+	// terminated (quickSessionCloseWait for a QuickStop provider).
+	sessionCloseWait      = 2 * time.Second
+	quickSessionCloseWait = 500 * time.Millisecond
 )
 
 var (
@@ -118,14 +123,16 @@ type conversation struct {
 	optionsFor        func(ports.ChatTurnSettings) []SessionOption
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
-	requireAdvertised  bool
-	permissionMode     ports.PermissionMode
-	permissionFor      PermissionPolicy
-	initialPermission  ports.PermissionMode
-	validateSettings   TurnSettingsValidator
-	extensionFor       ClientExtensionHandler
-	extensionMethods   map[string]string
-	legacyModel        bool
+	requireAdvertised bool
+	permissionMode    ports.PermissionMode
+	permissionFor     PermissionPolicy
+	initialPermission ports.PermissionMode
+	validateSettings  TurnSettingsValidator
+	extensionFor      ClientExtensionHandler
+	extensionMethods  map[string]string
+	legacyModel       bool
+	// The agent lists model among its own config options, as well as the older model list.
+	modelConfigOption  bool
 	legacyMode         bool
 	liveState          *persistenthost.ACPState
 	hasDurableTurns    bool
@@ -136,8 +143,12 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
-	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
-	historyNotice         func(string) bool
+	// sessionPromptResponseFailure is promptResponseFailure given the session.
+	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
+	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	historyNotice                func(string) bool
+	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
+	historyUserChunkIsMessage bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -322,6 +333,9 @@ func (c *conversation) start(
 	c.permissionMode = c.initialPermission
 	c.validateSettings = validateSettings
 	c.legacyModel = models != nil
+	c.modelConfigOption = slices.ContainsFunc(configOptions, func(option acpsdk.SessionConfigOption) bool {
+		return option.Select != nil && option.Select.Id == "model"
+	})
 	c.legacyMode = modes != nil
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -498,8 +512,21 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			return err
 		}
 	}
+	var options []SessionOption
+	if optionsFor != nil {
+		options = optionsFor(settings)
+	}
+	// A setting the session already has is skipped (some agents take seconds
+	// per change) unless session/set_model made the list stale.
+	catalogStale := false
 	if legacyModel && settings.Model != "" {
+		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		for _, option := range options {
+			if option.ID == "model" && option.Value != "" {
+				model = option.Value
+			}
+		}
 		modelOptionFound := false
 		for _, option := range configOptions {
 			if option.ID != "model" {
@@ -516,20 +543,34 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
-			if isACPMethodNotFound(err) {
-				return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
+		if c.configOptionCurrent("model") != model {
+			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
+				if isACPMethodNotFound(err) {
+					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
+				}
+				return fmt.Errorf("set ACP session model %q: %w", model, err)
 			}
-			return fmt.Errorf("set ACP session model %q: %w", model, err)
+			catalogStale = true
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
-	var options []SessionOption
-	if optionsFor != nil {
-		options = optionsFor(settings)
-	}
 	applyOption := func(option SessionOption) error {
+		if option.ID == "" || option.Value == "" {
+			return nil
+		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
+			return nil
+		}
+		if offered, known := c.configOptionOffers(option.ID, option.Value); known && !offered && option.Name != "" {
+			if value := c.configOptionValueNamed(option.ID, option.Name); value != "" {
+				option.Value = value
+			}
+		}
+		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
+			return nil
+		}
+		// The models offered do not depend on the model chosen, so this is final.
+		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
 			return nil
 		}
 		return c.setSessionOption(ctx, sessionID, option)
@@ -630,6 +671,11 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		},
 	})
 	if err != nil {
+		// An optional setting the chosen model lacks is skipped; session/set_model
+		// does not return the new model's options to check in advance.
+		if option.Optional && isACPInvalidParams(err) {
+			return nil
+		}
 		if isACPMethodNotFound(err) {
 			return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
 		}
@@ -730,6 +776,7 @@ func (c *conversation) finishPrompt(
 	c.settlingTurn = turnID
 	interrupt := c.interrupt
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
+	answered := len(c.messages) > 0 || len(c.tools) > 0
 	c.mu.Unlock()
 	c.settleOpenItems(turnID)
 	interruptedLocally := false
@@ -753,6 +800,15 @@ func (c *conversation) finishPrompt(
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
 			if failure := c.promptResponseFailure(resp); failure != nil {
+				state = domain.TurnStateFailed
+				turnErr = failure
+			}
+		}
+		if c.sessionPromptResponseFailure != nil && turnErr == nil && state != domain.TurnStateInterrupted && !interruptedLocally {
+			c.mu.Lock()
+			sessionID := c.sessionID
+			c.mu.Unlock()
+			if failure := c.sessionPromptResponseFailure(sessionID, resp, answered); failure != nil {
 				state = domain.TurnStateFailed
 				turnErr = failure
 			}
@@ -1115,8 +1171,16 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
-			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
+			// The provider may save its session while answering; an answered close
+			// lets the host stop it sooner.
+			wait := sessionCloseWait
+			if c.proc != nil && c.proc.quickStop.Load() {
+				wait = quickSessionCloseWait
+			}
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), wait)
+			if _, err := c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)}); err == nil && c.proc != nil {
+				c.proc.quickStop.Store(true)
+			}
 			cancelClose()
 		}
 		if persistent {

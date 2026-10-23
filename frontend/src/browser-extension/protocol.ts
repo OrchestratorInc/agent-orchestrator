@@ -18,6 +18,7 @@ export type CancelFrame = { type: "cancel"; requestId: string };
 
 export type HostFrame =
 	| CommandFrame
+	| { type: "ping" }
 	| CancelFrame
 	| { type: "ready"; protocol: number }
 	| { type: "error"; code: string; message?: string; protocol?: number };

@@ -23,9 +23,10 @@ type generatedTaskName struct {
 	Slug  string `json:"slug"`
 }
 
-// startTaskNaming overlaps the one cosmetic model call with workspace preparation.
-// The waiter also observes the deadline if a provider is slow to cancel.
-func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, rec domain.SessionRecord, projectConfig domain.ProjectConfig) (func() generatedTaskName, context.CancelFunc) {
+// startTaskNaming overlaps the one cosmetic model call with the whole start.
+// It runs under the daemon context because the rename that consumes it happens
+// after launch. The waiter also observes the deadline if a provider is slow to cancel.
+func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecord, projectConfig domain.ProjectConfig) (func() generatedTaskName, context.CancelFunc) {
 	if !cfg.NameFromPrompt || cfg.Branch != "" || cfg.Kind != domain.KindWorker || strings.TrimSpace(cfg.Prompt) == "" {
 		return nil, func() {}
 	}
@@ -33,11 +34,15 @@ func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, re
 	if fallback.Slug == "" {
 		fallback.Slug = taskSlug(string(rec.ID))
 	}
+	// Clients keep the temporary branch private until the rename settles.
+	m.setBranchNaming(rec.ID, true)
+	settled := func() { m.setBranchNaming(rec.ID, false) }
 	runner, ok := m.chat.(chatBackgroundTaskRunner)
 	if !ok {
-		return func() generatedTaskName { return fallback }, func() {}
+		return func() generatedTaskName { return fallback }, settled
 	}
-	namingCtx, cancel := context.WithTimeout(ctx, taskNamingTimeout)
+	namingCtx, cancelNaming := context.WithTimeout(m.backgroundContext, taskNamingTimeout)
+	cancel := func() { cancelNaming(); settled() }
 	done := make(chan generatedTaskName, 1)
 	slots := m.taskNamingSlots
 	select {
@@ -129,97 +134,120 @@ func taskSlug(value string) string {
 	return b.String()
 }
 
-func (m *Manager) nameTaskWorkspace(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, name generatedTaskName) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
-	namer, ok := m.workspace.(ports.WorkspaceTaskNamer)
-	if !ok || name.Slug == "" || ws.Branch == "" {
-		return ws, project, nil
+// nameTaskBranchLater renames a launched task's temporary branch once its
+// generated name arrives. The checkout never moves, so neither setup nor the
+// agent waits for naming. A skipped or failed rename keeps the temporary branch.
+// The launched spawn hands back its project gate, which the rename takes.
+func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, taskName func() generatedTaskName, cancel context.CancelFunc) {
+	if release, ok := ctx.Value(spawnWorkspaceGateKey{}).(func()); ok {
+		release()
 	}
-	if name.Title != "" {
-		if _, err := m.store.RenameSessionIfDisplayName(ctx, rec.ID, rec.DisplayName, name.Title, m.clock()); err != nil {
-			m.logger.Warn("apply generated task title", "sessionID", rec.ID, "error", err)
+	if taskName == nil {
+		cancel()
+		return
+	}
+	m.runInBackground(func() {
+		defer cancel()
+		started := time.Now()
+		name := taskName()
+		if name.Title != "" {
+			// The title needs no gate, so another start's long setup cannot delay it.
+			ctx, done := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
+			if _, err := m.store.RenameSessionIfDisplayName(ctx, rec.ID, rec.DisplayName, name.Title, m.clock()); err != nil {
+				m.logger.Warn("apply generated task title", "sessionID", rec.ID, "error", err)
+			}
+			done()
 		}
+		branch := ws.Branch
+		if namer, ok := m.workspace.(ports.WorkspaceTaskNamer); ok && name.Slug != "" && ws.Branch != "" {
+			renamed, err := m.renameTaskBranch(namer, rec, ws, project, name.Slug)
+			if err != nil {
+				m.logger.Warn("task naming: rename branch", "sessionID", rec.ID, "branch", renamed, "error", err)
+			}
+			branch = renamed
+		}
+		m.logger.Info("task branch naming", "sessionID", rec.ID, "branch", branch, "durationMs", time.Since(started).Milliseconds())
+	})
+}
+
+// taskBranchRenameTimeout starts once the project gate is held. A variable so
+// tests can shorten it.
+var taskBranchRenameTimeout = 30 * time.Second
+
+const taskNamingWriteTimeout = 10 * time.Second
+
+// renameTaskBranch returns the branch Git holds afterwards, and records it.
+func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, slug string) (string, error) {
+	// Serialize with cleanup and restore so a removed checkout is never renamed.
+	gate := m.workspaceGate(rec.ProjectID)
+	if !gate.TryLock() {
+		// Another start or cleanup holds the project, maybe for minutes: show the
+		// temporary branch meanwhile. The rename still lands after.
+		m.setBranchNaming(rec.ID, false)
+		gate.Lock()
+	}
+	defer gate.Unlock()
+	if err := m.backgroundContext.Err(); err != nil {
+		return ws.Branch, err
+	}
+	// Shutdown must not kill Git halfway through renaming a live agent's branch.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskBranchRenameTimeout)
+	defer cancel()
+	current, found, err := m.store.GetSession(ctx, rec.ID)
+	if err != nil {
+		return ws.Branch, err
+	}
+	if !found || current.IsTerminated || current.Metadata.Branch != ws.Branch || current.Metadata.WorkspacePath != ws.Path {
+		return ws.Branch, errors.New("session workspace changed before naming finished")
 	}
 	info := ports.WorkspaceProjectInfo{Root: ws}
 	if project != nil {
 		info = *project
 	}
-	info, namingErr := namer.NameTaskWorkspace(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), name.Slug, "root"), name.Slug)
-	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath)
-	if namingErr == nil && persistErr == nil {
-		persistErr = m.completeNamedWorktree(ctx, info)
-	}
-	if project != nil {
-		project = &info
-	}
-	return info.Root, project, errors.Join(namingErr, persistErr)
-}
-
-// Complete synchronous naming progress before acknowledging its move journal.
-// Recovery must not leave a repaired final branch hidden behind a stale shimmer.
-func (m *Manager) completeNamedWorktree(ctx context.Context, info ports.WorkspaceProjectInfo) error {
-	rec, found, err := m.store.GetSession(ctx, info.Root.SessionID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return errors.New("naming session no longer exists")
-	}
-	if rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
-		for i, step := range rec.ProvisionSteps {
-			if step.ID != domain.SessionProvisionStepWorktree || step.Status == domain.SessionProvisionStepDone {
-				continue
-			}
-			steps := slices.Clone(rec.ProvisionSteps)
-			now := m.clock()
-			steps[i].Status, steps[i].EndedAt = domain.SessionProvisionStepDone, &now
-			if err := m.store.SetSessionProvisionSteps(ctx, rec.ID, steps, now); err != nil {
-				return err
-			}
-			break
+	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug, "root"))
+	if err == nil && held.Root.Branch != ws.Branch {
+		recordErr := m.recordTaskBranch(ctx, rec.ID, ws.Branch, held)
+		if recordErr == nil {
+			return held.Root.Branch, nil
 		}
+		// Keep Git and the row agreeing: put the temporary names back exactly.
+		var undoErr error
+		if held, undoErr = namer.RevertTaskBranch(ctx, held, info); undoErr == nil {
+			return ws.Branch, recordErr
+		}
+		err = errors.Join(recordErr, undoErr)
 	}
-	return m.completeTaskNaming(ctx, info)
+	if !sameTaskBranches(held, info) {
+		// A failed undo left Git, maybe per repository, off the temporary
+		// names: the row must name what Git holds.
+		retryCtx, done := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
+		defer done()
+		err = errors.Join(err, m.recordTaskBranch(retryCtx, rec.ID, ws.Branch, held))
+	}
+	return held.Root.Branch, err
 }
 
-func (m *Manager) completeTaskNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
-	if recovery, ok := m.workspace.(ports.WorkspaceTaskNamingRecovery); ok {
-		return recovery.CompleteTaskWorkspaceNaming(ctx, info)
+func (m *Manager) recordTaskBranch(ctx context.Context, id domain.SessionID, temporary string, held ports.WorkspaceProjectInfo) error {
+	repos := map[string]string{domain.RootWorkspaceRepoName: held.Root.Branch}
+	for _, repo := range held.Worktrees {
+		repos[repo.RepoName] = repo.Branch
 	}
-	return nil
+	updated, err := m.store.SetSessionTaskBranch(ctx, id, temporary, held.Root.Branch, repos, m.clock())
+	if err == nil && !updated {
+		err = errors.New("session branch changed during naming")
+	}
+	return err
 }
 
-func (m *Manager) recoverTaskNaming(ctx context.Context, rec domain.SessionRecord) (ports.WorkspaceProjectInfo, bool, error) {
-	recovery, ok := m.workspace.(ports.WorkspaceTaskNamingRecovery)
-	if !ok || rec.ProjectID == "" || rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" {
-		return ports.WorkspaceProjectInfo{}, false, nil
-	}
-	info, found, err := recovery.RecoverTaskWorkspace(ctx, rec.ProjectID, rec.ID)
-	if !found || err != nil {
-		return info, found, err
-	}
-	if err := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath); err != nil {
-		return info, true, err
-	}
-	return info, true, m.completeNamedWorktree(ctx, info)
+func sameTaskBranches(a, b ports.WorkspaceProjectInfo) bool {
+	return a.Root.Branch == b.Root.Branch && slices.EqualFunc(a.Worktrees, b.Worktrees, func(x, y ports.WorkspaceRepoInfo) bool { return x.Branch == y.Branch })
 }
 
-// Persist the actual result even after a partial Git failure. The provision
-// checklist separately records whether registration repair and setup finished.
-func (m *Manager) persistTaskWorkspace(ctx context.Context, id domain.SessionID, info ports.WorkspaceProjectInfo, expectedPath string) error {
-	persistCtx, cancel := spawnRollbackContext(ctx)
+// setBranchNaming publishes whether a task's generated branch name is on the way.
+func (m *Manager) setBranchNaming(id domain.SessionID, naming bool) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
 	defer cancel()
-	updated, persistErr := m.store.SetSessionNamedWorkspace(persistCtx, id, expectedPath, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
-	if persistErr == nil && !updated {
-		persistErr = errors.New("task naming session no longer accepts this workspace")
+	if err := m.store.SetSessionBranchNaming(ctx, id, naming); err != nil {
+		m.logger.Warn("task naming: record branch naming", "sessionID", id, "error", err)
 	}
-	if persistErr != nil {
-		return persistErr
-	}
-	for _, wt := range info.Worktrees {
-		persistErr = errors.Join(persistErr, m.store.UpsertSessionWorktree(persistCtx, domain.SessionWorktreeRecord{
-			SessionID: id, RepoName: wt.RepoName, Branch: wt.Branch, BaseSHA: wt.BaseSHA,
-			BaseRef: wt.BaseRef, CreationSHA: wt.CreationSHA, WorktreePath: wt.Path, State: "active",
-		}))
-	}
-	return persistErr
 }

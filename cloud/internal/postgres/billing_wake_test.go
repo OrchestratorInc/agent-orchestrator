@@ -818,3 +818,61 @@ func TestPresenceIgnoresViewersAndIsRateLimited(t *testing.T) {
 		t.Fatalf("presence rewritten within the interval (age %v)", age)
 	}
 }
+
+// A sandbox being deleted may resume to run its Cleanup only within its
+// organization's plan: an organization over it (here, without a plan) keeps
+// its billed sandboxes paused, and an unbilled sandbox or billing that is off
+// always may. Its writes carry the organization's context, so it also passes
+// as a table-owning non-superuser (forced RLS).
+func TestCleanupResumeFollowsThePlan(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	store = nonBypassStore(t, store, admin)
+	ctx := context.Background()
+	asOrg := func(query string, args ...any) {
+		t.Helper()
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, fixture.orgID); err != nil {
+			t.Fatal(err)
+		}
+		if tag, err := tx.Exec(ctx, query, args...); err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("%s: %v (%d rows)", query, err, tag.RowsAffected())
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sandboxIs := func(provider string, billed bool) {
+		t.Helper()
+		asOrg(`UPDATE ao_sandboxes SET provider = $2, billed = $3, desired_state = 'deleted', observed_state = 'stopped'
+			WHERE session_id = $1`, fixture.sessionID, provider, billed)
+	}
+	sandboxIs("freestyle", false)
+	if err := store.CleanupResumeAllowed(ctx, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatalf("billing off: %v", err)
+	}
+	store.EnableBilling(7*24*time.Hour, time.Time{})
+	if err := store.CleanupResumeAllowed(ctx, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatalf("unrecorded organization: %v", err)
+	}
+	asOrg(`UPDATE ao_organizations SET settings = settings || jsonb_build_object('billing_mode', $2::text) WHERE id = $1`,
+		fixture.orgID, domain.BillingModeSelfServe)
+	if err := store.CleanupResumeAllowed(ctx, fixture.orgID, fixture.sessionID); !IsPlanRefusal(err) {
+		t.Fatalf("over its plan: err = %v, want a plan refusal", err)
+	}
+	sandboxIs("coder", false)
+	if err := store.CleanupResumeAllowed(ctx, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatalf("unbilled sandbox: %v", err)
+	}
+	sandboxIs("coder", true)
+	if err := store.CleanupResumeAllowed(ctx, fixture.orgID, fixture.sessionID); !IsPlanRefusal(err) {
+		t.Fatalf("billed Coder sandbox over its plan: err = %v, want a plan refusal", err)
+	}
+	subscribe(t, store, fixture.orgID, "active", starterLimits())
+	if err := store.CleanupResumeAllowed(ctx, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatalf("within its plan: %v", err)
+	}
+}

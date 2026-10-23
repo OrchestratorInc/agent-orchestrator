@@ -96,6 +96,8 @@ if (typeof window !== "undefined") {
 	const localStorageStub = (() => {
 		const values = new Map<string, string>();
 		return {
+			get length() { return values.size; },
+			key: (index: number) => [...values.keys()][index] ?? null,
 			clear: () => values.clear(),
 			getItem: (key: string) => values.get(key) ?? null,
 			removeItem: (key: string) => values.delete(key),
@@ -207,12 +209,16 @@ if (typeof window !== "undefined") {
 		},
 		telemetry: {
 			getBootstrap: async () => null,
+			getAnalyticsOptOut: async () => false,
+			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+			onAnalyticsOptOut: () => () => undefined,
+			setCloudUser: async () => false,
+			getGithubLogin: async () => null,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: true,
@@ -342,7 +348,8 @@ if (typeof window !== "undefined") {
 				return { id, name, createdAt: now, updatedAt: now };
 			},
 			clear: async () => undefined,
-			delete: async () => undefined,
+			usage: async () => ({ sessions: [] }),
+			delete: async () => ({}),
 			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
@@ -409,6 +416,7 @@ if (typeof window !== "undefined") {
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",

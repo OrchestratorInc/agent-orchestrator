@@ -96,6 +96,72 @@ func TestFailedSetupIsReportedAsTheWorkspaceStartupError(t *testing.T) {
 	}
 }
 
+// A failed Setup step's output and command never carry a credential to the
+// control plane, in the outcome event or the startup error: an AWS Secrets
+// Manager SecretString's password is masked whole, not cut at its first
+// escaped quote, and a secret environment variable's value printed with
+// nothing naming it (or traced by set -x) is masked as the step's events mask
+// it.
+func TestFailedSetupNeverReportsASecret(t *testing.T) {
+	t.Setenv("MY_SERVICE_SECRET", "LeakEnvSvc01x")
+	t.Setenv("REGISTRY_PASSWORD", "LeakEnvReg02x")
+	// Not a secret's name: only the coloured pair it prints names it one.
+	t.Setenv("PRINTED_VALUE", "LeakAnsi03x")
+	recorder := &workerEventRecorder{}
+	c := recorder.server(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	workspace := t.TempDir()
+	failed := runProjectSetup(context.Background(), logger, c, t.TempDir(), true,
+		[]string{`printf '%s\n' '{"SecretString":"{\"password\":\"hunter2xyz\"}"}' 'mysql --password Leak7flag'; ` +
+			`printf '\033[1mSIGNING_KEY\033[0m: %s\n' "$PRINTED_VALUE"; ` +
+			`(set -x; : docker login -u ci -p "$REGISTRY_PASSWORD" registry.example) 2>&1; ` +
+			`printf '%s' "$MY_SERVICE_SECRET"; exit 3`},
+		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
+	if failed == nil {
+		t.Fatal("setup reported success")
+	}
+	reportWorkspaceStartup(context.Background(), logger, c, setupStartupFailure(*failed))
+	recorder.mu.Lock()
+	encoded, err := json.Marshal(recorder.events)
+	recorder.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"hunter2xyz", "Leak7flag", "LeakEnvSvc01x", "LeakEnvReg02x", "LeakAnsi03x"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("%q reported in %s", secret, encoded)
+		}
+	}
+	if !strings.Contains(failed.Output, `"SecretString":[REDACTED]`) {
+		t.Fatalf("setup output = %q", failed.Output)
+	}
+}
+
+// A Setup step refused Docker says so in the startup message, and the detail
+// names the command, the user it ran as, and its full log.
+func TestSetupPermissionFailureExplainsWhoRanIt(t *testing.T) {
+	recorder := &workerEventRecorder{}
+	c := recorder.server(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	workspace, dataDir := t.TempDir(), t.TempDir()
+	failed := runProjectSetup(context.Background(), logger, c, dataDir, true,
+		[]string{"docker compose up -d || { echo 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock' >&2; exit 1; }"},
+		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
+	if failed == nil {
+		t.Fatal("setup reported success")
+	}
+	report := setupStartupFailure(*failed)
+	user := worker.CurrentScriptIdentity().User
+	if !strings.Contains(report.Message, "This step ran as "+user+", which cannot use Docker") {
+		t.Fatalf("message = %q", report.Message)
+	}
+	for _, want := range []string{"Step 1: docker compose up -d", "Ran as " + user, " in " + workspace, "Full output: " + dataDir, "docker.sock"} {
+		if !strings.Contains(report.Detail, want) {
+			t.Fatalf("detail %q lacks %q", report.Detail, want)
+		}
+	}
+}
+
 // A checkout failure names its cause: the Coder connection's working
 // directory, or the repository checkout with the redacted error as detail.
 func TestCheckoutFailuresHaveTheirOwnStartupErrors(t *testing.T) {
@@ -130,6 +196,70 @@ func TestReadyWorkspaceIsReported(t *testing.T) {
 	reports := recorder.startup(t)
 	if len(reports) != 1 || reports[0].Status != worker.WorkspaceStartupReady || reports[0].Code != "" {
 		t.Fatalf("reports = %+v", reports)
+	}
+}
+
+// The staging re-test's Setup steps, verbatim (see the worker package's
+// stagingRetestSteps): the failed run's outcome event, the startup error the
+// worker reports (its Detail is what Copy details copies) and that Detail as
+// the control plane stores it hold none of the steps' secrets, and still show
+// what is not secret.
+func TestStagingRetestStartupErrorNeverReportsASecret(t *testing.T) {
+	steps := []string{
+		`echo '{"SecretString":"{\"password\":\"FAKEVAL1\"}"}'`,
+		`echo "docker login -p FAKEVAL2 registry.example.com || true"`,
+		`echo "mysql -pFAKEVAL3"`,
+		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"`,
+		`echo "curl -u admin:FAKEVAL5 https://x"`,
+		`echo "https://` + "gh" + "p_" + `FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
+		`echo "https://acct.blob.core.windows.net/c?sv=1&sig=FAKEVAL7"`,
+		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
+		`echo '["--token","FAKEVAL9"]'`,
+		`printf 'private_key: |\n  FAKEVAL10-line-one\n  FAKEVAL10-line-two\nafter_block: visible\n'`,
+		`echo hf_FAKEVAL11aaaaaaaaaaaaaaaaaaaaaaaa`,
+		`echo "API_KEY=FAKEVAL12;next=1"`,
+		`printf '\033[32mPASSWORD\033[0m=FAKEVAL13\n'`,
+		`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`,
+		`echo "docker run -p 8080:80 nginx"`,
+	}
+	combined := `echo "== summary step =="; ` + strings.Join(steps, "; ") + `; set -x; true --password FAKEVAL15; echo "about to fail"; exit 3`
+	recorder := &workerEventRecorder{}
+	c := recorder.server(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	workspace := t.TempDir()
+	failed := runProjectSetup(context.Background(), logger, c, t.TempDir(), true, append(steps, combined),
+		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
+	if failed == nil {
+		t.Fatal("setup reported success")
+	}
+	startup := setupStartupFailure(*failed)
+	reportWorkspaceStartup(context.Background(), logger, c, startup)
+	recorder.mu.Lock()
+	encoded, err := json.Marshal(recorder.events)
+	recorder.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the control plane stores (worker_handlers.go): the detail through
+	// the script redaction again.
+	stored := worker.RedactScriptOutput(startup.Detail)
+	published := string(encoded) + "\n" + startup.Detail + "\n" + startup.Message + "\n" + stored
+	for index := 1; index <= 15; index++ {
+		secret := fmt.Sprintf("FAKEVAL%d", index)
+		if index == 8 {
+			secret = "RkFLRVZBTDg"
+		}
+		if strings.Contains(published, secret) {
+			t.Errorf("%q reported", secret)
+		}
+	}
+	for _, kept := range []string{"ssh -p 22 host", "docker run -p 8080:80 nginx", "API_KEY=[REDACTED];next=1", "after_block: visible"} {
+		if !strings.Contains(startup.Detail, kept) || !strings.Contains(stored, kept) {
+			t.Errorf("%q is not in the startup error's detail", kept)
+		}
+	}
+	if t.Failed() {
+		t.Logf("detail:\n%s", startup.Detail)
 	}
 }
 

@@ -17,7 +17,8 @@ AWS_PROFILE=ao-cloud ./scripts/deploy-staging.sh
 
 The offering a deploy rolls out (served providers, the default provider, the
 capability gate, default organization capabilities and billing, paywalled
-features, and both idle-pause thresholds) is checked in at
+features, both idle-pause thresholds, and the
+[Coder rollout flags](#coder-rollout-flags)) is checked in at
 `scripts/offering/staging.env` and `scripts/offering/production.env`. Staging
 serves `coder,freestyle` with `coder` as the default; NodeOps is retired and no
 longer a default. A variable set in the deploying shell overrides the file,
@@ -290,6 +291,31 @@ COMMIT;
 
 The 00081 Down migration runs the same statements. Members reconnect once the
 newer release is back.
+
+### Coder rollout flags
+
+Two settings in each offering file (`true` or `false`) gate Coder session
+data an older control plane cannot read, so the release that introduced them
+stays a safe rollback target:
+
+- `AO_CLOUD_CODER_READABLE_NAMES`: new Coder sessions get the readable
+  `<prefix>-o-<id>` (orchestrator) and `<prefix>-w-<word>-<id>` (worker)
+  workspace names, stored on the session's sandbox profile. Off, new sessions
+  keep the `<prefix>-<id>` name every release computes. A stored name is read
+  either way, so turning the flag off never loses a workspace.
+- `AO_CLOUD_CODER_WORKER_WORKING_FOLDER`: a session whose worker runs as the
+  dedicated `ao-worker` user checks its repository out in the project's working
+  folder (for example `~/work/alice`). Off, those sessions keep the durable
+  root's `repository` folder. A folder already stamped on a session is honored
+  either way.
+
+A release from before these settings computes the legacy workspace name and
+ignores the working folder, so after a rollback to it the sessions created with
+the flags on would lose their workspace or checkout. Staging runs both on.
+Production keeps both off: turn them on in production one release after this
+one ships, so the previous release (the rollback target) can read stored names
+and honors stored working folders. A control plane that is not hosted
+(development, test) turns both on unless they are set.
 
 ## Production promotion
 

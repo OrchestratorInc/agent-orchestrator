@@ -57,10 +57,6 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
-import {
-	AGENT_SWITCH_VISIBILITY_IPC_CHANNEL,
-	type AgentSwitchVisibilitySignalBody,
-} from "./shared/agent-switch-observability";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -73,6 +69,8 @@ import type {
 import type {
 	BrowserProfile,
 	BrowserProfileListState,
+	BrowserProfileUsageResult,
+	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
 	BrowserProfileViewState,
@@ -397,6 +395,17 @@ const api = {
 			if (bootstrap && currentTelemetryPolicy) currentTelemetryPolicy = { ...currentTelemetryPolicy, eventsEnabled: bootstrap.eventsEnabled, consentGeneration: bootstrap.consentGeneration };
 			return bootstrap;
 		},
+		getAnalyticsOptOut: () => ipcRenderer.invoke("telemetry:getAnalyticsOptOut") as Promise<boolean>,
+		setAnalyticsOptOut: (optedOut: boolean) => ipcRenderer.invoke("telemetry:setAnalyticsOptOut", optedOut) as Promise<boolean>,
+		onAnalyticsOptOut: (listener: (optedOut: boolean) => void) => {
+			const wrapped = (_event: unknown, optedOut: boolean) => listener(optedOut);
+			ipcRenderer.on("telemetry:analyticsOptOutChanged", wrapped);
+			return () => {
+				ipcRenderer.off("telemetry:analyticsOptOutChanged", wrapped);
+			};
+		},
+		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
+		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			currentTelemetryPolicy = view;
@@ -409,11 +418,6 @@ const api = {
 		capture: (input: RendererTelemetryCaptureInput) => {
 			if (!currentTelemetryPolicy) return Promise.resolve(false);
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
-		},
-		signalAgentSwitchVisibility: (signal: AgentSwitchVisibilitySignalBody) => {
-			if (!currentTelemetryPolicy) return false;
-			ipcRenderer.send(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, { consentGeneration: currentTelemetryPolicy.consentGeneration, signal });
-			return true;
 		},
 	},
 	browser: {
@@ -608,7 +612,8 @@ const api = {
 		rename: (input: { id: string; name: string }) =>
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
-		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
+		usage: (id: string) => ipcRenderer.invoke("browserProfiles:usage", { id }) as Promise<BrowserProfileUsageResult>,
+		delete: (id: string, confirmedViewIds: string[]) => ipcRenderer.invoke("browserProfiles:delete", { id, confirmedViewIds }) as Promise<BrowserProfileDeleteResult>,
 		setDefault: (id: string | null) => ipcRenderer.invoke("browserProfiles:setDefault", { id }) as Promise<void>,
 		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
 			(input === undefined
@@ -735,6 +740,8 @@ const api = {
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
 		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		// The name this machine is listed under on the account's other devices.
+		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>

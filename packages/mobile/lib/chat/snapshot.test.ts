@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as snapshotModule from "./snapshot";
 
-const { cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages } = snapshotModule;
+const { cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages, olderPageFits, withLivePage } = snapshotModule;
 type ConversationPage = snapshotModule.ConversationPage;
 
 function page(overrides: Partial<ConversationPage> = {}): ConversationPage {
@@ -43,6 +43,37 @@ describe("mobile conversation pagination", () => {
 		const live = page({ oldestSequence: 3, hasMoreBefore: true });
 		const historical = page({ oldestSequence: 1, hasMoreBefore: false });
 		expect(discardHistoricalPages([live, historical])).toEqual([live]);
+	});
+});
+
+describe("live page and branch changes", () => {
+	const message = (id: string, sequence: number) => ({ kind: "message" as const, id, sequence, revision: 1, role: "user" as const, origin: "human" as const, text: id, streaming: false, createdAt: "2026-01-01" });
+
+	it("keeps loaded history across refreshes of the same branch", () => {
+		const live = page({ activeBranchId: "root", items: [message("new", 5)] });
+		const older = page({ activeBranchId: "root", items: [message("old", 1)] });
+		const refreshed = page({ activeBranchId: "root", items: [message("new", 5)] });
+		expect(withLivePage([live, older], refreshed)).toEqual([refreshed, older]);
+	});
+
+	it("drops source-branch history once an edit, even an uncertain one, activates another branch", () => {
+		const live = page({ activeBranchId: "root", items: [message("source-new", 5)] });
+		const older = page({ activeBranchId: "root", items: [message("source-old", 1)] });
+		const replacement = page({ activeBranchId: "child", items: [message("replacement", 6)] });
+		const pages = withLivePage([live, older], replacement);
+		expect(mergeConversationPages(pages)?.items.map((item) => item.id)).toEqual(["replacement"]);
+	});
+
+	it("starts over for another conversation and keeps history when an older host omits the branch", () => {
+		const older = page({ items: [message("old", 1)] });
+		expect(withLivePage([page(), older], page({ conversationId: "conv-2" }))).toHaveLength(1);
+		expect(withLivePage([page(), older], page())).toHaveLength(2);
+	});
+
+	it("refuses an older page that loaded for a branch no longer active", () => {
+		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "root" }))).toBe(false);
+		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "child" }))).toBe(true);
+		expect(olderPageFits([], page())).toBe(false);
 	});
 });
 

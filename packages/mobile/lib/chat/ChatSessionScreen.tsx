@@ -1,15 +1,12 @@
 import { Feather } from "../icons";
-import { useHeaderHeight } from "expo-router/build/react-navigation/elements";
 import { useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import {
 	ActivityIndicator,
 	Alert,
 	Keyboard,
-	Platform,
 	Pressable,
 	StyleSheet,
 	Text,
@@ -30,7 +27,6 @@ import {
 	mobileInterfaceTransitionRecoveryMessage,
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
-import { dockRestingInset, keyboardVerticalOffset, screenKeyboardAvoidance } from "../session/keyboardInset";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
@@ -39,6 +35,7 @@ import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
+import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
@@ -63,6 +60,8 @@ import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
+import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { useChangeSummary } from "../files/useChangeSummary";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -90,8 +89,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const headerHeight = useHeaderHeight();
-	const insets = useSafeAreaInsets();
 	const [headerRightReady, setHeaderRightReady] = useState(false);
 	useLayoutEffect(
 		() => resetHeaderRightForSwap(
@@ -122,6 +119,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
+	// An earlier prompt open in its inline editor takes the keyboard, so the
+	// composer steps aside (still mounted, keeping its draft and attachments).
+	const [editingMessage, setEditingMessage] = useState(false);
 	// Which request the user pushed aside to type instead. It lives here because
 	// both the composer and the timeline change shape depending on it.
 	const [dismissedRequest, setDismissedRequest] = useState<number>();
@@ -135,13 +135,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Banners closed this visit, by what they report. See conversationBanners.
 	const [dismissedBanners, setDismissedBanners] = useState<ReadonlySet<string>>(() => new Set());
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
-	// Listens on keyboardWillShow / keyboardDidHide on both platforms. The effect
-	// this replaces took its event names from screenKeyboardAvoidance, which gave
-	// Android keyboardDidShow — fired only after the IME had finished animating,
-	// which is why the composer needed a hand-rolled LayoutAnimation to cover the
-	// gap it left. Reporting early removes the gap rather than animating over it.
-	const keyboardHeight = useKeyboardState((state) => state.height);
-	const keyboardVisible = useKeyboardState((state) => state.isVisible);
+	// keyboard-controller's early events, corrected by React Native's when it
+	// misses a transition. See useChatKeyboard.
+	const chatKeyboard = useChatKeyboard();
+	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
 	const failedStart = "projectName" in session || session.provisionState !== "failed"
@@ -205,6 +202,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}, [conversation.loadTurnOptions, conversation.snapshot, session.id]);
 
 	const sessionName = sessionTitle(session);
+	// Codex-style: every surface that shows the agent changed files can open them.
+	const filesNavigation = useMemo<FilesNavigation>(() => ({
+		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
+		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
+	}), [currentHostId, router, session.id, sessionName]);
+	// Re-read git's totals when a turn reports edits, not on a timer.
+	const lastTurn = conversation.snapshot?.turns.at(-1);
+	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
+	const changeSummary = useChangeSummary(config, session.id, changeSignal);
 	// Desktop derives one name from the session (useWorkspaceQuery: displayName ??
 	// issueId ?? id) and its chat header prefers it over the conversation's own
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
@@ -513,6 +519,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			canRename: !("projectName" in session),
 			canPin: !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
+			onFiles: filesNavigation.openChanges,
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
 			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
@@ -553,7 +560,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [currentHostId, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
+	}, [currentHostId, conversation, filesNavigation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -617,9 +624,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		// keyboard event on the JS thread, which is the single-frame jump up when
 		// the keyboard opens.
 		<KeyboardAvoidingView
-			style={[styles.screen, Platform.OS === "android" ? screenKeyboardAvoidance("android", keyboardHeight, insets.bottom).rootStyle : undefined]}
-			behavior={Platform.OS === "ios" ? "padding" : undefined}
-			keyboardVerticalOffset={Platform.OS === "ios" ? keyboardVerticalOffset(headerHeight) : 0}
+			style={[styles.screen, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
 			{interfaceTransitionActive ? (
 				<InlineBanner
@@ -676,6 +683,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
 			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
+				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -685,57 +693,65 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
 					onRollback={conversation.rollback}
+					onEditMessage={conversation.editMessage}
+					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}
 					onJumpHandled={clearJumpToSequence}
 					answeredBelow={answeredBelow}
 					startup={timelineStartup}
 				/>
+				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
-			<ChatComposer
-				key={composerKey}
-				quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
-				onQuoteHandled={quoteHandled}
-				reviewPR={reviewPromptPR}
-				reviewPRSummary={reviewPromptSummary}
-				reviewPRCollapsed={reviewPromptCollapsed}
-				onCollapseReviewPR={collapseReviewPrompt}
-				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
-				sessionId={session.id}
-				config={config}
-				snapshot={snapshot}
-				quotaActive={Boolean(quota)}
-				request={request}
-				requestDismissed={requestDismissed}
-				onRequestDecide={conversation.resolveApproval}
-				onRequestResolveInput={conversation.resolveInput}
-				onShowRequest={setJumpToSequence}
-				onDismissRequest={() => setDismissedRequest(request?.sequence)}
-				onRestoreRequest={restoreRequest}
-				skills={conversation.skills}
-				filePaths={filePaths}
-				filePathsTruncated={filePathsTruncated}
-				onLoadSkills={conversation.loadSkills}
-				onLoadFiles={loadWorkspaceFiles}
-				configOptions={conversation.configOptions}
-				models={conversation.models}
-				steerUnavailable={steerUnsupported}
-				disabled={interfaceTransitionActive || Boolean(failedStart)}
-				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
-				interrupting={conversation.pendingActions.includes("interrupt")}
-				onSend={conversation.send}
-				onAcknowledgeSend={conversation.acknowledgeSend}
-				completedRetry={conversation.completedRetry}
-				onSteer={conversation.steer}
-				onPromoteQueuedTurn={conversation.promoteQueuedTurn}
-				onCancelQueuedTurn={conversation.cancelQueuedTurn}
-				onInterrupt={() => void conversation.interrupt().catch(() => {})}
-				onOpenSettings={() => void openTurnSettings()}
-				onSettings={conversation.chooseSettings}
-				onConfigOption={conversation.setConfigOption}
-				restingInset={dockRestingInset(insets.bottom)}
-				openingTurnId={startupView?.openingTurnId}
-				startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
-			/>
+			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
+			<View style={editingMessage ? styles.composerHidden : undefined}>
+				<ChatComposer
+					key={composerKey}
+					quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
+					onQuoteHandled={quoteHandled}
+					reviewPR={reviewPromptPR}
+					reviewPRSummary={reviewPromptSummary}
+					reviewPRCollapsed={reviewPromptCollapsed}
+					onCollapseReviewPR={collapseReviewPrompt}
+					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+					sessionId={session.id}
+					config={config}
+					snapshot={snapshot}
+					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
+					quotaActive={Boolean(quota)}
+					request={request}
+					requestDismissed={requestDismissed}
+					onRequestDecide={conversation.resolveApproval}
+					onRequestResolveInput={conversation.resolveInput}
+					onShowRequest={setJumpToSequence}
+					onDismissRequest={() => setDismissedRequest(request?.sequence)}
+					onRestoreRequest={restoreRequest}
+					skills={conversation.skills}
+					filePaths={filePaths}
+					filePathsTruncated={filePathsTruncated}
+					onLoadSkills={conversation.loadSkills}
+					onLoadFiles={loadWorkspaceFiles}
+					configOptions={conversation.configOptions}
+					models={conversation.models}
+					steerUnavailable={steerUnsupported}
+					disabled={interfaceTransitionActive || Boolean(failedStart)}
+					pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
+					interrupting={conversation.pendingActions.includes("interrupt")}
+					onSend={conversation.send}
+					onAcknowledgeSend={conversation.acknowledgeSend}
+					completedRetry={conversation.completedRetry}
+					onSteer={conversation.steer}
+					onPromoteQueuedTurn={conversation.promoteQueuedTurn}
+					onCancelQueuedTurn={conversation.cancelQueuedTurn}
+					onInterrupt={() => void conversation.interrupt().catch(() => {})}
+					onOpenSettings={() => void openTurnSettings()}
+					onSettings={conversation.chooseSettings}
+					onConfigOption={conversation.setConfigOption}
+					restingInset={chatKeyboard.restingInset}
+					dockRiseOverride={chatKeyboard.dockRiseOverride}
+					openingTurnId={startupView?.openingTurnId}
+					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
+				/>
+			</View>
 		</KeyboardAvoidingView>
 	);
 }
@@ -798,6 +814,7 @@ function interfacePhaseLabel(phase?: string): string {
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
+	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	banner: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.sm, paddingVertical: space.xs, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
 	bannerIcon: { alignSelf: "flex-start", marginTop: space.hair },

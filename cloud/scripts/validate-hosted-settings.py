@@ -50,6 +50,8 @@ def main() -> None:
     offering.add_argument("--paywalled-features", default="")
     offering.add_argument("--idle-pause-threshold", default="")
     offering.add_argument("--freestyle-idle-pause-threshold", default="")
+    offering.add_argument("--coder-readable-names", default="")
+    offering.add_argument("--coder-worker-working-folder", default="")
     args = parser.parse_args()
 
     if args.stripe:
@@ -74,6 +76,8 @@ def main() -> None:
             paywalled_features=csv_list(args.paywalled_features),
             idle_pause_threshold=args.idle_pause_threshold,
             freestyle_idle_pause_threshold=args.freestyle_idle_pause_threshold,
+            coder_readable_names=args.coder_readable_names,
+            coder_worker_working_folder=args.coder_worker_working_folder,
             staging_providers=staging_providers,
         )
         return

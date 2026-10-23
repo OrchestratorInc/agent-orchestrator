@@ -123,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 37 {
-		t.Fatalf("got %d plans, want 37", len(plans))
+	if len(plans) != 38 {
+		t.Fatalf("got %d plans, want 38", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -331,6 +331,37 @@ func TestGooseWindowsUsesPowerShellInstallerCommand(t *testing.T) {
 	}
 	if !slices.Equal(plan.Script.Env, []string{"CONFIGURE=false"}) {
 		t.Fatalf("Goose Windows installer env = %v, want CONFIGURE=false", plan.Script.Env)
+	}
+}
+
+func TestHermesPrefersHomebrewAndFallsBackToOfficialInstaller(t *testing.T) {
+	for _, tc := range []struct {
+		goos, shell, url string
+		args             []string
+	}{
+		{"darwin", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"linux", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"windows", "powershell.exe", "https://hermes-agent.nousresearch.com/install.ps1", []string{"-NonInteractive"}},
+	} {
+		t.Run(tc.goos+" without Homebrew", func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetHermes)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
+				t.Fatalf("Hermes plan = %+v, want available official installer", plan)
+			}
+			if plan.Script.URL != tc.url || !slices.Equal(plan.Script.Args, tc.args) {
+				t.Fatalf("Hermes installer = %s %v, want %s %v", plan.Script.URL, plan.Script.Args, tc.url, tc.args)
+			}
+			if !strings.HasSuffix(displayCommand(plan), strings.Join(tc.args, " ")) {
+				t.Fatalf("display omits installer arguments: %q", displayCommand(plan))
+			}
+		})
+	}
+	// The official installer clones GitHub, so Homebrew's release bottle wins.
+	s := newTestService("darwin", "brew", "bash")
+	s.installCapabilities = installCapabilitiesStub{homebrewPrefix: "/opt/homebrew", writable: true}
+	plan := s.planAgent(TargetHermes)
+	if plan.Unsupported || plan.Method != "homebrew" || plan.Package != "hermes-agent" {
+		t.Fatalf("Hermes plan with Homebrew = %+v, want homebrew hermes-agent", plan)
 	}
 }
 

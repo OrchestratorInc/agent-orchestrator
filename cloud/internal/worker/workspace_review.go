@@ -88,7 +88,10 @@ type WorkspaceRepository struct {
 	// Name is the checkout's folder name, the value a request's "repository"
 	// selects it with.
 	Name string `json:"name"`
-	// Repository is the GitHub owner/name of an additional repository.
+	// Label is the name to show when it differs from the folder: the main
+	// repository's own name, since its folder is the provider's fixed one.
+	Label string `json:"label,omitempty"`
+	// Repository is the repository's GitHub owner/name, when it is on GitHub.
 	Repository string `json:"repository,omitempty"`
 	// Branch is the branch an additional repository was cloned at.
 	Branch string `json:"branch,omitempty"`

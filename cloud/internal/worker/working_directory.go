@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Worker environment a bring-your-own Coder connection sets through the
@@ -40,6 +41,14 @@ const CapabilityWorkspacePathPlaceholder = "workspace.path-placeholder"
 // repository through the pull request socket's "repository" field. The control
 // plane only describes those to the agent for a worker that advertises it.
 const CapabilityMultiRepo = "workspace.multi-repo"
+
+// CapabilityChatStart, in a worker's capabilities, means it starts a session
+// created in Chat straight into the Chat controller, and itself moves the
+// session to the TUI (POST /worker/interface/chat-start-fallback) when it
+// cannot run that controller. For a worker that does not report it, the
+// control plane moves a never-started Claude Chat session to the TUI when the
+// worker bootstraps.
+const CapabilityChatStart = "agent.chat-start"
 
 // CapabilitiesHeader carries a worker's capabilities, comma separated, on its
 // requests (the reconnect GET has no body to report them in).
@@ -182,4 +191,168 @@ func ResolveWorkingDirectory(
 		Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash, BranchCreated: created,
 		AdoptedAt: adoptedCommit(ctx, runner, dir, branch, created),
 	})
+}
+
+// Worker environment for a working-folder checkout, set by the Coder provider
+// when the worker runs as the dedicated ao-worker user (mirrored by the coder
+// provider's constants of the same names).
+const (
+	// CheckoutDirectoryEnv is the absolute folder AO checks the session's main
+	// repository out in (the project's working folder, for example
+	// /home/ubuntu/work/alice), instead of the durable root's repository
+	// folder. AO_WORKSPACE_DIR names the same folder.
+	CheckoutDirectoryEnv = "AO_WORKER_CHECKOUT_DIRECTORY"
+	// UserHomeEnv is the workspace login user's home. The agent never starts
+	// in it, and messages show folders below it with "~".
+	UserHomeEnv = "AO_WORKER_USER_HOME"
+)
+
+// ErrWorkingDirectoryOccupied reports a working-folder checkout that already
+// exists and is not AO's: something else (typically the Coder template, from
+// one of its own options) created it. AO, running as its own user, never
+// takes over or changes it, and never falls back to another folder.
+var ErrWorkingDirectoryOccupied = errors.New("the working folder already exists")
+
+// ErrCheckoutDirectoryUnusable reports a working-folder checkout AO could not
+// prepare, for example a missing folder it is not allowed to create.
+var ErrCheckoutDirectoryUnusable = errors.New("the working folder cannot be used")
+
+// ResolveOwnedCheckoutDirectory checks the folder a dedicated-user worker
+// checks the main repository out in. The provider's bootstrap creates it owned
+// by the worker user, so a folder the worker owns is AO's own checkout (a fresh
+// one, or this session's from an earlier start, whose origin the checkout then
+// verifies) and is used as is. A missing folder is created. Anything else (a
+// folder owned by another user, a symbolic link or a file) is
+// ErrWorkingDirectoryOccupied; home is the workspace login user's home, used
+// to name the folder with "~".
+func ResolveOwnedCheckoutDirectory(dir, home string) error {
+	return resolveOwnedCheckoutDirectory(dir, home, os.Getuid())
+}
+
+func resolveOwnedCheckoutDirectory(dir, home string, uid int) error {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if !filepath.IsAbs(dir) || dir == string(filepath.Separator) {
+		return fmt.Errorf("%w: %q is not an absolute folder", ErrCheckoutDirectoryUnusable, dir)
+	}
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		if mkdirErr := os.MkdirAll(dir, 0o755); mkdirErr != nil {
+			return fmt.Errorf("%w: %s does not exist and AO could not create it: %v",
+				ErrCheckoutDirectoryUnusable, DisplayPath(dir, home), mkdirErr)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrCheckoutDirectoryUnusable, DisplayPath(dir, home), err)
+	}
+	if foreignFolder(info, uid) {
+		return fmt.Errorf("%w: %s", ErrWorkingDirectoryOccupied, DisplayPath(dir, home))
+	}
+	return nil
+}
+
+// foreignFolder reports whether info is not a folder of uid's own: a symbolic
+// link, not a folder, or a folder another user owns.
+func foreignFolder(info os.FileInfo, uid int) bool {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return true
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(stat.Uid) != uid
+}
+
+// ownedRepoFoldersFile, in the worker data directory, marks a session whose
+// checkouts must all be AO's own folders: a dedicated-user worker's
+// working-folder checkout (CheckoutDirectoryEnv) and the additional
+// repositories beside it. An additional repository's folder that already
+// exists there and is not the worker's (the Coder template's own clone, from
+// one of its options) is then never used, as the main folder is not: AO does
+// not check the repository out in it, and its Setup and Cleanup steps are
+// skipped (ForeignRepoFolder). The file lists the folders refused when the
+// worker started, for diagnosis.
+const ownedRepoFoldersFile = "owned-repo-folders"
+
+// RecordOwnedRepoFolders marks dataDir's session as one whose checkouts must
+// be AO's own (owned), or clears the mark, and returns the additional
+// repositories' checkouts (extras) whose folders are refused now.
+func RecordOwnedRepoFolders(dataDir string, owned bool, extras []RepoCheckout) ([]RepoCheckout, error) {
+	path := filepath.Join(dataDir, ownedRepoFoldersFile)
+	if !owned {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return nil, nil
+	}
+	var refused []RepoCheckout
+	var listed strings.Builder
+	for _, checkout := range extras {
+		if ForeignRepoFolder(checkout.Path) {
+			refused = append(refused, checkout)
+			listed.WriteString(checkout.Path + "\n")
+		}
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return refused, err
+	}
+	return refused, writeFileAtomic(path, []byte(listed.String()), 0o600)
+}
+
+// OwnedRepoFoldersOnly reports whether dataDir marks its session as one whose
+// checkouts must be AO's own (RecordOwnedRepoFolders).
+func OwnedRepoFoldersOnly(dataDir string) bool {
+	_, err := os.Stat(filepath.Join(dataDir, ownedRepoFoldersFile))
+	return err == nil
+}
+
+// UsedSessionRepoCheckouts lists the session's checkouts AO uses
+// (SessionRepoCheckouts), the main repository's first. In a session whose
+// checkouts must be AO's own (OwnedRepoFoldersOnly in dataDir), an additional
+// repository whose folder is not (ForeignRepoFolder: the Coder template's own
+// clone) is left out, as a repository skipped for its folder name is: AO did
+// not check it out there, and never shows, changes or pushes from it. A
+// missing folder is kept: AO checks the repository out there.
+func UsedSessionRepoCheckouts(workspace, dataDir, mainURL string, extras []RepoRef) []RepoCheckout {
+	checkouts := SessionRepoCheckouts(workspace, mainURL, extras)
+	if strings.TrimSpace(dataDir) == "" || !OwnedRepoFoldersOnly(dataDir) {
+		return checkouts
+	}
+	used := []RepoCheckout{checkouts[0]}
+	for _, checkout := range checkouts[1:] {
+		if !ForeignRepoFolder(checkout.Path) {
+			used = append(used, checkout)
+		}
+	}
+	return used
+}
+
+// ForeignRepoFolder reports whether path exists and is not a folder of the
+// worker's own (foreignFolder): one AO never checks a repository out in or
+// runs a Setup or Cleanup step in when its checkouts must be its own.
+func ForeignRepoFolder(path string) bool {
+	return foreignRepoFolder(path, os.Getuid())
+}
+
+func foreignRepoFolder(path string, uid int) bool {
+	info, err := os.Lstat(path)
+	return err == nil && foreignFolder(info, uid)
+}
+
+// ForeignRepoFolderHint says why a Setup or Cleanup step of an additional
+// repository did not run: its folder (as shown) already exists and is not
+// AO's.
+func ForeignRepoFolderHint(folder string) string {
+	return folder + " already exists (created by your Coder template), so AO did not run this step in it. " +
+		"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. " +
+		"Start a new session after changing it."
+}
+
+// DisplayPath names dir for a person: below home it starts with "~/".
+func DisplayPath(dir, home string) string {
+	home = filepath.Clean(strings.TrimSpace(home))
+	if home != "" && filepath.IsAbs(home) && home != string(filepath.Separator) {
+		if rest, ok := strings.CutPrefix(dir, home+string(filepath.Separator)); ok {
+			return "~/" + rest
+		}
+	}
+	return dir
 }

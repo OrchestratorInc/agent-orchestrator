@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 // A project's Setup (postCreate) and Cleanup (preRemove) scripts, the same
@@ -21,12 +24,13 @@ import (
 // before the coding agent starts; Cleanup commands run before the session's
 // workspace is permanently deleted.
 const (
-	// ProjectSetupStepTimeout bounds each Setup command, as the local daemon
-	// does.
-	ProjectSetupStepTimeout = 30 * time.Minute
-	// ProjectCleanupStepTimeout bounds each Cleanup command; Cleanup as a whole
-	// also has the sandbox provider's deletion budget.
-	ProjectCleanupStepTimeout = 10 * time.Minute
+	// ProjectSetupStepTimeout bounds each Setup command that does not set its
+	// own time limit (domain.ScriptStepTimeout), as the local daemon does.
+	ProjectSetupStepTimeout = time.Duration(domain.DefaultSetupStepTimeoutMinutes) * time.Minute
+	// ProjectCleanupStepTimeout bounds each Cleanup command that does not set
+	// its own time limit; Cleanup as a whole also has the sandbox provider's
+	// deletion budget.
+	ProjectCleanupStepTimeout = time.Duration(domain.DefaultCleanupStepTimeoutMinutes) * time.Minute
 	// ProjectScriptOutputLimit bounds the command output kept for the worker
 	// log and the session event, as the local daemon does.
 	ProjectScriptOutputLimit = 8 << 10
@@ -41,13 +45,16 @@ const (
 	// agent blocked) instead of treating the session as already set up.
 	setupAttemptedFile = "setup.attempted"
 	// CleanupHookFile and CleanupCommandsFile, in the worker data directory,
-	// are what the control plane runs before it deletes a Coder workspace: the
+	// are what the control plane runs before it deletes the session's sandbox: the
 	// hook enters the session's workspace with the session environment and
 	// runs the Cleanup commands script beside it. The control plane rewrites
 	// that script with the project's current Cleanup before running the hook,
 	// as a local project reads its current config at removal time.
 	CleanupHookFile     = "cleanup-hook.sh"
 	CleanupCommandsFile = "cleanup-commands.sh"
+	// CleanupHookOutputLimit bounds the output tail the Cleanup hook prints
+	// for the control plane, which splits it into the run's step events.
+	CleanupHookOutputLimit = 64 << 10
 	// cleanupStateDir, in the worker data directory, makes Cleanup run at most
 	// once per workspace: the first hook run creates it and records the
 	// outcome there, and any later run (another control-plane replica, a
@@ -76,6 +83,21 @@ type SetupEvent struct {
 	// Output is the tail of the failed command's output (the last command's on
 	// success).
 	Output string `json:"output,omitempty"`
+	// The rest describe a failed step, so it can be fixed without opening the
+	// sandbox: its command (one line, bounded), the repository folder it ran
+	// in ("" for the main repository), the directory, the Linux user and
+	// groups it ran as, the file in the sandbox with its full output, and a
+	// hint when the output shows a permission problem.
+	Command    string   `json:"command,omitempty"`
+	Repository string   `json:"repository,omitempty"`
+	Dir        string   `json:"dir,omitempty"`
+	User       string   `json:"user,omitempty"`
+	Groups     []string `json:"groups,omitempty"`
+	LogPath    string   `json:"logPath,omitempty"`
+	Hint       string   `json:"hint,omitempty"`
+	// TimeoutMinutes is the failed step's time limit (0 for one from a worker
+	// that predates per-step limits, which had the default).
+	TimeoutMinutes int `json:"timeoutMinutes,omitempty"`
 }
 
 // Summary names the failed step and why, in the local daemon's words
@@ -83,9 +105,66 @@ type SetupEvent struct {
 // command's output.
 func (e SetupEvent) Summary() string {
 	if e.Status == SetupTimedOut {
-		return fmt.Sprintf("The project's Setup script stopped at step %d after %d minutes", e.Step, int(ProjectSetupStepTimeout/time.Minute))
+		return fmt.Sprintf("The project's Setup script stopped at step %d after %s", e.Step,
+			scriptMinutes(domain.ScriptStepTimeout(e.TimeoutMinutes, domain.DefaultSetupStepTimeoutMinutes)))
 	}
 	return fmt.Sprintf("The project's Setup script failed at step %d (exit status %d)", e.Step, e.ExitCode)
+}
+
+// scriptMinutes says a step's time limit in minutes ("1 minute", "30
+// minutes").
+func scriptMinutes(timeout time.Duration) string {
+	minutes := int(timeout / time.Minute)
+	if minutes == 1 {
+		return "1 minute"
+	}
+	return strconv.Itoa(minutes) + " minutes"
+}
+
+// timeoutMinutes is a step's time limit as whole minutes, for its events.
+func timeoutMinutes(timeout time.Duration) int {
+	return int((timeout + time.Minute - 1) / time.Minute)
+}
+
+// splitScriptSteps reads a run's step commands, each optionally led by its
+// time limit's marker (domain.TimedScriptCommand): the commands without the
+// marker and their time limits (defaultMinutes, the kind's default, for a step
+// that sets none), blank commands dropped.
+func splitScriptSteps(steps []string, defaultMinutes int) ([]string, []time.Duration) {
+	commands := make([]string, 0, len(steps))
+	timeouts := make([]time.Duration, 0, len(steps))
+	for _, step := range steps {
+		command, timeout := domain.SplitScriptStepTimeout(step, defaultMinutes)
+		if strings.TrimSpace(command) == "" {
+			continue
+		}
+		commands = append(commands, command)
+		timeouts = append(timeouts, timeout)
+	}
+	return commands, timeouts
+}
+
+// Context is a failed step's command, who and where it ran, and its log, one
+// fact per line, for the startup screen's details and the worker log.
+func (e SetupEvent) Context() string {
+	var lines []string
+	if e.Command != "" {
+		lines = append(lines, fmt.Sprintf("Step %d: %s", e.Step, e.Command))
+	}
+	if e.User != "" {
+		ran := "Ran as " + e.User
+		if len(e.Groups) > 0 {
+			ran += " (groups: " + strings.Join(e.Groups, " ") + ")"
+		}
+		if e.Dir != "" {
+			ran += " in " + e.Dir
+		}
+		lines = append(lines, ran)
+	}
+	if e.LogPath != "" {
+		lines = append(lines, "Full output: "+e.LogPath)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Message is the startup error shown when Setup did not succeed: the summary
@@ -122,10 +201,13 @@ type WorkspaceStartupEvent struct {
 // SessionScriptEnvironment is the AO_* environment a Setup or Cleanup command
 // sees.
 type SessionScriptEnvironment struct {
-	SessionID     string
-	SessionKind   string
-	Branch        string
-	WorkspaceDir  string
+	SessionID    string
+	SessionKind  string
+	Branch       string
+	WorkspaceDir string
+	// ReposRoot is the folder that holds the session's checkouts: the main
+	// repository's and each additional repository's beside it.
+	ReposRoot     string
 	RepositoryURL string
 	ProjectID     string
 	ProjectName   string
@@ -135,8 +217,15 @@ type SessionScriptEnvironment struct {
 // AO_SOURCE_TREE_PATH are the variables a local project's scripts use. A
 // cloud session has no separate source tree (its checkout is the only copy of
 // the repository in the sandbox), so both name the session's workspace.
+// AO_REPOS_ROOT is the folder that holds every checkout of a project with
+// additional repositories, each in its own folder (see ExtraRepoPath).
 func (e SessionScriptEnvironment) Map() map[string]string {
+	reposRoot := e.ReposRoot
+	if reposRoot == "" && e.WorkspaceDir != "" {
+		reposRoot = filepath.Dir(e.WorkspaceDir)
+	}
 	return map[string]string{
+		"AO_REPOS_ROOT":       reposRoot,
 		"AO_SESSION_ID":       e.SessionID,
 		"AO_SESSION_KIND":     e.SessionKind,
 		"AO_SESSION_BRANCH":   e.Branch,
@@ -158,21 +247,39 @@ type SetupRunner struct {
 	// (or under a worker from before Setup existed) never runs one added to
 	// the project later inside its already-prepared workspace.
 	FirstStart bool
-	// StepTimeout overrides ProjectSetupStepTimeout for tests.
+	// StepTimeout overrides every step's time limit for tests.
 	StepTimeout time.Duration
+	// Publish, when set, receives the run's ScriptStepEventType events: each
+	// step's start, live updates of its output while it runs, its final
+	// outcome, and the steps a failure skipped. It is called from its own
+	// goroutine, so a slow or failing control plane never holds up a step;
+	// it returns ErrScriptStepsUnsupported when the control plane refuses
+	// the event type.
+	Publish func(context.Context, ScriptStepEvent) error
+	// Secrets returns credentials the step's environment does not name
+	// (the worker's token), masked in the published output and commands.
+	Secrets func() []string
+	// UpdateInterval overrides liveUpdateInterval for tests.
+	UpdateInterval time.Duration
+	// LiveHeartbeat overrides liveHeartbeat for tests.
+	LiveHeartbeat time.Duration
+	// FinalWait overrides scriptStepFinalWait for tests.
+	FinalWait time.Duration
 }
 
 // Run runs commands in order in dir with `sh -c`, stopping at the first one
-// that fails. ran is false when there is nothing to run or Setup already
-// succeeded for this session. Only a success is recorded, so a failed Setup
-// runs again when the session is reopened.
+// that fails. Each runs for at most its time limit: the one its timeout marker
+// line sets (domain.TimedScriptCommand, LaunchContext.ProjectScripts), else
+// ProjectSetupStepTimeout. ran is false when there is nothing to run or Setup
+// already succeeded for this session. Only a success is recorded, so a failed
+// Setup runs again when the session is reopened.
 func (r SetupRunner) Run(
 	ctx context.Context,
-	commands []string,
+	timedCommands []string,
 	dir string,
 	environment SessionScriptEnvironment,
 ) (event SetupEvent, ran bool) {
-	commands = nonEmptyCommands(commands)
+	commands, timeouts := splitScriptSteps(timedCommands, domain.DefaultSetupStepTimeoutMinutes)
 	marker := filepath.Join(r.DataDir, setupDoneFile)
 	if _, err := os.Stat(marker); err == nil {
 		return SetupEvent{}, false
@@ -186,22 +293,68 @@ func (r SetupRunner) Run(
 		return SetupEvent{}, false
 	}
 	r.writeMarker(attempted)
-	timeout := r.StepTimeout
-	if timeout <= 0 {
-		timeout = ProjectSetupStepTimeout
+	// Each run keeps only its own steps' logs.
+	logs := filepath.Join(r.DataDir, setupLogsDir)
+	_ = os.RemoveAll(logs)
+	if err := os.MkdirAll(logs, 0o700); err != nil {
+		logs = ""
 	}
+	redactor := r.redactor(commands)
+	steps := r.startStepEvents(ctx, len(commands), redactor)
+	defer steps.close()
 	started := time.Now()
 	event = SetupEvent{Status: SetupSucceeded}
+	ownedOnly := OwnedRepoFoldersOnly(r.DataDir)
 	for index, command := range commands {
-		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map())
-		// Only a failure carries output: it is what the startup screen shows to
-		// fix the step. A successful Setup's output (often secrets a step
-		// loaded or printed) is never published to the session's events.
+		logPath := ""
+		if logs != "" {
+			logPath = filepath.Join(logs, "step-"+strconv.Itoa(index+1)+".log")
+		}
+		timeout := timeouts[index]
+		if r.StepTimeout > 0 {
+			timeout = r.StepTimeout
+		}
+		if folder, _, ok := domain.ParseRepoScriptCommand(command); ok && ownedOnly {
+			// An additional repository's folder the template made is not
+			// AO's: the step never runs there, and the rest still run.
+			if path := filepath.Join(filepath.Dir(dir), folder); ForeignRepoFolder(path) {
+				steps.skipOne(index+1, command, timeout, ForeignRepoFolderHint(DisplayPath(path, os.Getenv(UserHomeEnv))))
+				continue
+			}
+		}
+		live := steps.start(index+1, command, logPath, timeout)
+		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map(), logPath, live)
+		step.TimeoutMinutes = timeoutMinutes(timeout)
+		// Only a failure carries output in the summary event: it is what the
+		// startup screen shows to fix the step. Each step's own events carry
+		// its redacted output (setupStepEvents).
 		if step.Status != SetupSucceeded {
+			// The summary (and the startup error made from it) carries the
+			// output as the step's events do: carriage-return overwrites
+			// collapsed, escapes stripped, and the values of the secret-named
+			// environment variables and the worker's token masked before the
+			// patterns run.
+			step.Output, _ = redactor.scriptStepOutput(step.Output, false)
 			step.Step = index + 1
 			step.DurationMS = time.Since(started).Milliseconds()
+			step.Command, step.Repository = scriptCommandSummary(command, redactor)
+			step.Dir = dir
+			if step.Repository != "" {
+				step.Dir = filepath.Join(filepath.Dir(dir), step.Repository)
+			}
+			identity := CurrentScriptIdentity()
+			step.User, step.Groups = identity.User, identity.Groups
+			if logPath != "" {
+				if _, err := os.Stat(logPath); err == nil {
+					step.LogPath = logPath
+				}
+			}
+			step.Hint = ScriptFailureHint(step.Output, step.ExitCode, step.User)
+			steps.finish(step)
+			steps.skip(commands[index+1:], timeouts[index+1:])
 			return step, true
 		}
+		steps.finish(step)
 	}
 	event.DurationMS = time.Since(started).Milliseconds()
 	r.writeMarker(marker)
@@ -232,6 +385,8 @@ func runProjectScriptStep(
 	timeout time.Duration,
 	dir string,
 	environment map[string]string,
+	logPath string,
+	live io.Writer,
 ) SetupEvent {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -239,8 +394,22 @@ func runProjectScriptStep(
 	process.Dir = dir
 	process.Env = mergeEnvironment(os.Environ(), environment)
 	output := &tailBuffer{limit: ProjectScriptOutputLimit}
-	process.Stdout = output
-	process.Stderr = output
+	sinks := []io.Writer{output}
+	if live != nil {
+		sinks = append(sinks, live)
+	}
+	if logPath != "" {
+		if file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
+			defer file.Close()
+			sinks = append(sinks, &cappedFile{file: file, left: scriptLogLimit})
+		}
+	}
+	var sink io.Writer = output
+	if len(sinks) > 1 {
+		sink = io.MultiWriter(sinks...)
+	}
+	process.Stdout = sink
+	process.Stderr = sink
 	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	process.Cancel = func() error {
 		if process.Process == nil {
@@ -294,36 +463,112 @@ func mergeEnvironment(base []string, overrides map[string]string) []string {
 
 // tailBuffer keeps the last limit bytes written to it.
 type tailBuffer struct {
-	limit int
-	data  bytes.Buffer
+	limit   int
+	data    bytes.Buffer
+	dropped bool
 }
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
 	b.data.Write(p)
 	if over := b.data.Len() - b.limit; over > 0 {
 		b.data.Next(over)
+		b.dropped = true
 	}
 	return len(p), nil
 }
 
-func (b *tailBuffer) String() string { return b.data.String() }
+// String is the kept output. Once its beginning was dropped, what it then
+// starts with that may be cut short is dropped too (dropPartialHead): a secret
+// cut in half there is not recognized by any redaction pattern.
+func (b *tailBuffer) String() string {
+	text := b.data.String()
+	if b.dropped {
+		return dropPartialHead(text)
+	}
+	return text
+}
 
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
-// command with `sh -c` in order, each bounded by ProjectCleanupStepTimeout when
-// timeout(1) is available, stopping at the first failure with that command's
-// status. With no commands it does nothing.
-func CleanupCommandsScript(commands []string) string {
-	seconds := strconv.Itoa(int(ProjectCleanupStepTimeout / time.Second))
-	var steps strings.Builder
-	steps.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
-	steps.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5 " + seconds + "\"; fi\n")
-	for index, command := range nonEmptyCommands(commands) {
-		step := strconv.Itoa(index + 1)
-		steps.WriteString("$ao_timeout sh -c " + shellQuote(command) + " </dev/null\n")
-		steps.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then echo \"cleanup step " + step +
-			" failed: exit status $ao_code\" >&2; exit \"$ao_code\"; fi\n")
+// command with `sh -c` in order, each bounded by its time limit (the one its
+// timeout marker line sets, else ProjectCleanupStepTimeout) when timeout(1) is
+// available, stopping at the first failure with that command's status. With
+// no commands it does nothing. Around each command it prints a start and an
+// end marker line carrying nonce (NewScriptMarkerNonce), which the control
+// plane parses into the run's step events (CleanupStepEvents); the commands, their order, environment and exit
+// status are the same as without them. Each end marker also carries the
+// step's time limit in seconds, so its timeout is told apart from a failure.
+func CleanupCommandsScript(steps []string, nonce string) string {
+	commands, timeouts := splitScriptSteps(steps, domain.DefaultCleanupStepTimeoutMinutes)
+	// The step lines it prints name each command, redacted: also of the
+	// values its commands assign to secret-named variables.
+	redactor := newScriptRedactor(nil, assignedSecretValues(commands))
+	total := strconv.Itoa(len(commands))
+	marker := scriptMarkerPrefix + nonce + " "
+	var script strings.Builder
+	script.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
+	script.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5\"; fi\n")
+	if len(commands) > 0 {
+		// Milliseconds since the epoch: from nanoseconds when date has %N (16
+		// digits or more), else from seconds, else 0; never anything that
+		// would stop the script.
+		script.WriteString("ao_ms() { ao_t=$(date +%s%N 2>/dev/null) || ao_t=\n" +
+			"  case \"$ao_t\" in *[!0-9]*) ao_t= ;; ????????????????*) ao_t=${ao_t%??????} ;; *) ao_t= ;; esac\n" +
+			"  [ -n \"$ao_t\" ] || ao_t=$(date +%s 2>/dev/null)000\n" +
+			"  case \"$ao_t\" in ''|*[!0-9]*) ao_t=0 ;; esac\n" +
+			"  echo \"$ao_t\"\n}\n")
+		script.WriteString("printf '%s\\n' " + shellQuote(marker+"log") + "\" $(dirname \"$0\")/" + cleanupStateDir + "/output\"\n")
+		// A hook whose session's checkouts must be AO's own sets
+		// ownedRepoFoldersEnv (WriteCleanupHook): an additional repository's
+		// folder that is not the hook user's own (ForeignRepoFolder) is the
+		// Coder template's, and no step runs in it. The steps never see it.
+		script.WriteString("ao_owned_only=${" + ownedRepoFoldersEnv + ":-}\nunset " + ownedRepoFoldersEnv + "\n" +
+			"ao_foreign() { [ -L \"$1\" ] || { [ -e \"$1\" ] && { ! [ -d \"$1\" ] || ! [ -O \"$1\" ]; }; }; }\n")
+		// ao_shown REPOSITORY names that repository's folder beside the main
+		// checkout as Setup does (DisplayPath): absolute, or below the
+		// workspace user's home (cleanupUserHomeEnv) with "~/".
+		script.WriteString("ao_user_home=${" + cleanupUserHomeEnv + ":-}\nunset " + cleanupUserHomeEnv + "\n" +
+			"while [ \"${ao_user_home%/}\" != \"$ao_user_home\" ]; do ao_user_home=${ao_user_home%/}; done\n" +
+			"ao_shown() {\n" +
+			"  ao_parent=$(dirname \"$(pwd)\"); [ \"$ao_parent\" = / ] && ao_parent=\n" +
+			"  ao_path=$ao_parent/$1\n" +
+			"  case \"$ao_user_home\" in /?*) case \"$ao_path\" in \"$ao_user_home\"/*) ao_path=\"~/${ao_path#\"$ao_user_home\"/}\" ;; esac ;; esac\n" +
+			"  printf '%s' \"$ao_path\"\n" +
+			"}\n")
 	}
-	return steps.String()
+	for index, command := range commands {
+		step := strconv.Itoa(index + 1)
+		seconds := strconv.Itoa(int(timeouts[index] / time.Second))
+		summary, repository := scriptCommandSummary(command, redactor)
+		guarded := repository != ""
+		if repository == "" {
+			repository = scriptMarkerMainRepository
+		}
+		if guarded {
+			script.WriteString("if [ \"$ao_owned_only\" = 1 ] && ao_foreign " + shellQuote("../"+repository) + "; then\n" +
+				"  printf '%s %s\\n' " + shellQuote(marker+step+" "+total+" folder") + " \"$(ao_shown " + shellQuote(repository) + ")\"\n" +
+				"  printf '%s\\n' " + shellQuote(marker+step+" "+total+" skip "+scriptSkipForeignFolder+" "+repository+" "+summary) + "\n" +
+				"else\n")
+		}
+		script.WriteString("ao_started=$(ao_ms)\n")
+		script.WriteString("printf '%s %s %s\\n' " + shellQuote(marker+step+" "+total+" start") + " \"$ao_started\" " +
+			shellQuote(repository+" "+summary) + "\n")
+		// Unquoted, so an empty $ao_timeout (no timeout(1)) leaves the
+		// command and its limit out.
+		script.WriteString("${ao_timeout:+$ao_timeout " + seconds + "} sh -c " + shellQuote(command) + " </dev/null\n")
+		end := "echo \"" + marker + step + " " + total + " end $ao_code $(($(ao_ms) - $ao_started)) " + seconds + "\"\n"
+		// Say which step, what it ran, and as whom and where, so a failure in
+		// the logs needs no trip into the sandbox.
+		script.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then\n" +
+			"  echo \"cleanup step " + step + " failed: exit status $ao_code\" >&2\n" +
+			"  echo " + shellQuote("cleanup step "+step+": "+summary) + " >&2\n" +
+			"  echo \"ran as $(id -un 2>/dev/null) (groups: $(id -Gn 2>/dev/null)) in $(pwd)\" >&2\n" +
+			"  " + end +
+			"  exit \"$ao_code\"\nfi\n" + end)
+		if guarded {
+			script.WriteString("fi\n")
+		}
+	}
+	return script.String()
 }
 
 // WriteCleanupHook installs the hook the control plane runs before it deletes
@@ -337,7 +582,7 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(commandsPath, []byte(CleanupCommandsScript(commands)), 0o600); err != nil {
+	if err := writeFileAtomic(commandsPath, []byte(CleanupCommandsScript(commands, NewScriptMarkerNonce())), 0o600); err != nil {
 		return err
 	}
 	state := filepath.Join(dataDir, cleanupStateDir)
@@ -351,6 +596,14 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 		"fi\n")
 	content.WriteString("cd " + shellQuote(dir) + " >\"$ao_state/output\" 2>&1 || { echo 1 >\"$ao_state/status\"; cat \"$ao_state/output\"; exit 1; }\n")
 	values := environment.Map()
+	// Setup steps inherit the worker's HOME; pin it so Cleanup sees the same
+	// home (its ~/.docker, gh and tool config), whichever runner starts the
+	// hook (sudo -H, runuser and the provider's exec each set their own).
+	if home := os.Getenv("HOME"); home != "" {
+		if _, set := values["HOME"]; !set {
+			values["HOME"] = home
+		}
+	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -359,12 +612,50 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	for _, key := range keys {
 		content.WriteString("export " + key + "=" + shellQuote(values[key]) + "\n")
 	}
+	if home := strings.TrimSpace(os.Getenv(UserHomeEnv)); home != "" {
+		// The commands script names a skipped step's folder below it with
+		// "~/", as Setup does (CleanupCommandsScript).
+		content.WriteString("export " + cleanupUserHomeEnv + "=" + shellQuote(home) + "\n")
+	}
+	if OwnedRepoFoldersOnly(dataDir) {
+		// The commands script skips an additional repository's step whose
+		// folder is not the worker's own (CleanupCommandsScript).
+		content.WriteString("export " + ownedRepoFoldersEnv + "=1\n")
+	}
 	content.WriteString("sh " + shellQuote(commandsPath) + " >>\"$ao_state/output\" 2>&1\n" +
 		"ao_code=$?\n" +
-		"tail -c " + strconv.Itoa(ProjectScriptOutputLimit) + " \"$ao_state/output\"\n" +
+		"tail -c " + strconv.Itoa(CleanupHookOutputLimit) + " \"$ao_state/output\"\n" +
+		"if [ \"$ao_code\" -ne 0 ]; then echo \"full cleanup output: $ao_state/output\"; fi\n" +
 		"echo \"$ao_code\" >\"$ao_state/status\"\n" +
 		"exit \"$ao_code\"\n")
 	return writeFileAtomic(hook, []byte(content.String()), 0o700)
+}
+
+// CleanupHookSkippedPrefix starts the only line a hook that runs no Cleanup
+// prints (WriteSkippedCleanupHook), followed by its reason. The control
+// plane's hook command reports that run as skipped with the reason.
+const CleanupHookSkippedPrefix = "__AO_CLEANUP_HOOK_SKIPPED__:"
+
+// CleanupSkipNoWorkingFolder is the reason a session that never got its
+// working folder (the folder was in use, for example by the Coder template)
+// runs no Cleanup: the folder is someone else's, so the project's Cleanup
+// must never run there.
+const CleanupSkipNoWorkingFolder = "no_working_folder"
+
+// WriteSkippedCleanupHook installs a Cleanup hook that runs no Cleanup
+// command and reports reason instead (CleanupHookSkippedPrefix), for a session
+// whose Cleanup must never run, whatever the project's Cleanup is when the
+// session is deleted. Any commands script from an earlier start is emptied.
+func WriteSkippedCleanupHook(dataDir, reason string) error {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(filepath.Join(dataDir, CleanupCommandsFile), []byte(CleanupCommandsScript(nil, NewScriptMarkerNonce())), 0o600); err != nil {
+		return err
+	}
+	content := "#!/bin/sh\n# Written by the AO worker: this session's Cleanup never runs (" + reason + ").\n" +
+		"printf '%s\\n' " + shellQuote(CleanupHookSkippedPrefix+reason) + "\n"
+	return writeFileAtomic(filepath.Join(dataDir, CleanupHookFile), []byte(content), 0o700)
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {

@@ -47,6 +47,7 @@ const shellMocks = vi.hoisted(() => {
 							workerAgent: string;
 							orchestratorAgent: string;
 							asWorkspace?: boolean;
+							clonePreparationId?: string;
 						}) => Promise<void>;
 				  }
 			| undefined,
@@ -553,6 +554,33 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1" },
 		});
 		expect(screen.getByTestId("global-toast")).toHaveTextContent("Project already added");
+	});
+
+	it("finishes clone provisioning after registration committed but its response was lost", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		vi.mocked(apiClient.POST)
+			.mockReset()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce({ error: {
+				code: "PATH_ALREADY_REGISTERED", message: "Already registered", details: { existingProjectId: "proj-1" },
+			} })
+			.mockResolvedValueOnce({ data: { session: {
+				id: "orch-existing", projectId: "proj-1", kind: "orchestrator", mode: "chat",
+			} } });
+		await renderShell();
+		const input = { path: "/one", workerAgent: "codex", orchestratorAgent: "codex", clonePreparationId: "prepared" };
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).rejects.toThrow("Failed to fetch");
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).resolves.toBeUndefined();
+		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "orch-existing" },
+		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+		});
+		expect(apiClient.POST).toHaveBeenCalledTimes(3);
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
 	});
 
 	it("uses the daemon project identity when an imported path is an alias", async () => {
