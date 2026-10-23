@@ -642,6 +642,7 @@ export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTe
 	const str = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
 	return {
 		distinctId: str(data?.distinctId),
+		installId: str(data?.installId),
 		cloudUserId: str(data?.cloudUserId),
 		githubLogin: str(data?.githubLogin),
 		optedOut: data?.optedOut === true,

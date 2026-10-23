@@ -400,6 +400,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	identity := ports.TelemetryIdentity{CloudUserID: cloudUserID}
 	if s.ident != nil {
 		identity.InstallID = s.ident.InstallID()
+		identity.AnonymousID = s.ident.AnonymousID()
 	}
 	distinctID := identity.DistinctID()
 	body := map[string]any{
@@ -531,6 +532,9 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		props[k] = v
 	}
 	s.stampIdentity(props)
+	if s.ident != nil {
+		props["install_id"] = s.ident.InstallID()
+	}
 	return props
 }
 
@@ -552,8 +556,8 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	actor, _ := props["github_actor"].(string)
 	if uid != "" {
 		props["ao_cloud_user_id"] = uid
-		// Linked to the person that the desktop identify() merged this install
-		// into; without it the daemon's events would not join that profile.
+		// Linked to the person the desktop identify() selected; the stable
+		// installation ID remains an event property.
 		props["$process_person_profile"] = true
 	}
 	if actor == "" && uid == "" {
@@ -720,12 +724,31 @@ func loadOrCreateInstallID(dataDir string) (string, error) {
 		if id := strings.TrimSpace(string(b)); id != "" {
 			return id, nil
 		}
+		return "", fmt.Errorf("empty telemetry install id")
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("read telemetry install id: %w", err)
 	}
 	id := "ins_" + uuid.NewString()
-	if err := os.WriteFile(path, []byte(id+"\n"), 0o600); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if os.IsExist(err) {
+		b, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return "", fmt.Errorf("read existing telemetry install id: %w", readErr)
+		}
+		if strings.TrimSpace(string(b)) == "" {
+			return "", fmt.Errorf("empty telemetry install id")
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	if err != nil {
 		return "", fmt.Errorf("write telemetry install id: %w", err)
+	}
+	if _, err := f.WriteString(id + "\n"); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
 	}
 	return id, nil
 }

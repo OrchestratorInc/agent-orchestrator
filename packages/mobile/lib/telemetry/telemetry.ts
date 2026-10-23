@@ -27,6 +27,7 @@ export interface MobileTelemetryClient {
  */
 export type DesktopTelemetryIdentity = {
 	distinctId?: string;
+	installId?: string;
 	cloudUserId?: string;
 	githubLogin?: string;
 	optedOut: boolean;
@@ -38,7 +39,7 @@ export type MobileTelemetry = {
 	/** Emit the daily-active heartbeat at most once per UTC day. */
 	active(storage?: ActiveStorage, now?: Date): Promise<void>;
 	/** Join the paired desktop's person, or stop everything if it has opted out. */
-	adoptDesktopIdentity(identity: DesktopTelemetryIdentity): void;
+	adoptDesktopIdentity(identity: DesktopTelemetryIdentity | null): void;
 	setOptedOut(optedOut: boolean): void;
 	/**
 	 * Applies the saved opt-out read from storage and releases capture. Ignored
@@ -82,6 +83,7 @@ export function createMobileTelemetry(
 	let identified = false;
 	let adoptedId: string | null = null;
 	let adoptedKey: string | null = null;
+	let pairedInstallId: string | null = null;
 
 	// With awaitPreference the facade's initial `optedOut` is a guess, not what the
 	// SDK and the saved marker hold (a previous run may have left both opted out).
@@ -104,6 +106,7 @@ export function createMobileTelemetry(
 			identified = false;
 			adoptedId = null;
 			adoptedKey = null;
+			pairedInstallId = null;
 			return;
 		}
 		void client.optIn();
@@ -122,6 +125,7 @@ export function createMobileTelemetry(
 		if (!allow(event)) return;
 		client.capture(event, {
 			...sanitizeMobileProperties(event, properties),
+			...(pairedInstallId ? { paired_install_id: pairedInstallId } : {}),
 			// Anonymous rate until a paired desktop's identity is adopted.
 			// Matches every desktop and daemon event.
 			...(identified ? {} : { $process_person_profile: false }),
@@ -136,11 +140,29 @@ export function createMobileTelemetry(
 		setOptedOut(saved);
 	};
 
-	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity): void => {
+	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity | null): void => {
+		if (!identity) {
+			pairedInstallId = null;
+			void client.unregister("paired_install_id");
+			if (identified) {
+				client.reset();
+				void client.optIn();
+				void client.register(context);
+			}
+			identified = false;
+			adoptedId = null;
+			adoptedKey = null;
+			return;
+		}
 		liveStateApplied = true;
 		setOptedOut(identity.optedOut);
-		if (optedOut || !identity.distinctId) return;
-		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin]);
+		if (optedOut || !identity.distinctId) {
+			pairedInstallId = null;
+			void client.unregister("paired_install_id");
+			return;
+		}
+		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;
+		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
 		const signedIn = Boolean(identity.cloudUserId);
 		if (identified && (!signedIn || adoptedId !== identity.distinctId)) {

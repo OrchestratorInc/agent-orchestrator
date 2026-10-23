@@ -103,6 +103,19 @@ describe("createMobileTelemetry", () => {
 	});
 
 	describe("desktop identity", () => {
+		it("keeps the phone identity and stamps only the authenticated paired install", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, { install_id: "phone_install" });
+			const desktop = "ins_123e4567-e89b-12d3-a456-426614174000";
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", installId: desktop, optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr", paired_install_id: "spoofed" });
+			expect(captures.at(-1)?.props?.paired_install_id).toBe(desktop);
+			expect(calls).toContain("identify:user_A");
+			t.adoptDesktopIdentity(null);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_install_id");
+			expect(captures).toHaveLength(2);
+		});
 		it("identifies with the desktop distinct id once, registers github/cloud ids, and lifts the anonymous flag", () => {
 			const { client, captures, registered, calls } = fakeClient();
 			const t = createMobileTelemetry(client, {});
@@ -121,7 +134,7 @@ describe("createMobileTelemetry", () => {
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ optedOut: false });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
-			expect(calls).toEqual([]);
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual([]);
 			expect(captures[0].props?.$process_person_profile).toBe(false);
 		});
 

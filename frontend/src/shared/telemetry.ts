@@ -6,6 +6,7 @@ import type { TelemetryPolicySnapshot } from "./telemetry-policy";
 
 export type TelemetryBootstrap = {
 	distinctId: string;
+	installId: string;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -65,12 +66,19 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
 	try {
 		const existing = (await readFile(file, "utf8")).trim();
 		if (existing) return existing;
-	} catch {
+		throw new Error("empty telemetry install id");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		// Create the id on first use.
 	}
 	await mkdir(dataDir, { recursive: true });
 	const distinctId = `ins_${randomUUID()}`;
-	await writeFile(file, `${distinctId}\n`, { mode: 0o600 });
+	try {
+		await writeFile(file, `${distinctId}\n`, { mode: 0o600, flag: "wx" });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return loadOrCreateTelemetryInstallId(dataDir);
+		throw error;
+	}
 	return distinctId;
 }
 
@@ -83,11 +91,10 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
  * client starts on a throwaway anonymous ID, and a signed-in user's identify()
  * merges it into the person anyway.
  *
- * The marker is checked before the ID is read. The daemon retires an ID by
- * writing the replacement and only then removing the marker, so a missing marker
- * guarantees that any ID read afterwards is the replacement, never one that was
- * linked. Reading the ID first would let a rotation land between the two reads
- * and return the retired ID with no marker left to flag it.
+ * The marker is checked before the anonymous ID is read. The daemon writes a
+ * replacement anonymous ID before removing the marker. The installation ID
+ * remains fixed for event attribution and must not be reused as a linked
+ * anonymous distinct ID after sign-out.
  */
 export async function bootstrapDistinctId(
 	dataDir: string,
@@ -103,8 +110,15 @@ export async function bootstrapDistinctId(
 	},
 ): Promise<string> {
 	const unlinked = await io.markerMissing(path.join(dataDir, "telemetry_bound_user"));
-	const installId = await io.loadId(dataDir);
-	return unlinked ? installId : `anon_${randomUUID()}`;
+	if (!unlinked) return `anon_${randomUUID()}`;
+	try {
+		const anonymousId = (await readFile(path.join(dataDir, "telemetry_anonymous_id"), "utf8")).trim();
+		if (anonymousId) return anonymousId;
+		throw new Error("empty telemetry anonymous id");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return io.loadId(dataDir);
 }
 
 export async function buildTelemetryBootstrap(
@@ -128,6 +142,7 @@ export async function buildTelemetryBootstrap(
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),
+		installId: await loadOrCreateTelemetryInstallId(dataDir),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),

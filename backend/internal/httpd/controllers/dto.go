@@ -2474,6 +2474,7 @@ type IdentityResponse struct {
 // phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
 	DistinctID  string `json:"distinctId"`
+	InstallID   string `json:"installId,omitempty"`
 	CloudUserID string `json:"cloudUserId,omitempty"`
 	GitHubLogin string `json:"githubLogin,omitempty"`
 	OptedOut    bool   `json:"optedOut"`

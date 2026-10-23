@@ -29,6 +29,7 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
+let installId = "";
 let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
@@ -164,7 +165,7 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
 	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
 	// the flag is left to the SDK, which processes the identified person.
-	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }) };
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
 }
 
 // Who this install is. The GitHub login and AO Cloud user ID ride every event as
@@ -572,7 +573,9 @@ export function sanitizeReplayRequestName(name: string): string {
 }
 
 function sanitizePostHogCaptureResult<T>(event: T): T {
-	return sanitizePostHogEvent(event as unknown as Record<string, unknown>) as unknown as T;
+	const safe = sanitizePostHogEvent(event as unknown as Record<string, unknown>);
+	if (installId) safe.properties = { ...((safe.properties as Record<string, unknown>) ?? {}), install_id: installId };
+	return safe as T;
 }
 
 async function sanitizeRendererContextProperties(properties?: TelemetryProperties): Promise<TelemetryProperties> {
@@ -1044,6 +1047,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// Null means the supervisor withheld it: no key, no data dir, or an
 		// unpackaged build that has not opted in. The client is never created.
 		if (!bootstrap) return false;
+		installId = bootstrap.installId;
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
 		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
