@@ -30,7 +30,7 @@ const OPEN_SHARE_LINK_EVENT = "ao:open-share-link";
  * no longer works, or one for someone else, rather than the control plane's
  * generic access error.
  */
-export function shareLinkErrorMessage(error: unknown, t: (key: string) => string): string {
+export function shareLinkErrorMessage(error: unknown, t: (key: "shareLink.expired" | "shareLink.notForYou") => string): string {
 	if (error instanceof CloudCpError && error.status === 404) return t("shareLink.expired");
 	if (error instanceof CloudCpError && error.status === 403) return t("shareLink.notForYou");
 	return error instanceof Error ? error.message : String(error);

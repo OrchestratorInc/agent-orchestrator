@@ -23,6 +23,8 @@ const frame: CloudCpSessionLive = {
 	composer: { holder: null, epoch: 0, waitlist: [] },
 	canTakeOver: true,
 	you: "u1",
+	chatSettings: { model: "opus" },
+	canConfigure: true,
 };
 
 describe("subscribeSessionLiveBridged", () => {

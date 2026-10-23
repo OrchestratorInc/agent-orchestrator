@@ -6,7 +6,7 @@ import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
-import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
+import type { CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
@@ -328,6 +328,26 @@ function promptAuthorName(payload: EventPayload, viewerUserId: string | undefine
 	return typeof payload.authorName === "string" && payload.authorName.trim() !== "" ? payload.authorName.trim() : undefined;
 }
 
+/** A shared session's owner-set settings, as the composer's turn settings. */
+export function fromSessionChatSettings(shared: CloudCpSessionChatSettings | undefined): CloudTurnSettings {
+	return {
+		...(shared?.model ? { model: shared.model } : {}),
+		...(shared?.reasoningEffort ? { reasoningEffort: shared.reasoningEffort } : {}),
+		...(shared?.approvalMode ? { approvalMode: shared.approvalMode } : {}),
+		...(shared?.mode === "read-only" ? { executionMode: "plan" as const } : {}),
+	};
+}
+
+/** The composer's turn settings, as the session's owner-set settings. */
+export function toSessionChatSettings(settings: CloudTurnSettings): CloudCpSessionChatSettings {
+	return {
+		...(settings.model ? { model: settings.model } : {}),
+		...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {}),
+		...(settings.approvalMode ? { approvalMode: settings.approvalMode } : {}),
+		...(settings.executionMode === "plan" ? { mode: "read-only" as const } : {}),
+	};
+}
+
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[], viewerUserId?: string): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
@@ -612,6 +632,16 @@ export function CloudSessionChatSurface({
 	const cloud = session.cloud;
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready, userId } = useCloudCp();
+	// A shared session's live state: who else has it open, who holds its
+	// composer (the lock on talking to the agent), and the model and settings
+	// its owner chose.
+	const live = useCloudSessionLive(cloud?.orgId, session.id, Boolean(cloud && ready && session.isTerminated !== true));
+	// Who this person is, as the server sees them on the live stream; the
+	// remembered account only until the stream says.
+	const me = live?.you || userId;
+	// The owner sets a shared session's model and settings; everyone else sees
+	// them read-only and their turns run with them.
+	const settingsLocked = Boolean(live && !live.canConfigure);
 	const queryClient = useQueryClient();
 	// A failed checkout or Setup reads the way a failed local Chat start does: the
 	// setup checklist under the opening message, with Retry. Retry asks the running
@@ -647,13 +677,22 @@ export function CloudSessionChatSurface({
 		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : undefined };
 	};
 	const [selected, setSelected] = useState<{ key: string; settings: CloudTurnSettings }>(() => ({ key: settingsKey, settings: readSettings() }));
-	const settings = selected.key === settingsKey ? selected.settings : readSettings();
+	const ownSettings = selected.key === settingsKey ? selected.settings : readSettings();
+	const settings = settingsLocked && live ? fromSessionChatSettings(live.chatSettings) : ownSettings;
 	const [rememberedMode, setRememberedMode] = useState<{ key: string; mode?: ApprovalMode }>(() => ({ key: projectKey, mode: readRememberedApprovalMode(projectKey) }));
 	const settingsRef = useRef({ key: settingsKey, settings });
 	if (settingsRef.current.key !== settingsKey) settingsRef.current = { key: settingsKey, settings };
 	const manualSelectionRef = useRef({ key: settingsKey, version: 0 });
 	if (manualSelectionRef.current.key !== settingsKey) manualSelectionRef.current = { key: settingsKey, version: 0 };
+	// The owner's choice becomes the session's, so everyone in it sees it.
+	const shareSettings = useMutation({
+		mutationFn: async (next: CloudTurnSettings) => {
+			if (!cloud) return;
+			await client.setSessionChatSettings(cloud.orgId, session.id, toSessionChatSettings(next));
+		},
+	});
 	const updateSettings = (next: CloudTurnSettings) => {
+		if (settingsLocked) return;
 		manualSelectionRef.current.version++;
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
@@ -662,7 +701,19 @@ export function CloudSessionChatSurface({
 		} catch {
 			// The choice still applies for this mounted session when storage is unavailable.
 		}
+		if (live?.canConfigure) shareSettings.mutate(next);
 	};
+	// The owner opening a shared session whose settings were never set makes
+	// their current choice the session's, once.
+	const seededSettingsRef = useRef("");
+	const liveCanConfigure = live?.canConfigure === true;
+	const liveSettingsEmpty = live ? Object.keys(live.chatSettings ?? {}).length === 0 : false;
+	const shareSettingsNow = shareSettings.mutate;
+	useEffect(() => {
+		if (!liveCanConfigure || !liveSettingsEmpty || seededSettingsRef.current === settingsKey) return;
+		seededSettingsRef.current = settingsKey;
+		if (Object.keys(toSessionChatSettings(settingsRef.current.settings)).length > 0) shareSettingsNow(settingsRef.current.settings);
+	}, [liveCanConfigure, liveSettingsEmpty, settingsKey, shareSettingsNow]);
 	const modelsQuery = useQuery({
 		// A deleted session has no worker and cannot be resumed (only restored),
 		// so it is not asked. Keying on the worker generation reloads the
@@ -726,12 +777,6 @@ export function CloudSessionChatSurface({
 	});
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
-	// A shared session's live state: who else has it open and who holds its
-	// composer, the lock on talking to the agent.
-	const live = useCloudSessionLive(cloud?.orgId, session.id, Boolean(cloud && ready && session.isTerminated !== true));
-	// Who this person is, as the server sees them on the live stream; the
-	// remembered account only until the stream says.
-	const me = live?.you || userId;
 	const myRole = live?.viewers.find((viewer) => viewer.userId === me)?.role;
 	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId: me, live, canWrite: myRole !== "viewer" });
 	const leaseRef = useRef(lease);
@@ -891,7 +936,9 @@ export function CloudSessionChatSurface({
 			controllerTransitioning={controllerTransitioning}
 			newWorkDisabled={newWorkDisabled}
 			commandError={
-				interrupt.error instanceof Error
+				shareSettings.error instanceof Error
+					? shareSettings.error.message
+					: interrupt.error instanceof Error
 					? interrupt.error.message
 					: decide.error instanceof Error
 						? decide.error.message
@@ -918,6 +965,7 @@ export function CloudSessionChatSurface({
 						: appI18n.t("chat.shared.waitingForTurn"))
 					: undefined}
 			onComposerInput={lease.noteDraft}
+			settingsLocked={settingsLocked}
 			onOpenFiles={onOpenFiles}
 			onOpenFile={onOpenFile}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}

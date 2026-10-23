@@ -57,6 +57,7 @@ import type {
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
 	CloudCpComposerAnswer,
+	CloudCpSessionChatSettings,
 	CloudCpCreateShareLinkRequest,
 	CloudCpShareLink,
 	CloudCpSharedProject,
@@ -399,6 +400,8 @@ export interface CloudCpClient {
 	leaveComposerQueue(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	/** Takes the lease from its holder (session creator, org owners and admins). */
 	takeOverComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Sets the model and settings the session's turns run with (its owner only). */
+	setSessionChatSettings(orgId: string, sessionId: string, settings: CloudCpSessionChatSettings, options?: CloudCpRequestOptions): Promise<{ chatSettings: CloudCpSessionChatSettings }>;
 	/** Shares the holder's draft and caret live with the session; counts as a keystroke. */
 	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
@@ -915,6 +918,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/queue`, { signal: o?.signal }),
 		takeOverComposer: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/takeover`, { signal: o?.signal }),
+		setSessionChatSettings: (orgId, sessionId, settings, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-settings`, { body: settings, signal: o?.signal }),
 		publishComposerDraft: (orgId, sessionId, epoch, text, cursor, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/draft`, { body: { epoch, text, cursor }, signal: o?.signal }),
 		createShareLink: (orgId, projectId, body, o) =>

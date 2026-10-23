@@ -1515,6 +1515,18 @@ export interface CloudCpSessionLive {
 	canTakeOver: boolean;
 	/** The user the stream is authenticated as: the identity the server acts on. */
 	you: string;
+	/** What the session's turns run with, set by its owner. */
+	chatSettings: CloudCpSessionChatSettings;
+	/** Whether the person reading the stream owns the session and may change chatSettings. */
+	canConfigure: boolean;
+}
+
+/** A session's owner-set turn settings; an absent field means the default. */
+export interface CloudCpSessionChatSettings {
+	model?: string;
+	reasoningEffort?: string;
+	mode?: "read-only" | "standard" | "trusted";
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
 }
 
 export type CloudCpShareRole = "viewer" | "editor";
