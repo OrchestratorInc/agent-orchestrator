@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Copy, Ellipsis, FolderOpen, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Copy, Ellipsis, FolderOpen, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
@@ -37,18 +37,24 @@ export function ArtifactActionsMenu({
 	hostId,
 	session,
 	iconOnly = false,
-	showDeleteButton = false,
+	pinInMenu = false,
 	pinned = false,
 	onTogglePin,
+	onOpenInSession,
+	onDeleted,
+	errorClassName,
 	className,
 }: {
 	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl">;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
-	showDeleteButton?: boolean;
+	pinInMenu?: boolean;
 	pinned?: boolean;
 	onTogglePin?: () => void;
+	onOpenInSession?: () => void;
+	onDeleted?: () => void;
+	errorClassName?: string;
 	className?: string;
 }) {
 	const { t } = useTranslation();
@@ -64,6 +70,7 @@ export function ArtifactActionsMenu({
 		onSuccess: async () => {
 			setConfirmingDelete(false);
 			if (local) useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path }));
+			onDeleted?.();
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 		},
 	});
@@ -122,7 +129,7 @@ export function ArtifactActionsMenu({
 	);
 	return (
 		<>
-			{onTogglePin ? (
+			{onTogglePin && !pinInMenu ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
@@ -140,22 +147,21 @@ export function ArtifactActionsMenu({
 					<TooltipContent side="bottom">{t(pinned ? "artifacts.unpin" : "artifacts.pin")}</TooltipContent>
 				</Tooltip>
 			) : null}
-			{showDeleteButton && !session.cloud ? (
+			{onOpenInSession ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
-							aria-label={`${t("artifacts.delete")}: ${artifact.name}`}
-							className={cn("text-muted-foreground hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60", className)}
-							disabled={remove.isPending}
-							onClick={confirmDelete}
+							aria-label={`${t("artifacts.openInSession")}: ${artifact.name}`}
+							className={cn("text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60", className)}
+							onClick={onOpenInSession}
 							size="icon-sm"
 							type="button"
 							variant="ghost"
 						>
-							<Trash2 aria-hidden="true" className="size-icon-sm" />
+							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("artifacts.delete")}</TooltipContent>
+					<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
 				</Tooltip>
 			) : null}
 			<DropdownMenu>
@@ -168,6 +174,23 @@ export function ArtifactActionsMenu({
 					</Tooltip>
 				) : menuTrigger}
 				<DropdownMenuContent align={iconOnly ? "end" : "start"} className="min-w-44" data-browser-native-overlay="true">
+					{onTogglePin || onOpenInSession ? (
+						<>
+							{onTogglePin ? (
+								<DropdownMenuItem onSelect={onTogglePin}>
+									{pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+									{t(pinned ? "artifacts.unpin" : "artifacts.pin")}
+								</DropdownMenuItem>
+							) : null}
+							{onOpenInSession ? (
+								<DropdownMenuItem onSelect={onOpenInSession}>
+									<ArrowUpRight aria-hidden="true" />
+									{t("artifacts.openInSession")}
+								</DropdownMenuItem>
+							) : null}
+							<DropdownMenuSeparator />
+						</>
+					) : null}
 					{local ? (
 						<>
 							<DropdownMenuItem onSelect={() => reveal("file-manager")}>
@@ -219,6 +242,7 @@ export function ArtifactActionsMenu({
 					iconOnly
 						? "absolute bottom-full right-0 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-md bg-popover p-2 shadow-md"
 						: "min-w-0 truncate",
+					errorClassName,
 				)} role="alert" title={error}>
 					{error}
 				</span>

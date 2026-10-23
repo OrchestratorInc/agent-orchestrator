@@ -2934,6 +2934,7 @@
 	"settings.project.workersRequestReviewToggle": "Workers request AO review",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
 	"artifacts.title": "Artifacts",
+	"artifacts.openInSession": "Abrir na sessão",
 	"artifacts.recent": "Recentes",
 	"artifacts.pinned": "Fixados",
 	"artifacts.pin": "Fixar artefato",

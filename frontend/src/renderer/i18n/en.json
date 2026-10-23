@@ -2865,6 +2865,7 @@
 	"inspector.usage.processedTokensUnavailable": "Processed tokens unavailable",
 	"artifacts.title": "Artifacts",
 	"artifacts.recent": "Recent",
+	"artifacts.openInSession": "Open in session",
 	"artifacts.pinned": "Pinned",
 	"artifacts.pin": "Pin artifact",
 	"artifacts.unpin": "Unpin artifact",
