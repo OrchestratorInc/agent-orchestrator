@@ -1011,7 +1011,11 @@ type nativeHistoryTurn struct {
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
-	return string(role) + "\x00" + text
+	// Trim both sides: providers that strip persisted text (Hermes flattens
+	// every stored message with a string strip) replay answers whose boundary
+	// whitespace AO's live projection kept, and an exact comparison would
+	// re-import the same reply as a duplicate.
+	return string(role) + "\x00" + strings.TrimSpace(text)
 }
 
 func nativeHistoryEventMessageFingerprint(event ports.ChatEvent) (string, bool) {
@@ -1229,7 +1233,13 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		if match == nil && event.Text != "" {
 			for _, candidate := range ordered {
-				if !used[candidate] && candidate.text == event.Text {
+				if used[candidate] || candidate.text == "" {
+					continue
+				}
+				// Trim-tolerant like the checkpoint comparison: providers that
+				// strip persisted text replay the prompt with different
+				// boundary whitespace than the dispatched original.
+				if nativeHistoryTextMatches(candidate.text, event.Text) {
 					match = candidate
 					break
 				}

@@ -28,6 +28,9 @@ const (
 	fakeAgentEnv         = "AO_TEST_HERMES_ACP_FAKE_AGENT"
 	fakeAgentModeLog     = "AO_TEST_HERMES_ACP_MODE_LOG"
 	fakeAgentResponseLog = "AO_TEST_HERMES_ACP_RESPONSE_LOG"
+	// fakeAgentLiveReplies switches the fake into the replay-test persona: live
+	// prompts stream reply text, and a load_session replays the persisted shape.
+	fakeAgentLiveReplies = "AO_TEST_HERMES_ACP_LIVE_REPLIES"
 )
 
 func TestMain(m *testing.M) {
@@ -210,6 +213,128 @@ func TestHermesACPTransportBypassApprovalAnswersAllowOnceAndRepromptsAfterDefaul
 	}
 }
 
+// Killing the chat host and resuming replays Hermes' persisted transcript in a
+// different shape than the live stream: id-less chunks, stripped reply text,
+// and the failed-turn boundary row on the interrupted turn. The reconciler
+// must produce the two stored turns without duplicating the reply or importing
+// the boundary notice as a reply.
+func TestHermesACPTransportReplayAfterHostDeathDoesNotDuplicateTurns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	modeLog := filepath.Join(t.TempDir(), "modes.json")
+	binary := writeHermesACPExecutable(t, modeLog, "")
+	t.Setenv(fakeAgentLiveReplies, "1")
+	driver := newDriver(
+		&fakePlugin{status: ports.AgentAuthStatusAuthorized, binary: binary},
+		nil,
+		nil,
+	)
+
+	ctx := context.Background()
+	start := ports.ChatStartConfig{
+		SessionID: "hermes-acp-replay", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		Permissions: ports.PermissionModeDefault,
+	}
+	conversation, err := driver.Start(ctx, start)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	startTurn := func(text string) ports.ChatTurnRef {
+		t.Helper()
+		ref, err := conversation.SendTurn(ctx, ports.ChatUserMessage{Text: text})
+		if err != nil {
+			t.Fatalf("SendTurn: %v", err)
+		}
+		if err := conversation.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			t.Fatalf("StartDeferredTurn: %v", err)
+		}
+		return ref
+	}
+
+	startTurn("What is X?")
+	finishTurn(t, conversation, conversation.Events(), domain.TurnStateCompleted)
+
+	// Interrupt the second turn once its partial reply streamed, the way a
+	// host kill or a user interrupt leaves it in Hermes' transcript.
+	ref := startTurn("Do turn two.")
+	deadline := time.After(30 * time.Second)
+	interrupted := false
+events:
+	for {
+		select {
+		case event := <-conversation.Events():
+			switch event.Kind {
+			case ports.ChatEventMessageDelta:
+				if err := conversation.Interrupt(ctx, ref.ProviderTurnID); err != nil {
+					t.Fatalf("Interrupt: %v", err)
+				}
+			case ports.ChatEventTurnCompleted:
+				if event.TurnState != domain.TurnStateInterrupted {
+					t.Fatalf("turn state = %q, want interrupted (err=%v)", event.TurnState, event.Err)
+				}
+				if err := conversation.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(
+					ctx, event.ProviderEventID); err != nil {
+					t.Fatal(err)
+				}
+				interrupted = true
+				break events
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the interrupted turn to settle")
+		}
+	}
+	if !interrupted {
+		t.Fatal("second turn did not settle interrupted")
+	}
+	providerID := conversation.ProviderConversationID()
+	if err := conversation.(ports.ChatProviderTerminator).Terminate(); err != nil {
+		t.Fatalf("Terminate: %v", err)
+	}
+
+	resumed, err := driver.Resume(ctx, ports.ChatResumeConfig{
+		SessionID: start.SessionID, ProviderConversationID: providerID,
+		DataDir: start.DataDir, WorkspacePath: start.WorkspacePath,
+		Permissions: start.Permissions, HasPriorTurns: true,
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer func() { _ = resumed.(ports.ChatProviderTerminator).Terminate() }()
+	history, err := resumed.(ports.ChatHistoryReader).ReadHistory(ctx)
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+
+	var userTexts, replies, turnStates []string
+	for _, event := range history {
+		switch event.Kind {
+		case ports.ChatEventUserMessageCompleted:
+			userTexts = append(userTexts, event.Text)
+		case ports.ChatEventMessageCompleted:
+			replies = append(replies, event.Text)
+		case ports.ChatEventTurnCompleted:
+			turnStates = append(turnStates, string(event.TurnState))
+		}
+	}
+	wantUsers := []string{"What is X?", "Do turn two."}
+	if len(userTexts) != len(wantUsers) {
+		t.Fatalf("replayed user messages = %q, want exactly %q", userTexts, wantUsers)
+	}
+	for i, text := range wantUsers {
+		if userTexts[i] != text {
+			t.Fatalf("replayed user messages = %q, want %q", userTexts, wantUsers)
+		}
+	}
+	if len(replies) != 1 || replies[0] != "Answer one." {
+		t.Fatalf("replayed replies = %q, want exactly [Answer one.] with no boundary notice", replies)
+	}
+	if len(turnStates) != 2 {
+		t.Fatalf("replayed turns = %d, want 2", len(turnStates))
+	}
+}
+
 // writeHermesACPExecutable installs a fake `hermes` binary whose `acp`
 // entry point re-executes this test binary as the fake ACP agent.
 func writeHermesACPExecutable(t *testing.T, modeLog, responseLog string) string {
@@ -290,7 +415,11 @@ func readResponseLog(t *testing.T, path string) []string {
 // ---- fake Hermes ACP agent (runs in the re-executed test binary) ----
 
 func serveFakeHermesAgent(modeLog, responseLog string) {
-	agent := &fakeHermesAgent{modeLog: modeLog, responseLog: responseLog, approved: map[string]bool{}}
+	agent := &fakeHermesAgent{
+		modeLog: modeLog, responseLog: responseLog,
+		liveReplies: os.Getenv(fakeAgentLiveReplies) == "1",
+		approved:    map[string]bool{},
+	}
 	agent.conn = acpsdk.NewAgentSideConnection(agent, os.Stdout, os.Stdin)
 	// Serve until the driver tears the process down; the SDK's pump goroutines
 	// keep the runtime alive off these channels.
@@ -302,10 +431,12 @@ type fakeHermesAgent struct {
 	conn        *acpsdk.AgentSideConnection
 	modeLog     string
 	responseLog string
+	liveReplies bool
 
 	mu        sync.Mutex
 	modes     []string
 	responses []string
+	prompts   int
 
 	approved map[string]bool
 }
@@ -327,7 +458,9 @@ func (a *fakeHermesAgent) Authenticate(context.Context, acpsdk.AuthenticateReque
 func (a *fakeHermesAgent) Initialize(context.Context, acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
 	return acpsdk.InitializeResponse{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
+		// Hermes advertises load_session (acp_adapter/server.py initialize).
 		AgentCapabilities: acpsdk.AgentCapabilities{
+			LoadSession:         true,
 			SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
 		},
 	}, nil
@@ -379,6 +512,9 @@ func hermesAdvertisedPermissionOptions() []acpsdk.PermissionOption {
 }
 
 func (a *fakeHermesAgent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	if a.liveReplies {
+		return a.livePrompt(ctx, params)
+	}
 	if a.responseLog == "" {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 	}
@@ -428,11 +564,56 @@ func (a *fakeHermesAgent) recordResponse(optionID string) error {
 	return os.WriteFile(a.responseLog, raw, 0o600)
 }
 
+// livePrompt streams replies the way Hermes' live session does: chunks carry
+// UUID-shaped message ids and the model's raw text, boundary whitespace
+// included. The second prompt never finishes, so the turn it belongs to
+// settles interrupted.
+func (a *fakeHermesAgent) livePrompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	a.mu.Lock()
+	n := a.prompts
+	a.prompts++
+	a.mu.Unlock()
+	if n > 0 {
+		_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+			SessionId: params.SessionId,
+			Update:    acpsdk.UpdateAgentMessageText("partial "),
+		})
+		<-ctx.Done()
+		return acpsdk.PromptResponse{}, ctx.Err()
+	}
+	_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+		SessionId: params.SessionId,
+		Update:    acpsdk.UpdateAgentMessageText("\n\nAnswer one.\n"),
+	})
+	return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+}
+
+// hermesReplayUpdates mirrors acp_adapter/server.py _history_replay_updates:
+// persisted text comes back as id-less user/agent chunks, flattened with a
+// string strip, and an interrupted turn carries the Hermes-authored boundary
+// row (agent/turn_failure_copy.py) as ordinary assistant text.
+func (a *fakeHermesAgent) hermesReplayUpdates(ctx context.Context, sessionID acpsdk.SessionId) {
+	updates := []acpsdk.SessionUpdate{
+		acpsdk.UpdateUserMessageText("What is X?"),
+		acpsdk.UpdateAgentMessageText("Answer one."),
+		acpsdk.UpdateUserMessageText("Do turn two."),
+		acpsdk.UpdateAgentMessageText(hermesFailedTurnNotices[0]),
+	}
+	for _, update := range updates {
+		_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: sessionID, Update: update})
+	}
+}
+
 func (a *fakeHermesAgent) ResumeSession(context.Context, acpsdk.ResumeSessionRequest) (acpsdk.ResumeSessionResponse, error) {
 	return acpsdk.ResumeSessionResponse{}, nil
 }
 
-func (a *fakeHermesAgent) LoadSession(context.Context, acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
+func (a *fakeHermesAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
+	// Per ACP spec Hermes streams the replayed transcript via session/update
+	// before responding (acp_adapter/server.py _session_response_fields).
+	if a.liveReplies {
+		a.hermesReplayUpdates(ctx, params.SessionId)
+	}
 	return acpsdk.LoadSessionResponse{}, nil
 }
 

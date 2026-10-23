@@ -132,6 +132,12 @@ type Config struct {
 	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
 	// prompt, for an agent that replays a user message as one chunk (pi-acp).
 	HistoryUserChunkIsMessage bool
+	// HistoryReconciler rewrites one completed session/load replay before it
+	// becomes the conversation's history snapshot, for an agent whose replay
+	// carries rows AO never saw live. It runs after stable event identities are
+	// assigned, so an identical provider replay stays identical after the same
+	// rewrite. See hermesacp for the motivating shape.
+	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// QuickStop marks a provider whose stop gains nothing from waiting (it never
 	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
@@ -723,6 +729,7 @@ func (d *Driver) initialize(
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
+	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
 		state := proc.acpState

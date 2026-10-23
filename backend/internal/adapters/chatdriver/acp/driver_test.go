@@ -3891,7 +3891,8 @@ func TestACPDriverTranslatesBareConfigModelToProviderPrefixedAdvertisedID(t *tes
 	}
 }
 
-func TestACPDriverExposesDynamicAvailableCommandsAsSkills(t *testing.T) {	agent := &fakeAgent{}
+func TestACPDriverExposesDynamicAvailableCommandsAsSkills(t *testing.T) {
+	agent := &fakeAgent{}
 	driver := New(Config{
 		Harness:      domain.HarnessClaudeCode,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
