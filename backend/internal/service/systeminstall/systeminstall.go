@@ -1776,8 +1776,24 @@ const (
 	cuaDriverDocs             = "https://cua.ai/docs/how-to-guides/driver/install"
 )
 
+// planCuaDriver runs the official installer. When the shell AO would run it
+// with is missing from the daemon's PATH, the plan is unsupported but carries
+// Cua's own one-line install command, so Settings offers it to copy instead of
+// an Install button that fails the same way again.
 func (s *Service) planCuaDriver() Plan {
-	return s.officialByOS(TargetCuaDriver, cuaDriverUnixInstaller, "bash", cuaDriverWindowsInstaller, cuaDriverDocs)
+	plan := s.officialByOS(TargetCuaDriver, cuaDriverUnixInstaller, "bash", cuaDriverWindowsInstaller, cuaDriverDocs)
+	if !plan.Unsupported || plan.Script != nil || len(plan.Command) > 0 {
+		return plan
+	}
+	switch s.goos {
+	case "windows":
+		plan.Command = []string{"irm", cuaDriverWindowsInstaller, "|", "iex"}
+		plan.Reason += " Copy the install command and run it in PowerShell, or follow " + cuaDriverDocs + "."
+	case "darwin", "linux":
+		plan.Command = []string{"curl", "-fsSL", cuaDriverUnixInstaller, "|", "bash"}
+		plan.Reason += " Copy the install command and run it in a terminal, or follow " + cuaDriverDocs + "."
+	}
+	return plan
 }
 
 func (s *Service) planNPM(target Target, pkg string) Plan {

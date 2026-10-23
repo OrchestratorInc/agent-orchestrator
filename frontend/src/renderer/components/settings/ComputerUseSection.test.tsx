@@ -142,12 +142,12 @@ describe("ComputerUseSection", () => {
 	it("hands over the command when AO cannot run the installer here", async () => {
 		const writeText = vi.fn().mockResolvedValue(undefined);
 		Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-		daemon({ status: () => ({ ...notInstalled, platform: "linux" }), job: { target: "cua-driver", status: "unsupported", command: "bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"", error: "bash was not found on PATH." } });
+		daemon({ status: () => ({ ...notInstalled, platform: "linux" }), job: { target: "cua-driver", status: "unsupported", command: "curl -fsSL https://cua.ai/driver/install.sh | bash", error: "bash was not found on PATH. Copy the install command and run it in a terminal, or follow https://cua.ai/docs/how-to-guides/driver/install." } });
 		renderSection();
 
-		expect(await screen.findByText("bash was not found on PATH.")).toBeInTheDocument();
+		expect(await screen.findByText(/^bash was not found on PATH\. Copy the install command and run it in a terminal, or follow https:\/\/cua\.ai\/docs/)).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Copy command" }));
-		expect(writeText).toHaveBeenCalledWith("bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"");
+		expect(writeText).toHaveBeenCalledWith("curl -fsSL https://cua.ai/driver/install.sh | bash");
 	});
 
 	it("shows a failed install and its output", async () => {
