@@ -99,17 +99,18 @@ async function run(): Promise<void> {
 	await window.loadURL("data:text/html,<title>AO browser integration host</title>");
 	window.show();
 	let browserView: WebContentsView | undefined;
+	let forceInitialPresentation = true;
+	const browserViews = new Map<number, WebContentsView>();
 	const IntegrationWebContentsView = function (options: ConstructorParameters<typeof WebContentsView>[0]) {
 		const view = new WebContentsView(options);
 		browserView = view;
-		// AO normally hides a new view off-screen until the renderer asks to show
-		// the panel. This standalone fixture has no renderer, so keep a real surface
-		// attached; Chromium otherwise may defer initialization indefinitely on
-		// Windows and under Xvfb.
+		browserViews.set(view.webContents.id, view);
+		// Warm the initial blank view before this fixture can show the panel.
+		// Native scenarios then honor AO's real active/inactive tab layout.
 		const setBounds = view.setBounds.bind(view);
-		view.setBounds = () => setBounds({ x: 0, y: 0, width: 800, height: 600 });
+		view.setBounds = (bounds) => setBounds(forceInitialPresentation ? { x: 0, y: 0, width: 800, height: 600 } : bounds);
 		const setVisible = view.setVisible.bind(view);
-		view.setVisible = () => setVisible(true);
+		view.setVisible = (visible) => setVisible(forceInitialPresentation || visible);
 		const loadURL = view.webContents.loadURL.bind(view.webContents);
 		view.webContents.loadURL = async (url, loadOptions) => {
 			let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -262,11 +263,13 @@ async function run(): Promise<void> {
 
 	const shellWebContents = {
 		id: 1,
+		getZoomFactor: () => 1,
 		focus: () => undefined,
 		send: () => undefined,
 		on: () => undefined,
 	} as never;
 	const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
+	const ipcEvents = new Map<string, (...args: unknown[]) => unknown>();
 	const hostOptions = {
 		mainWindow: {
 			contentView: window.contentView,
@@ -275,9 +278,9 @@ async function run(): Promise<void> {
 		shellWebContents,
 		ipcMain: {
 			handle: (channel: string, handler: (...args: unknown[]) => unknown) => ipcHandlers.set(channel, handler),
-			on: () => undefined,
+			on: (channel: string, handler: (...args: unknown[]) => unknown) => ipcEvents.set(channel, handler),
 			removeHandler: (channel: string) => ipcHandlers.delete(channel),
-			off: () => undefined,
+			off: (channel: string) => ipcEvents.delete(channel),
 		} as never,
 		shell: { openExternal: async () => undefined },
 		WebContentsView: IntegrationWebContentsView,
@@ -438,8 +441,28 @@ async function run(): Promise<void> {
 		});
 		nativeHost = createBrowserViewHost({ ...hostOptions, agentBrowserRuntime: nativeRuntime });
 		const liveHost = nativeHost;
+		const shownSessions = new Set<string>();
 		async function nativeCommand(sessionId: string, action: string, args: Record<string, unknown> = {}) {
-			return liveHost.execute(sessionId, action, args);
+			const initialOpen = action === "open" && !shownSessions.has(sessionId);
+			if (initialOpen) forceInitialPresentation = true;
+			try {
+				const result = await liveHost.execute(sessionId, action, args);
+				if (initialOpen) {
+					const ensure = ipcHandlers.get("browser:ensure");
+					const setBounds = ipcEvents.get("browser:setBounds");
+					assert.ok(ensure && setBounds);
+					const { viewId } = await ensure({ sender: shellWebContents }, sessionId) as { viewId: string };
+					forceInitialPresentation = false;
+					setBounds({ sender: shellWebContents }, {
+						viewId, revision: 1, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true,
+					});
+					shownSessions.add(sessionId);
+					await waitForFirstFrame(activeWebContents());
+				}
+				return result;
+			} finally {
+				if (initialOpen) forceInitialPresentation = false;
+			}
 		}
 		async function nativeSnapshot(sessionId: string, expected: string, tabId: string) {
 			const result = await nativeCommand(sessionId, "snapshot", { interactive: true }) as {
@@ -478,6 +501,7 @@ async function run(): Promise<void> {
 				const childSnapshot = await nativeSnapshot(sessionId, "Change child", "t2");
 				assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Native popup child");
 				await nativeCommand(sessionId, "click", { ref: refFor(childSnapshot, "Change child") });
+				await nativeCommand(sessionId, "wait", { text: "Child changed", timeoutMs: 2_500 });
 				await nativeSnapshot(sessionId, "Child changed", "t2");
 				await nativeCommand(sessionId, "tab-select", { tabId: "t1" });
 				await nativeSnapshot(sessionId, "Open report link", "t1");
@@ -572,6 +596,8 @@ async function run(): Promise<void> {
 				nativeRuntime.runAction = originalRunAction;
 			}
 			await nativeCommand(sessionId, "tab-select", { tabId: "t3" });
+			assert.equal(browserViews.get(third.id)?.getBounds().x, 0, "AO t3 must occupy the visible panel");
+			assert.ok((browserViews.get(fourth.id)?.getBounds().x ?? 0) < 0, "inactive AO t4 must be parked outside the panel");
 			assert.ok(targetProvider, "background synchronization must expose this session's real target provider");
 			const nativeTabs = (await nativeRuntime.runAction(sessionId, "tabs", {}, targetProvider)).tabs as Array<{ tabId: string; targetId: string }>;
 			assert.equal(nativeTabs.find(tab => tab.targetId === "t3")?.tabId, "t2", "fixture must prove AO t3 differs from native t2");
@@ -591,8 +617,19 @@ async function run(): Promise<void> {
 				await nativeCommand(sessionId, "tab-select", { tabId: "t3" });
 				snapshot = await nativeSnapshot(sessionId, "Change Third", "t3");
 			}
+			assert.equal(browserViews.get(third.id)?.getVisible(), true, "selected AO t3 must be drawn");
+			assert.equal(browserViews.get(fourth.id)?.getVisible(), false, "inactive AO t4 must not cover the selected page");
 			await nativeCommand(sessionId, "click", { ref: refFor(snapshot, "Change Third") });
-			await nativeSnapshot(sessionId, "Third changed", "t3");
+			try {
+				await nativeCommand(sessionId, "wait", { text: "Third changed", timeoutMs: 2_500 });
+				await nativeSnapshot(sessionId, "Third changed", "t3");
+			} catch (error) {
+				const pages = await Promise.all([third, fourth].map(async (contents) => ({
+					state: await contents.executeJavaScript("({button: document.querySelector('button').textContent, focused: document.hasFocus()})"),
+					visible: browserViews.get(contents.id)?.getVisible(),
+				})));
+				throw new Error(`${String(error)}; pages=${JSON.stringify(pages)}; windowFocused=${window.isFocused()}; tabs=${JSON.stringify(await nativeCommand(sessionId, "tabs"))}`);
+			}
 			assert.equal(await third.executeJavaScript("document.querySelector('button').textContent"), "Third changed");
 			assert.equal(await fourth.executeJavaScript("document.querySelector('button').textContent"), "Change Fourth");
 			assert.equal(await gapOpener.executeJavaScript("document.title"), "Native popup opener");
