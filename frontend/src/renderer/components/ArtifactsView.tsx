@@ -229,11 +229,22 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	const expanded = useArtifactsViewStore((state) => !collapsible || !state.collapsedSections.includes(sectionId));
 	const toggleSection = useArtifactsViewStore((state) => state.toggleSection);
 	const gridId = useId();
+	const headerContent = <>
+		<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
+			<Icon aria-hidden="true" className="size-icon-md shrink-0" />
+			<span className="truncate">{name}</span>
+		</span>
+		{updatedAt ? (
+			<time dateTime={updatedAt} title={new Date(updatedAt).toLocaleString()} className="shrink-0 text-caption font-normal tabular-nums text-muted-foreground">
+				{t("shell.updatedAt", { time: formatTimeCompact(updatedAt) })}
+			</time>
+		) : null}
+	</>;
 	return (
 		<section aria-label={name} className={expanded ? "mb-3" : undefined}>
-			{collapsible ? <header>
-				<h2>
-					<button
+			<header>
+				<h2 aria-label={name}>
+					{collapsible ? <button
 						type="button"
 						aria-label={name}
 						aria-expanded={expanded}
@@ -241,19 +252,11 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 						onClick={() => toggleSection(sectionId)}
 						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md text-left transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					>
-						<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
-							<Icon aria-hidden="true" className="size-icon-md shrink-0" />
-							<span className="truncate">{name}</span>
-						</span>
-						{updatedAt ? (
-							<time dateTime={updatedAt} title={new Date(updatedAt).toLocaleString()} className="shrink-0 text-caption font-normal tabular-nums text-muted-foreground">
-								{t("shell.updatedAt", { time: formatTimeCompact(updatedAt) })}
-							</time>
-						) : null}
+						{headerContent}
 						<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground", !expanded && "-rotate-90")} />
-					</button>
+					</button> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
 				</h2>
-			</header> : null}
+			</header>
 			<ul id={gridId} aria-label={name} hidden={!expanded} className={expanded ? (view === "gallery" ? ARTIFACT_GRID_CLASS : "grid gap-2") : "hidden"}>
 				{children}
 			</ul>
