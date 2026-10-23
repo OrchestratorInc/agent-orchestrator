@@ -322,22 +322,14 @@ describe("CommandPalette gating", () => {
 });
 
 function paletteSearchData(overrides: Record<string, unknown> = {}) {
-	return {
-		query: "",
-		fileNames: [],
-		fileContent: [],
-		messages: [],
-		files: { state: "ready", progress: 1 },
-		chats: { state: "ready", progress: 1 },
-		...overrides,
-	};
+	return { fileNames: [], fileContent: [], messages: [], files: "ready", ...overrides };
 }
 
 describe("CommandPalette workspace file search", () => {
 	it("searches the current session and requests the selected file without navigating", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		getMock.mockImplementation(async (path: string) => path === "/api/v1/search"
-			? { data: paletteSearchData({ query: "App", fileNames: [{ path: "src/components/App.tsx", score: 8, exactName: true }] }) }
+			? { data: paletteSearchData({ fileNames: [{ path: "src/components/App.tsx", score: 8, exactName: true }] }) }
 			: { data: {} });
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
@@ -384,7 +376,7 @@ describe("CommandPalette workspace file search", () => {
 		fireEvent.change(input, { target: { value: "Ap" } });
 		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
 			"/api/v1/search",
-			expect.objectContaining({ params: { query: { q: "Ap", sessionId: "w-fix", kinds: "fileNames,fileContent,messages", limit: 20 } } }),
+			expect.objectContaining({ params: { query: { q: "Ap", sessionId: "w-fix", kinds: "fileNames,fileContent,messages" } } }),
 		));
 	});
 
@@ -417,7 +409,7 @@ describe("CommandPalette workspace file search", () => {
 		ctx.workspaces[0].hostId = "host-a";
 		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
 		getMock.mockResolvedValue({
-			data: paletteSearchData({ query: "app", fileNames: [{ path: "src/app.ts", score: 7, exactName: false }] }),
+			data: paletteSearchData({ fileNames: [{ path: "src/app.ts", score: 7, exactName: false }] }),
 		});
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
@@ -450,13 +442,9 @@ async function typeInPalette(value: string) {
 
 const chatHit = {
 	messageId: "m1",
-	conversationId: "c1",
 	conversationTitle: "Login flake chat",
 	sessionId: "w-fix",
 	projectId: "proj-1",
-	scope: "session",
-	role: "user",
-	createdAt: "2026-10-22T08:00:00Z",
 	score: 5,
 	decisive: false,
 	olderVersion: false,
@@ -509,7 +497,7 @@ describe("CommandPalette search results", () => {
 		await typeInPalette("login flaky ci");
 		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
 			"/api/v1/search",
-			expect.objectContaining({ params: { query: { q: "login flaky ci", kinds: "messages", limit: 20 } } }),
+			expect.objectContaining({ params: { query: { q: "login flaky ci", kinds: "messages" } } }),
 		));
 
 		fireEvent.click(await screen.findByText("Login flake chat", {}, { timeout: 2_000 }));
@@ -565,7 +553,7 @@ describe("CommandPalette search results", () => {
 
 	it("says when the session's file index is still being built", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
-		getMock.mockResolvedValue({ data: paletteSearchData({ files: { state: "building", progress: 0.3 } }) });
+		getMock.mockResolvedValue({ data: paletteSearchData({ files: "building" }) });
 		renderPalette();
 		await typeInPalette("anything");
 		expect(await screen.findByText("Indexing files…", {}, { timeout: 2_000 })).toBeInTheDocument();

@@ -5367,14 +5367,6 @@ paths:
           description: Comma-separated subset of fileNames, fileContent and messages.
             Defaults to all three.
           type: string
-      - description: Maximum hits per group. Defaults to 20.
-        in: query
-        name: limit
-        schema:
-          description: Maximum hits per group. Defaults to 20.
-          maximum: 50
-          minimum: 1
-          type: integer
       responses:
         "200":
           content:
@@ -18706,31 +18698,9 @@ components:
       - start
       - end
       type: object
-    SearchIndexStatus:
-      properties:
-        progress:
-          format: double
-          maximum: 1
-          minimum: 0
-          type: number
-        state:
-          enum:
-          - ready
-          - building
-          - unavailable
-          type: string
-      required:
-      - state
-      - progress
-      type: object
     SearchMessageHit:
       properties:
-        conversationId:
-          type: string
         conversationTitle:
-          type: string
-        createdAt:
-          format: date-time
           type: string
         decisive:
           type: boolean
@@ -18742,10 +18712,6 @@ components:
           type: boolean
         projectId:
           type: string
-        role:
-          type: string
-        scope:
-          type: string
         score:
           format: double
           type: number
@@ -18755,11 +18721,7 @@ components:
           $ref: '#/components/schemas/SearchSnippet'
       required:
       - messageId
-      - conversationId
-      - scope
       - conversationTitle
-      - role
-      - createdAt
       - snippet
       - score
       - decisive
@@ -18767,9 +18729,6 @@ components:
       type: object
     SearchResponse:
       properties:
-        chats:
-          $ref: '#/components/schemas/SearchIndexStatus'
-          description: Readiness of the chat index.
         fileContent:
           items:
             $ref: '#/components/schemas/SearchFileContentHit'
@@ -18779,22 +18738,22 @@ components:
             $ref: '#/components/schemas/SearchFileNameHit'
           type: array
         files:
-          $ref: '#/components/schemas/SearchIndexStatus'
           description: Readiness of the session's file index; building while its first
             index runs.
+          enum:
+          - ready
+          - building
+          - unavailable
+          type: string
         messages:
           items:
             $ref: '#/components/schemas/SearchMessageHit'
           type: array
-        query:
-          type: string
       required:
-      - query
       - fileNames
       - fileContent
       - messages
       - files
-      - chats
       type: object
     SearchSnippet:
       properties:

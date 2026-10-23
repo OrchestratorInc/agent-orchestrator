@@ -2,7 +2,7 @@ package search
 
 import (
 	"context"
-	"strconv"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +30,6 @@ const (
 
 type messageDoc struct {
 	Content string `json:"content"`
-	Group   string `json:"group"` // conversation id
 }
 
 type messageCursor struct {
@@ -51,11 +50,10 @@ type messageIndex struct {
 	chunks   map[string]int // message id -> chunk docs it owns
 	cursor   messageCursor
 	caughtUp bool
-	lastSync time.Time
 }
 
 func openMessageIndex(dir string, m *mapping.IndexMappingImpl, store MessageStore) (*messageIndex, error) {
-	disk, err := openDiskIndex(dir, m)
+	disk, err := openDiskIndex(dir, m, true)
 	if err != nil {
 		return nil, err
 	}
@@ -65,17 +63,6 @@ func openMessageIndex(dir string, m *mapping.IndexMappingImpl, store MessageStor
 	}
 	_ = disk.getJSON(internalCursor, &mi.cursor)
 	return mi, nil
-}
-
-func messageChunkID(id string, k int) string { return id + "#" + strconv.Itoa(k) }
-
-func messageOfChunk(docID string) (string, int) {
-	i := strings.LastIndex(docID, "#")
-	if i < 0 {
-		return docID, 0
-	}
-	k, _ := strconv.Atoi(docID[i+1:])
-	return docID[:i], k
 }
 
 // splitMessageChunks keeps short messages whole and cuts long ones into
@@ -101,17 +88,13 @@ func splitMessageChunks(text string) []string {
 
 // syncOnce indexes every message changed since the cursor. Safe to call
 // concurrently; overlapping calls return immediately.
-func (mi *messageIndex) syncOnce(ctx context.Context, now func() time.Time) error {
+func (mi *messageIndex) syncOnce(ctx context.Context) error {
 	if !mi.syncMu.TryLock() {
 		return nil
 	}
 	defer mi.syncMu.Unlock()
 	mi.mu.RLock()
-	cursor := mi.cursor
-	chunks := make(map[string]int, len(mi.chunks))
-	for k, v := range mi.chunks {
-		chunks[k] = v
-	}
+	cursor, chunks := mi.cursor, maps.Clone(mi.chunks)
 	mi.mu.RUnlock()
 	// The cursor and chunk counts are saved together every few pages and at
 	// the end; a crash in between only re-reads those pages (idempotent).
@@ -137,13 +120,13 @@ func (mi *messageIndex) syncOnce(ctx context.Context, now func() time.Time) erro
 				parts = splitMessageChunks(row.Text)
 			}
 			for k, part := range parts {
-				if err := batch.Index(messageChunkID(row.ID, k), messageDoc{Content: part, Group: row.ConversationID}); err != nil {
+				if err := batch.Index(docID(row.ID, k), messageDoc{Content: part}); err != nil {
 					return err
 				}
 				mi.disk.vocab.addText(part)
 			}
 			for k := len(parts); k < chunks[row.ID]; k++ {
-				batch.Delete(messageChunkID(row.ID, k))
+				batch.Delete(docID(row.ID, k))
 			}
 			if len(parts) == 0 {
 				delete(chunks, row.ID)
@@ -174,7 +157,6 @@ func (mi *messageIndex) syncOnce(ctx context.Context, now func() time.Time) erro
 	}
 	mi.mu.Lock()
 	mi.caughtUp = true
-	mi.lastSync = now()
 	mi.mu.Unlock()
 	return nil
 }
@@ -189,12 +171,8 @@ func (mi *messageIndex) persist(chunks map[string]int, cursor messageCursor) err
 	if err := mi.disk.saveVocab(); err != nil {
 		return err
 	}
-	snapshot := make(map[string]int, len(chunks))
-	for k, v := range chunks {
-		snapshot[k] = v
-	}
 	mi.mu.Lock()
-	mi.chunks, mi.cursor = snapshot, cursor
+	mi.chunks, mi.cursor = maps.Clone(chunks), cursor
 	mi.mu.Unlock()
 	return nil
 }
@@ -236,17 +214,13 @@ func (mi *messageIndex) remove(ids []string) error {
 	mi.syncMu.Lock()
 	defer mi.syncMu.Unlock()
 	mi.mu.RLock()
-	chunks := make(map[string]int, len(mi.chunks))
-	for k, v := range mi.chunks {
-		chunks[k] = v
-	}
-	cursor := mi.cursor
+	cursor, chunks := mi.cursor, maps.Clone(mi.chunks)
 	mi.mu.RUnlock()
 	batch := mi.disk.bleve.NewBatch()
 	for _, id := range ids {
 		n := max(chunks[id], 1)
 		for k := 0; k < n; k++ {
-			batch.Delete(messageChunkID(id, k))
+			batch.Delete(docID(id, k))
 		}
 		delete(chunks, id)
 	}
@@ -256,13 +230,8 @@ func (mi *messageIndex) remove(ids []string) error {
 	return mi.persist(chunks, cursor)
 }
 
-type messageIndexState struct {
-	caughtUp bool
-	lastSync time.Time
-}
-
-func (mi *messageIndex) state() messageIndexState {
+func (mi *messageIndex) ready() bool {
 	mi.mu.RLock()
 	defer mi.mu.RUnlock()
-	return messageIndexState{caughtUp: mi.caughtUp, lastSync: mi.lastSync}
+	return mi.caughtUp
 }

@@ -871,7 +871,7 @@ export function CommandPalette() {
 							{view.mode === "file-search" && fileSearchQuery.isFetching && fileItems.length > 0 && (
 								<div role="status" className="px-3 py-1 text-xs text-muted-foreground">{t("command.searchFilesLoading")}</div>
 							)}
-							{fileSearchActive && fileSearchSettled && fileSearchQuery.data?.files?.state === "building" && (
+							{fileSearchActive && fileSearchSettled && fileSearchQuery.data?.files === "building" && (
 								<div role="status" className="px-3 py-1 text-xs text-muted-foreground">{t("command.indexingFiles")}</div>
 							)}
 							{groups.map((group) => (

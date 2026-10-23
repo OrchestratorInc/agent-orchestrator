@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -31,8 +30,6 @@ func (c *SearchController) Register(r chi.Router) {
 	r.Get("/search", c.search)
 }
 
-const maxSearchLimit = 50
-
 func (c *SearchController) search(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/search")
@@ -44,27 +41,16 @@ func (c *SearchController) search(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_SEARCH_KINDS", "kinds must be a comma-separated subset of fileNames, fileContent, messages", nil)
 		return
 	}
-	limit := 0
-	if raw := strings.TrimSpace(query.Get("limit")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > maxSearchLimit {
-			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_SEARCH_LIMIT", "limit must be between 1 and 50", nil)
-			return
-		}
-		limit = n
-	}
-	q := query.Get("q")
 	res, err := c.Svc.Search(r.Context(), searchsvc.Request{
-		Query:     q,
+		Query:     query.Get("q"),
 		SessionID: domain.SessionID(strings.TrimSpace(query.Get("sessionId"))),
 		Kinds:     kinds,
-		Limit:     limit,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, searchResponse(q, res))
+	envelope.WriteJSON(w, http.StatusOK, searchResponse(res))
 }
 
 func parseSearchKinds(raw string) (searchsvc.Kinds, bool) {
@@ -87,14 +73,12 @@ func parseSearchKinds(raw string) (searchsvc.Kinds, bool) {
 	return k, true
 }
 
-func searchResponse(q string, res searchsvc.Response) SearchResponse {
+func searchResponse(res searchsvc.Response) SearchResponse {
 	out := SearchResponse{
-		Query:       q,
 		FileNames:   make([]SearchFileNameHit, 0, len(res.FileNames)),
 		FileContent: make([]SearchFileContentHit, 0, len(res.FileContent)),
 		Messages:    make([]SearchMessageHit, 0, len(res.Messages)),
-		Files:       SearchIndexStatus{State: string(res.Files.State), Progress: res.Files.Progress},
-		Chats:       SearchIndexStatus{State: string(res.Chats.State), Progress: res.Chats.Progress},
+		Files:       string(res.Files),
 	}
 	for _, h := range res.FileNames {
 		out.FileNames = append(out.FileNames, SearchFileNameHit{Path: h.Path, Score: h.Score, ExactName: h.ExactName})
@@ -105,13 +89,9 @@ func searchResponse(q string, res searchsvc.Response) SearchResponse {
 	for _, h := range res.Messages {
 		out.Messages = append(out.Messages, SearchMessageHit{
 			MessageID:         h.MessageID,
-			ConversationID:    h.ConversationID,
 			SessionID:         h.SessionID,
 			ProjectID:         h.ProjectID,
-			Scope:             h.Scope,
 			ConversationTitle: h.ConversationTitle,
-			Role:              h.Role,
-			CreatedAt:         h.CreatedAt,
 			Snippet:           searchSnippet(h.Snippet),
 			Score:             h.Score,
 			Decisive:          h.Decisive,

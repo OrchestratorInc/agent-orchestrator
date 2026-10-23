@@ -754,7 +754,7 @@ describe("buildSearchResultCommands", () => {
 		const items = buildSearchResultCommands("tokens.css", target, {
 			fileNames: [{ path: "src/styles/tokens.css", score: 9, exactName: true }],
 			fileContent: [{ path: "src/app.ts", score: 4, decisive: true, snippet: { text: "const x = 1", line: 7, highlights: [{ start: 6, end: 7 }] } }],
-			messages: [{ messageId: "m1", conversationId: "c1", conversationTitle: "", sessionId: "sess", snippet: { text: "hello", highlights: [] }, score: 3, decisive: false, olderVersion: true }],
+			messages: [{ messageId: "m1", conversationTitle: "", sessionId: "sess", snippet: { text: "hello", highlights: [] }, score: 3, decisive: false, olderVersion: true }],
 		});
 		const [name, content, message] = items;
 		expect(name).toMatchObject({ group: "files", title: "tokens.css", serverScore: 9, decisive: true,
@@ -774,7 +774,7 @@ describe("buildSearchResultCommands", () => {
 	it("drops file rows without a session target but keeps chat rows", () => {
 		const items = buildSearchResultCommands("x", undefined, {
 			fileNames: [{ path: "a.ts", score: 1, exactName: false }],
-			messages: [{ messageId: "m1", conversationId: "c1", conversationTitle: "T", snippet: { text: "x", highlights: [] }, score: 1, decisive: false, olderVersion: false }],
+			messages: [{ messageId: "m1", conversationTitle: "T", snippet: { text: "x", highlights: [] }, score: 1, decisive: false, olderVersion: false }],
 		});
 		expect(items.map((item) => item.group)).toEqual(["messages"]);
 	});

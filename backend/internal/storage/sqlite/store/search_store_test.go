@@ -26,9 +26,6 @@ func TestSearchMessagesAfterPagesInCursorOrder(t *testing.T) {
 		}
 		for _, row := range rows {
 			seen = append(seen, row.ID)
-			if row.ConversationID != conversation.ID {
-				t.Fatalf("row %s conversation = %q", row.ID, row.ConversationID)
-			}
 		}
 		last := rows[len(rows)-1]
 		cursorAt, cursorID = last.UpdatedAt, last.ID
@@ -78,8 +75,7 @@ func TestSearchMessagesByIDCarriesConversationFacts(t *testing.T) {
 		t.Fatalf("got %d messages, want only the existing one", len(got))
 	}
 	msg := got[0]
-	if msg.Text != "first prompt" || msg.Role != domain.MessageRoleUser || msg.Scope != domain.ConversationScopeSession ||
-		msg.SessionID != session.ID || msg.ProjectID != "branches" || msg.ConversationID != conversation.ID {
+	if msg.Text != "first prompt" || msg.SessionID != session.ID || msg.ProjectID != "branches" || msg.ConversationID != conversation.ID {
 		t.Fatalf("message = %+v", msg)
 	}
 	if none, err := s.SearchMessagesByID(ctx, nil); err != nil || none != nil {

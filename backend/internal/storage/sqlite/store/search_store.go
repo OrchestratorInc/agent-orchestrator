@@ -21,15 +21,7 @@ func (s *Store) SearchMessagesAfter(ctx context.Context, updatedAt time.Time, id
 	}
 	out := make([]domain.SearchMessageChange, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, domain.SearchMessageChange{
-			ID:             row.ID,
-			ConversationID: row.ConversationID,
-			Role:           row.Role,
-			Text:           row.Text,
-			Streaming:      row.Streaming != 0,
-			Revision:       row.Revision,
-			UpdatedAt:      row.UpdatedAt,
-		})
+		out = append(out, domain.SearchMessageChange{ID: row.ID, Text: row.Text, Streaming: row.Streaming != 0, UpdatedAt: row.UpdatedAt})
 	}
 	return out, nil
 }
@@ -55,11 +47,9 @@ func (s *Store) SearchMessagesByID(ctx context.Context, ids []string) ([]domain.
 		msg := domain.SearchMessage{
 			ID:                row.ID,
 			ConversationID:    row.ConversationID,
-			Role:              row.Role,
 			Text:              row.Text,
 			Streaming:         row.Streaming != 0,
 			CreatedAt:         row.CreatedAt,
-			Scope:             row.Scope,
 			ConversationTitle: row.AppliedTitle,
 		}
 		if msg.ConversationTitle == "" {

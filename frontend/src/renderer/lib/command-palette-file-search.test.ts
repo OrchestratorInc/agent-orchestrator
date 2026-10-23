@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClient } from "./cloud-cp";
-import {
-	COMMAND_PALETTE_FILE_SEARCH_LIMIT,
-	commandPaletteFileSearchAvailable,
-	commandPaletteFileSearchQueryOptions,
-} from "./command-palette-file-search";
+import { commandPaletteFileSearchAvailable, commandPaletteFileSearchQueryOptions } from "./command-palette-file-search";
 
 const { localGet, remoteGet } = vi.hoisted(() => ({ localGet: vi.fn(), remoteGet: vi.fn() }));
 
@@ -14,11 +10,10 @@ vi.mock("./host-clients", () => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-const ready = { state: "ready", progress: 1 };
 
 function searchResponse(overrides: Record<string, unknown> = {}) {
 	return {
-		data: { query: "q", fileNames: [], fileContent: [], messages: [], files: ready, chats: ready, ...overrides },
+		data: { fileNames: [], fileContent: [], messages: [], files: "ready", ...overrides },
 	};
 }
 
@@ -27,7 +22,7 @@ describe("command palette search", () => {
 		localGet.mockResolvedValue(searchResponse({
 			fileNames: [{ path: "src/App.tsx", score: 9, exactName: true }],
 			fileContent: [{ path: "src/App.tsx", score: 4, decisive: false, snippet: { text: "export function App()", line: 3, highlights: [] } }],
-			messages: [{ messageId: "m1", conversationId: "c1", conversationTitle: "Work", scope: "session", role: "user", createdAt: "2026-10-22T00:00:00Z", score: 3, decisive: false, olderVersion: false, snippet: { text: "App crash", highlights: [] } }],
+			messages: [{ messageId: "m1", conversationTitle: "Work", score: 3, decisive: false, olderVersion: false, snippet: { text: "App crash", highlights: [] } }],
 		}));
 		remoteGet.mockResolvedValue(searchResponse({ fileNames: [{ path: "README.md", score: 5, exactName: false }] }));
 		const cloud = { client: {} as CloudCpClient, baseUrl: "", ready: false };
@@ -48,7 +43,7 @@ describe("command palette search", () => {
 		expect((await remote.queryFn()).fileNames?.[0]?.path).toBe("README.md");
 		expect(localGet).toHaveBeenCalledWith(
 			"/api/v1/search",
-			expect.objectContaining({ params: { query: { q: "App", sessionId: "s", kinds: "fileNames,fileContent,messages", limit: COMMAND_PALETTE_FILE_SEARCH_LIMIT } } }),
+			expect.objectContaining({ params: { query: { q: "App", sessionId: "s", kinds: "fileNames,fileContent,messages" } } }),
 		);
 		expect(remoteGet).toHaveBeenCalledTimes(1);
 	});
@@ -61,7 +56,7 @@ describe("command palette search", () => {
 		await options.queryFn();
 		expect(localGet).toHaveBeenCalledWith(
 			"/api/v1/search",
-			expect.objectContaining({ params: { query: { q: "deploy", kinds: "messages", limit: COMMAND_PALETTE_FILE_SEARCH_LIMIT } } }),
+			expect.objectContaining({ params: { query: { q: "deploy", kinds: "messages" } } }),
 		);
 	});
 

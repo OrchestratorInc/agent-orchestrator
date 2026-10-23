@@ -8,12 +8,14 @@
 package search
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -62,8 +64,8 @@ const (
 	// answers from the index as it is.
 	freshnessBudget = 250 * time.Millisecond
 	maxQueryLen     = 512
-	defaultLimit    = 20
-	maxLimit        = 50
+	// limit caps each group of hits.
+	limit = 20
 )
 
 // New opens (or creates) the indexes. Call Start to begin indexing chats and
@@ -119,7 +121,7 @@ func (s *Service) Start() {
 		defer tick.Stop()
 		lastPrune := time.Time{}
 		for {
-			if err := s.messages.syncOnce(s.ctx, s.deps.Now); err != nil && s.ctx.Err() == nil {
+			if err := s.messages.syncOnce(s.ctx); err != nil && s.ctx.Err() == nil {
 				s.deps.Logger.Warn("search: chat index catch-up failed", "err", err)
 			}
 			if s.deps.Now().Sub(lastPrune) >= pruneInterval {
@@ -165,10 +167,10 @@ type Request struct {
 	// file search.
 	SessionID domain.SessionID
 	Kinds     Kinds
-	Limit     int
 }
 
-// IndexState describes an index's readiness.
+// IndexState describes the file index's readiness, so the palette can say
+// "Indexing files…" instead of silently showing fewer results.
 type IndexState string
 
 // Index states.
@@ -177,13 +179,6 @@ const (
 	IndexBuilding    IndexState = "building"
 	IndexUnavailable IndexState = "unavailable"
 )
-
-// IndexStatus is reported with every response so the palette can say
-// "Indexing… 40%" instead of silently showing fewer results.
-type IndexStatus struct {
-	State    IndexState
-	Progress float64
-}
 
 // FileNameHit is a file whose path matches the query as a name.
 type FileNameHit struct {
@@ -203,12 +198,9 @@ type ContentHit struct {
 // MessageHit is a chat message.
 type MessageHit struct {
 	MessageID         string
-	ConversationID    string
 	SessionID         domain.SessionID
 	ProjectID         domain.ProjectID
-	Scope             domain.ConversationScope
 	ConversationTitle string
-	Role              domain.MessageRole
 	CreatedAt         time.Time
 	Snippet           Snippet
 	Score             float64
@@ -223,8 +215,7 @@ type Response struct {
 	FileNames   []FileNameHit
 	FileContent []ContentHit
 	Messages    []MessageHit
-	Files       IndexStatus
-	Chats       IndexStatus
+	Files       IndexState
 }
 
 // Search answers one palette query.
@@ -236,13 +227,8 @@ func (s *Service) Search(ctx context.Context, req Request) (Response, error) {
 	if len(raw) > maxQueryLen {
 		return Response{}, apierr.Invalid("SEARCH_QUERY_TOO_LONG", fmt.Sprintf("query is longer than %d bytes", maxQueryLen), nil)
 	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	limit = min(limit, maxLimit)
 	q := parseQuery(raw)
-	resp := Response{Files: IndexStatus{State: IndexUnavailable}, Chats: IndexStatus{State: IndexUnavailable}}
+	resp := Response{Files: IndexUnavailable}
 
 	var (
 		ws     Workspace
@@ -281,14 +267,6 @@ func (s *Service) Search(ctx context.Context, req Request) (Response, error) {
 			}
 		}
 	}
-	if req.Kinds.Messages && s.messages != nil {
-		st := s.messages.state()
-		resp.Chats = IndexStatus{State: IndexBuilding}
-		if st.caughtUp {
-			resp.Chats = IndexStatus{State: IndexReady, Progress: 1}
-		}
-	}
-
 	var disks []*diskIndex
 	var vocabs []*vocabulary
 	contentOK := fi != nil && req.Kinds.FileContent
@@ -313,14 +291,14 @@ func (s *Service) Search(ctx context.Context, req Request) (Response, error) {
 		return resp, nil
 	}
 	if contentOK {
-		hits, err := s.searchFileContent(ctx, fi, ws, q, ts, limit)
+		hits, err := s.searchFileContent(ctx, fi, ws, q, ts)
 		if err != nil {
 			return Response{}, err
 		}
 		resp.FileContent = hits
 	}
 	if chatsOK {
-		hits, err := s.searchMessages(ctx, q, ts, limit)
+		hits, err := s.searchMessages(ctx, q, ts)
 		if err != nil {
 			return Response{}, err
 		}
@@ -332,13 +310,13 @@ func (s *Service) Search(ctx context.Context, req Request) (Response, error) {
 // freshen keeps a session's file index current. The first build runs in the
 // background (one at a time across sessions); after that, a search older than
 // fileStaleAfter re-checks the worktree, waiting at most freshnessBudget.
-func (s *Service) freshen(ctx context.Context, fi *fileIndex, ws Workspace, session domain.SessionID) IndexStatus {
+func (s *Service) freshen(ctx context.Context, fi *fileIndex, ws Workspace, session domain.SessionID) IndexState {
 	st := fi.state()
 	if !st.built {
 		if !st.reconciling {
 			s.startBuild(fi, ws, session)
 		}
-		return IndexStatus{State: IndexBuilding, Progress: st.progress}
+		return IndexBuilding
 	}
 	if s.deps.Now().Sub(st.lastReconcile) >= fileStaleAfter && !st.reconciling {
 		done := make(chan struct{})
@@ -356,7 +334,7 @@ func (s *Service) freshen(ctx context.Context, fi *fileIndex, ws Workspace, sess
 		case <-ctx.Done():
 		}
 	}
-	return IndexStatus{State: IndexReady, Progress: 1}
+	return IndexReady
 }
 
 func (s *Service) startBuild(fi *fileIndex, ws Workspace, session domain.SessionID) {
@@ -430,20 +408,18 @@ func dedupeHits(hits []rawHit) []rawHit {
 			best[h.id] = h
 		}
 	}
-	out := make([]rawHit, 0, len(best))
-	for _, h := range best {
-		out = append(out, h)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].score != out[j].score {
-			return out[i].score > out[j].score
-		}
-		return out[i].id < out[j].id
+	return sortedValues(best, len(best), func(a, b rawHit) int {
+		return cmp.Or(cmp.Compare(b.score, a.score), strings.Compare(a.id, b.id))
 	})
-	return out
 }
 
-func (s *Service) searchFileContent(ctx context.Context, fi *fileIndex, ws Workspace, q parsedQuery, ts []queryTerm, limit int) ([]ContentHit, error) {
+// sortedValues returns m's values ordered by order, at most n of them.
+func sortedValues[T any](m map[string]T, n int, order func(a, b T) int) []T {
+	out := slices.SortedFunc(maps.Values(m), order)
+	return out[:min(len(out), n)]
+}
+
+func (s *Service) searchFileContent(ctx context.Context, fi *fileIndex, ws Workspace, q parsedQuery, ts []queryTerm) ([]ContentHit, error) {
 	hits, err := retrieve(ctx, fi.disk, q, ts, contentCandidates)
 	if err != nil {
 		return nil, err
@@ -451,7 +427,7 @@ func (s *Service) searchFileContent(ctx context.Context, fi *fileIndex, ws Works
 	cache := make(map[string][]string)
 	bestByPath := make(map[string]ContentHit)
 	for _, h := range hits {
-		rel, start := pathOfChunk(h.id)
+		rel, start := splitDocID(h.id)
 		text, ok := readChunk(ws.Root, rel, start, cache)
 		if !ok {
 			continue
@@ -480,26 +456,15 @@ func (s *Service) searchFileContent(ctx context.Context, fi *fileIndex, ws Works
 			Decisive: decisive(q, ts, f),
 		}
 	}
-	out := make([]ContentHit, 0, len(bestByPath))
-	for _, h := range bestByPath {
-		out = append(out, h)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score != out[j].Score {
-			return out[i].Score > out[j].Score
-		}
-		return out[i].Path < out[j].Path
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return sortedValues(bestByPath, limit, func(a, b ContentHit) int {
+		return cmp.Or(cmp.Compare(b.Score, a.Score), strings.Compare(a.Path, b.Path))
+	}), nil
 }
 
 // olderVersionFactor demotes a message that left the visible transcript.
 const olderVersionFactor = 0.5
 
-func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryTerm, limit int) ([]MessageHit, error) {
+func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryTerm) ([]MessageHit, error) {
 	hits, err := retrieve(ctx, s.messages.disk, q, ts, messageCandidates)
 	if err != nil {
 		return nil, err
@@ -510,7 +475,7 @@ func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryT
 	ids := make([]string, 0, len(hits))
 	seen := make(map[string]bool)
 	for _, h := range hits {
-		id, _ := messageOfChunk(h.id)
+		id, _ := splitDocID(h.id)
 		if !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
@@ -552,7 +517,7 @@ func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryT
 	}
 	best := make(map[string]MessageHit)
 	for _, h := range hits {
-		id, k := messageOfChunk(h.id)
+		id, k := splitDocID(h.id)
 		msg, ok := byID[id]
 		if !ok {
 			continue
@@ -575,12 +540,9 @@ func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryT
 		}
 		best[id] = MessageHit{
 			MessageID:         msg.ID,
-			ConversationID:    msg.ConversationID,
 			SessionID:         msg.SessionID,
 			ProjectID:         msg.ProjectID,
-			Scope:             msg.Scope,
 			ConversationTitle: msg.ConversationTitle,
-			Role:              msg.Role,
 			CreatedAt:         msg.CreatedAt,
 			Snippet:           bestSnippet(msg.Text, f.hits, 0),
 			Score:             score,
@@ -588,18 +550,7 @@ func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryT
 			OlderVersion:      older,
 		}
 	}
-	out := make([]MessageHit, 0, len(best))
-	for _, h := range best {
-		out = append(out, h)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score != out[j].Score {
-			return out[i].Score > out[j].Score
-		}
-		return out[i].CreatedAt.After(out[j].CreatedAt)
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return sortedValues(best, limit, func(a, b MessageHit) int {
+		return cmp.Or(cmp.Compare(b.Score, a.Score), b.CreatedAt.Compare(a.CreatedAt))
+	}), nil
 }

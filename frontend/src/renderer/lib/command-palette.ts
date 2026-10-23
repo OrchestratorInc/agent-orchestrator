@@ -21,6 +21,7 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import type { components } from "../../api/schema";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
@@ -254,23 +255,12 @@ export function buildWorkspaceFileCommands(
 	});
 }
 
-type SearchHighlight = { start: number; end: number };
-type SearchSnippet = { text: string; line?: number; highlights: SearchHighlight[] };
+type SearchSchemas = components["schemas"];
 
 export type PaletteSearchResults = {
-	fileNames?: { path: string; score: number; exactName: boolean }[];
-	fileContent?: { path: string; snippet: SearchSnippet; score: number; decisive: boolean }[];
-	messages?: {
-		messageId: string;
-		conversationId: string;
-		conversationTitle: string;
-		sessionId?: string;
-		projectId?: string;
-		snippet: SearchSnippet;
-		score: number;
-		decisive: boolean;
-		olderVersion: boolean;
-	}[];
+	fileNames?: SearchSchemas["SearchFileNameHit"][];
+	fileContent?: SearchSchemas["SearchFileContentHit"][];
+	messages?: SearchSchemas["SearchMessageHit"][];
 };
 
 /**

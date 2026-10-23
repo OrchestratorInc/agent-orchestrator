@@ -30,7 +30,6 @@ const (
 
 	fieldContent   = "content"
 	fieldStartLine = "start_line"
-	fieldGroup     = "group"
 )
 
 func init() {
@@ -132,10 +131,6 @@ func newIndexMapping(chats bool) (*mapping.IndexMappingImpl, error) {
 		return nil, err
 	}
 	dm := bleve.NewDocumentMapping()
-	keyword := bleve.NewKeywordFieldMapping()
-	keyword.IncludeInAll = false
-	keyword.DocValues = false
-	dm.AddFieldMappingsAt(fieldGroup, keyword)
 	content := bleve.NewTextFieldMapping()
 	content.Analyzer = codeAnalyzer
 	if chats {

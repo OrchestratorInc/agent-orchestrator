@@ -11,12 +11,11 @@ type SearchResponse = components["schemas"]["SearchResponse"];
 export type PaletteSearchFileName = components["schemas"]["SearchFileNameHit"];
 export type PaletteSearchContentHit = components["schemas"]["SearchFileContentHit"];
 export type PaletteSearchMessageHit = components["schemas"]["SearchMessageHit"];
-export type PaletteSearchIndexStatus = components["schemas"]["SearchIndexStatus"];
 
 /**
  * What the palette shows from a search: file names (scored by the daemon,
  * or name-matched in the palette for Cloud sessions), passages inside files,
- * chat messages, and whether each index is still being built.
+ * chat messages, and whether the file index is still being built.
  */
 export type CommandPaletteFileSearchResponse = {
 	results: WorkspaceFileSearchItem[];
@@ -24,8 +23,7 @@ export type CommandPaletteFileSearchResponse = {
 	fileNames?: PaletteSearchFileName[];
 	fileContent?: PaletteSearchContentHit[];
 	messages?: PaletteSearchMessageHit[];
-	files?: PaletteSearchIndexStatus;
-	chats?: PaletteSearchIndexStatus;
+	files?: SearchResponse["files"];
 };
 
 type CommandPaletteFileSearchArgs = {
@@ -100,7 +98,6 @@ export function commandPaletteFileSearchQueryOptions(
 						q: args.query,
 						...(target ? { sessionId: target.sessionId } : {}),
 						kinds,
-						limit: COMMAND_PALETTE_FILE_SEARCH_LIMIT,
 					},
 				},
 				signal,
@@ -120,6 +117,5 @@ function fromSearchResponse(data: SearchResponse): CommandPaletteFileSearchRespo
 		fileContent: data.fileContent,
 		messages: data.messages,
 		files: data.files,
-		chats: data.chats,
 	};
 }

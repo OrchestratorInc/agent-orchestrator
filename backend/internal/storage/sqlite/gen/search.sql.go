@@ -50,7 +50,7 @@ func (q *Queries) ListConversationMessageIDsAfter(ctx context.Context, arg ListC
 
 const listConversationMessagesForSearchAfter = `-- name: ListConversationMessagesForSearchAfter :many
 
-SELECT id, conversation_id, role, text, streaming, revision, updated_at
+SELECT id, text, streaming, updated_at
 FROM conversation_messages
 WHERE updated_at > ?1
    OR (updated_at = ?1 AND id > ?2)
@@ -65,13 +65,10 @@ type ListConversationMessagesForSearchAfterParams struct {
 }
 
 type ListConversationMessagesForSearchAfterRow struct {
-	ID             string
-	ConversationID string
-	Role           domain.MessageRole
-	Text           string
-	Streaming      int64
-	Revision       int64
-	UpdatedAt      time.Time
+	ID        string
+	Text      string
+	Streaming int64
+	UpdatedAt time.Time
 }
 
 // Read side of the chat search index. The indexer catches up in
@@ -88,11 +85,8 @@ func (q *Queries) ListConversationMessagesForSearchAfter(ctx context.Context, ar
 		var i ListConversationMessagesForSearchAfterRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.ConversationID,
-			&i.Role,
 			&i.Text,
 			&i.Streaming,
-			&i.Revision,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -109,8 +103,8 @@ func (q *Queries) ListConversationMessagesForSearchAfter(ctx context.Context, ar
 }
 
 const listConversationMessagesForSearchByIDs = `-- name: ListConversationMessagesForSearchByIDs :many
-SELECT m.id, m.conversation_id, m.role, m.text, m.streaming, m.created_at,
-       c.scope, c.session_id, c.current_session_id, c.project_id,
+SELECT m.id, m.conversation_id, m.text, m.streaming, m.created_at,
+       c.session_id, c.current_session_id, c.project_id,
        c.applied_title, c.provider_title
 FROM conversation_messages AS m
 JOIN conversations AS c ON c.id = m.conversation_id
@@ -120,11 +114,9 @@ WHERE m.id IN (/*SLICE:ids*/?)
 type ListConversationMessagesForSearchByIDsRow struct {
 	ID               string
 	ConversationID   string
-	Role             domain.MessageRole
 	Text             string
 	Streaming        int64
 	CreatedAt        time.Time
-	Scope            domain.ConversationScope
 	SessionID        *domain.SessionID
 	CurrentSessionID *domain.SessionID
 	ProjectID        *domain.ProjectID
@@ -154,11 +146,9 @@ func (q *Queries) ListConversationMessagesForSearchByIDs(ctx context.Context, id
 		if err := rows.Scan(
 			&i.ID,
 			&i.ConversationID,
-			&i.Role,
 			&i.Text,
 			&i.Streaming,
 			&i.CreatedAt,
-			&i.Scope,
 			&i.SessionID,
 			&i.CurrentSessionID,
 			&i.ProjectID,

@@ -3,9 +3,10 @@ package search
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/mapping"
@@ -15,7 +16,7 @@ import (
 // schemaVersion is stored inside every index. Bump it whenever the mapping,
 // analyzers or document layout change: an index with another version is
 // deleted and rebuilt from source, never migrated.
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 const (
 	internalSchema   = "ao.schema"
@@ -36,22 +37,18 @@ type diskIndex struct {
 }
 
 // openDiskIndex opens dir, or creates it when missing, unreadable or built
-// with another schema version.
-func openDiskIndex(dir string, m *mapping.IndexMappingImpl) (*diskIndex, error) {
+// with another schema version. phrases says whether m keeps word positions.
+func openDiskIndex(dir string, m *mapping.IndexMappingImpl, phrases bool) (*diskIndex, error) {
+	d := &diskIndex{dir: dir, vocab: newVocabulary(), phrases: phrases}
 	if idx, err := bleve.Open(dir); err == nil {
-		version, verr := idx.GetInternal([]byte(internalSchema))
-		if verr == nil && string(version) == schemaVersion {
-			d := &diskIndex{dir: dir, bleve: idx, vocab: newVocabulary(), phrases: hasTermVectors(m)}
-			if raw, err := idx.GetInternal([]byte(internalVocab)); err == nil && len(raw) > 0 {
-				_ = json.Unmarshal(raw, d.vocab)
-			}
+		if version, verr := idx.GetInternal([]byte(internalSchema)); verr == nil && string(version) == schemaVersion {
+			d.bleve = idx
+			_ = d.getJSON(internalVocab, d.vocab)
 			return d, nil
 		}
 		_ = idx.Close()
-	} else if !errors.Is(err, bleve.ErrorIndexPathDoesNotExist) {
-		// Corrupt or half-written: rebuild from source.
-		_ = os.RemoveAll(dir)
 	}
+	// Missing, corrupt, half-written or another schema: rebuild from source.
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, fmt.Errorf("reset search index: %w", err)
 	}
@@ -63,19 +60,22 @@ func openDiskIndex(dir string, m *mapping.IndexMappingImpl) (*diskIndex, error) 
 		_ = idx.Close()
 		return nil, fmt.Errorf("stamp search index: %w", err)
 	}
-	return &diskIndex{dir: dir, bleve: idx, vocab: newVocabulary(), phrases: hasTermVectors(m)}, nil
+	d.bleve = idx
+	return d, nil
 }
 
-func hasTermVectors(m *mapping.IndexMappingImpl) bool {
-	if m.DefaultMapping == nil {
-		return false
+// docID names a document: a path or message id plus its chunk's start line
+// or ordinal.
+func docID(key string, n int) string { return key + "#" + strconv.Itoa(n) }
+
+// splitDocID reverses docID.
+func splitDocID(id string) (string, int) {
+	i := strings.LastIndex(id, "#")
+	if i < 0 {
+		return id, 0
 	}
-	for _, f := range m.DefaultMapping.Properties[fieldContent].Fields {
-		if f.IncludeTermVectors {
-			return true
-		}
-	}
-	return false
+	n, _ := strconv.Atoi(id[i+1:])
+	return id[:i], n
 }
 
 func (d *diskIndex) close() error { return d.bleve.Close() }

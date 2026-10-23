@@ -3812,25 +3812,16 @@ type SearchQuery struct {
 	Q         string `query:"q" required:"true" maxLength:"512" description:"What the user typed: a name, an identifier, a copied phrase or a plain-English question. Quote text to require it verbatim."`
 	SessionID string `query:"sessionId,omitempty" description:"Session whose workspace files are searched. Without it, only chats are searched."`
 	Kinds     string `query:"kinds,omitempty" description:"Comma-separated subset of fileNames, fileContent and messages. Defaults to all three."`
-	Limit     int    `query:"limit,omitempty" minimum:"1" maximum:"50" description:"Maximum hits per group. Defaults to 20."`
 }
 
-// SearchResponse is the body of GET /api/v1/search. Hits are grouped by kind;
-// scores share one scale across groups, so a client can merge groups and rank
-// them against its own name matches.
+// SearchResponse is the body of GET /api/v1/search, at most 20 hits per
+// group. Scores share one scale across groups, so a client can merge groups
+// and rank them against its own name matches.
 type SearchResponse struct {
-	Query       string                 `json:"query"`
 	FileNames   []SearchFileNameHit    `json:"fileNames"`
 	FileContent []SearchFileContentHit `json:"fileContent"`
 	Messages    []SearchMessageHit     `json:"messages"`
-	Files       SearchIndexStatus      `json:"files" description:"Readiness of the session's file index; building while its first index runs."`
-	Chats       SearchIndexStatus      `json:"chats" description:"Readiness of the chat index."`
-}
-
-// SearchIndexStatus reports whether a search index is ready.
-type SearchIndexStatus struct {
-	State    string  `json:"state" enum:"ready,building,unavailable"`
-	Progress float64 `json:"progress" minimum:"0" maximum:"1"`
+	Files       string                 `json:"files" enum:"ready,building,unavailable" description:"Readiness of the session's file index; building while its first index runs."`
 }
 
 // SearchSnippet is one line of a hit with the matched words marked.
@@ -3864,16 +3855,12 @@ type SearchFileContentHit struct {
 
 // SearchMessageHit is a chat message.
 type SearchMessageHit struct {
-	MessageID         string                   `json:"messageId"`
-	ConversationID    string                   `json:"conversationId"`
-	SessionID         domain.SessionID         `json:"sessionId,omitempty"`
-	ProjectID         domain.ProjectID         `json:"projectId,omitempty"`
-	Scope             domain.ConversationScope `json:"scope"`
-	ConversationTitle string                   `json:"conversationTitle"`
-	Role              domain.MessageRole       `json:"role"`
-	CreatedAt         time.Time                `json:"createdAt"`
-	Snippet           SearchSnippet            `json:"snippet"`
-	Score             float64                  `json:"score"`
-	Decisive          bool                     `json:"decisive"`
-	OlderVersion      bool                     `json:"olderVersion" description:"The message left the visible transcript: an edit forked past it or its turn was rolled back."`
+	MessageID         string           `json:"messageId"`
+	SessionID         domain.SessionID `json:"sessionId,omitempty"`
+	ProjectID         domain.ProjectID `json:"projectId,omitempty"`
+	ConversationTitle string           `json:"conversationTitle"`
+	Snippet           SearchSnippet    `json:"snippet"`
+	Score             float64          `json:"score"`
+	Decisive          bool             `json:"decisive"`
+	OlderVersion      bool             `json:"olderVersion" description:"The message left the visible transcript: an edit forked past it or its turn was rolled back."`
 }

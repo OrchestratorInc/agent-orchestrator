@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -42,7 +42,7 @@ func (s *Service) SearchWorkspace(ctx context.Context, id domain.SessionID) (sea
 		for _, f := range files {
 			paths = append(paths, f.Path)
 		}
-		sort.Strings(paths)
+		slices.Sort(paths)
 		return searchsvc.Workspace{Root: root, Paths: paths}, nil
 	case domain.ProjectKindWorkspace:
 		rows, err := s.store.ListSessionWorktrees(ctx, rec.ID)
@@ -99,16 +99,9 @@ func underAnyPrefix(p string, prefixes []string) bool {
 	return false
 }
 
+// dedupeSorted returns the non-empty paths, sorted, each once.
 func dedupeSorted(paths []string) []string {
-	out := append([]string(nil), paths...)
-	sort.Strings(out)
-	n := 0
-	for i, p := range out {
-		if p == "" || (i > 0 && p == out[i-1]) {
-			continue
-		}
-		out[n] = p
-		n++
-	}
-	return out[:n]
+	out := slices.DeleteFunc(slices.Clone(paths), func(p string) bool { return p == "" })
+	slices.Sort(out)
+	return slices.Compact(out)
 }

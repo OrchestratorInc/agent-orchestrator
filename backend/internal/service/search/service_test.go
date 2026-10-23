@@ -40,7 +40,6 @@ type fakeMessage struct {
 	domain.SearchMessage
 	streaming bool
 	updated   time.Time
-	revision  int64
 	hidden    bool
 }
 
@@ -70,8 +69,7 @@ func (f *fakeMessages) SearchMessagesAfter(_ context.Context, at time.Time, id s
 	var out []domain.SearchMessageChange
 	for _, r := range f.rows {
 		if r.updated.After(at) || (r.updated.Equal(at) && r.ID > id) {
-			out = append(out, domain.SearchMessageChange{ID: r.ID, ConversationID: r.ConversationID, Role: r.Role,
-				Text: r.Text, Streaming: r.streaming, Revision: r.revision, UpdatedAt: r.updated})
+			out = append(out, domain.SearchMessageChange{ID: r.ID, Text: r.Text, Streaming: r.streaming, UpdatedAt: r.updated})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -217,7 +215,7 @@ func searchReady(t *testing.T, s *Service, query string) Response {
 		if err != nil {
 			t.Fatalf("Search(%q): %v", query, err)
 		}
-		if resp.Files.State == IndexReady {
+		if resp.Files == IndexReady {
 			return resp
 		}
 		if time.Now().After(deadline) {
@@ -245,8 +243,8 @@ func TestSearchFilesByNameAndContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Files.State != IndexBuilding {
-		t.Fatalf("first search state = %v, want building", first.Files.State)
+	if first.Files != IndexBuilding {
+		t.Fatalf("first search state = %v, want building", first.Files)
 	}
 	if len(first.FileNames) == 0 || first.FileNames[0].Path != "palette/palette.go" {
 		t.Fatalf("name hits while building = %+v", first.FileNames)
@@ -333,14 +331,14 @@ func TestFileIndexSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Files.State != IndexReady || len(resp.FileContent) == 0 {
+	if resp.Files != IndexReady || len(resp.FileContent) == 0 {
 		t.Fatalf("reopened index not ready: %+v", resp)
 	}
 }
 
 func syncMessages(t *testing.T, s *Service) {
 	t.Helper()
-	if err := s.messages.syncOnce(context.Background(), s.deps.Now); err != nil {
+	if err := s.messages.syncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -359,9 +357,9 @@ func TestSearchChatMessages(t *testing.T) {
 	base := c.now()
 	msg := func(id, text string, at time.Duration) fakeMessage {
 		return fakeMessage{
-			SearchMessage: domain.SearchMessage{ID: id, ConversationID: "conv-1", Role: domain.MessageRoleAssistant, Text: text,
-				SessionID: "sess-1", Scope: domain.ConversationScopeSession, ConversationTitle: "Palette work", CreatedAt: base.Add(at)},
-			updated: base.Add(at), revision: 1,
+			SearchMessage: domain.SearchMessage{ID: id, ConversationID: "conv-1", Text: text,
+				SessionID: "sess-1", ConversationTitle: "Palette work", CreatedAt: base.Add(at)},
+			updated: base.Add(at),
 		}
 	}
 	msgs.put(msg("m1", "We should close the palette after the animation finishes.", 0))
@@ -381,7 +379,7 @@ func TestSearchChatMessages(t *testing.T) {
 		return resp
 	}
 	resp := search("close the palette")
-	if resp.Chats.State != IndexReady || len(resp.Messages) == 0 || resp.Messages[0].MessageID != "m1" {
+	if len(resp.Messages) == 0 || resp.Messages[0].MessageID != "m1" {
 		t.Fatalf("phrase search = %+v", resp)
 	}
 	hit := resp.Messages[0]
@@ -442,11 +440,7 @@ func TestSearchRejectsBadQueries(t *testing.T) {
 	if _, err := s.Search(context.Background(), Request{Query: "   "}); err == nil {
 		t.Fatal("empty query accepted")
 	}
-	long := make([]byte, maxQueryLen+1)
-	for i := range long {
-		long[i] = 'a'
-	}
-	if _, err := s.Search(context.Background(), Request{Query: string(long)}); err == nil {
+	if _, err := s.Search(context.Background(), Request{Query: strings.Repeat("a", maxQueryLen+1)}); err == nil {
 		t.Fatal("over-long query accepted")
 	}
 }
@@ -482,12 +476,12 @@ func TestChatPhraseFindsMessageAmongManySharingItsWords(t *testing.T) {
 	base := c.now()
 	for i := 0; i < 80; i++ {
 		msgs.put(fakeMessage{SearchMessage: domain.SearchMessage{
-			ID: fmt.Sprintf("noise-%02d", i), ConversationID: "conv", Role: domain.MessageRoleAssistant,
+			ID: fmt.Sprintf("noise-%02d", i), ConversationID: "conv",
 			Text: "deploy deploy the deploy script again " + strings.Repeat("x", i%5), CreatedAt: base,
 		}, updated: base.Add(time.Duration(i) * time.Millisecond)})
 	}
 	msgs.put(fakeMessage{SearchMessage: domain.SearchMessage{
-		ID: "target", ConversationID: "conv", Role: domain.MessageRoleUser,
+		ID: "target", ConversationID: "conv",
 		Text: "ok so we will deploy it after lunch then", CreatedAt: base,
 	}, updated: base.Add(time.Second)})
 	s := newTestService(t, nil, msgs, c)

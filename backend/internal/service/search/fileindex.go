@@ -6,11 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,13 +65,12 @@ type fileIndex struct {
 	root          string // worktree root from the last reconcile
 	built         bool
 	reconciling   bool
-	progress      float64
 	lastReconcile time.Time
 	users         int // guarded by fileIndexes.mu
 }
 
 func openFileIndex(dir string, m *mapping.IndexMappingImpl) (*fileIndex, error) {
-	disk, err := openDiskIndex(dir, m)
+	disk, err := openDiskIndex(dir, m, false)
 	if err != nil {
 		return nil, err
 	}
@@ -81,29 +81,8 @@ func openFileIndex(dir string, m *mapping.IndexMappingImpl) (*fileIndex, error) 
 	if raw, err := disk.bleve.GetInternal([]byte(internalBuilt)); err == nil && string(raw) == "1" {
 		fi.built = true
 	}
-	fi.paths = sortedKeys(fi.manifest)
+	fi.paths = slices.Sorted(maps.Keys(fi.manifest))
 	return fi, nil
-}
-
-func sortedKeys(m map[string]fileEntry) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func chunkID(path string, start int) string { return path + "#" + strconv.Itoa(start) }
-
-// pathOfChunk splits a chunk doc id back into its path and start line.
-func pathOfChunk(id string) (string, int) {
-	i := strings.LastIndex(id, "#")
-	if i < 0 {
-		return id, 0
-	}
-	n, _ := strconv.Atoi(id[i+1:])
-	return id[:i], n
 }
 
 // splitChunks cuts text into overlapping 40-line windows.
@@ -152,10 +131,7 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 	defer fi.reconcileMu.Unlock()
 	fi.mu.Lock()
 	fi.reconciling = true
-	manifest := make(map[string]fileEntry, len(fi.manifest))
-	for k, v := range fi.manifest {
-		manifest[k] = v
-	}
+	manifest := maps.Clone(fi.manifest)
 	fi.mu.Unlock()
 	defer func() {
 		fi.mu.Lock()
@@ -188,7 +164,7 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 		return nil
 	}
 
-	for i, rel := range paths {
+	for _, rel := range paths {
 		if err := ctx.Err(); err != nil {
 			_ = flush(true)
 			return err
@@ -203,7 +179,7 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 			// Gone, a directory or a symlink: listed by name, never read.
 			if old, had := manifest[rel]; had {
 				for _, start := range old.Chunks {
-					batch.Delete(chunkID(rel, start))
+					batch.Delete(docID(rel, start))
 					pending++
 				}
 			}
@@ -219,7 +195,7 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 		if info.Size() <= maxIndexBytes {
 			if data, err := os.ReadFile(full); err == nil && indexableText(data) {
 				for _, c := range splitChunks(string(data)) {
-					if err := batch.Index(chunkID(rel, c.StartLine), c); err != nil {
+					if err := batch.Index(docID(rel, c.StartLine), c); err != nil {
 						return err
 					}
 					fi.disk.vocab.addText(c.Content)
@@ -231,7 +207,7 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 		}
 		for _, start := range old.Chunks {
 			if !keep[start] {
-				batch.Delete(chunkID(rel, start))
+				batch.Delete(docID(rel, start))
 				pending++
 			}
 		}
@@ -239,18 +215,13 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 		if err := flush(false); err != nil {
 			return err
 		}
-		if i%500 == 0 {
-			fi.mu.Lock()
-			fi.progress = float64(i) / float64(len(paths))
-			fi.mu.Unlock()
-		}
 	}
 	for rel, old := range manifest {
 		if _, ok := wanted[rel]; ok {
 			continue
 		}
 		for _, start := range old.Chunks {
-			batch.Delete(chunkID(rel, start))
+			batch.Delete(docID(rel, start))
 			pending++
 		}
 		delete(manifest, rel)
@@ -265,7 +236,6 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 	}
 	fi.mu.Lock()
 	fi.lastReconcile = now()
-	fi.progress = 1
 	fi.root = ws.Root
 	fi.mu.Unlock()
 	return nil
@@ -293,13 +263,10 @@ func (fi *fileIndex) publish(manifest map[string]fileEntry, complete bool) error
 			return err
 		}
 	}
-	snapshot := make(map[string]fileEntry, len(manifest))
-	for k, v := range manifest {
-		snapshot[k] = v
-	}
+	snapshot := maps.Clone(manifest)
 	fi.mu.Lock()
 	fi.manifest = snapshot
-	fi.paths = sortedKeys(snapshot)
+	fi.paths = slices.Sorted(maps.Keys(snapshot))
 	if complete {
 		fi.built = true
 	}
@@ -309,14 +276,13 @@ func (fi *fileIndex) publish(manifest map[string]fileEntry, complete bool) error
 
 type fileIndexState struct {
 	built, reconciling bool
-	progress           float64
 	lastReconcile      time.Time
 }
 
 func (fi *fileIndex) state() fileIndexState {
 	fi.mu.RLock()
 	defer fi.mu.RUnlock()
-	return fileIndexState{built: fi.built, reconciling: fi.reconciling, progress: fi.progress, lastReconcile: fi.lastReconcile}
+	return fileIndexState{built: fi.built, reconciling: fi.reconciling, lastReconcile: fi.lastReconcile}
 }
 
 // readChunk returns the current text of the chunk starting at line start.

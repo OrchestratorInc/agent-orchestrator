@@ -6538,38 +6538,27 @@ export interface components {
             end: number;
             start: number;
         };
-        SearchIndexStatus: {
-            /** Format: double */
-            progress: number;
-            /** @enum {string} */
-            state: "ready" | "building" | "unavailable";
-        };
         SearchMessageHit: {
-            conversationId: string;
             conversationTitle: string;
-            /** Format: date-time */
-            createdAt: string;
             decisive: boolean;
             messageId: string;
             /** @description The message left the visible transcript: an edit forked past it or its turn was rolled back. */
             olderVersion: boolean;
             projectId?: string;
-            role: string;
-            scope: string;
             /** Format: double */
             score: number;
             sessionId?: string;
             snippet: components["schemas"]["SearchSnippet"];
         };
         SearchResponse: {
-            /** @description Readiness of the chat index. */
-            chats: components["schemas"]["SearchIndexStatus"];
             fileContent: components["schemas"]["SearchFileContentHit"][];
             fileNames: components["schemas"]["SearchFileNameHit"][];
-            /** @description Readiness of the session's file index; building while its first index runs. */
-            files: components["schemas"]["SearchIndexStatus"];
+            /**
+             * @description Readiness of the session's file index; building while its first index runs.
+             * @enum {string}
+             */
+            files: "ready" | "building" | "unavailable";
             messages: components["schemas"]["SearchMessageHit"][];
-            query: string;
         };
         SearchSnippet: {
             highlights: components["schemas"]["SearchHighlight"][];
@@ -14842,8 +14831,6 @@ export interface operations {
                 sessionId?: string;
                 /** @description Comma-separated subset of fileNames, fileContent and messages. Defaults to all three. */
                 kinds?: string;
-                /** @description Maximum hits per group. Defaults to 20. */
-                limit?: number;
             };
             header?: never;
             path?: never;

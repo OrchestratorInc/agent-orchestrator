@@ -338,7 +338,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListDirsQuery":                            "ListDirsQuery",
 	"ControllersSearchQuery":                              "SearchQuery",
 	"ControllersSearchResponse":                           "SearchResponse",
-	"ControllersSearchIndexStatus":                        "SearchIndexStatus",
 	"ControllersSearchSnippet":                            "SearchSnippet",
 	"ControllersSearchHighlight":                          "SearchHighlight",
 	"ControllersSearchFileNameHit":                        "SearchFileNameHit",

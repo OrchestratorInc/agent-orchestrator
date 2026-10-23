@@ -7,11 +7,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	searchsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/search"
@@ -57,36 +55,31 @@ func getSearch(t *testing.T, srv *httptest.Server, params url.Values) (int, Sear
 }
 
 func TestSearchControllerPassesRequestAndShapesResponse(t *testing.T) {
-	created := time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)
 	svc := &fakeSearch{resp: searchsvc.Response{
 		FileNames: []searchsvc.FileNameHit{{Path: "src/palette.ts", Score: 9, ExactName: true}},
 		FileContent: []searchsvc.ContentHit{{Path: "src/palette.ts", Score: 5, Decisive: true,
 			Snippet: searchsvc.Snippet{Text: "close the palette", Line: 12, Highlights: [][2]int{{10, 17}}}}},
-		Messages: []searchsvc.MessageHit{{MessageID: "m1", ConversationID: "c1", SessionID: "s1", Scope: domain.ConversationScopeSession,
-			ConversationTitle: "Palette", Role: domain.MessageRoleUser, CreatedAt: created, Score: 4, OlderVersion: true,
+		Messages: []searchsvc.MessageHit{{MessageID: "m1", SessionID: "s1", ConversationTitle: "Palette", Score: 4, OlderVersion: true,
 			// "é" is two bytes but one UTF-16 unit; "😀" is four bytes and two units.
 			Snippet: searchsvc.Snippet{Text: "é😀 palette", Highlights: [][2]int{{7, 14}}}}},
-		Files: searchsvc.IndexStatus{State: searchsvc.IndexReady, Progress: 1},
-		Chats: searchsvc.IndexStatus{State: searchsvc.IndexBuilding, Progress: 0.4},
+		Files: searchsvc.IndexReady,
 	}}
 	srv := newSearchRig(t, svc)
-	code, body, _ := getSearch(t, srv, url.Values{"q": {"palette"}, "sessionId": {" s1 "}, "kinds": {"fileNames,messages"}, "limit": {"5"}})
+	code, body, _ := getSearch(t, srv, url.Values{"q": {"palette"}, "sessionId": {" s1 "}, "kinds": {"fileNames,messages"}})
 	if code != http.StatusOK {
 		t.Fatalf("status = %d", code)
 	}
-	if svc.got.Query != "palette" || svc.got.SessionID != "s1" || svc.got.Limit != 5 ||
-		!svc.got.Kinds.FileNames || svc.got.Kinds.FileContent || !svc.got.Kinds.Messages {
+	if svc.got.Query != "palette" || svc.got.SessionID != "s1" || !svc.got.Kinds.FileNames || svc.got.Kinds.FileContent || !svc.got.Kinds.Messages {
 		t.Fatalf("request = %+v", svc.got)
 	}
-	if body.Query != "palette" || len(body.FileNames) != 1 || !body.FileNames[0].ExactName || body.Files.State != "ready" || body.Chats.Progress != 0.4 {
+	if len(body.FileNames) != 1 || !body.FileNames[0].ExactName || body.Files != "ready" {
 		t.Fatalf("body = %+v", body)
 	}
-	c := body.FileContent[0]
-	if c.Snippet.Line != 12 || !c.Decisive || c.Snippet.Highlights[0] != (SearchHighlight{Start: 10, End: 17}) {
+	if c := body.FileContent[0]; c.Snippet.Line != 12 || !c.Decisive || c.Snippet.Highlights[0] != (SearchHighlight{Start: 10, End: 17}) {
 		t.Fatalf("content hit = %+v", c)
 	}
 	m := body.Messages[0]
-	if m.MessageID != "m1" || !m.OlderVersion || !m.CreatedAt.Equal(created) {
+	if m.MessageID != "m1" || m.SessionID != "s1" || !m.OlderVersion {
 		t.Fatalf("message hit = %+v", m)
 	}
 	if h := m.Snippet.Highlights[0]; h != (SearchHighlight{Start: 4, End: 11}) {
@@ -96,13 +89,9 @@ func TestSearchControllerPassesRequestAndShapesResponse(t *testing.T) {
 
 func TestSearchControllerDefaultsToAllKinds(t *testing.T) {
 	svc := &fakeSearch{}
-	srv := newSearchRig(t, svc)
-	code, body, _ := getSearch(t, srv, url.Values{"q": {"x"}})
-	if code != http.StatusOK {
-		t.Fatalf("status = %d", code)
-	}
-	if !svc.got.Kinds.FileNames || !svc.got.Kinds.FileContent || !svc.got.Kinds.Messages || svc.got.Limit != 0 {
-		t.Fatalf("request = %+v", svc.got)
+	code, body, _ := getSearch(t, newSearchRig(t, svc), url.Values{"q": {"x"}})
+	if code != http.StatusOK || !svc.got.Kinds.FileNames || !svc.got.Kinds.FileContent || !svc.got.Kinds.Messages {
+		t.Fatalf("status = %d, request = %+v", code, svc.got)
 	}
 	// Empty groups are arrays, never null.
 	if body.FileNames == nil || body.FileContent == nil || body.Messages == nil {
@@ -110,36 +99,21 @@ func TestSearchControllerDefaultsToAllKinds(t *testing.T) {
 	}
 }
 
-func TestSearchControllerRejectsBadParameters(t *testing.T) {
-	srv := newSearchRig(t, &fakeSearch{})
+func TestSearchControllerErrors(t *testing.T) {
 	for _, tc := range []struct {
+		name   string
+		svc    SearchService
 		params url.Values
+		status int
 		code   string
 	}{
-		{url.Values{"q": {"x"}, "kinds": {"files"}}, "INVALID_SEARCH_KINDS"},
-		{url.Values{"q": {"x"}, "limit": {"0"}}, "INVALID_SEARCH_LIMIT"},
-		{url.Values{"q": {"x"}, "limit": {"51"}}, "INVALID_SEARCH_LIMIT"},
-		{url.Values{"q": {"x"}, "limit": {"many"}}, "INVALID_SEARCH_LIMIT"},
+		{"bad kinds", &fakeSearch{}, url.Values{"q": {"x"}, "kinds": {"files"}}, http.StatusBadRequest, "INVALID_SEARCH_KINDS"},
+		{"service error", &fakeSearch{err: apierr.Invalid("SEARCH_QUERY_REQUIRED", "query is required", nil)}, url.Values{"q": {""}}, http.StatusBadRequest, "SEARCH_QUERY_REQUIRED"},
+		{"no service", nil, url.Values{"q": {"x"}}, http.StatusNotImplemented, ""},
 	} {
-		status, _, apiErr := getSearch(t, srv, tc.params)
-		if status != http.StatusBadRequest || apiErr.Code != tc.code {
-			t.Errorf("%v: status=%d code=%q, want 400 %s", tc.params, status, apiErr.Code, tc.code)
+		status, _, apiErr := getSearch(t, newSearchRig(t, tc.svc), tc.params)
+		if status != tc.status || (tc.code != "" && apiErr.Code != tc.code) {
+			t.Errorf("%s: status=%d code=%q, want %d %s", tc.name, status, apiErr.Code, tc.status, tc.code)
 		}
-	}
-}
-
-func TestSearchControllerSurfacesServiceErrors(t *testing.T) {
-	srv := newSearchRig(t, &fakeSearch{err: apierr.Invalid("SEARCH_QUERY_REQUIRED", "query is required", nil)})
-	status, _, apiErr := getSearch(t, srv, url.Values{"q": {""}})
-	if status != http.StatusBadRequest || apiErr.Code != "SEARCH_QUERY_REQUIRED" {
-		t.Fatalf("status=%d code=%q", status, apiErr.Code)
-	}
-}
-
-func TestSearchControllerNotImplementedWithoutService(t *testing.T) {
-	srv := newSearchRig(t, nil)
-	status, _, _ := getSearch(t, srv, url.Values{"q": {"x"}})
-	if status != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", status)
 	}
 }

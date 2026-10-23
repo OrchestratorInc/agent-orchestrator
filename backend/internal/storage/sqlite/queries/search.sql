@@ -3,7 +3,7 @@
 -- at query time, so search never serves text the store no longer holds.
 
 -- name: ListConversationMessagesForSearchAfter :many
-SELECT id, conversation_id, role, text, streaming, revision, updated_at
+SELECT id, text, streaming, updated_at
 FROM conversation_messages
 WHERE updated_at > sqlc.arg(after_updated_at)
    OR (updated_at = sqlc.arg(after_updated_at) AND id > sqlc.arg(after_id))
@@ -17,8 +17,8 @@ ORDER BY id
 LIMIT sqlc.arg(page_size);
 
 -- name: ListConversationMessagesForSearchByIDs :many
-SELECT m.id, m.conversation_id, m.role, m.text, m.streaming, m.created_at,
-       c.scope, c.session_id, c.current_session_id, c.project_id,
+SELECT m.id, m.conversation_id, m.text, m.streaming, m.created_at,
+       c.session_id, c.current_session_id, c.project_id,
        c.applied_title, c.provider_title
 FROM conversation_messages AS m
 JOIN conversations AS c ON c.id = m.conversation_id
