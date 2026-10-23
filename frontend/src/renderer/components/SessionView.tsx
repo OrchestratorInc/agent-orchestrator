@@ -19,6 +19,7 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
+import { openModelPicker } from "./chat/TurnSettingsBar";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { NotificationCenter } from "./NotificationCenter";
@@ -1827,12 +1828,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useSessionShortcut(
 		"model-picker",
 		() => {
-			const picker = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
-			if (!picker) return;
-			// Radix menu triggers open on pointerdown or Enter, never on a synthetic click.
-			picker.dataset.shortcutOpened = "";
-			picker.focus();
-			picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+			openModelPicker();
 		},
 		hasInspector,
 	);

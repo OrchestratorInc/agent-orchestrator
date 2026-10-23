@@ -1630,6 +1630,12 @@ func (s *Store) SettleTurn(
 	if err != nil {
 		return fmt.Errorf("select turn %s: %w", providerTurnID, err)
 	}
+	// A reattached controller can replay a settled turn's completion without its
+	// error; the first settlement's message is the provider's explanation, so a
+	// replay to the same state must not erase it.
+	if errMessage == "" && turn.State == state {
+		errMessage = turn.ErrorMessage
+	}
 
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
@@ -4153,6 +4159,8 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 			}
 			turn.UsageLimit.AutoResume = row.UsageLimitAutoResume != 0
 			turn.UsageLimit.ResumeError = row.UsageLimitResumeError
+		} else {
+			turn.Failure = domain.ClassifyConversationFailure(turn.ErrorMessage)
 		}
 	}
 	if row.DiffJson != "" {

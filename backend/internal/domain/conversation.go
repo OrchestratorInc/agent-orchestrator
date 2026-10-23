@@ -556,9 +556,11 @@ type ConversationTurn struct {
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
 	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`
-	RequestedAt  time.Time               `json:"requestedAt"`
-	StartedAt    *time.Time              `json:"startedAt,omitempty"`
-	CompletedAt  *time.Time              `json:"completedAt,omitempty"`
+	// Failure explains a recognized non-usage-limit provider refusal.
+	Failure     *ConversationFailure `json:"failure,omitempty"`
+	RequestedAt time.Time            `json:"requestedAt"`
+	StartedAt   *time.Time           `json:"startedAt,omitempty"`
+	CompletedAt *time.Time           `json:"completedAt,omitempty"`
 	// RolledBackAt is set when a rollback discarded this turn provider-side. The
 	// row survives because AO does not destroy durable facts, but the agent no
 	// longer remembers the exchange, so its messages and activities are left out

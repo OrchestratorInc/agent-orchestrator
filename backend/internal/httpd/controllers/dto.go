@@ -2998,6 +2998,7 @@ type ConversationTurnResponse struct {
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
+	Failure        *ConversationFailureResponse    `json:"failure,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
 	CompletedAt    *string                         `json:"completedAt,omitempty"`
@@ -3028,6 +3029,14 @@ type ConversationUsageLimitResponse struct {
 	ResetsAt    *string `json:"resetsAt,omitempty"`
 	AutoResume  bool    `json:"autoResume"`
 	ResumeError string  `json:"resumeError,omitempty"`
+}
+
+// ConversationFailureResponse names a recognized provider failure so a client
+// can say what went wrong and what to do, instead of showing a raw error.
+type ConversationFailureResponse struct {
+	Kind string `json:"kind" enum:"outOfCredit,auth,rateLimited,overloaded,contextTooLong,modelUnavailable,network"`
+	// Detail is the provider's own sentence with transport wrapping removed.
+	Detail string `json:"detail,omitempty"`
 }
 
 // ConversationPlanResponse is the agent's plan for one turn.

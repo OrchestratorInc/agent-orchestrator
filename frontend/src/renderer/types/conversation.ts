@@ -109,6 +109,22 @@ export interface ConversationUsageLimit {
 	resumeError?: string;
 }
 
+export type ConversationFailureKind =
+	| "outOfCredit"
+	| "auth"
+	| "rateLimited"
+	| "overloaded"
+	| "contextTooLong"
+	| "modelUnavailable"
+	| "network";
+
+/** A provider failure the daemon recognized, so the UI can say what to do next. */
+export interface ConversationFailure {
+	kind: ConversationFailureKind;
+	/** The provider's own sentence with transport wrapping removed. */
+	detail?: string;
+}
+
 export interface ConversationTurn {
 	id: string;
 	state: TurnState;
@@ -128,6 +144,7 @@ export interface ConversationTurn {
 	hasHumanPrompt?: boolean;
 	errorMessage?: string;
 	usageLimit?: ConversationUsageLimit;
+	failure?: ConversationFailure;
 	requestedAt: string;
 	startedAt?: string;
 	completedAt?: string;

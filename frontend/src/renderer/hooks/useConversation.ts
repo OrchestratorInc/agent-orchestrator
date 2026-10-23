@@ -1756,6 +1756,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 				autoResume: turn.usageLimit.autoResume,
 				resumeError: turn.usageLimit.resumeError,
 			} : undefined,
+			failure: turn.failure ? { kind: turn.failure.kind, detail: turn.failure.detail } : undefined,
 			requestedAt: turn.requestedAt,
 			startedAt: turn.startedAt ?? undefined,
 			completedAt: turn.completedAt ?? undefined,

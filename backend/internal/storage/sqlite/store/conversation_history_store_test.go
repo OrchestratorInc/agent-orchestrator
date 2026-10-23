@@ -1131,6 +1131,37 @@ func seedTurn(t *testing.T, s *sqlite.Store, conversationID string, session doma
 	}
 }
 
+func TestSettleTurnReplayKeepsFailureMessage(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	turnID := "turn-failed"
+	providerTurnID := "provider-" + turnID
+	if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+		ID: turnID + "-msg", Text: "do the work", Origin: domain.MessageOriginHuman,
+	}, turnID, histClock); err != nil || !created {
+		t.Fatalf("append user message: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, turnID, providerTurnID, histClock); err != nil {
+		t.Fatalf("bind turn: %v", err)
+	}
+	const reason = "ACP session/prompt: Insufficient account funds"
+	if err := s.SettleTurn(ctx, conversation, providerTurnID, domain.TurnStateFailed, reason, histClock); err != nil {
+		t.Fatalf("settle turn: %v", err)
+	}
+	// A reattached controller replays the completion without its error.
+	if err := s.SettleTurn(ctx, conversation, providerTurnID, domain.TurnStateFailed, "", histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("replay settle: %v", err)
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	turn := snapshot.Turns[len(snapshot.Turns)-1]
+	if turn.ErrorMessage != reason || turn.Failure == nil || turn.Failure.Kind != domain.FailureOutOfCredit {
+		t.Fatalf("turn = %+v, want the first failure kept and classified", turn)
+	}
+}
+
 func TestSettleTurnStopsStreamingAssistantMessages(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()

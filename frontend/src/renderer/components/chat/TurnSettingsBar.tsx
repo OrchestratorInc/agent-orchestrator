@@ -963,6 +963,20 @@ function PlanModeToggle({
 	);
 }
 
+/**
+ * Opens the composer's model menu, as ⌘⇧M does. False when no enabled picker is
+ * on screen, so a caller can fall back instead of doing nothing.
+ */
+export function openModelPicker(): boolean {
+	const picker = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
+	if (!picker) return false;
+	// Radix menu triggers open on pointerdown or Enter, never on a synthetic click.
+	picker.dataset.shortcutOpened = "";
+	picker.focus();
+	picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+	return true;
+}
+
 // ⌘⇧M opens the model menu from the composer, so closing it (Esc or a choice)
 // hands focus back to the composer instead of leaving it on the trigger.
 function restoreComposerFocus(event: Event) {

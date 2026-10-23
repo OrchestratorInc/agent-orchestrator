@@ -167,6 +167,7 @@ import {
 	type ConversationBranchPoint,
 	type ConversationItem,
 	type ConversationMessage,
+	type ConversationFailure,
 	type ConversationTurn,
 	type ConversationUsageLimit,
 	type TurnDiff,
@@ -4027,6 +4028,8 @@ export function Timeline({
 									onOpenFiles={onOpenFiles ? openFiles : undefined}
 									onOpenFile={onOpenFile ? openFile : undefined}
 									retry={retry}
+									harness={snapshot.harness}
+									canSwitchModel={!newWorkDisabled}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
 									onStartMessageEdit={stableStartMessageEdit}
@@ -4253,6 +4256,8 @@ const TurnGroup = memo(function TurnGroup({
 	canRollback,
 	rollbackDisabled,
 	retry,
+	harness,
+	canSwitchModel,
 	busy,
 	queued,
 	newHumanMessageIds,
@@ -4260,6 +4265,10 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation,
 }: {
 	group: TimelineGroup;
+	/** The session's agent, so a credential failure can open its sign-in. */
+	harness?: string;
+	/** The composer can take a new model, so a failure can offer to switch. */
+	canSwitchModel?: boolean;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
 	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
@@ -4436,9 +4445,12 @@ const TurnGroup = memo(function TurnGroup({
 		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
+	// A turn that failed before doing anything has no work to summarize: its
+	// duration is only the provider's retries, and the outcome card says the rest.
+	const failedEmpty = outcome?.state === "failed" && foldedRuns.length === 0 && !finalRun;
 	if (!outcome) {
 		body.push(...workedRuns.map(renderRun));
-	} else {
+	} else if (!failedEmpty) {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
 			<TurnWorkSummary
@@ -4475,7 +4487,7 @@ const TurnGroup = memo(function TurnGroup({
 			{/* No assistant prose to hang the undo / duration on — still offer them
 			    before the outcome divider so a tool-only turn is not stuck without a
 			    way back or a record of how long it took. */}
-			{!copyableMessageId && !group.live && canRollback ? (
+			{!copyableMessageId && !group.live && canRollback && group.outcome?.state !== "failed" ? (
 				<div className="flex h-7 items-center gap-0.5">
 					{canRollback ? (
 						<button
@@ -4496,7 +4508,16 @@ const TurnGroup = memo(function TurnGroup({
 					state={group.outcome.state}
 					error={group.outcome.error}
 					usageLimit={group.outcome.usageLimit}
+					failure={group.outcome.failure}
+					harness={harness}
+					canSwitchModel={canSwitchModel}
 					retry={group.outcome.state === "failed" ? retry : undefined}
+					onRollback={
+						group.outcome.state === "failed" && !copyableMessageId && canRollback
+							? () => onRollback(group.turnId as string)
+							: undefined
+					}
+					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
 		</div>
@@ -4888,6 +4909,7 @@ type TimelineGroup = {
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
+		failure?: ConversationFailure;
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -5091,6 +5113,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		group.outcome = {
 			state: turn.state,
 			usageLimit: turn.usageLimit,
+			failure: turn.failure,
 			durationMs: settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(

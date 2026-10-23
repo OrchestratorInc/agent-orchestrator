@@ -45,6 +45,7 @@ import {
 	MousePointer2,
 	Pencil,
 	Plug,
+	RotateCw,
 	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
@@ -78,6 +79,9 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { openModelPicker } from "./TurnSettingsBar";
+import { Button } from "../ui/button";
+import { useUiStore } from "../../stores/ui-store";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
@@ -106,6 +110,8 @@ import {
 	type ActivityKind,
 	type ConversationActivity,
 	type ConversationBranchPoint,
+	type ConversationFailure,
+	type ConversationFailureKind,
 	type ConversationMessage,
 	type ConversationUsageLimit,
 	type DecisionOption,
@@ -431,17 +437,194 @@ export function ContinuedMarker() {
 	return <TwoRowTimelineMarker message="Continued" />;
 }
 
+const failureCopy = {
+	outOfCredit: { title: "chat.failure.outOfCredit.title", hint: "chat.failure.outOfCredit.hint" },
+	auth: { title: "chat.failure.auth.title", hint: "chat.failure.auth.hint" },
+	rateLimited: { title: "chat.failure.rateLimited.title", hint: "chat.failure.rateLimited.hint" },
+	overloaded: { title: "chat.failure.overloaded.title", hint: "chat.failure.overloaded.hint" },
+	contextTooLong: { title: "chat.failure.contextTooLong.title", hint: "chat.failure.contextTooLong.hint" },
+	modelUnavailable: { title: "chat.failure.modelUnavailable.title", hint: "chat.failure.modelUnavailable.hint" },
+	network: { title: "chat.failure.network.title", hint: "chat.failure.network.hint" },
+} as const satisfies Record<ConversationFailureKind, { title: string; hint: string }>;
+
+/**
+ * What fixes each failure. Retrying a refused credential, an empty account, or
+ * an unusable model fails the same way, so those lead with the real fix and keep
+ * Retry second; transient faults lead with Retry.
+ */
+const failureFix: Record<ConversationFailureKind, "signIn" | "switchModel" | undefined> = {
+	auth: "signIn",
+	outOfCredit: "switchModel",
+	contextTooLong: "switchModel",
+	modelUnavailable: "switchModel",
+	rateLimited: undefined,
+	overloaded: undefined,
+	network: undefined,
+};
+
+const outcomeButtonClass = "h-7 px-2.5 focus-visible:ring-2 focus-visible:ring-ring";
+
+/** Undo for a failed turn, kept with the failure so the turn reads as one block. */
+function RollbackTurnButton({ onRollback, disabled }: { onRollback: () => void; disabled?: boolean }) {
+	return (
+		<Button
+			type="button" size="sm" variant="ghost" onClick={onRollback} disabled={disabled}
+			aria-label="Roll back to here" title="Roll back to here"
+			className="size-7 px-0 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+		>
+			<Undo2 aria-hidden="true" className="size-3.5" />
+		</Button>
+	);
+}
+
+function RetryTurnButton({ retry, variant }: { retry: TurnOutcomeRetryControl; variant: "secondary" | "ghost" }) {
+	const { t } = useTranslation();
+	return (
+		<Button
+			type="button"
+			size="sm"
+			variant={variant}
+			onClick={retry.onRetry}
+			disabled={retry.pending || retry.disabled}
+			aria-label={retry.pending ? t("chat.turn.retrying") : t("chat.turn.retryLabel")}
+			title={retry.error ?? (retry.disabled ? t("chat.turn.retryWait") : t("chat.turn.retryTitle"))}
+			data-testid="retry-turn"
+			className={cn(outcomeButtonClass, variant === "ghost" && "text-muted-foreground hover:text-foreground")}
+		>
+			{retry.pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <RotateCw aria-hidden="true" className="size-3.5" />}
+			{retry.pending ? t("chat.turn.retrying") : t("chat.turn.retry")}
+		</Button>
+	);
+}
+
+/** The raw provider error, kept one click away for bug reports and support. */
+function FailureErrorDetails({ error }: { error: string }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	return (
+		<div className="min-w-0">
+			<button
+				type="button"
+				onClick={() => setOpen((value) => !value)}
+				aria-expanded={open}
+				className="-mx-1 flex min-h-6 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			>
+				<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+				{t("chat.failure.errorDetails")}
+			</button>
+			{open ? (
+				<div className="mt-1 flex min-w-0 items-start gap-2 rounded-md bg-muted/40 px-2.5 py-2">
+					<div className="min-w-0 flex-1 whitespace-pre-wrap wrap-anywhere font-mono text-xs leading-relaxed text-muted-foreground">
+						{linkifiedProviderErrorText(error)}
+					</div>
+					<CopyButton text={error} label={t("chat.failure.copyErrorDetails")} compact className="size-6 justify-center rounded px-0 py-0 hover:text-foreground" />
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+/** A provider refusal AO recognized: what happened, the provider's words, and the fix. */
+function KnownFailureOutcome({
+	failure,
+	error,
+	retry,
+	harness,
+	canSwitchModel,
+	onRollback,
+	rollbackDisabled,
+}: {
+	failure: ConversationFailure;
+	error?: string;
+	retry?: TurnOutcomeRetryControl;
+	harness?: string;
+	canSwitchModel?: boolean;
+	onRollback?: () => void;
+	rollbackDisabled?: boolean;
+}) {
+	const { t } = useTranslation();
+	const openSettings = useUiStore((state) => state.openGlobalSettings);
+	const known = failureCopy[failure.kind];
+	// The daemon strips transport framing; without a detail the raw text is already plain.
+	const detail = failure.detail || error;
+	const fix = failureFix[failure.kind];
+	const fixButton =
+		fix === "signIn" && harness ? (
+			<Button
+				type="button" size="sm" variant="secondary" className={outcomeButtonClass}
+				onClick={() => openSettings("harness", { focusAgentId: harness, harnessView: "local", preserveProject: true, startLogin: true })}
+			>
+				<KeyRound aria-hidden="true" className="size-3.5" />
+				{t("chat.failure.action.signIn")}
+			</Button>
+		) : fix === "switchModel" && canSwitchModel ? (
+			<Button type="button" size="sm" variant="secondary" className={outcomeButtonClass} onClick={() => openModelPicker()}>
+				<Shuffle aria-hidden="true" className="size-3.5" />
+				{t("chat.failure.action.switchModel")}
+			</Button>
+		) : undefined;
+	// Overloaded and rate-limited models can also be worked around by switching.
+	const switchAside = !fix && canSwitchModel && (failure.kind === "overloaded" || failure.kind === "rateLimited") ? (
+		<Button
+			type="button" size="sm" variant="ghost" className={cn(outcomeButtonClass, "text-muted-foreground hover:text-foreground")}
+			onClick={() => openModelPicker()}
+		>
+			{t("chat.failure.action.switchModel")}
+		</Button>
+	) : undefined;
+	return (
+		<div className="flex min-w-0 flex-col gap-1.5 py-3" data-failure-kind={failure.kind}>
+			<div className="flex min-w-0 items-start gap-2">
+				<CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
+				<div className="flex min-w-0 flex-1 flex-col gap-1">
+					<strong className="text-pretty text-sm font-medium text-foreground">{t(known.title)}</strong>
+					{detail ? (
+						<p className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-muted-foreground">
+							{linkifiedProviderErrorText(detail)}
+						</p>
+					) : null}
+					<p className="text-pretty text-xs leading-relaxed text-muted-foreground">{t(known.hint)}</p>
+				</div>
+			</div>
+			{fixButton || retry || switchAside || onRollback ? (
+				<div className="flex flex-wrap items-center gap-1.5 pl-6 pt-1">
+					{fixButton}
+					{retry ? <RetryTurnButton retry={retry} variant={fixButton ? "ghost" : "secondary"} /> : null}
+					{switchAside}
+					{onRollback ? <RollbackTurnButton onRollback={onRollback} disabled={rollbackDisabled} /> : null}
+					{retry?.error ? <span role="alert" className="text-pretty text-xs leading-snug text-destructive">{retry.error}</span> : null}
+				</div>
+			) : null}
+			{error && error !== detail ? <div className="pl-6"><FailureErrorDetails error={error} /></div> : null}
+		</div>
+	);
+}
+
 export function TurnOutcome({
 	state,
 	error,
 	retry,
 	usageLimit,
+	failure,
+	harness,
+	canSwitchModel,
+	onRollback,
+	rollbackDisabled,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
 	retry?: TurnOutcomeRetryControl;
 	usageLimit?: ConversationUsageLimit;
+	failure?: ConversationFailure;
+	/** The session's agent, for a credential failure's sign-in. */
+	harness?: string;
+	/** The composer's model picker can take a new model. */
+	canSwitchModel?: boolean;
+	/** Undo for a failed turn with no reply to hang it on. */
+	onRollback?: () => void;
+	rollbackDisabled?: boolean;
 }) {
+	const { t } = useTranslation();
 	if (state === "failed" && usageLimit) {
 		return (
 			<div className="flex min-w-0 flex-col gap-2 py-3">
@@ -455,6 +638,14 @@ export function TurnOutcome({
 				/>
 				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
 			</div>
+		);
+	}
+	if (state === "failed" && failure) {
+		return (
+			<KnownFailureOutcome
+				failure={failure} error={error} retry={retry} harness={harness} canSwitchModel={canSwitchModel}
+				onRollback={onRollback} rollbackDisabled={rollbackDisabled}
+			/>
 		);
 	}
 	const copy = {
@@ -472,7 +663,7 @@ export function TurnOutcome({
 	const action = retry ? (
 		<>
 			{retry.error ? (
-				<span role="alert" className="max-w-[50%] text-pretty text-right text-xs leading-tight text-destructive">
+				<span role="alert" className="max-w-[50%] text-pretty text-right text-xs leading-snug text-destructive">
 					{retry.error}
 				</span>
 			) : null}
@@ -480,12 +671,12 @@ export function TurnOutcome({
 				type="button"
 				onClick={retry.onRetry}
 				disabled={retry.pending || retry.disabled}
-				aria-label="Retry this turn"
-				title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+				aria-label={retry.pending ? t("chat.turn.retrying") : t("chat.turn.retryLabel")}
+				title={retry.error ?? (retry.disabled ? t("chat.turn.retryWait") : t("chat.turn.retryTitle"))}
 				data-testid="retry-turn"
-				className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
+				className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 			>
-				{retry.pending ? "Retrying…" : "Retry"}
+				{retry.pending ? t("chat.turn.retrying") : t("chat.turn.retry")}
 			</button>
 		</>
 	) : undefined;
@@ -494,7 +685,10 @@ export function TurnOutcome({
 			<div className="flex min-w-0 flex-col gap-2 py-3">
 				<div className="flex items-baseline justify-between gap-3 text-sm font-medium text-destructive">
 					<span>{copy.label}</span>
-					{action}
+					<span className="flex items-center gap-1">
+						{action}
+						{onRollback ? <RollbackTurnButton onRollback={onRollback} disabled={rollbackDisabled} /> : null}
+					</span>
 				</div>
 				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
 			</div>

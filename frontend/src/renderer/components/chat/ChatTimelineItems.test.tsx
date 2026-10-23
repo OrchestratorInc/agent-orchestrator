@@ -84,6 +84,68 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
 	});
 
+	it("explains a recognized provider failure and keeps the raw error behind a toggle", () => {
+		const raw = 'ACP session/prompt: {"code":-32603,"message":"Internal error: Upstream request failed: Insufficient account funds"}';
+		const onRetry = vi.fn();
+		render(
+			<TurnOutcome
+				state="failed"
+				error={raw}
+				failure={{ kind: "outOfCredit", detail: "Insufficient account funds" }}
+				retry={{ onRetry }}
+			/>,
+		);
+
+		expect(screen.getByText("The model provider account is out of credit")).toBeInTheDocument();
+		expect(screen.getByText("Insufficient account funds")).toBeInTheDocument();
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByText(raw)).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "Error details" }));
+		expect(screen.getByText(raw)).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+	});
+
+	it("leads with the real fix when retrying cannot help", () => {
+		render(
+			<TurnOutcome
+				state="failed"
+				error="401 Unauthorized"
+				failure={{ kind: "auth" }}
+				harness="codex"
+				canSwitchModel
+				retry={{ onRetry: vi.fn() }}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry this turn" })).toBeInTheDocument();
+	});
+
+	it("offers Switch model only when the composer can take one", () => {
+		const failure = { kind: "modelUnavailable" as const };
+		const { rerender } = render(<TurnOutcome state="failed" error="unknown model" failure={failure} canSwitchModel />);
+		expect(screen.getByRole("button", { name: "Switch model" })).toBeInTheDocument();
+
+		rerender(<TurnOutcome state="failed" error="unknown model" failure={failure} canSwitchModel={false} />);
+		expect(screen.queryByRole("button", { name: "Switch model" })).not.toBeInTheDocument();
+	});
+
+	it("shows a plain-text provider error inline, links included, without a details toggle", () => {
+		render(
+			<TurnOutcome
+				state="failed"
+				error="You have no credits remaining. Add credits at https://platform.openai.com/settings/organization/billing."
+				failure={{ kind: "outOfCredit" }}
+			/>,
+		);
+
+		expect(screen.getByText("The model provider account is out of credit")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "https://platform.openai.com/settings/organization/billing" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Error details" })).not.toBeInTheDocument();
+	});
+
 	it("presents a non-retryable usage limit as a historical notice without controls", () => {
 		render(
 			<TurnOutcome

@@ -5328,6 +5328,11 @@ export interface components {
             revision: number;
             text: string;
         };
+        ConversationFailureResponse: {
+            detail?: string;
+            /** @enum {string} */
+            kind: "outOfCredit" | "auth" | "rateLimited" | "overloaded" | "contextTooLong" | "modelUnavailable" | "network";
+        };
         ConversationImageContentRequest: {
             data: string;
             mimeType: string;
@@ -5476,6 +5481,7 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            failure?: components["schemas"]["ConversationFailureResponse"];
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;

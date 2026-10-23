@@ -1359,6 +1359,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			HasHumanPrompt:  turn.HasHumanPrompt,
 			ErrorMessage:    turn.ErrorMessage,
 			UsageLimit:      usageLimitPayload(turn.UsageLimit),
+			Failure:         failurePayload(turn.Failure),
 			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
 			StartedAt:       optionalTimestamp(turn.StartedAt),
 			CompletedAt:     optionalTimestamp(turn.CompletedAt),
@@ -1421,6 +1422,13 @@ func usageLimitPayload(limit *domain.ConversationUsageLimit) *ConversationUsageL
 		return nil
 	}
 	return &ConversationUsageLimitResponse{ResetsAt: optionalTimestamp(limit.ResetsAt), AutoResume: limit.AutoResume, ResumeError: limit.ResumeError}
+}
+
+func failurePayload(failure *domain.ConversationFailure) *ConversationFailureResponse {
+	if failure == nil {
+		return nil
+	}
+	return &ConversationFailureResponse{Kind: string(failure.Kind), Detail: failure.Detail}
 }
 
 func branchMaterializationPayload(branch domain.ConversationBranch) *ConversationBranchMaterializationResponse {
