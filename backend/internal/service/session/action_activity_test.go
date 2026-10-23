@@ -152,7 +152,7 @@ func TestRequestKillDoesNotConfirmPendingCleanup(t *testing.T) {
 	}
 }
 
-func TestTerminateRenameRestoreSwitchAndClaim(t *testing.T) {
+func TestTerminateRenameRestoreAndClaim(t *testing.T) {
 	svc, st, fc := actionFixture(t)
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-1")
 	if _, err := svc.Kill(ctx, "mer-1"); err != nil {
@@ -200,24 +200,6 @@ func TestTerminateRenameRestoreSwitchAndClaim(t *testing.T) {
 	}
 	if len(actionsNamed(st.activities, actionSessionRestored)) != 1 {
 		t.Fatalf("restores = %+v", st.activities)
-	}
-
-	fc.switchRecord = domain.AgentSwitch{
-		ID: "switch-1", State: domain.AgentSwitchCompleted, FromHarness: "codex", TargetHarness: "claude",
-	}
-	if _, err := svc.SwitchAgent(ctx, "mer-1", SwitchAgentInput{TargetHarness: "claude", IdempotencyKey: "same"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.SwitchAgent(ctx, "mer-1", SwitchAgentInput{TargetHarness: "claude", IdempotencyKey: "same"}); err != nil {
-		t.Fatal(err)
-	}
-	switches := actionsNamed(st.activities, actionSessionAgentSwitched)
-	if len(switches) != 1 || switches[0].Revision != 2 {
-		t.Fatalf("switches = %+v", switches)
-	}
-	switched := decodeAction(t, switches[0])
-	if switched.PreviousHarness != "codex" || switched.Harness != "claude" {
-		t.Fatalf("switch detail = %+v", switched)
 	}
 
 	svc.recordClaimed(ctx, "mer-1", domain.PullRequest{URL: "https://github.com/acme/repo/pull/7", Number: 7, Title: "Readable actions"}, domain.ActivityStatusCompleted, nil)
@@ -325,51 +307,6 @@ func TestStandaloneSessionHref(t *testing.T) {
 	}
 	if safeActionHref(got) != got {
 		t.Fatalf("href rejected: %q", got)
-	}
-}
-
-func TestRejectedSwitchWritesNothing(t *testing.T) {
-	svc, st, fc := actionFixture(t)
-	fc.switchErr = errors.New("unsupported switch harness")
-	if _, err := svc.SwitchAgent(context.Background(), "mer-1", SwitchAgentInput{TargetHarness: "notarealharness"}); err == nil {
-		t.Fatal("expected rejection")
-	}
-	if got := actionsNamed(st.activities, actionSessionAgentSwitched); len(got) != 0 {
-		t.Fatalf("rejected switch wrote %+v", got)
-	}
-}
-
-func TestSwitchActivitySettlesWhenDurableSwitchFinishes(t *testing.T) {
-	svc, st, fc := actionFixture(t)
-	ctx := context.Background()
-	fc.switchRecord = domain.AgentSwitch{
-		ID: "switch-1", SessionID: "mer-1", State: domain.AgentSwitchPreparingHandoff,
-		FromHarness: "codex", TargetHarness: "claude",
-	}
-	if _, err := svc.SwitchAgent(ctx, "mer-1", SwitchAgentInput{TargetHarness: "claude"}); err != nil {
-		t.Fatal(err)
-	}
-	switches := actionsNamed(st.activities, actionSessionAgentSwitched)
-	if len(switches) != 1 || switches[0].Status != domain.ActivityStatusRunning {
-		t.Fatalf("admitted activity = %+v", switches)
-	}
-
-	svc.observeSettledAgentSwitch(ctx, domain.AgentSwitch{
-		ID: "switch-1", SessionID: "mer-1", State: domain.AgentSwitchFailed, ErrorCode: domain.AgentSwitchErrorTargetBinaryMissing,
-		FromHarness: "codex", TargetHarness: "claude",
-	})
-	switches = actionsNamed(st.activities, actionSessionAgentSwitched)
-	if len(switches) != 1 || switches[0].Status != domain.ActivityStatusFailed || switches[0].Revision != 2 {
-		t.Fatalf("failed settlement = %+v", switches)
-	}
-
-	svc.observeSettledAgentSwitch(ctx, domain.AgentSwitch{
-		ID: "switch-1", SessionID: "mer-1", State: domain.AgentSwitchCompleted,
-		FromHarness: "codex", TargetHarness: "claude",
-	})
-	switches = actionsNamed(st.activities, actionSessionAgentSwitched)
-	if len(switches) != 1 || switches[0].Status != domain.ActivityStatusCompleted || switches[0].Revision != 3 {
-		t.Fatalf("recovered settlement = %+v", switches)
 	}
 }
 

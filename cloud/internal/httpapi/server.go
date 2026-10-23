@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
@@ -218,6 +219,7 @@ type Server struct {
 	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
 	notificationWake        func()
+	analytics               analytics.Sink
 	sandboxWake             func()
 	projectSnapshots        ProjectSnapshotter
 	billingOptions          *BillingOptions
@@ -276,6 +278,8 @@ type Options struct {
 	TerminalStreamEnabled   bool
 	TerminalRelayEnabled    bool
 	NotificationWake        func()
+	// Analytics receives server-side product events. Nil disables them.
+	Analytics analytics.Sink
 	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
 	// this control plane runs no reconciler.
 	SandboxWake func()
@@ -389,6 +393,7 @@ func New(options Options) *Server {
 		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
+		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
 		projectSnapshots:          options.ProjectSnapshots,
 		billingOptions:            options.Billing,
@@ -809,6 +814,17 @@ func (s *Server) principalForBearer(
 		return domain.Principal{}, err
 	}
 	return s.store.UpsertWorkOSUser(ctx, principal)
+}
+
+// capture reports a product event for the signed-in WorkOS user. Local-auth
+// (development) principals and anonymous callers are never reported.
+func (s *Server) capture(r *http.Request, event string, props map[string]any) {
+	if s.analytics == nil {
+		return
+	}
+	if p := principalFrom(r); p.Provider == "workos" && p.UserID != "" {
+		s.analytics.Capture(p.UserID, event, props)
+	}
 }
 
 func principalFrom(r *http.Request) domain.Principal {

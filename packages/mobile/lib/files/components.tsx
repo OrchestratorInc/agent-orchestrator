@@ -14,6 +14,8 @@ import {
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { SvgXml } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
+import { dockRestingInset, KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { highlightCode, type SyntaxTokenKind } from "../chat/syntaxHighlight";
 import { haptics } from "../haptics";
 import { Feather, type FeatherIconName } from "../icons";
@@ -287,6 +289,9 @@ export const FoldRow = memo(function FoldRow({ hidden, section, expandable, onEx
 
 export type ComposerAction = "comment" | "send";
 
+/** The session composer's capsule corner (ChatComposer), so the glass behind both matches. */
+const COMPOSER_RADIUS = 28;
+
 export function SelectionComposer({
 	label,
 	busy,
@@ -310,54 +315,63 @@ export function SelectionComposer({
 	// Extending the range keeps what was typed; a new selection remounts the composer.
 	const [text, setText] = useState(initialText ?? "");
 	const trimmed = text.trim();
+	const ready = Boolean(trimmed) && !busy;
+	const restingInset = dockRestingInset(insets.bottom);
 	return (
-		<KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }} style={styles.composerDock}>
-			<View accessibilityViewIsModal={false} style={[styles.composer, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
-				<View style={styles.composerHead}>
-					<Feather name="message-square-text" size={iconSize.sm} color={t.textSecondary} />
+		// The session dock's spacing: it rests on the safe-area inset and, with the
+		// keyboard up, sits KEYBOARD_DOCK_GAP above it instead.
+		<KeyboardStickyView offset={{ closed: 0, opened: restingInset - KEYBOARD_DOCK_GAP }} style={styles.composerDock}>
+			<View accessibilityViewIsModal={false} style={[styles.composerShell, { paddingBottom: restingInset }]}>
+				{/* What the comment is about, where the session composer keeps its model row. */}
+				<View style={styles.composerMeta}>
+					<Feather name="message-square-text" size={iconSize.sm} color={t.textTertiary} />
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.composerLabel}>{label}</Text>
-					<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" hitSlop={8} onPress={() => { haptics.success(); onCopy(); }} style={styles.composerIcon}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" hitSlop={6} onPress={() => { haptics.success(); onCopy(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
 						<Feather name="copy" size={iconSize.md} color={t.textSecondary} />
 					</Pressable>
-					<Pressable accessibilityRole="button" accessibilityLabel="Clear selection" hitSlop={8} onPress={() => { haptics.tap(); onClose(); }} style={styles.composerIcon}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Clear selection" hitSlop={6} onPress={() => { haptics.tap(); onClose(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
 						<Feather name="x" size={iconSize.md} color={t.textSecondary} />
 					</Pressable>
 				</View>
-				<TextInput
-					value={text}
-					onChangeText={setText}
-					multiline
-					editable={!busy}
-					placeholder="Comment for the agent…"
-					{...textSelectionColors(t)}
-					placeholderTextColor={t.textTertiary}
-					accessibilityLabel={`Comment on ${label}`}
-					style={styles.composerInput}
-					maxFontSizeMultiplier={fontScaleCap.body}
-				/>
 				{error ? <Text accessibilityRole="alert" style={styles.composerError}>{error}</Text> : null}
-				<View style={styles.composerActions}>
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel="Add comment to review"
-						accessibilityHint="Queues the comment so several can be sent together"
-						accessibilityState={{ disabled: busy || !trimmed }}
-						disabled={busy || !trimmed}
-						onPress={() => { haptics.tap(); onAction("comment", text); }}
-						style={({ pressed }) => [styles.composerSecondary, (!trimmed || busy) && styles.disabled, pressed && { opacity: press.opacity }]}
-					>
-						<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.composerSecondaryText}>Add</Text>
-					</Pressable>
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel="Send comment now"
-						accessibilityState={{ disabled: busy || !trimmed, busy }}
-						disabled={busy || !trimmed}
-						onPress={() => { haptics.tap(); onAction("send", text); }}
-						style={({ pressed }) => [styles.composerPrimary, (!trimmed || busy) && styles.disabled, pressed && { opacity: press.opacity }]}
-					>
-						{busy ? <ActivityIndicator size="small" color={t.onAccent} /> : <Feather name="arrow-up" size={iconSize.md} color={t.onAccent} />}
-					</Pressable>
+				{/* The session composer's capsule: same radius, same glass, same 44-point controls. */}
+				<View style={styles.composerPill}>
+					<ComposerGlass radius={COMPOSER_RADIUS} />
+					<View style={styles.composerRow}>
+						<TextInput
+							value={text}
+							onChangeText={setText}
+							multiline
+							editable={!busy}
+							placeholder="Comment for the agent…"
+							{...textSelectionColors(t)}
+							placeholderTextColor={t.textFaint}
+							accessibilityLabel={`Comment on ${label}`}
+							style={styles.composerInput}
+							maxFontSizeMultiplier={fontScaleCap.body}
+						/>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Add comment to review"
+							accessibilityHint="Queues the comment so several can be sent together"
+							accessibilityState={{ disabled: !ready }}
+							disabled={!ready}
+							onPress={() => { haptics.tap(); onAction("comment", text); }}
+							style={({ pressed }) => [styles.composerPlain, !ready && styles.disabled, pressed && { opacity: press.opacity }]}
+						>
+							<Feather name="message-square-plus" size={iconSize.lg} color={t.textSecondary} />
+						</Pressable>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Send comment now"
+							accessibilityState={{ disabled: !ready, busy }}
+							disabled={!ready}
+							onPress={() => { haptics.tap(); onAction("send", text); }}
+							style={({ pressed }) => [styles.composerSend, !trimmed && !busy && { opacity: 0.35 }, pressed && { opacity: 0.8 }]}
+						>
+							{busy ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}
+						</Pressable>
+					</View>
 				</View>
 			</View>
 		</KeyboardStickyView>
@@ -528,16 +542,19 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	foldSection: { fontFamily: t.fontMono, color: t.textTertiary },
 
 	composerDock: { position: "absolute", left: 0, right: 0, bottom: 0 },
-	composer: { backgroundColor: t.bgSurface, borderTopWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.lg, paddingTop: space.md, gap: space.sm },
-	composerHead: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	composerLabel: { flex: 1, fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textSecondary },
-	composerIcon: { minWidth: touchTarget - space.sm, minHeight: touchTarget - space.sm, alignItems: "center", justifyContent: "center" },
-	composerInput: { ...type.callout, minHeight: 44, maxHeight: 132, color: t.textPrimary, backgroundColor: t.bgElevated, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.sm, textAlignVertical: "top" },
-	composerError: { ...type.footnote, color: t.red },
-	composerActions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
-	composerSecondary: { minHeight: 36, paddingHorizontal: space.md, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderStrong, alignItems: "center", justifyContent: "center" },
-	composerSecondaryText: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textPrimary },
-	composerPrimary: { width: 36, height: 36, borderRadius: 18, backgroundColor: t.accent, alignItems: "center", justifyContent: "center" },
+	// Mirrors ChatComposer's dock and pill (COMPOSER_HEIGHT 56, field 44, radius 28),
+	// so commenting on a line feels like messaging the session.
+	composerShell: { backgroundColor: t.bgBase, paddingHorizontal: space.md, paddingTop: space.xxs, gap: space.xxs },
+	// The session composer's meta row: its left edge, and the close button over send.
+	composerMeta: { height: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm, paddingRight: space.xs },
+	composerLabel: { flex: 1, fontFamily: font.semibold, fontSize: type.footnote.fontSize, fontWeight: "600", color: t.textSecondary },
+	composerIcon: { width: 44, height: 44, alignItems: "center", justifyContent: "center", marginLeft: -space.sm },
+	composerError: { ...type.footnote, color: t.red, paddingHorizontal: space.sm },
+	composerPill: { minHeight: 56, padding: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	composerRow: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
+	composerInput: { flex: 1, minHeight: 44, maxHeight: 138, fontFamily: font.regular, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, color: t.textPrimary, paddingHorizontal: space.md, paddingVertical: space.md, textAlignVertical: "top" },
+	composerPlain: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+	composerSend: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	disabled: { opacity: 0.45 },
 
 	inlineWrap: { paddingRight: space.md, paddingTop: space.xs, paddingBottom: space.sm, backgroundColor: t.bgBase },

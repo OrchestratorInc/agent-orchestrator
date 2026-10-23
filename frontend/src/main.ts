@@ -43,9 +43,8 @@ import {
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
 import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
-import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
-import { AgentSwitchVisibilityController } from "./main/agent-switch-observability";
+import { TelemetryIdentityController } from "./main/telemetry-identity";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
@@ -118,7 +117,7 @@ import {
 	resolveDaemonFromPort,
 	resolveDaemonFromRunFile,
 } from "./shared/daemon-attach";
-import { browserDaemonOwnershipDecision, shouldReplacePortHolder } from "./shared/daemon-takeover";
+import { browserDaemonOwnershipDecision, portHolderPidToReplace } from "./shared/daemon-takeover";
 import {
 	buildDaemonEnv,
 	devDaemonAllowedOrigins,
@@ -190,6 +189,7 @@ import type {
 	BrowserRemoteTabAction,
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { readProcessStartMs } from "./main/process-start";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -206,7 +206,6 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
-import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -234,6 +233,12 @@ const APP_DISPLAY_NAME = "Orchestrator.inc";
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
 // panel never impersonate the installed app (#3642).
 app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
+
+// An unsigned dev Electron is a new app to macOS whenever its binary changes, so Chromium's
+// keychain-held cookie key prompted on start. Dev runs use the stand-in key; packaged keep the keychain.
+if (!app.isPackaged && process.platform === "darwin") {
+	app.commandLine.appendSwitch("use-mock-keychain");
+}
 
 // Windows shows native toasts only when the app declares an AppUserModelID that
 // matches its installer shortcut (the NSIS maker's appId). Without it,
@@ -283,7 +288,17 @@ app.setPath(
 const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
-let agentSwitchVisibilityController: AgentSwitchVisibilityController | null = null;
+// PostHog identity: the user-facing analytics opt-out (marker file shared with the
+// daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
+const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
+const telemetryIdentity = new TelemetryIdentityController(
+	desktopDataDir,
+	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
+	(url, init) => net.fetch(url, init),
+	(optedOut) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
+	},
+);
 const trustedShellWebContents = new Map<number, WebContents>();
 const pendingRendererQueuePurges = new Map<string, {
 	senderId: number;
@@ -643,6 +658,8 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") void telemetryIdentity.flush();
+	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
@@ -841,10 +858,8 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
-	agentSwitchVisibilityController?.registerWindow(shellWebContents.id);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
-		agentSwitchVisibilityController?.destroyWindow(shellWebContents.id);
 	});
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
@@ -1483,6 +1498,11 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
 		...(bundledTmuxBinary ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" } : {}),
+		// The packaged macOS app ships cloudflared, so turning on remote access
+		// never waits for an install. An explicit AO_CLOUDFLARED_PATH still wins.
+		...(app.isPackaged && process.platform === "darwin"
+			? { AO_CLOUDFLARED_PATH: process.env.AO_CLOUDFLARED_PATH ?? path.join(process.resourcesPath, "cloudflared", "cloudflared") }
+			: {}),
 	};
 	// In dev mode, inject isolation defaults so the dev daemon never collides with
 	// the installed app. User-set env vars take priority (checked first).
@@ -2030,47 +2050,46 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
-	// may still be holding the port. The only reachable case here is a hung/wedged
-	// holder whose run-file PID is still alive but is not answering /healthz (e.g.
-	// our own daemon that bound the port and then deadlocked). Two cases are
-	// intentionally NOT handled: an identity-mismatched but healthy AO daemon is
-	// already surfaced as an error status upstream by resolveDaemonFromPort (not
-	// killed here), and a foreign non-AO process holding the port with a dead
-	// run-file PID is not replaced (out of scope). When no holder is detectable,
-	// skip straight to spawn.
+	// may still be holding the port: a hung daemon that bound it and then stopped
+	// answering /healthz (e.g. one that deadlocked), or one that started answering
+	// since the checks above. A run-file PID that is merely alive is not enough to
+	// signal: after a crash or reboot the OS hands that PID to an unrelated
+	// process, so portHolderPidToReplace names only a daemon it can identify. Two
+	// cases are intentionally NOT handled: an identity-mismatched but healthy AO
+	// daemon is already surfaced as an error status upstream by
+	// resolveDaemonFromPort (not killed here), and a foreign non-AO process holding
+	// the port is not replaced (out of scope). When no holder is identified, skip
+	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
+	// process that is left alone is logged below.
 	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
 	const runFilePath_ = runFilePath();
-	let runFilePid: number | null = null;
+	let runFile: ReturnType<typeof parseRunFile> = null;
 	if (runFilePath_) {
 		try {
-			runFilePid = parseRunFile(await readFile(runFilePath_, "utf8"))?.pid ?? null;
+			runFile = parseRunFile(await readFile(runFilePath_, "utf8"));
 		} catch {
 			// run-file absent or unreadable; proceed without a PID.
 		}
 	}
-	// process.kill(pid, 0) does not kill; it throws iff the PID is not live.
-	let holderPidAlive = false;
-	if (runFilePid) {
-		try {
-			process.kill(runFilePid, 0);
-			holderPidAlive = true;
-		} catch {
-			holderPidAlive = false;
-		}
+	const holder = await portHolderPidToReplace({
+		probe: orphanProbe,
+		runFile,
+		processStartMs: readProcessStartMs,
+	});
+	// Declining to signal is otherwise silent, so say why a live process named by
+	// running.json is left alone (a hung daemon that is not replaced shows up here).
+	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
+		console.warn(`AO: not stopping process ${runFile.pid} named by running.json: ${holder.reason}`);
 	}
-	if (shouldReplacePortHolder(orphanProbe, holderPidAlive)) {
-		// Use the run-file PID when available; fall back to the probe's reported
-		// PID as a last resort (a wedged daemon may not have written a fresh run-file).
-		const pidToKill = runFilePid ?? orphanProbe?.pid ?? null;
-		if (pidToKill) {
+	const holderPid = holder.pid;
+	if (holderPid !== null) {
+		try {
+			process.kill(-holderPid, "SIGTERM");
+		} catch {
 			try {
-				process.kill(-pidToKill, "SIGTERM");
+				process.kill(holderPid, "SIGTERM");
 			} catch {
-				try {
-					process.kill(pidToKill, "SIGTERM");
-				} catch {
-					// process already gone; proceed
-				}
+				// process already gone; proceed
 			}
 		}
 		// Poll until the port is free (probe returns null) or 8 s elapses.
@@ -2678,8 +2697,22 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 });
 ipcMain.handle("telemetry:getBootstrap", () => {
 	if (!telemetryPolicyController) return null;
+	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
+	if (telemetryIdentity.isOptedOut()) return null;
 	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
 });
+ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
+ipcMain.handle("telemetry:setAnalyticsOptOut", (event, optedOut: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
+	return telemetryIdentity.setOptedOut(optedOut);
+});
+ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || (userId !== null && typeof userId !== "string")) throw new Error("invalid cloud user request");
+	return telemetryIdentity.setCloudUser(userId);
+});
+ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getPolicy", () => telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView());
 ipcMain.handle("telemetry:setEventsEnabled", (_event, input: { eventsEnabled?: unknown; expectedGeneration?: unknown }) => {
 	if (!telemetryPolicyController || typeof input?.eventsEnabled !== "boolean" || typeof input.expectedGeneration !== "string") throw new Error("invalid telemetry policy request");
@@ -2700,12 +2733,6 @@ ipcMain.handle("telemetry:capture", (_event, request: RendererTelemetryCapture) 
 	if (!telemetryPolicyController || !sanitized) return false;
 	return telemetryPolicyController.capture(sanitized);
 });
-ipcMain.on(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, (event, request: unknown) => {
-	const trustedSender = trustedShellWebContents.get(event.sender.id);
-	if (trustedSender !== event.sender || trustedSender.isDestroyed()) return;
-	agentSwitchVisibilityController?.signal(event.sender.id, request);
-});
-
 function failClosedTelemetryPolicyView(): TelemetryPolicyView {
 	return { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" };
 }
@@ -3342,20 +3369,11 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
-	const visibilityKillSwitched = (process.env.AO_TELEMETRY_DISABLED_EVENTS ?? "").split(",").some((name) => name.trim() === "ao.agent_switch.visibility_failure");
-	// The approved release gate is intentionally closed. Tests inject the
-	// dedicated no-cache sender; the shipping composition creates no visibility
-	// network transport until that gate is separately approved.
-	agentSwitchVisibilityController = new AgentSwitchVisibilityController({ send: async () => undefined, killSwitched: visibilityKillSwitched, diagnostic: (code) => console.warn("agent switch visibility diagnostic:", code) });
-	for (const shellContents of trustedShellWebContents.values()) agentSwitchVisibilityController.registerWindow(shellContents.id);
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
-	const daemonPolicy = new DaemonTelemetryPolicyClient(() => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null, (url, init) => net.fetch(url, init));
 	const policyController = new DesktopTelemetryController({
 		authority,
-		daemon: daemonPolicy,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
 		transportFactory: () => initMainSentry(app.getVersion(), app.getPath("userData")),
-		visibility: agentSwitchVisibilityController,
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);

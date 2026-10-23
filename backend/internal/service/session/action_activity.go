@@ -42,11 +42,6 @@ type conversationActionWriter interface {
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
 }
 
-type actionStatusReader interface {
-	ConversationForSession(ctx context.Context, id domain.SessionID) (domain.ConversationRecord, error)
-	ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error)
-}
-
 type actionDetail struct {
 	Action              string `json:"action"`
 	OperationID         string `json:"operationId"`
@@ -248,36 +243,6 @@ func (s *Service) recordRestored(ctx context.Context, id domain.SessionID, rec d
 	}, status)
 }
 
-func (s *Service) recordAgentSwitched(ctx context.Context, id domain.SessionID, sw domain.AgentSwitch, status domain.ActivityStatus, err error) {
-	operationID := string(sw.ID)
-	if operationID == "" {
-		operationID = sw.IdempotencyKey
-	}
-	if operationID == "" {
-		operationID = failureOperationID(ctx, "switch")
-	}
-	if operationID == "" {
-		return
-	}
-	rec := s.lookupActionSession(ctx, id)
-	if status == domain.ActivityStatusRunning && s.actionAlreadyTerminal(ctx, id, "ao-action:"+actionSessionAgentSwitched+":"+operationID) {
-		return
-	}
-	if status == domain.ActivityStatusRunning && s.afterActionStatusCheck != nil {
-		s.afterActionStatusCheck()
-	}
-	s.recordAction(ctx, id, actionDetail{
-		Action:          actionSessionAgentSwitched,
-		OperationID:     operationID,
-		TargetSessionID: string(id),
-		DisplayName:     rec.DisplayName,
-		Harness:         string(sw.TargetHarness),
-		PreviousHarness: string(sw.FromHarness),
-		Href:            sessionActionHref(rec.ProjectID, id),
-		Error:           actionErrorText(err),
-	}, status)
-}
-
 func (s *Service) recordClaimed(ctx context.Context, id domain.SessionID, pr domain.PullRequest, status domain.ActivityStatus, err error) {
 	// Only a completed claim keys on the PR. A failed re-claim of the same PR
 	// (closed, merged, SCM error) is its own operation, so it cannot settle an
@@ -316,22 +281,6 @@ func (s *Service) spawnParent(ctx context.Context, id domain.SessionID) (domain.
 		return "", false
 	}
 	return parent, true
-}
-
-func (s *Service) actionAlreadyTerminal(ctx context.Context, id domain.SessionID, providerItemID string) bool {
-	reader, ok := s.store.(actionStatusReader)
-	if !ok || providerItemID == "" {
-		return false
-	}
-	conversation, err := reader.ConversationForSession(ctx, id)
-	if err != nil {
-		return false
-	}
-	status, found, err := reader.ActivityStatusByProviderItem(ctx, conversation.ID, providerItemID)
-	if err != nil || !found {
-		return false
-	}
-	return status == domain.ActivityStatusCompleted || status == domain.ActivityStatusFailed || status == domain.ActivityStatusCancelled
 }
 
 func (s *Service) lookupActionSession(ctx context.Context, id domain.SessionID) domain.SessionRecord {

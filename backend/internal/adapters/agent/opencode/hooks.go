@@ -127,7 +127,83 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := InstallUsingAOSkill(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
 	}
+	if err := seedPluginDependencyStub(cfg.WorkspacePath); err != nil {
+		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
+	}
 	return nil
+}
+
+// opencodePluginDependency is the package opencode npm-installs into every
+// `.opencode` directory it loads (config.ts).
+const opencodePluginDependency = "@opencode-ai/plugin"
+
+// seedPluginDependencyStub stops opencode's 4-7s npm install of its plugin
+// package on a worktree's first launch. AO's plugin imports it only for types,
+// which Bun erases; opencode skips the install when node_modules exists and
+// package-lock.json names the package (core/src/npm.ts). Only a `.opencode`
+// holding nothing but AO's files is seeded: a repository's own plugins may
+// import the package at runtime.
+func seedPluginDependencyStub(workspacePath string) error {
+	dir := filepath.Join(workspacePath, opencodePluginDirName)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	stub := hasDependencyStub(dir)
+	foreign := false
+	for _, entry := range entries {
+		switch entry.Name() {
+		case opencodeSkillSubDir, ".gitignore":
+		case "node_modules", "package-lock.json":
+			// AO's own stub from an earlier launch, or a real install.
+			foreign = foreign || !stub
+		case opencodePluginSubDir:
+			plugins, err := os.ReadDir(filepath.Join(dir, opencodePluginSubDir))
+			if err != nil {
+				return fmt.Errorf("read %s: %w", filepath.Join(dir, opencodePluginSubDir), err)
+			}
+			for _, plugin := range plugins {
+				if name := plugin.Name(); name != opencodePluginFileName && name != ".gitignore" {
+					foreign = true
+				}
+			}
+		default:
+			foreign = true
+		}
+	}
+	if foreign {
+		// Left to opencode; a stub AO seeded before would block its install.
+		if stub {
+			_ = os.Remove(filepath.Join(dir, "package-lock.json"))
+			_ = os.Remove(filepath.Join(dir, "node_modules"))
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o750); err != nil {
+		return fmt.Errorf("seed opencode node_modules: %w", err)
+	}
+	if err := hookutil.AtomicWriteFile(filepath.Join(dir, "package-lock.json"), []byte(dependencyStubLock+"\n"), 0o600); err != nil {
+		return fmt.Errorf("seed opencode package-lock.json: %w", err)
+	}
+	// Ignored like every hook file (with what opencode ignores itself), so the
+	// worktree can still be removed.
+	if err := hookutil.EnsureWorkspaceGitignore(dir, "node_modules", "package.json", "package-lock.json", "bun.lock"); err != nil {
+		return fmt.Errorf("seed opencode .gitignore: %w", err)
+	}
+	return nil
+}
+
+var dependencyStubLock = fmt.Sprintf(`{"name":"ao-opencode","lockfileVersion":3,"requires":true,"packages":{"":{"dependencies":{%q:"*"}}}}`, opencodePluginDependency)
+
+// hasDependencyStub reports AO's stub: its exact lock file and an empty
+// node_modules, which a real install never leaves.
+func hasDependencyStub(dir string) bool {
+	lock, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	if err != nil || strings.TrimSpace(string(lock)) != dependencyStubLock {
+		return false
+	}
+	modules, err := os.ReadDir(filepath.Join(dir, "node_modules"))
+	return err == nil && len(modules) == 0
 }
 
 // UninstallHooks removes AO's opencode plugin and the AO-managed using-ao skill

@@ -80,16 +80,16 @@ describe("describeConversationActivity", () => {
 		expect(replay?.state).toBe("failed");
 	});
 
-	it("shows a readable switch failure for existing activity codes", () => {
+	it("shows a readable switch failure for legacy activity codes", () => {
 		const switched = activity({
 			status: "failed",
 			detail: { action: "session.agent_switched", error: "target_binary_missing" },
 		});
-		expect(actionDetailLines(switched)).toContain("Target agent is not installed");
+		expect(actionDetailLines(switched)).toContain("Agent switch failed");
 		expect(actionDetailLines(activity({
 			status: "failed",
 			detail: { action: "session.agent_switched", error: "future_switch_failure" },
-		}))).toContain("Switch failed");
+		}))).toContain("Agent switch failed");
 		expect(actionDetailLines(activity({
 			status: "failed",
 			detail: { action: "pull_request.claimed", error: "Claim failed because the PR is closed" },

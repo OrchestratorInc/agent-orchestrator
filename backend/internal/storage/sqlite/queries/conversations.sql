@@ -230,13 +230,13 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, created_at, handoff_note
 ) VALUES (
     sqlc.arg(id), sqlc.arg(conversation_id), sqlc.narg(session_id),
     sqlc.arg(provider_conversation_id), sqlc.narg(parent_branch_id),
     sqlc.narg(fork_after_turn_id), sqlc.narg(replaced_turn_id),
     sqlc.narg(replacement_turn_id), sqlc.arg(fork_after_sequence), sqlc.arg(strategy),
-    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at)
+    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at), sqlc.arg(handoff_note)
 );
 
 -- name: InsertReviewConversationBranch :exec
@@ -530,15 +530,8 @@ WHERE id = ?;
 -- offset, so a multi-byte character here silently corrupts later queries.
 -- name: UpdateConversationTurnSettings :exec
 UPDATE conversations
-SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
+SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, auto_compact_window = ?, updated_at = ?
 WHERE id = ?;
-
--- An agent switch starts a new provider/model scope. Clear only the source
--- harness choices; approval posture is AO-owned and remains applicable.
--- name: ResetConversationAgentOverridesForSession :exec
-UPDATE conversations
-SET model = NULL, reasoning_effort = NULL, updated_at = ?
-WHERE current_session_id = ?;
 
 -- Token position for the conversation, latest wins.
 --
@@ -806,10 +799,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
@@ -867,10 +862,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
@@ -901,10 +898,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
@@ -935,10 +934,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
   AND (
@@ -1206,8 +1207,13 @@ INSERT INTO conversation_messages (
 -- because AO does not know the message id the provider will use.
 -- name: AppendConversationMessageDelta :exec
 UPDATE conversation_messages
-SET text = text || ?, revision = revision + 1, streaming = 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?;
+SET text = text || ?, revision = revision + 1,
+    streaming = NOT EXISTS (
+        SELECT 1 FROM conversation_turns
+        WHERE conversation_turns.id = conversation_messages.turn_id
+          AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+    ), updated_at = ?
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ?;
 
 -- name: SettleConversationMessage :exec
 UPDATE conversation_messages

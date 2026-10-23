@@ -146,15 +146,15 @@ describe("SessionInterfaceSwitchButton", () => {
 	});
 
 	it.each([
-		["chat", "Switch to chat UI", "lucide-message-square"],
-		["tui", "Switch to terminal UI", "lucide-square-terminal"],
-	] as const)("uses an icon-only %s destination control", (target, label, iconClass) => {
+		["chat", "Switch to chat UI", "[data-icon='rounded-chat']"],
+		["tui", "Switch to terminal UI", "[data-icon='rounded-terminal']"],
+	] as const)("uses an icon-only %s destination control", (target, label, iconSelector) => {
 		const { onClick } = renderSwitchButton(target);
 
 		const button = screen.getByRole("button", { name: label });
 		expect(button.classList.contains("topbar-control--icon")).toBe(true);
 		expect(button.textContent).toBe("");
-		expect(button.querySelector(`.${iconClass}`)).not.toBeNull();
+		expect(button.querySelector(iconSelector)).not.toBeNull();
 		fireEvent.click(button);
 		expect(onClick).toHaveBeenCalledOnce();
 	});

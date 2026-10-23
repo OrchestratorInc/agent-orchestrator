@@ -13,13 +13,19 @@ import (
 )
 
 func TestConfigureUsesUserDroidACPDaemonAndStandingInstructions(t *testing.T) {
-	args, env, err := configure(context.Background(), acpdriver.LaunchConfig{SystemPrompt: "Follow AO orchestrator rules."})
+	data := t.TempDir()
+	args, env, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: data, SessionID: "s1", SystemPrompt: "Follow AO orchestrator rules."})
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
+	// The prompt goes in a file: with a handoff note it can pass Windows' command line limit.
+	file := filepath.Join(data, "prompts", "s1", "droid", "system-prompt.md")
+	if got, err := os.ReadFile(file); err != nil || string(got) != "Follow AO orchestrator rules." {
+		t.Fatalf("system prompt file = %q, %v", got, err)
+	}
 	want := []string{
 		"exec", "--output-format", "acp-daemon",
-		"--append-system-prompt", "Follow AO orchestrator rules.",
+		"--append-system-prompt-file", file,
 	}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
