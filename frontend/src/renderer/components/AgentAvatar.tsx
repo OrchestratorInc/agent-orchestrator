@@ -49,6 +49,7 @@ import kimiLightLogo from "../assets/agents/kimi-light.svg";
 import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
+import mastraCodeLogo from "../assets/agents/mastra-code.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
@@ -71,6 +72,7 @@ import vibeLogo from "../assets/agents/vibe.svg";
 // background; a single mark reads on both. Agents without an asset fall back to
 // a lettered tile.
 const LOGOS: AgentLogoSources = {
+	"mastra-code": mastraCodeLogo,
 	codex: codexLogo,
 	codewhale: { light: codewhaleLightLogo, dark: codewhaleDarkLogo },
 	"command-code": { light: commandCodeLightLogo, dark: commandCodeDarkLogo },

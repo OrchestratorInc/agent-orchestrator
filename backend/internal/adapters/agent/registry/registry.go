@@ -33,6 +33,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
@@ -88,6 +89,7 @@ func Constructors() []adapters.Adapter {
 		autohand.New(),
 		fx.New(),
 		commandcode.New(),
+		mastracode.New(),
 		hermes.New(),
 		unrealagent.New(),
 		mimocode.New(),

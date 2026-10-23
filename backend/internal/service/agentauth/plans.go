@@ -16,6 +16,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
+	plan("mastra-code", ActionLogin, "Log in to Mastra Code", []string{"mastracode", "login"}, "Choose an OAuth account or Add an API key in Mastra's native provider chooser. After adding a key, open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),

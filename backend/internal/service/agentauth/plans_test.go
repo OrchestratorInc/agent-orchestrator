@@ -19,6 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
+		{"mastra-code", "Log in to Mastra Code", "mastracode", "Choose an OAuth account or Add an API key in Mastra's native provider chooser. After adding a key, open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode", "", ActionLogin, []string{"mastracode", "login"}},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},

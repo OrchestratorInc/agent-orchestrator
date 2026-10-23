@@ -152,16 +152,14 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	var output string
 	var err error
-	if requiresRendered {
-		reader, ok := o.runtime.(interface {
-			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
-		})
-		if !ok {
-			return
-		}
-		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
-	} else if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
-		output, err = rendered.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	reader, available := o.runtime.(ports.StyledTerminalOutputReader)
+	_, requiresViewport := agent.(ports.TerminalMessageInputGuard)
+	if (requiresViewport || requiresRendered) && !available {
+		return
+	}
+	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
+		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
 	} else {
 		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -209,6 +210,13 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		InitialInput:                   plan.initialInput,
 		InitialInputReadyStates:        plan.initialInputReadyStates,
 		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
+	}
+	if plan.AgentID == "mastra-code" {
+		profile := mastracode.ProfileDir(s.dataDir)
+		if !filepath.IsAbs(profile) {
+			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", "Mastra requires an absolute native profile.")
+		}
+		input.Env = map[string]string{"MASTRA_APP_DATA_DIR": profile}
 	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)

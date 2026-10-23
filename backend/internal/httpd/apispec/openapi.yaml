@@ -16242,6 +16242,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - memcode
           - hermes
           - fake
@@ -16943,6 +16944,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - memcode
           - hermes
           - cloudflared
@@ -20292,6 +20294,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - memcode
           - hermes
           type: string

@@ -950,8 +950,8 @@ function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={false}
-			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			allowCustom={catalog?.allowCustom}
+			customModelEntry={catalog?.customModelEntry}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
@@ -960,6 +960,7 @@ function TaskModelPicker({
 			disabled={disabled || agentId === ""}
 			agentId={agentId}
 			onChange={selectCatalogModel}
+			onCustom={selectCatalogModel}
 			compact
 			recentScope={agentId}
 			triggerClassName="composer-chip composer-toolbar-option w-fit"

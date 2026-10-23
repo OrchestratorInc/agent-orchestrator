@@ -456,6 +456,7 @@ type Manager struct {
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
 	inputDrained              map[domain.SessionID]chan struct{}
+	serializedInput           map[domain.SessionID]bool
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -2235,6 +2236,11 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
 		merged.Model = ""
 	}
+	// Mastra Code uses native interactive permissions unless a project, role, or
+	// request explicitly chooses another policy. Do not synthesize Auto.
+	if harness == domain.HarnessMastraCode && merged.Permissions == "" {
+		merged.Permissions = ports.PermissionModeDefault
+	}
 	return merged
 }
 
@@ -2386,6 +2392,7 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return
@@ -2410,6 +2417,7 @@ func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 		return false, false, fmt.Errorf("rollback %s: %w", id, err)
 	}
 	if deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return true, false, nil
@@ -2481,6 +2489,7 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 		return fmt.Errorf("kill %s: %w", id, errors.Join(err, markerErr))
 	}
+	m.forgetSerializedInput(id)
 	m.cleanupSystemPromptDir(id)
 	if markerErr != nil {
 		return fmt.Errorf("kill %s: clear restore marker: %w", id, markerErr)
@@ -3632,6 +3641,19 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
+	verifiedNativeIdentity := false
+	if verifier, requiresProof := agent.(ports.NativeRestoreVerifier); requiresProof && mode == RestoreModeNative {
+		proofCfg := ports.RestoreConfig{DataDir: m.dataDir, Config: agentConfig, Session: ports.SessionRef{
+			ID: string(rec.ID), WorkspacePath: ws.Path,
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
+		}}
+		if err := m.verifyNativeRestore(ctx, verifier, proofCfg, launchID, handle); err != nil {
+			m.destroySpawnRuntimeAfterFailure(ctx, handle)
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, fmt.Errorf("%s %s: native identity: %w", operation, rec.ID, err)
+		}
+		verifiedNativeIdentity = true
+	}
 	// A runtime accepting Restart only proves that its supervisor was created.
 	// Keep the previous launch (and stale/release references) until the exact
 	// resumed child is observable. A failed native resume remains recoverable.
@@ -3679,7 +3701,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// The interface coordinator provides the same guarantee after it freezes Chat
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
-	bindNativeIdentity := mode == RestoreModeNative &&
+	bindNativeIdentity := verifiedNativeIdentity || mode == RestoreModeNative &&
 		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
 	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
@@ -6577,6 +6599,9 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+	if _, guarded := agent.(ports.TerminalMessageInputGuard); guarded {
+		m.enableSerializedInput(id)
+	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil

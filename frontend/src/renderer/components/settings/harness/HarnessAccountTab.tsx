@@ -84,9 +84,13 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 					: t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
 			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={ACTION_CLASS} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 		) : null;
+	// Keep a supported native flow accessible after an inconclusive check.
+	// Update and model gates still require explicit signed-out evidence.
+	const unknownAuthActionAvailable = authPlan?.available && authPlan.action !== "instructions"
+		&& (details.authStatus === "unknown" || details.authStatus === undefined);
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
-		: details.needsLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
+		: details.needsLogin || unknownAuthActionAvailable ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
 		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={ACTION_CLASS} disabled={authWorkflowActive} onClick={onLogin}>

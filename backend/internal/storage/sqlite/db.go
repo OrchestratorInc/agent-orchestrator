@@ -2028,6 +2028,29 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// The Mastra development branch previously used 0213 for its harness
+	// constraint. Preserve that ledger while restoring main's physical 0213
+	// effects before later migrations and generated session reads execute.
+	{version: 213, table: "sessions", column: "stale_binary_since",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_since TIMESTAMP`},
+	{version: 213, table: "sessions", column: "stale_binary_version",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_version TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_launch",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_launch TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_switch_failed_at",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_switch_failed_at TIMESTAMP`,
+		postAdd: []string{`CREATE TRIGGER IF NOT EXISTS sessions_stale_binary_cdc_update
+AFTER UPDATE OF stale_binary_since, stale_binary_launch, stale_binary_switch_failed_at ON sessions
+WHEN OLD.stale_binary_since IS NOT NEW.stale_binary_since
+    OR OLD.stale_binary_launch IS NOT NEW.stale_binary_launch
+    OR OLD.stale_binary_switch_failed_at IS NOT NEW.stale_binary_switch_failed_at
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    VALUES (NEW.project_id, NEW.id, 'session_updated',
+        json_object('id', NEW.id, 'conversationId',
+            (SELECT id FROM conversations WHERE current_session_id = NEW.id LIMIT 1)),
+        CURRENT_TIMESTAMP);
+END`}},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
@@ -2121,9 +2144,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsMastraCode := !strings.Contains(schema, "'mastra-code'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	if !needsMastraCode && !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2246,6 +2270,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
+	// Preserve exact legacy repair recognizers above before appending new tails.
+	if needsMastraCode {
+		repairs = append(repairs, replacement{"'fake'))", "'mastra-code', 'fake'))"})
+	}
 	// Add the new harness only after exact historical variants are repaired.
 	if needsNativeAssistant {
 		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
@@ -2301,6 +2329,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
+	}
+	if !strings.Contains(schema, "'mastra-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Mastra Code")
 	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")

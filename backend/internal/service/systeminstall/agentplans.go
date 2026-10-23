@@ -49,6 +49,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetMastraCode:  "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 }
 
@@ -268,6 +269,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetMastraCode:
+		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 (@mastra/code-sdk 1.11.0) with Node >=22.19. AO qualifies the native TUI only. ONNXRUNTIME_NODE_INSTALL=skip is the supported way to omit optional CUDA downloads for API-backed use.", agentDocumentationURLs[target])}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}

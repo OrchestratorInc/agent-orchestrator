@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -123,11 +124,16 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 38 {
-		t.Fatalf("got %d plans, want 38", len(plans))
+	// Match the selectable domain inventory rather than a stale fixed count.
+	expected := make(map[string]bool, len(domain.AllHarnesses))
+	for _, harness := range domain.AllHarnesses {
+		expected[string(harness)] = true
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
+		if !expected[plan.AgentID] {
+			t.Fatalf("unexpected install plan for %q", plan.AgentID)
+		}
 		if seen[plan.AgentID] {
 			t.Fatalf("duplicate plan for %q", plan.AgentID)
 		}
@@ -137,6 +143,16 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		}
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
+		}
+	}
+	for _, harness := range domain.AllHarnesses {
+		if !seen[string(harness)] {
+			t.Errorf("missing install plan for %q", harness)
+		}
+	}
+	for _, id := range []string{"mastra-code", "memcode"} {
+		if !seen[id] {
+			t.Fatalf("missing install plan for %q", id)
 		}
 	}
 }

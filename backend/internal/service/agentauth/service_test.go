@@ -434,3 +434,31 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 		})
 	}
 }
+
+func TestStartMastraUsesNativeProviderChooserAndSessionProfile(t *testing.T) {
+	for _, override := range []string{"", filepath.Join(t.TempDir(), "native-profile")} {
+		t.Run(override, func(t *testing.T) {
+			t.Setenv("MASTRA_APP_DATA_DIR", override)
+			dir := t.TempDir()
+			opener := &recordingTerminalOpener{}
+			svc := NewWithAgentResolver(foundExecutable("mastracode"), nil, opener, dir)
+			result, err := svc.Start(context.Background(), "mastra-code")
+			if err != nil {
+				t.Fatalf("Start(mastra-code): %v", err)
+			}
+			if !reflect.DeepEqual(opener.input.Argv, []string{"/test/bin/mastracode", "login"}) {
+				t.Fatalf("native provider chooser = %q", opener.input.Argv)
+			}
+			expected := override
+			if expected == "" {
+				expected = filepath.Join(dir, "mastra-code", "profile")
+			}
+			if opener.input.Env["MASTRA_APP_DATA_DIR"] != expected {
+				t.Fatalf("profile = %q, want %q", opener.input.Env, expected)
+			}
+			if result.Action != ActionLogin {
+				t.Fatalf("action = %s", result.Action)
+			}
+		})
+	}
+}

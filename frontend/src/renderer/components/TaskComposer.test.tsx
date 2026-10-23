@@ -1967,6 +1967,52 @@ describe("TaskComposer", () => {
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
 	});
 
+	it.each([
+		["codex", "Codex", "direct"],
+		["claude-code", "Claude Code", "direct"],
+		["codex", "Codex", undefined],
+	] as const)("submits a directly entered model for %s (%s, entry=%s)", async (agent, label, customModelEntry) => {
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: {
+				agentId: agent,
+				selectionMode: "text",
+				models: [],
+				allowCustom: true,
+				customModelEntry,
+			} };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "custom-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		const search = await screen.findByRole("searchbox", { name: "Search model" });
+		await userEvent.type(search, "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		fireEvent.change(task(), { target: { value: "Use the selected native model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/sessions",
+			expect.objectContaining({ body: expect.objectContaining({ harness: agent, model: "private/model-id" }) }),
+		));
+	});
+
+	it("refuses direct model entry when the catalog explicitly disables it", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "codex", selectionMode: "catalog", models: [], allowCustom: true, customModelEntry: "none" } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
+	});
+
 	it("does not render free text when models must be configured in the agent", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -2031,7 +2077,7 @@ describe("TaskComposer", () => {
 		const model = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(model);
 		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.getByRole("searchbox", { name: "Search model" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.1" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });
 		fireEvent.click(screen.getByText("Start task"));
