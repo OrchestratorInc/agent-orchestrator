@@ -2358,9 +2358,10 @@ const SessionRow = memo(function SessionRow({
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	const queryClient = useQueryClient();
+	// A cloud session's name comes from the cloud session list.
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
-		[queryClient, session.hostId],
+		() => queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(session.hostId) }),
+		[queryClient, session.cloud, session.hostId],
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const lastTouchAtRef = useRef(0);

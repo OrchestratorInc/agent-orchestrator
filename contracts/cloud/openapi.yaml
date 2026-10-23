@@ -562,6 +562,31 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateSession
+      tags: [Sessions]
+      description: >-
+        Renames the session, as the local daemon's PATCH /api/v1/sessions/{sessionId}
+        does. The project orchestrator cannot be renamed (ORCHESTRATOR_RENAME_UNSUPPORTED).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionInput"
+      responses:
+        "200":
+          description: Session renamed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
     delete:
       operationId: deleteSession
       tags: [Sessions]
@@ -5149,6 +5174,16 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+    UpdateSessionInput:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: The session's new name; surrounding whitespace is trimmed.
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false

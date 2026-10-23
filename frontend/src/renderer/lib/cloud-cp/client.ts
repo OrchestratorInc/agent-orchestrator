@@ -203,6 +203,8 @@ export interface CloudCpClient {
 		body: CloudCpUpdateSessionPreferencesRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionResponse>;
+	/** PATCH /orgs/{orgId}/sessions/{sessionId}: renames the session (1-100 characters). */
+	renameSession(orgId: string, sessionId: string, displayName: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	inspectSessionReviewerHarnesses(
 		orgId: string,
 		sessionId: string,
@@ -739,6 +741,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/merge-policy`, { body: { terminateOnPrMerge }, signal: o?.signal }),
 		updateSessionPreferences: (orgId, sessionId, body, o) =>
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/preferences`, { body, signal: o?.signal }),
+		renameSession: (orgId, sessionId, displayName, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { body: { displayName }, signal: o?.signal }),
 		inspectSessionReviewerHarnesses: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviewer-harnesses`, { signal: o?.signal }),
 		installSessionReviewerHarness: (orgId, sessionId, harness, o) =>
