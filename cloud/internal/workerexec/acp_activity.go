@@ -131,7 +131,7 @@ func acpToolOutput(tool *acpToolState) string {
 	var parts []string
 	for _, item := range tool.content {
 		if item.Content != nil && item.Content.Content.Text != nil {
-			parts = append(parts, item.Content.Content.Text.Text)
+			parts = append(parts, unfencedACPText(item.Content.Content.Text.Text))
 		}
 	}
 	text := strings.Join(parts, "\n")
@@ -149,6 +149,21 @@ func acpToolOutput(tool *acpToolState) string {
 		text = text[len(text)-8<<10:]
 	}
 	return text
+}
+
+// unfencedACPText drops the markdown fence Claude wraps tool output in
+// ("```console" ... "```"): the row already shows it as preformatted text.
+func unfencedACPText(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "```") || !strings.HasSuffix(trimmed, "```") || len(trimmed) < 6 {
+		return text
+	}
+	body := strings.TrimSuffix(trimmed, "```")
+	newline := strings.IndexByte(body, '\n')
+	if newline < 0 {
+		return text
+	}
+	return strings.TrimSuffix(body[newline+1:], "\n")
 }
 
 func acpCommand(rawInput any) string {
@@ -193,7 +208,7 @@ func acpFiles(content []acp.ToolCallContent) []map[string]any {
 			status = "deleted"
 		}
 		additions, deletions := acpLineChanges(oldText, item.Diff.NewText)
-		patch := acpPatch(item.Diff.Path, oldText, item.Diff.NewText, status)
+		patch := acpPatch(oldText, item.Diff.NewText)
 		file := map[string]any{"path": boundedCodexField(item.Diff.Path), "status": status,
 			"additions": additions, "deletions": deletions, "patch": boundedCodexPatch(patch)}
 		if len(patch) > 512 {
@@ -233,23 +248,26 @@ func acpLines(text string) []string {
 	return strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 }
 
-func acpPatch(path, oldText, newText, status string) string {
-	from, to := "a/"+path, "b/"+path
-	if status == "added" {
-		from = "/dev/null"
-	}
-	if status == "deleted" {
-		to = "/dev/null"
-	}
+// acpPatch is one hunk replacing the old text with the new, the shape the
+// Chat diff view renders (it has no file header: the row names the file).
+func acpPatch(oldText, newText string) string {
+	oldLines, newLines := acpLines(oldText), acpLines(newText)
 	var patch strings.Builder
-	fmt.Fprintf(&patch, "--- %s\n+++ %s\n", from, to)
-	for _, line := range acpLines(oldText) {
+	fmt.Fprintf(&patch, "@@ -%s +%s @@\n", acpHunkRange(len(oldLines)), acpHunkRange(len(newLines)))
+	for _, line := range oldLines {
 		patch.WriteString("-" + line + "\n")
 	}
-	for _, line := range acpLines(newText) {
+	for _, line := range newLines {
 		patch.WriteString("+" + line + "\n")
 	}
 	return patch.String()
+}
+
+func acpHunkRange(lines int) string {
+	if lines == 0 {
+		return "0,0"
+	}
+	return fmt.Sprintf("1,%d", lines)
 }
 
 func boundedACPValue(value any) any {

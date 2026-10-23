@@ -451,6 +451,14 @@ type cloudACPClient struct {
 	tools     map[string]*acpToolState
 	thoughtID string
 	thoughts  int
+	// textID is the assistant message the current run of text chunks adds to.
+	// A tool call or thought ends it, so the agent's sentence before each step
+	// is its own message, placed where it was said.
+	textID string
+	texts  int
+	// published is each activity's last snapshot, so an update that changes
+	// nothing the timeline shows is not stored again.
+	published map[string]string
 }
 
 func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.SessionNotification) error {
@@ -459,8 +467,7 @@ func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.Sessi
 	}
 	update := notification.Update
 	if chunk := update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
-		c.endThought()
-		return c.publish(Output{Stream: "stdout", Text: chunk.Content.Text.Text})
+		return c.publish(Output{Stream: "stdout", Text: chunk.Content.Text.Text, ItemID: c.text()})
 	}
 	if chunk := update.AgentThoughtChunk; chunk != nil && chunk.Content.Text != nil && chunk.Content.Text.Text != "" {
 		// Consecutive thought chunks are one reasoning row, as with Codex.
@@ -484,9 +491,37 @@ func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.Sessi
 // publishActivity records a tool call or reasoning row on a best-effort basis:
 // the timeline is a view of the turn, so a rejected activity must never fail
 // it. A worker that lost its turn finds out from the assistant text it
-// publishes.
+// publishes. A tool snapshot identical to the last one sent is skipped.
 func (c *cloudACPClient) publishActivity(output Output) {
+	if activity := output.Activity; activity != nil && activity.Kind != "reasoning" {
+		raw, err := json.Marshal(activity)
+		if err == nil {
+			c.mu.Lock()
+			if c.published == nil {
+				c.published = map[string]string{}
+			}
+			same := c.published[activity.ID] == string(raw)
+			c.published[activity.ID] = string(raw)
+			c.mu.Unlock()
+			if same {
+				return
+			}
+		}
+	}
 	_ = c.publish(output)
+}
+
+// text is the id of the assistant message the current run of text chunks adds
+// to, starting a new one after a tool call or a thought.
+func (c *cloudACPClient) text() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.thoughtID = ""
+	if c.textID == "" {
+		c.texts++
+		c.textID = fmt.Sprintf("acp-text-%d", c.texts)
+	}
+	return c.textID
 }
 
 // toolActivity folds an ACP tool_call or tool_call_update into the call's
@@ -505,7 +540,7 @@ func (c *cloudACPClient) toolActivity(update acp.SessionUpdate) *worker.ChatActi
 		if id == "" {
 			return nil
 		}
-		c.thoughtID = ""
+		c.thoughtID, c.textID = "", ""
 		tool := &acpToolState{title: call.Title, kind: call.Kind, status: call.Status, content: call.Content,
 			rawInput: call.RawInput, rawOutput: call.RawOutput, meta: call.Meta}
 		c.tools[id] = tool
@@ -516,7 +551,7 @@ func (c *cloudACPClient) toolActivity(update acp.SessionUpdate) *worker.ChatActi
 		if id == "" {
 			return nil
 		}
-		c.thoughtID = ""
+		c.thoughtID, c.textID = "", ""
 		tool := c.tools[id]
 		if tool == nil {
 			tool = &acpToolState{}
@@ -553,17 +588,12 @@ func (c *cloudACPClient) toolActivity(update acp.SessionUpdate) *worker.ChatActi
 func (c *cloudACPClient) thought() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.textID = ""
 	if c.thoughtID == "" {
 		c.thoughts++
 		c.thoughtID = fmt.Sprintf("acp-thought-%d", c.thoughts)
 	}
 	return c.thoughtID
-}
-
-func (c *cloudACPClient) endThought() {
-	c.mu.Lock()
-	c.thoughtID = ""
-	c.mu.Unlock()
 }
 
 func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {

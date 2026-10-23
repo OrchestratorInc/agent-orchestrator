@@ -149,3 +149,92 @@ func TestACPReplayBeforeTheLiveTurnRecordsNoActivity(t *testing.T) {
 		t.Fatalf("replayed tool call published %d outputs", len(published))
 	}
 }
+
+func TestACPTextBeforeEachToolCallIsItsOwnMessage(t *testing.T) {
+	var published []Output
+	client := liveACPClient(&published)
+	ctx := context.Background()
+	say := func(text string) {
+		if err := client.SessionUpdate(ctx, toolCallUpdate(acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{Content: acp.TextBlock(text)}})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	say("I'll list ")
+	say("the files.")
+	if err := client.SessionUpdate(ctx, toolCallUpdate(acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+		ToolCallId: "ls-1", Kind: acp.ToolKindExecute, Status: acp.ToolCallStatusCompleted, RawInput: map[string]any{"command": "ls"},
+	}})); err != nil {
+		t.Fatal(err)
+	}
+	say("Now the README.")
+	if len(published) != 4 {
+		t.Fatalf("published %d outputs, want 4", len(published))
+	}
+	first, second, after := published[0].ItemID, published[1].ItemID, published[3].ItemID
+	if first == "" || first != second || after == "" || after == first {
+		t.Fatalf("item ids = %q %q / %q: one message per run of text, a new one after the tool call", first, second, after)
+	}
+}
+
+func TestACPFileChangePatchIsAHunkWithoutFileHeaders(t *testing.T) {
+	var published []Output
+	client := liveACPClient(&published)
+	oldText := "a\nb\n"
+	if err := client.SessionUpdate(context.Background(), toolCallUpdate(acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+		ToolCallId: "edit-1", Kind: acp.ToolKindEdit, Status: acp.ToolCallStatusCompleted,
+		Content: []acp.ToolCallContent{
+			{Diff: &acp.ToolCallContentDiff{Path: "/home/coder/repository/main.go", OldText: &oldText, NewText: "a\nc\nd\n"}},
+			{Diff: &acp.ToolCallContentDiff{Path: "/home/coder/repository/new.txt", NewText: "x\n"}},
+		},
+	}})); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := published[0].Activity.Detail["files"].([]map[string]any)
+	if len(files) != 2 {
+		t.Fatalf("files = %+v", files)
+	}
+	if patch, _ := files[0]["patch"].(string); patch != "@@ -1,2 +1,3 @@\n-a\n-b\n+a\n+c\n+d\n" {
+		t.Fatalf("modified file patch = %q", patch)
+	}
+	if patch, _ := files[1]["patch"].(string); patch != "@@ -0,0 +1,1 @@\n+x\n" || files[1]["status"] != "added" {
+		t.Fatalf("added file = %+v", files[1])
+	}
+}
+
+func TestACPToolOutputDropsClaudesMarkdownFence(t *testing.T) {
+	var published []Output
+	client := liveACPClient(&published)
+	if err := client.SessionUpdate(context.Background(), toolCallUpdate(acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+		ToolCallId: "ls-1", Kind: acp.ToolKindExecute, Status: acp.ToolCallStatusCompleted, RawInput: map[string]any{"command": "ls"},
+		Content: []acp.ToolCallContent{{Content: &acp.ToolCallContentContent{Content: acp.TextBlock("```console\nREADME.md\nmain.go\n```")}}},
+	}})); err != nil {
+		t.Fatal(err)
+	}
+	if got := published[0].Activity.Detail["output"]; got != "README.md\nmain.go" {
+		t.Fatalf("output = %q, want the fence dropped", got)
+	}
+	if got := unfencedACPText("plain output"); got != "plain output" {
+		t.Fatalf("unfenced plain text = %q", got)
+	}
+}
+
+func TestACPUnchangedToolSnapshotIsNotStoredAgain(t *testing.T) {
+	var published []Output
+	client := liveACPClient(&published)
+	ctx := context.Background()
+	inProgress := acp.ToolCallStatusInProgress
+	call := func(update acp.SessionUpdate) {
+		if err := client.SessionUpdate(ctx, toolCallUpdate(update)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call(acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{ToolCallId: "ls-1", Title: "ls", Kind: acp.ToolKindExecute, Status: acp.ToolCallStatusPending}})
+	// pending and in_progress both read as running: nothing visible changed.
+	call(acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{ToolCallId: "ls-1", Status: &inProgress}})
+	call(acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{ToolCallId: "ls-1", Meta: map[string]any{"claudeCode": map[string]any{}}}})
+	completed := acp.ToolCallStatusCompleted
+	call(acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{ToolCallId: "ls-1", Status: &completed}})
+	if len(published) != 2 || published[1].Activity.Status != "completed" {
+		t.Fatalf("published %d snapshots (%+v), want the running one and the completed one", len(published), published)
+	}
+}
