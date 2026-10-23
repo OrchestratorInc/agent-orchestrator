@@ -111,6 +111,8 @@ export type DashboardSession = {
 	provisionError?: string;
 	/** The daemon's start-up stages while a Chat session provisions. Absent from older daemons. */
 	provisionSteps?: SessionProvisionStep[];
+	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
+	branchNaming?: boolean;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
 	/** Automatically review each new pull-request head. */
@@ -212,6 +214,7 @@ type WireSession = {
 	provisionState?: "provisioning" | "ready" | "failed";
 	provisionError?: string;
 	provisionSteps?: SessionProvisionStep[];
+	branchNaming?: boolean;
 	status?: string | null;
 	kanbanColumn?: string | null;
 	displayStatus?: string | null;
@@ -316,6 +319,7 @@ function mapSession(s: WireSession): DashboardSession {
 		provisionState: s.provisionState,
 		provisionError: s.provisionError,
 		provisionSteps: s.provisionSteps?.length ? s.provisionSteps : undefined,
+		branchNaming: !!s.branchNaming,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
 		autoReviewEnabled: !!s.autoReviewEnabled,
@@ -609,6 +613,7 @@ export type AgentModelCatalog = {
 	fetchedAt: string;
 	validatedAt?: string;
 	refreshRecommended?: boolean;
+	refreshState?: "idle" | "queued" | "refreshing" | "error";
 	warning?: string;
 };
 
@@ -663,10 +668,41 @@ export async function refreshAgents(cfg: ServerConfig): Promise<AgentCatalog> {
 	};
 }
 
-export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
+// The daemon answers an agent it has never discovered with an empty catalog
+// marked refreshing while discovery runs in the background, rather than making
+// the picker wait. Re-read until the discovered list arrives.
+const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
+
+function pollDelay(signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, MODEL_CATALOG_REFRESH_POLL_MS);
+		signal?.addEventListener("abort", finish, { once: true });
+		if (signal?.aborted) finish();
+	});
+}
+
+/**
+ * Loads an agent's model catalog, re-reading while the daemon is still
+ * discovering it. There is no attempt cap: the daemon bounds discovery (a
+ * readiness wait, then discovery's own timeout) and then saves a result, so a
+ * cold load ends with models or an error. `signal` stops polling when the view
+ * that asked closes.
+ */
+export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string, signal?: AbortSignal): Promise<AgentModelCatalog> {
 	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-	const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
-	return await res.json() as AgentModelCatalog;
+	for (;;) {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
+		const catalog = await res.json() as AgentModelCatalog;
+		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
+		if (!discovering || signal?.aborted) return catalog;
+		await pollDelay(signal);
+		if (signal?.aborted) return catalog;
+	}
 }
 
 export async function refreshAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
@@ -742,6 +778,11 @@ export async function clearNotification(cfg: ServerConfig, id: string): Promise<
 	}
 }
 
+// Clears the machine's whole history, not just the rows the screen has loaded.
+export async function clearAllNotifications(cfg: ServerConfig): Promise<void> {
+	await req(cfg, `${API}/notifications`, { method: "DELETE" });
+}
+
 // ---- Notification history ---------------------------------------------------
 
 export type NotificationType =
@@ -792,8 +833,13 @@ export async function getNotifications(
 	};
 }
 
-export async function markAllNotificationsRead(cfg: ServerConfig): Promise<void> {
-	await req(cfg, `${API}/notifications/read-all`, { method: "POST" });
+// With ids, only those rows are marked, so unread rows on pages the screen has
+// not loaded yet stay unread. Without ids, every unread row on the machine is.
+export async function markAllNotificationsRead(cfg: ServerConfig, ids?: string[]): Promise<void> {
+	await req(cfg, `${API}/notifications/read-all`, {
+		method: "POST",
+		...(ids && ids.length > 0 ? { body: JSON.stringify({ ids }) } : {}),
+	});
 }
 
 // ---- Pull request detail ----------------------------------------------------

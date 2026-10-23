@@ -1840,18 +1840,19 @@ type AgentInstallationObservation = domain.AgentInstallationObservation
 // AgentAuthenticationObservation is the normalized authentication observation.
 type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 
-// AgentModelsQuery scopes a model catalog to a project where providers may be
-// configured per workspace.
+// AgentModelsQuery reads a model catalog. Catalogs are device-wide: a project
+// ID is accepted for compatibility and ignored; only a cloud credential scope
+// caches separately.
 type AgentModelsQuery struct {
 	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
-	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
 }
 
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
-// revalidation for a project-scoped model catalog.
+// revalidation for a device-wide model catalog.
 type AgentModelsRefreshQuery struct {
 	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache."`
-	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
 	Revalidate  bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
 }
 
