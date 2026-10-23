@@ -53,7 +53,7 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 	}, []);
 	useLayoutEffect(() => {
 		const element = container.current;
-		if (!element || !page) return;
+		if (!element || (!page && !isMarkdown)) return;
 		const initialWidth = element.getBoundingClientRect().width;
 		if (initialWidth > 0) setWidth(initialWidth);
 		const observer = new ResizeObserver(([entry]) => {
@@ -61,7 +61,7 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 		});
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, [page]);
+	}, [page, isMarkdown]);
 	const content = file.data && !file.data.binary ? file.data.content : "";
 	const markdown = isMarkdown ? stripMarkdownFrontmatter(content).trim() : "";
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
@@ -91,7 +91,10 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 			) : plainText ? (
 				<pre className="m-0 h-full overflow-hidden whitespace-pre-wrap break-words p-4 font-mono text-caption leading-relaxed text-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]">{text}</pre>
 			) : (
-				<span className="block h-full overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]">
+				<span
+					className="absolute left-0 top-0 block origin-top-left"
+					style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}
+				>
 					<MarkdownFileView
 						artifactOrigin={contentUrl ? new URL(row.rawUrl ?? contentUrl).origin : undefined}
 						content={content}

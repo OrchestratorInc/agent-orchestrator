@@ -179,7 +179,7 @@ export function MarkdownFileView({
 	);
 	return (
 		<MarkdownFileContext.Provider value={contextValue}>
-			<div inert={thumbnail || undefined}>
+			<div className={thumbnail ? "h-full" : undefined} inert={thumbnail || undefined}>
 				{truncated && !thumbnail ? (
 					<div className="shrink-0 border-b border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">
 						{t("files.contentTruncated")}
@@ -188,7 +188,7 @@ export function MarkdownFileView({
 				{/* github-markdown-css hangs each heading's `.anchor` link icon 20px
 				    into the left gutter (`margin-left: -20px`), so the inline padding
 				    must be wider than that or the scroll container clips the icon. */}
-				<div className={cn("markdown-body px-6 py-4", thumbnail && "bg-transparent!")} ref={bodyRef}>
+				<div className={cn("markdown-body px-6 py-4", thumbnail && "min-h-full")} ref={bodyRef}>
 					<Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
 						{thumbnail ? body.slice(0, 4000) : body}
 					</Markdown>
