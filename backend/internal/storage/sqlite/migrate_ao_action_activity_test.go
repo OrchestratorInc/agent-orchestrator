@@ -69,7 +69,8 @@ func TestProviderItemLookupUsesIndex(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, actionMigration)
 	upTo(t, db, lookupMigration)
 
-	rows, err := db.Query(`EXPLAIN QUERY PLAN
+	usesLookupIndex := func() bool {
+		rows, err := db.Query(`EXPLAIN QUERY PLAN
 SELECT current_session_id
 FROM conversations
 JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
@@ -77,26 +78,26 @@ WHERE conversation_activities.provider_item_id = ?
   AND conversation_activities.provider_item_id <> ''
   AND current_session_id IS NOT NULL
 LIMIT 1`, "ao-action:session.spawned:mer-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	usesLookupIndex := false
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+		if err != nil {
 			t.Fatal(err)
 		}
-		usesLookupIndex = usesLookupIndex ||
-			strings.Contains(detail, "idx_conversation_activities_provider_item_lookup") &&
-				strings.Contains(detail, "provider_item_id=?")
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
+		defer rows.Close()
+		usesIndex := false
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			usesIndex = usesIndex ||
+				strings.Contains(detail, "idx_conversation_activities_provider_item_lookup") &&
+					strings.Contains(detail, "provider_item_id=?")
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return usesIndex
+	}()
 	if !usesLookupIndex {
 		t.Fatal("provider item lookup did not use its index")
 	}
