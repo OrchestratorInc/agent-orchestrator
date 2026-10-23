@@ -3695,5 +3695,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "Review and edit issue draft",
 	"settings.harness.troubleshoot.draftHelp": "Add your reproduction steps, review for private information, then copy this draft into a bug report. Nothing is submitted automatically. Replacing the draft discards your edits.",
 	"settings.harness.troubleshoot.copyDraft": "Copy issue draft",
-	"settings.harness.troubleshoot.copied": "Copied to clipboard"
+	"settings.harness.troubleshoot.copied": "Copied to clipboard",
+	"settings.harness.troubleshoot.stepCheck": "Check your setup",
+	"settings.harness.troubleshoot.stepHelper": "Investigate and verify",
+	"settings.harness.troubleshoot.stepReport": "Still having trouble?",
+	"settings.harness.troubleshoot.checksFirst": "Collect diagnostics to choose a helper or copy a troubleshooting prompt.",
+	"settings.harness.troubleshoot.sharingSummary": "Only sanitized diagnostics are sent to your selected agent provider.",
+	"settings.harness.troubleshoot.sharingDetails": "Data and permissions",
+	"settings.harness.troubleshoot.checkingProgress": "Checking installation and sign-in…",
+	"settings.harness.troubleshoot.startingProgress": "Starting your helper…",
+	"settings.harness.troubleshoot.stoppingProgress": "Stopping your helper…",
+	"settings.harness.troubleshoot.reviewPrompt": "Review original prompt",
+	"settings.harness.troubleshoot.authNotRequired": "Not required",
+	"settings.harness.troubleshoot.replaceDraftTitle": "Replace your edited draft?",
+	"settings.harness.troubleshoot.replaceDraftDescription": "Replacing this draft will discard your edits. Copy it first if you want to keep it.",
+	"settings.harness.troubleshoot.sessionDetails": "About this helper"
 }

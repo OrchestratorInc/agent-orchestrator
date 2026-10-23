@@ -3783,5 +3783,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "Revisar e editar rascunho do relato",
 	"settings.harness.troubleshoot.draftHelp": "Adicione as etapas para reproduzir o problema, confira se há informações privadas e copie o rascunho para um relatório de erro. Nada é enviado automaticamente. Substituir o rascunho descarta suas edições.",
 	"settings.harness.troubleshoot.copyDraft": "Copiar rascunho do relato",
-	"settings.harness.troubleshoot.copied": "Copiado para a área de transferência"
+	"settings.harness.troubleshoot.copied": "Copiado para a área de transferência",
+	"settings.harness.troubleshoot.stepCheck": "Verifique sua configuração",
+	"settings.harness.troubleshoot.stepHelper": "Investigar e verificar",
+	"settings.harness.troubleshoot.stepReport": "O problema continua?",
+	"settings.harness.troubleshoot.checksFirst": "Colete diagnósticos para escolher um agente auxiliar ou copiar as instruções de diagnóstico.",
+	"settings.harness.troubleshoot.sharingSummary": "Somente diagnósticos sem dados sensíveis são enviados ao provedor do agente selecionado.",
+	"settings.harness.troubleshoot.sharingDetails": "Dados e permissões",
+	"settings.harness.troubleshoot.checkingProgress": "Verificando instalação e login…",
+	"settings.harness.troubleshoot.startingProgress": "Iniciando o agente auxiliar…",
+	"settings.harness.troubleshoot.stoppingProgress": "Parando o agente auxiliar…",
+	"settings.harness.troubleshoot.reviewPrompt": "Revisar instruções originais",
+	"settings.harness.troubleshoot.authNotRequired": "Não necessária",
+	"settings.harness.troubleshoot.replaceDraftTitle": "Substituir seu rascunho editado?",
+	"settings.harness.troubleshoot.replaceDraftDescription": "Substituir este rascunho descartará suas edições. Copie-o primeiro se quiser mantê-lo.",
+	"settings.harness.troubleshoot.sessionDetails": "Sobre este agente auxiliar"
 }

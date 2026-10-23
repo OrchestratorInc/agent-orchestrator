@@ -3696,5 +3696,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "审阅并编辑问题草稿",
 	"settings.harness.troubleshoot.draftHelp": "添加复现步骤，检查是否包含私人信息，然后将草稿复制到错误报告中。系统不会自动提交。替换草稿会丢弃你的编辑。",
 	"settings.harness.troubleshoot.copyDraft": "复制问题草稿",
-	"settings.harness.troubleshoot.copied": "已复制到剪贴板"
+	"settings.harness.troubleshoot.copied": "已复制到剪贴板",
+	"settings.harness.troubleshoot.stepCheck": "检查你的配置",
+	"settings.harness.troubleshoot.stepHelper": "调查并验证",
+	"settings.harness.troubleshoot.stepReport": "仍然遇到问题？",
+	"settings.harness.troubleshoot.checksFirst": "收集诊断信息后，即可选择辅助智能体或复制故障排查提示词。",
+	"settings.harness.troubleshoot.sharingSummary": "仅将脱敏后的诊断信息发送给你选择的智能体提供商。",
+	"settings.harness.troubleshoot.sharingDetails": "数据与权限",
+	"settings.harness.troubleshoot.checkingProgress": "正在检查安装和登录状态…",
+	"settings.harness.troubleshoot.startingProgress": "正在启动辅助智能体…",
+	"settings.harness.troubleshoot.stoppingProgress": "正在停止辅助智能体…",
+	"settings.harness.troubleshoot.reviewPrompt": "查看原始提示词",
+	"settings.harness.troubleshoot.authNotRequired": "无需验证",
+	"settings.harness.troubleshoot.replaceDraftTitle": "替换已编辑的草稿？",
+	"settings.harness.troubleshoot.replaceDraftDescription": "替换此草稿会丢弃你的编辑。如需保留，请先复制草稿。",
+	"settings.harness.troubleshoot.sessionDetails": "关于此辅助智能体"
 }

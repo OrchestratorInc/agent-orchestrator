@@ -3783,5 +3783,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "Relire et modifier le brouillon",
 	"settings.harness.troubleshoot.draftHelp": "Ajoutez les étapes de reproduction, vérifiez l’absence d’informations privées, puis copiez ce brouillon dans un rapport de bug. Rien n’est envoyé automatiquement. Remplacer le brouillon supprime vos modifications.",
 	"settings.harness.troubleshoot.copyDraft": "Copier le brouillon du signalement",
-	"settings.harness.troubleshoot.copied": "Copié dans le presse-papiers"
+	"settings.harness.troubleshoot.copied": "Copié dans le presse-papiers",
+	"settings.harness.troubleshoot.stepCheck": "Vérifier votre configuration",
+	"settings.harness.troubleshoot.stepHelper": "Examiner et vérifier",
+	"settings.harness.troubleshoot.stepReport": "Le problème persiste ?",
+	"settings.harness.troubleshoot.checksFirst": "Collectez les diagnostics pour choisir un agent d’assistance ou copier les instructions de dépannage.",
+	"settings.harness.troubleshoot.sharingSummary": "Seuls les diagnostics sans données sensibles sont envoyés au fournisseur de l’agent sélectionné.",
+	"settings.harness.troubleshoot.sharingDetails": "Données et permissions",
+	"settings.harness.troubleshoot.checkingProgress": "Vérification de l’installation et de la connexion…",
+	"settings.harness.troubleshoot.startingProgress": "Démarrage de l’agent d’assistance…",
+	"settings.harness.troubleshoot.stoppingProgress": "Arrêt de l’agent d’assistance…",
+	"settings.harness.troubleshoot.reviewPrompt": "Consulter les instructions d’origine",
+	"settings.harness.troubleshoot.authNotRequired": "Non requise",
+	"settings.harness.troubleshoot.replaceDraftTitle": "Remplacer votre brouillon modifié ?",
+	"settings.harness.troubleshoot.replaceDraftDescription": "Le remplacement de ce brouillon supprimera vos modifications. Copiez-le d’abord si vous souhaitez le conserver.",
+	"settings.harness.troubleshoot.sessionDetails": "À propos de cet agent d’assistance"
 }

@@ -3714,5 +3714,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "問題報告の下書きを確認・編集",
 	"settings.harness.troubleshoot.draftHelp": "再現手順を追加し、個人情報が含まれていないか確認してから、下書きをバグ報告にコピーしてください。自動送信はされません。下書きを置換すると編集内容は失われます。",
 	"settings.harness.troubleshoot.copyDraft": "問題報告の下書きをコピー",
-	"settings.harness.troubleshoot.copied": "クリップボードにコピーしました"
+	"settings.harness.troubleshoot.copied": "クリップボードにコピーしました",
+	"settings.harness.troubleshoot.stepCheck": "設定を確認",
+	"settings.harness.troubleshoot.stepHelper": "調査して検証",
+	"settings.harness.troubleshoot.stepReport": "まだ問題がありますか？",
+	"settings.harness.troubleshoot.checksFirst": "診断情報を収集すると、補助エージェントを選ぶか調査用プロンプトをコピーできます。",
+	"settings.harness.troubleshoot.sharingSummary": "機密情報を除去した診断情報のみを、選択したエージェントのプロバイダーに送信します。",
+	"settings.harness.troubleshoot.sharingDetails": "データと権限",
+	"settings.harness.troubleshoot.checkingProgress": "インストールとログインを確認中…",
+	"settings.harness.troubleshoot.startingProgress": "補助エージェントを起動中…",
+	"settings.harness.troubleshoot.stoppingProgress": "補助エージェントを停止中…",
+	"settings.harness.troubleshoot.reviewPrompt": "元のプロンプトを確認",
+	"settings.harness.troubleshoot.authNotRequired": "不要",
+	"settings.harness.troubleshoot.replaceDraftTitle": "編集した下書きを置換しますか？",
+	"settings.harness.troubleshoot.replaceDraftDescription": "置換すると編集内容が失われます。残したい場合は、先に下書きをコピーしてください。",
+	"settings.harness.troubleshoot.sessionDetails": "この補助エージェントについて"
 }

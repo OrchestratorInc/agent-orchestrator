@@ -3714,5 +3714,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "Entwurf der Fehlermeldung prüfen und bearbeiten",
 	"settings.harness.troubleshoot.draftHelp": "Ergänze die Schritte zur Reproduktion, prüfe den Entwurf auf private Informationen und kopiere ihn dann in einen Fehlerbericht. Nichts wird automatisch übermittelt. Das Ersetzen des Entwurfs verwirft deine Änderungen.",
 	"settings.harness.troubleshoot.copyDraft": "Entwurf der Fehlermeldung kopieren",
-	"settings.harness.troubleshoot.copied": "In die Zwischenablage kopiert"
+	"settings.harness.troubleshoot.copied": "In die Zwischenablage kopiert",
+	"settings.harness.troubleshoot.stepCheck": "Einrichtung prüfen",
+	"settings.harness.troubleshoot.stepHelper": "Untersuchen und prüfen",
+	"settings.harness.troubleshoot.stepReport": "Besteht das Problem weiterhin?",
+	"settings.harness.troubleshoot.checksFirst": "Erfasse Diagnosedaten, um einen Hilfsagenten auszuwählen oder die Anweisungen zur Fehlerbehebung zu kopieren.",
+	"settings.harness.troubleshoot.sharingSummary": "Nur Diagnosedaten ohne vertrauliche Informationen werden an den ausgewählten Agentenanbieter gesendet.",
+	"settings.harness.troubleshoot.sharingDetails": "Daten und Berechtigungen",
+	"settings.harness.troubleshoot.checkingProgress": "Installation und Anmeldung werden geprüft…",
+	"settings.harness.troubleshoot.startingProgress": "Hilfsagent wird gestartet…",
+	"settings.harness.troubleshoot.stoppingProgress": "Hilfsagent wird gestoppt…",
+	"settings.harness.troubleshoot.reviewPrompt": "Ursprüngliche Anweisungen prüfen",
+	"settings.harness.troubleshoot.authNotRequired": "Nicht erforderlich",
+	"settings.harness.troubleshoot.replaceDraftTitle": "Bearbeiteten Entwurf ersetzen?",
+	"settings.harness.troubleshoot.replaceDraftDescription": "Beim Ersetzen gehen deine Änderungen verloren. Kopiere den Entwurf zuerst, wenn du ihn behalten möchtest.",
+	"settings.harness.troubleshoot.sessionDetails": "Über diesen Hilfsagenten"
 }
