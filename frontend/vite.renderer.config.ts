@@ -247,7 +247,9 @@ export default defineConfig({
 		testTimeout: 20_000,
 		// Anchor node_modules at any depth: a bare "node_modules/**" replaces
 		// vitest's default "**/node_modules/**" and only matches the root.
-		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**"],
+		// The docs site is its own package with its own Vitest config and
+		// dependencies; the docs CI step runs its tests.
+		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**", "src/docs/**"],
 		globals: true,
 		setupFiles: "./src/renderer/test/setup.ts",
 	},
