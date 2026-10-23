@@ -84,7 +84,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
 	mountHealth(r, cfg, deps.Readiness)
-	mountTerminalMux(r, termMgr, log)
+	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)

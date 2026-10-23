@@ -678,12 +678,18 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 
 	const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer, scheme: "http" | "https"): void => {
 		const preview = previewPath(req.headers.host, req.url, req.method, scheme);
-		const path = preview?.kind === "app" || preview?.kind === "agent" ? preview.path : stripToken(req.url);
+		// Static/artifact preview hosts must never fall through to a token-prefixed
+		// control socket, even when hostile content knows a renderer URL.
+		if (preview && preview.kind !== "app" && preview.kind !== "agent") { socket.destroy(); return; }
+		const path = preview ? preview.path : stripToken(req.url);
 		if (path === null) {
 			socket.destroy();
 			return;
 		}
-		if (!validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
+		const rendererRequest = req.headers.origin === undefined
+			? req.headers["sec-fetch-site"] === undefined
+			: req.headers.origin === rendererOrigin;
+		if ((!preview && !rendererRequest) || !validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
 			socket.destroy();
 			return;
 		}
@@ -699,6 +705,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (socket.destroyed) return;
 			const upstreamSocket = dialUpstream(() => {
 				const headers = forwardHeaders(req.headers, preview?.kind);
+				if (!preview) {
+					delete headers["sec-fetch-site"];
+					delete headers["sec-fetch-mode"];
+					delete headers["sec-fetch-dest"];
+				}
 				const lines = [`${req.method} ${path} HTTP/1.1`];
 				// The WebSocket-specific headers were stripped as hop-by-hop; restore
 				// the two the handshake requires, with the credential injected above.
