@@ -160,7 +160,11 @@ jobs:
       - name: Verify mobile control boundary in real Electron
         working-directory: backend
         run: |
-          AO_MOBILE_CONTROL_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestMobileControlOriginElectron$' ./internal/httpd
+          # Install first so lazy-download output cannot become part of the executable path.
+          node ../frontend/node_modules/electron/install.js
+          electron_binary="$(node -p "require('../frontend/node_modules/electron')")"
+          test -x "$electron_binary"
+          AO_MOBILE_CONTROL_ELECTRON="$electron_binary" xvfb-run -a go test -count=1 -run '^TestMobileControlOriginElectron$' ./internal/httpd
 
       - name: Run vitest suite
         env:
