@@ -33,6 +33,7 @@ type Store interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	ListOrchestratorSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error)
 	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	SetSessionPreviewURL(ctx context.Context, id domain.SessionID, previewURL string, updatedAt time.Time) (bool, error)
@@ -188,6 +189,9 @@ type outputTypeReconciler interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	// outputReconciles records, per session, the row revision whose output-type
+	// repair a read already claimed. See claimOutputReconcile.
+	outputReconciles    sync.Map
 	manager             commander
 	store               Store
 	prClaimer           ports.PRClaimer
@@ -1187,7 +1191,7 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 // by the workspace adapter's per-repo teardown lock. Dirty worktrees are
 // preserved by Kill and Cleanup; callers only see hard teardown failures.
 func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID) error {
-	recs, err := s.listRecords(ctx, project)
+	recs, err := s.listRecords(ctx, ListFilter{ProjectID: project})
 	if err != nil {
 		return err
 	}
@@ -1218,7 +1222,7 @@ func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID)
 // List returns sessions as enriched display models after applying API filters.
 func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session, error) {
 	recoveryRevision := s.statusRecoveryRevision()
-	recs, err := s.listRecords(ctx, filter.ProjectID)
+	recs, err := s.listRecords(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -1269,6 +1273,24 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	return out, nil
 }
 
+// claimOutputReconcile reports whether this read runs the output-type repair
+// for a row at revision rev. It is false when a read of this or a newer
+// revision already claimed it.
+func (s *Service) claimOutputReconcile(id domain.SessionID, rev int64) bool {
+	for {
+		prev, loaded := s.outputReconciles.LoadOrStore(id, rev)
+		if !loaded {
+			return true
+		}
+		if prev.(int64) >= rev {
+			return false
+		}
+		if s.outputReconciles.CompareAndSwap(id, prev, rev) {
+			return true
+		}
+	}
+}
+
 func (s *Service) statusRecoveryRevision() uint64 {
 	if recovery, ok := s.manager.(interface{ StatusRecoveryRevision() uint64 }); ok {
 		return recovery.StatusRecoveryRevision()
@@ -1276,7 +1298,17 @@ func (s *Service) statusRecoveryRevision() uint64 {
 	return 0
 }
 
-func (s *Service) listRecords(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+func (s *Service) listRecords(ctx context.Context, filter ListFilter) ([]domain.SessionRecord, error) {
+	project := filter.ProjectID
+	if project == "" && filter.OrchestratorOnly {
+		// Phones poll this beside the board; reading every worker row only to
+		// drop it cost about a third of each poll.
+		recs, err := s.store.ListOrchestratorSessions(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list orchestrator sessions: %w", err)
+		}
+		return recs, nil
+	}
 	if project == "" {
 		recs, err := s.store.ListAllSessions(ctx)
 		if err != nil {
@@ -1385,9 +1417,15 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		// future ones: the persisted write below lands asynchronously
 		// relative to this read.
 		rec.OutputType = sessionartifacts.DeriveOutputType(len(prs), len(artifactFiles))
-		if s.outputTypeReconciler != nil {
-			if err := s.outputTypeReconciler.ReconcileSessionOutputType(ctx, rec.ID); err != nil && s.logger != nil {
-				s.logger.Warn("reconcile output type on read", "session", rec.ID, "err", err)
+		// Concurrent board reads all see the same stale row. Only the first
+		// claims the repair; the rest used to queue on the lifecycle reconcile
+		// mutex once per session per read, so a cold board stalled every poll.
+		if s.outputTypeReconciler != nil && s.claimOutputReconcile(rec.ID, rec.Revision) {
+			if err := s.outputTypeReconciler.ReconcileSessionOutputType(ctx, rec.ID); err != nil {
+				s.outputReconciles.CompareAndDelete(rec.ID, rec.Revision) // a later read retries
+				if s.logger != nil {
+					s.logger.Warn("reconcile output type on read", "session", rec.ID, "err", err)
+				}
 			}
 		}
 	}

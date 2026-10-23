@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -271,6 +273,58 @@ func openCountingStore(t *testing.T, statements *atomic.Int64) (store *sqlitesto
 	return store, dataDir
 }
 
+// Concurrent board reads see the same unrepaired rows. One read per row
+// revision runs each repair; the others used to queue on the lifecycle mutex,
+// once per row per read. A failed repair is retried by the next read.
+func TestListRunsEachRepairOncePerRevision(t *testing.T) {
+	var statements atomic.Int64
+	store, dataDir := openCountingStore(t, &statements)
+	reconciler := &countingReconciler{}
+	svc := newListFixtureService(store, dataDir, reconciler)
+	stale := 0
+	for i, shape := range append(settledShapes(), repairShapes()...) {
+		addListSession(t, store, dataDir, shape, i+1)
+		if shape.mustRepair {
+			stale++
+		}
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.List(context.Background(), ListFilter{}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := reconciler.calls.Load(); got != int64(stale) {
+		t.Fatalf("8 concurrent lists ran %d repairs, want %d, one per stale row", got, stale)
+	}
+
+	failing := &countingReconciler{err: errors.New("disk full")}
+	svc = newListFixtureService(store, dataDir, failing)
+	for range 2 {
+		if _, err := svc.List(context.Background(), ListFilter{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := failing.calls.Load(); got != int64(2*stale) {
+		t.Fatalf("2 lists with a failing repair ran %d repairs, want %d", got, 2*stale)
+	}
+}
+
+type countingReconciler struct {
+	calls atomic.Int64
+	err   error
+}
+
+func (c *countingReconciler) ReconcileSessionOutputType(context.Context, domain.SessionID) error {
+	c.calls.Add(1)
+	return c.err
+}
+
 func newListFixtureService(store *sqlitestore.Store, dataDir string, reconciler outputTypeReconciler) *Service {
 	return NewWithDeps(Deps{
 		Store: store, DataDir: dataDir, OutputTypeReconciler: reconciler,
@@ -322,8 +376,12 @@ func TestListMatchesGetForEverySessionShape(t *testing.T) {
 	}
 	listReconciled := append([]domain.SessionID(nil), reconciler.reconciled...)
 	reconciler.reconciled = nil
+	// A fresh service: the list already claimed these repairs at this row
+	// revision, and the fake reconciler never writes, so the same service
+	// would rightly skip them.
+	getSvc := newListFixtureService(store, dataDir, reconciler)
 	for _, sess := range list {
-		got, err := svc.Get(context.Background(), sess.ID)
+		got, err := getSvc.Get(context.Background(), sess.ID)
 		if err != nil {
 			t.Fatalf("get %s: %v", names[sess.ID], err)
 		}

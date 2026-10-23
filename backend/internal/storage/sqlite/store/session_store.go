@@ -905,6 +905,20 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	return mapListAllSessionsRows(rows), nil
 }
 
+// ListOrchestratorSessions returns every orchestrator session across all
+// projects, without decoding the far more numerous worker rows.
+func (s *Store) ListOrchestratorSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	rows, err := s.qr.ListOrchestratorSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list orchestrator sessions: %w", err)
+	}
+	out := make([]domain.SessionRecord, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, rowToRecord(gen.GetSessionRow(r)))
+	}
+	return out, nil
+}
+
 // ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.
 func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
 	ids, err := s.qr.ListChatHibernationCandidates(ctx)
