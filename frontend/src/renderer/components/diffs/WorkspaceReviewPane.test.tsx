@@ -285,6 +285,11 @@ describe("WorkspaceReviewPane", () => {
 		expect(existing).toBeInTheDocument();
 		if (expandAll) expect(scrollToMock).not.toHaveBeenCalled();
 		else await waitFor(() => expect(scrollToMock).toHaveBeenCalledExactlyOnceWith({ type: "item", id: `${reviewTarget(data).key}:package-lock.json`, align: "start" }));
+		scrollToMock.mockClear();
+		await userEvent.click(screen.getByRole("button", { name: "Collapse package-lock.json" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand package-lock.json" }));
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(scrollToMock).not.toHaveBeenCalled();
 	});
 
 	it("opens fallback files with the header icon and status", async () => {

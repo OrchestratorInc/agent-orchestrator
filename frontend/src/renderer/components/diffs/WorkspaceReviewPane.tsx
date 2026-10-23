@@ -466,7 +466,7 @@ export function WorkspaceReviewPane({
 		const path = file.path;
 		// An explicit expansion opts deferred files into loading, just like
 		// Expand all. Keep that choice when the file is collapsed again.
-		if (collapsedPaths.has(path) && isDeferredByDefault(file)) {
+		if (collapsedPaths.has(path) && isDeferredByDefault(file) && !loadedDeferredPaths.has(path)) {
 			setLoadedDeferredPaths((current) => current.has(path) ? current : new Set(current).add(path));
 			setPendingScrollPath(path);
 		}
@@ -476,7 +476,7 @@ export function WorkspaceReviewPane({
 			else next.add(path);
 			return next;
 		});
-	}, [collapsedPaths]);
+	}, [collapsedPaths, loadedDeferredPaths]);
 	const collapsePath = useCallback((path: string) => {
 		setCollapsedPaths((current) => {
 			if (current.has(path)) return current;
