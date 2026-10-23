@@ -70,13 +70,18 @@ export function reserveCapture(name: string, now = Date.now()): boolean {
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
 }
 
+type PendingUpdateDay = { day: string; failure_count: number };
+
 type UpdateFailureState = {
 	streaks?: Record<string, number>;
 	day?: string;
 	dayCount?: number;
+	pendingDays?: PendingUpdateDay[];
 	pendingDay?: string;
 	pendingCount?: number;
 };
+
+const PENDING_UPDATE_DAY_CAP = 14;
 
 function utcDay(now: number): string {
 	return new Date(now).toISOString().slice(0, 10);
@@ -102,7 +107,7 @@ export function claimUpdateFailure(
 	storage: DailyActiveStorage,
 	properties: TelemetryProperties,
 	now = Date.now(),
-): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; rollback: () => void } {
+): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; dailies?: TelemetryProperties[]; rollback: () => void } {
 	const none = { emit: false, extra: {}, streak: false, rollback: () => undefined };
 	const snapshot = storage.getItem(UPDATE_FAILURE_STORAGE_KEY);
 	const rollback = () => {
@@ -113,10 +118,18 @@ export function claimUpdateFailure(
 		const state = readUpdateFailureState(storage);
 		state.streaks ??= {};
 		const day = utcDay(now);
+		state.pendingDays ??= [];
+		if (state.pendingDay && (state.pendingCount ?? 0) > 0) {
+			state.pendingDays.push({ day: state.pendingDay, failure_count: state.pendingCount ?? 0 });
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
 		if (state.day && state.day !== day) {
-			if ((state.dayCount ?? 0) > 0 && !state.pendingDay) {
-				state.pendingDay = state.day;
-				state.pendingCount = state.dayCount;
+			if ((state.dayCount ?? 0) > 0) {
+				state.pendingDays.push({ day: state.day, failure_count: state.dayCount ?? 0 });
+			}
+			if (state.pendingDays.length > PENDING_UPDATE_DAY_CAP) {
+				state.pendingDays = state.pendingDays.slice(-PENDING_UPDATE_DAY_CAP);
 			}
 			state.day = day;
 			state.dayCount = 0;
@@ -126,17 +139,16 @@ export function claimUpdateFailure(
 		const streakOpen = state.streaks[key] !== undefined;
 		state.dayCount = (state.dayCount ?? 0) + 1;
 		if (!streakOpen) state.streaks[key] = now;
-		const pendingDay = state.pendingDay;
-		const pendingCount = state.pendingCount ?? 0;
-		const emitDaily = pendingDay !== undefined && (state.pendingCount ?? 0) > 0;
-		const daily = emitDaily ? { report: "daily" as const, day: pendingDay, failure_count: pendingCount } : undefined;
-		if (emitDaily) {
-			delete state.pendingDay;
-			delete state.pendingCount;
-		}
+		const dailies = state.pendingDays.map((pending) => ({
+			report: "daily" as const,
+			day: pending.day,
+			failure_count: pending.failure_count,
+		}));
+		const daily = dailies[0];
+		if (dailies.length > 0) state.pendingDays = [];
 		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
-		if (streakOpen && !emitDaily) return none;
-		return { emit: true, extra: {}, streak: !streakOpen, daily, rollback };
+		if (streakOpen && dailies.length === 0) return none;
+		return { emit: true, extra: {}, streak: !streakOpen, daily, dailies, rollback };
 	} catch {
 		return { emit: true, extra: {}, streak: true, rollback: () => undefined };
 	}
@@ -940,6 +952,12 @@ export async function sanitizeRendererProperties(
 			if (properties?.field === "status" || properties?.field === "activity") safe.field = properties.field;
 			if (properties?.reason === "missing" || properties?.reason === "unrecognized") safe.reason = properties.reason;
 			break;
+		case "ao.renderer.project_add_failed":
+		case "ao.renderer.project_clone_failed":
+			if (typeof properties?.error_code === "string" && (/^[A-Z0-9_]+$/.test(properties.error_code) || properties.error_code === "unknown")) {
+				safe.error_code = properties.error_code;
+			}
+			break;
 		case "ao.renderer.update_failures_daily":
 			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
 			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
@@ -1242,8 +1260,23 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
 			if (!decision.emit) return false;
 			releaseUpdateFailureClaim = decision.rollback;
-			if (decision.daily) {
-				posthog.capture("ao.renderer.update_failures_daily", withTelemetryContext(await sanitizeRendererProperties("ao.renderer.update_failures_daily", decision.daily)));
+			const dailyName = "ao.renderer.update_failures_daily";
+			for (const daily of decision.dailies ?? []) {
+				if (isDeniedEvent(dailyName)) continue;
+				if (!reserveCapture(dailyName)) {
+					releaseUpdateFailureClaim();
+					return false;
+				}
+				let sent = false;
+				try {
+					sent = Boolean(posthog.capture(dailyName, withTelemetryContext(await sanitizeRendererProperties(dailyName, daily))));
+				} catch {
+					sent = false;
+				}
+				if (!sent) {
+					releaseUpdateFailureClaim();
+					return false;
+				}
 			}
 			if (!decision.streak) return true;
 		}

@@ -186,8 +186,11 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   gated Sentry capture once. The local diagnostic stream keeps every
   occurrence. CLI usage errors are one event per command path and error kind
   per install per completed UTC day, with `command_path`, `error_kind`, and
-  `count`. At most 20 of those events are sent per day. No raw arguments are
-  included. Each event is stamped at the end of that UTC day.
+  `count`. At most 20 of those events are sent per day. The minute rate limit
+  does not apply to this event, because each one is already a summary. Paths
+  that are not a known `ao` command are reported as `other`. No raw arguments
+  are included. Each event is stamped at the last millisecond of that UTC day.
+  The on-disk summary is removed on opt-out and when the install ID is retired.
 - Renderer API errors are not sampled. A daemon-unavailable report is skipped
   while the daemon is still starting. HTTP 409 responses are dropped only for
   `POST /api/v1/sessions/:id/workspace/diffs`,
@@ -196,8 +199,13 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   `GET /api/v1/sessions/:id/conversation/skills`. Codex
   account management being unwired, and an already-closed shell terminal, are
   not analytics events. An expired GitHub token still reports. A Codex login
-  terminal failure and an incomplete Codex account setup use their own error
-  codes and still report.
+  terminal failure is `CODEX_LOGIN_TERMINAL_UNAVAILABLE`. An incomplete Codex
+  account setup is `CODEX_ACCOUNT_SETUP_INCOMPLETE`. Both still report on the
+  account routes. The account event stream stays open for setup-incomplete
+  and for account management that is not wired in this process, so those
+  conditions do not reconnect in a loop. A failed project add emits
+  `ao.renderer.project_add_failed` with `error_code`. A failed project clone
+  emits `ao.renderer.project_clone_failed` with `error_code`.
 - An updater failure streak emits one `ao.renderer.update_failed` until a
   successful download of that target, or a successful check for a check-phase
   streak, clears it. Retries in the streak do not emit again. Each install

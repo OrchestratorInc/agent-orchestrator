@@ -64,13 +64,29 @@ func TestDailySummaryOneEventPerInstallDay(t *testing.T) {
 	if _, ok := byPath["ao session"].Payload["error"]; ok {
 		t.Fatal("summary carried a raw error")
 	}
-	if !byPath["ao session"].OccurredAt.Equal(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)) {
+	if !byPath["ao session"].OccurredAt.Equal(time.Date(2026, 10, 20, 23, 59, 59, int(time.Millisecond*999), time.UTC)) {
 		t.Fatalf("occurred = %s", byPath["ao session"].OccurredAt)
 	}
 
 	restarted.Emit(context.Background(), usageEvent(next.Add(time.Hour), "ao preview"))
 	if len(rec.events) != 2 {
 		t.Fatalf("second same-day event after flush emitted again: %d", len(rec.events))
+	}
+}
+
+func TestDailySummaryCollapsesUnknownCommandPaths(t *testing.T) {
+	rec := &dailyRecorder{}
+	day := time.Date(2026, 10, 20, 15, 0, 0, 0, time.UTC)
+	sink := NewDailySummarySink(rec, "")
+	sink.Emit(context.Background(), usageEvent(day, "ao secret-token"))
+	sink.Emit(context.Background(), usageEvent(day, "AO  SESSION"))
+	sink.Emit(context.Background(), usageEvent(day.Add(24*time.Hour), "ao preview"))
+	byPath := map[string]int{}
+	for _, ev := range rec.events {
+		byPath[ev.Payload["command_path"].(string)] = ev.Payload["count"].(int)
+	}
+	if byPath["other"] != 1 || byPath["ao session"] != 1 {
+		t.Fatalf("counts = %#v", byPath)
 	}
 }
 

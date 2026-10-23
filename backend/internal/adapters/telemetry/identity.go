@@ -48,6 +48,7 @@ type Identity struct {
 	mu          sync.RWMutex
 	installID   string
 	anonymousID string
+	onRetired   func()
 	cloudUserID string
 	// persistFailed is set while the last SetCloudUserID could not persist.
 	persistFailed bool
@@ -83,6 +84,17 @@ func NewIdentity(dataDir string) (*Identity, error) {
 // FreshInstall reports whether this process is the first run of a brand new
 // install, the one moment ao.app.installed is emitted.
 func (i *Identity) FreshInstall() bool { return i.fresh }
+
+// OnInstallRetired runs after the anonymous ID is replaced. The CLI usage
+// summary uses it to drop in-memory counts for the retired install.
+func (i *Identity) OnInstallRetired(fn func()) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.onRetired = fn
+	i.mu.Unlock()
+}
 
 // MarkInstalledEvent reserves the one install event before it enters the
 // best-effort queue. A restart cannot emit it again if the queued send is lost.
@@ -182,6 +194,13 @@ func (i *Identity) bindLocked(id string) error {
 			return fmt.Errorf("retire telemetry anonymous id: %w", err)
 		}
 		i.anonymousID = next
+		_ = os.Remove(filepath.Join(i.dataDir, "telemetry", "cli-usage-daily.json"))
+		if i.onRetired != nil {
+			retired := i.onRetired
+			i.mu.Unlock()
+			retired()
+			i.mu.Lock()
+		}
 	}
 	switch {
 	case id == "" && bound != "":

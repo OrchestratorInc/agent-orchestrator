@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const (
@@ -34,14 +35,13 @@ type DailySummarySink struct {
 type dailyUsageState struct {
 	Day    string         `json:"day"`
 	Counts map[string]int `json:"counts"`
-	Kinds  map[string]int `json:"kinds"`
 	Sent   bool           `json:"sent"`
 }
 
 // NewDailySummarySink loads any unsent day from path. An empty path keeps the
 // summary in memory only.
 func NewDailySummarySink(next ports.EventSink, path string) *DailySummarySink {
-	sink := &DailySummarySink{next: next, path: path, state: dailyUsageState{Counts: map[string]int{}, Kinds: map[string]int{}}}
+	sink := &DailySummarySink{next: next, path: path, state: dailyUsageState{Counts: map[string]int{}}}
 	if path == "" {
 		return sink
 	}
@@ -55,9 +55,6 @@ func NewDailySummarySink(next ports.EventSink, path string) *DailySummarySink {
 	}
 	if stored.Counts == nil {
 		stored.Counts = map[string]int{}
-	}
-	if stored.Kinds == nil {
-		stored.Kinds = map[string]int{}
 	}
 	sink.state = stored
 	return sink
@@ -96,6 +93,20 @@ func (s *DailySummarySink) Close(ctx context.Context) error {
 	}
 	s.FlushCompleted(ctx, time.Now().UTC())
 	return s.next.Close(ctx)
+}
+
+// Discard drops the unsent summary and removes its file. Opt-out and an
+// install-id reset call this so command paths are not flushed later.
+func (s *DailySummarySink) Discard() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = dailyUsageState{Counts: map[string]int{}}
+	if s.path != "" {
+		_ = os.Remove(s.path)
+	}
 }
 
 func (s *DailySummarySink) flushCompleted(ctx context.Context, now time.Time) {
@@ -186,12 +197,9 @@ func (s *DailySummarySink) ensureDayLocked(now time.Time) {
 		if s.state.Counts == nil {
 			s.state.Counts = map[string]int{}
 		}
-		if s.state.Kinds == nil {
-			s.state.Kinds = map[string]int{}
-		}
 		return
 	}
-	s.state = dailyUsageState{Day: day, Counts: map[string]int{}, Kinds: map[string]int{}}
+	s.state = dailyUsageState{Day: day, Counts: map[string]int{}}
 }
 
 func endOfUTCDay(day string) time.Time {
@@ -199,7 +207,9 @@ func endOfUTCDay(day string) time.Time {
 	if err != nil {
 		return time.Now().UTC()
 	}
-	return parsed.UTC().Add(24 * time.Hour)
+	// Last millisecond of that UTC day. Midnight of the next day is bucketed
+	// as the following day.
+	return parsed.UTC().Add(24*time.Hour - time.Millisecond)
 }
 
 func errorKind(ev ports.TelemetryEvent) string {
@@ -235,9 +245,9 @@ func utcDay(now time.Time) string {
 
 func commandPath(ev ports.TelemetryEvent) string {
 	path, _ := ev.Payload["command_path"].(string)
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = "unknown"
+	path = telemetrymeta.NormalizeCommandPath(path)
+	if !isAllowedCommandValue("command_path", path) {
+		return "other"
 	}
 	if len(path) > 160 {
 		path = path[:160]

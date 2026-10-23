@@ -328,6 +328,29 @@ func TestCodexAccountEventStreamStaysOpenWhileManagementIsUnavailable(t *testing
 	cancel()
 }
 
+func TestCodexAccountEventStreamStaysOpenWhileSetupIsIncomplete(t *testing.T) {
+	fake := &fakeCodexAccounts{
+		subscribeErr: apierr.Unavailable("CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete"),
+	}
+	srv := newCodexAccountServer(t, fake)
+	defer srv.Close()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/agents/codex/accounts/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 while account setup is incomplete", resp.StatusCode)
+	}
+	cancel()
+}
+
 func TestCodexAccountEventStreamContinuesAfterManagementReturns(t *testing.T) {
 	restore := controllers.SetCodexAccountStreamRetryForTest(15 * time.Millisecond)
 	defer restore()

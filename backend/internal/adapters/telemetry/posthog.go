@@ -148,7 +148,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"browser_command":    {},
 		"runtime_link_state": {},
 		"count":              {},
-		"sample_rate":        {},
 		"window_start":       {},
 		"window_end":         {},
 	},
@@ -629,6 +628,9 @@ func isAllowedCommandValue(key, value string) bool {
 		}
 		_, ok := remoteCommandTokens[value]
 		return ok
+	}
+	if key == "command_path" && value == "other" {
+		return true
 	}
 	if key != "command_path" || tokens[0] != "ao" {
 		return false

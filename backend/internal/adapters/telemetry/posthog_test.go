@@ -82,7 +82,7 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	}
 }
 
-func TestPostHogSinkRejectsNonProductNames(t *testing.T) {
+func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
 	var names []string
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
 		defer req.Body.Close()
@@ -109,11 +109,11 @@ func TestPostHogSinkRejectsNonProductNames(t *testing.T) {
 	}
 }
 
-func TestSampleRateSurvivesRemoteAllowlist(t *testing.T) {
+func TestSampleRateIsNotARemoteProperty(t *testing.T) {
 	for _, name := range []string{"ao.http.5xx"} {
 		got := sanitizeRemotePayload(name, map[string]any{"sample_rate": 0.01, "count": 3, "raw_error": "/private/path"})
-		if got["sample_rate"] != 0.01 || got["count"] != int64(3) {
-			t.Fatalf("%s payload = %#v, want sampled count and rate", name, got)
+		if _, kept := got["sample_rate"]; kept || got["count"] != int64(3) {
+			t.Fatalf("%s payload = %#v, want count without sample_rate", name, got)
 		}
 		if _, leaked := got["raw_error"]; leaked {
 			t.Fatalf("%s leaked raw error", name)

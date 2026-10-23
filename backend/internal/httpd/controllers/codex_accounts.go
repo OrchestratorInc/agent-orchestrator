@@ -291,7 +291,7 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	events, err := c.Svc.SubscribeCodexAccounts(r.Context())
-	if err != nil && !codexAccountManagementUnavailable(err) {
+	if err != nil && !codexAccountStreamQuiet(err) {
 		envelope.WriteError(w, r, err)
 		return
 	}
@@ -348,9 +348,13 @@ func SetCodexAccountStreamRetryForTest(d time.Duration) func() {
 	return func() { codexAccountStreamRetry = previous }
 }
 
-func codexAccountManagementUnavailable(err error) bool {
+func codexAccountStreamQuiet(err error) bool {
 	var api *apierr.Error
-	return errors.As(err, &api) && api.Code == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE"
+	if !errors.As(err, &api) {
+		return false
+	}
+	// Hold the stream for both. Non-stream routes still report setup-incomplete.
+	return api.Code == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" || api.Code == "CODEX_ACCOUNT_SETUP_INCOMPLETE"
 }
 
 func (c *CodexAccountsController) waitForCodexAccountStream(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) <-chan agentsvc.CodexAccounts {
@@ -369,7 +373,7 @@ func (c *CodexAccountsController) waitForCodexAccountStream(ctx context.Context,
 			if err == nil {
 				return events
 			}
-			if !codexAccountManagementUnavailable(err) {
+			if !codexAccountStreamQuiet(err) {
 				return nil
 			}
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
