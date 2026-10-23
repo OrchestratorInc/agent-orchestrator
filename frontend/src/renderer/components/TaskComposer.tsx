@@ -41,6 +41,7 @@ import {
 	isLaunchableAgent,
 	isReadyAgent,
 	unknownAgentReadiness,
+	type AgentInfo,
 } from "../lib/agent-select-options";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -801,7 +802,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		setEffortTouched(false);
 	};
 
-	// The agents the new chat page's picker offers: the launchable ones, ranked as in New Task.
+	// The agents the new chat page's picker offers, ranked as in New Task. Locally only
+	// installed agents whose sign-in is known to be usable: an "Auth unknown" agent may
+	// not start, so it stays in Harness settings. A remote host's readiness can be
+	// unknown without anything being wrong, so there definite failures alone are left out.
 	const agentChoices = useMemo(() => {
 		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 		const ranked = buildRankedAgentOptions({
@@ -809,8 +813,8 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
 		});
-		return (agents ? ranked.filter(isLaunchableAgent) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, isCloudProject]);
+		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
@@ -972,6 +976,11 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 }
 
 export type TaskLaunch = ReturnType<typeof useTaskLaunch>;
+
+/** Installed, with a sign-in that works, is not needed, or has credentials not yet verified. */
+function startsLocally(agent: AgentInfo): boolean {
+	return agent.installation.state === "installed" && (isReadyAgent(agent) || agent.authentication.state === "configured");
+}
 
 // The launch form as a standalone composer. The app starts tasks from the new
 // chat page; this view keeps the launch logic exercised in isolation.

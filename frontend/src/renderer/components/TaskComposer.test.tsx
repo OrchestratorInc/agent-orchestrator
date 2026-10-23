@@ -99,7 +99,7 @@ vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses }),
 }));
 
-import { TaskComposer } from "./TaskComposer";
+import { TaskComposer, useTaskLaunch } from "./TaskComposer";
 import { CloudCpError } from "../lib/cloud-cp";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
@@ -2489,5 +2489,26 @@ describe("TaskComposer", () => {
 			act(() => { window.dispatchEvent(new Event("focus")); });
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
+	});
+});
+
+describe("useTaskLaunch agent choices", () => {
+	function Choices() {
+		const task = useTaskLaunch({ projectId: "proj-1" });
+		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.id}</li>)}</ul>;
+	}
+
+	it("offers locally only agents that can start, never an \"Auth unknown\" one", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("amp", "Amp", { authentication: "unknown" }),
+			agentReadiness("fx", "fx", { authentication: "configured" }),
+			agentReadiness("goose", "Goose", { authentication: "unauthorized" }),
+			agentReadiness("crush", "Crush", { installation: "unknown" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
 	});
 });
