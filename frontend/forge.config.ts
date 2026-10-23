@@ -402,7 +402,9 @@ const config: ForgeConfig = {
 		new FusesPlugin({
 			version: FuseVersion.V1,
 			// The app never re-execs itself as Node (no ELECTRON_RUN_AS_NODE /
-			// fork / utilityProcess); acp-runtime ships its own Node binary.
+			// child_process.fork); acp-runtime ships its own Node binary. The
+			// browser-import reader is an Electron utility process, which does
+			// not use this fuse.
 			[FuseV1Options.RunAsNode]: false,
 			// Left on: with this fuse off Electron unsets NODE_OPTIONS from its own
 			// environment at startup, so the daemon, agents and terminals it spawns
