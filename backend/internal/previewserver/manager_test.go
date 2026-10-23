@@ -255,6 +255,44 @@ func TestManagerRejectsMissingConfigAndNonLoopbackURL(t *testing.T) {
 	assertPreviewErrorCode(t, err, "PREVIEW_CONFIG_INVALID")
 }
 
+func TestManagerStartInlineRunsRequestConfigurationWithoutWritingLaunchFile(t *testing.T) {
+	workspace := t.TempDir()
+	manager := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(manager.Close)
+
+	status, err := manager.StartInline(context.Background(), "ao-1", workspace, helperConfiguration("", TargetApp), nil)
+	if err != nil {
+		t.Fatalf("StartInline: %v\nstatus=%+v", err, status)
+	}
+	t.Cleanup(func() { _, _ = manager.Stop(context.Background(), "ao-1") })
+	if status.State != StateReady || status.Configuration != InlineConfigurationName || status.TargetKind != TargetApp {
+		t.Fatalf("status = %+v, want ready inline app", status)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".ao")); !os.IsNotExist(statErr) {
+		t.Fatalf("StartInline must not create .ao in the workspace (stat err = %v)", statErr)
+	}
+}
+
+func TestManagerStartInlineRejectsInvalidConfiguration(t *testing.T) {
+	manager := New(nil)
+	t.Cleanup(manager.Close)
+	workspace := t.TempDir()
+
+	missingExecutable := helperConfiguration("", TargetApp)
+	missingExecutable.RuntimeExecutable = ""
+	_, err := manager.StartInline(context.Background(), "ao-1", workspace, missingExecutable, nil)
+	assertPreviewErrorCode(t, err, "PREVIEW_CONFIG_INVALID")
+
+	nonLoopback := helperConfiguration("", TargetApp)
+	nonLoopback.URL = "https://example.com:${PORT}/"
+	_, err = manager.StartInline(context.Background(), "ao-1", workspace, nonLoopback, nil)
+	assertPreviewErrorCode(t, err, "PREVIEW_CONFIG_INVALID")
+
+	badTarget := helperConfiguration("", TargetKind("worker"))
+	_, err = manager.StartInline(context.Background(), "ao-1", workspace, badTarget, nil)
+	assertPreviewErrorCode(t, err, "PREVIEW_CONFIG_INVALID")
+}
+
 func TestSelectPortRejectsOccupiedFixedPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
