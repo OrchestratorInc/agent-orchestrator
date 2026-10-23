@@ -1,0 +1,231 @@
+package modelcatalog
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"unicode/utf16"
+)
+
+const discoveryLauncherReadLimit = 64 << 10
+
+// Agent installers can replace another tool's wrapper while retaining its name.
+// Inspect launchers without running even --version: a redirected probe can open
+// an interactive login before printing anything. This is a local routing check,
+// not an attestation of arbitrary executable contents.
+func verifyDiscoveryExecutable(ctx context.Context, agentID, binaryPath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	resolved, err := exec.LookPath(binaryPath)
+	if err != nil {
+		return "", fmt.Errorf("%s model discovery: resolve executable: %w", agentID, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", err
+	}
+	resolved, err = filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", err
+	}
+	verified, err := inspectDiscoveryExecutable(ctx, agentID, resolved, map[string]bool{})
+	if err != nil {
+		return "", fmt.Errorf("%s model discovery: refusing executable %q: %w; repair or reinstall the intended agent's launcher", agentID, resolved, err)
+	}
+	if !verified {
+		return "", fmt.Errorf("%s model discovery: cannot verify executable %q belongs to %s; use that agent's own launcher instead of a shared agent alias", agentID, resolved, agentID)
+	}
+	return resolved, nil
+}
+
+// These are executable/package names, not words to search for in help output.
+// OpenCode's two registry entries intentionally share the same executable.
+var discoveryExecutableOwners = map[string]string{
+	"aider": "aider", "amp": "amp", "ampcode": "amp", "auggie": "auggie",
+	"autohand": "autohand", "autohand-code": "autohand", "autohand-cli": "autohand", "ah": "autohand",
+	"claude": "claude-code", "claude-code": "claude-code", "codex": "codex",
+	"copilot": "copilot", "crush": "crush", "cursor-agent": "cursor",
+	"grok": "grok", "grok-cli": "grok", "agy": "agy", "antigravity": "agy",
+	"kilocode": "kilocode", "kilo": "kilocode", "pi": "pi", "kimchi": "kimchi",
+	"prime-agent": "prime-agent", "kimi": "kimi", "kiro": "kiro", "kiro-cli": "kiro",
+	"omp": "omp", "codewhale": "codewhale", "codew": "codewhale", "droid": "droid", "fx": "fx",
+	"pi-coding-agent": "pi",
+	"mimo":            "mimo-code", "mimo-code": "mimo-code",
+	"opencode": "opencode", "opencode2": "opencode", "opencode-ai": "opencode",
+	"mimo-ai":      "mimo-code",
+	"command-code": "command-code", "cmdc": "command-code",
+}
+
+func discoveryExecutableOwner(path string) string {
+	path = strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+	path = strings.ReplaceAll(path, "%~dp0", "/")
+	name := path[strings.LastIndex(path, "/")+1:]
+	for _, ext := range []string{".exe", ".com", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs", ".py"} {
+		name = strings.TrimSuffix(name, ext)
+	}
+	if owner := discoveryExecutableOwners[name]; owner != "" {
+		return owner
+	}
+	if match := discoveryVersionedExecutable.FindStringSubmatch(name); len(match) > 1 {
+		if owner := discoveryExecutableOwners[match[1]]; owner != "" {
+			return owner
+		}
+	}
+	if name == "cmd" && !strings.HasSuffix(path, ".exe") {
+		return "command-code"
+	}
+	// npm wrappers launch cli.js/index.js inside an agent-owned package.
+	if index := strings.LastIndex(path, "/node_modules/"); index >= 0 {
+		for _, part := range strings.Split(path[index+len("/node_modules/"):], "/") {
+			if owner := discoveryExecutableOwners[strings.TrimPrefix(part, "@")]; owner != "" {
+				return owner
+			}
+		}
+	}
+	// Cursor's native installer retains an agent.ps1 entry point beside its
+	// cursor-agent launcher. Inspect it below even when its directory identifies
+	// it: an Autohand overwrite in that directory must still be rejected.
+	if name == "agent" {
+		for _, part := range strings.Split(path, "/") {
+			if part == "cursor-agent" {
+				return "cursor"
+			}
+		}
+	}
+	return ""
+}
+
+var discoveryVersionedExecutable = regexp.MustCompile(`^([a-z][a-z0-9-]*?)-(?:v?\d|windows-|darwin-|linux-)`)
+
+var discoveryLauncherReference = regexp.MustCompile(`(?i)"[^"\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)"|'[^'\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)'|[^\s"'<>|&;]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)\b`)
+
+func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen map[string]bool) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false, err
+	}
+	if seen[canonical] || len(seen) >= 8 {
+		return false, fmt.Errorf("launcher chain is cyclic or too deep")
+	}
+	seen[canonical] = true
+	defer delete(seen, canonical)
+	owner := discoveryExecutableOwner(canonical)
+	if agentID == "opencode-v2" {
+		agentID = "opencode"
+	}
+	if owner != "" && owner != agentID {
+		return false, fmt.Errorf("launcher targets %s instead of %s", owner, agentID)
+	}
+	verified := owner == agentID
+	file, err := os.Open(canonical)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("launcher is not a regular file")
+	}
+	// The package-owned application behind an npm shim is not another launcher;
+	// scanning its implementation would mistake provider integrations for redirects.
+	ext := strings.ToLower(filepath.Ext(canonical))
+	application := ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".py"
+	if application && strings.Contains(strings.ReplaceAll(canonical, `\`, "/"), "/node_modules/") && verified {
+		return true, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(file, discoveryLauncherReadLimit+1))
+	if err != nil {
+		return false, err
+	}
+	// Native executables are opaque here. Their resolved name must identify the
+	// agent; wrapper names alone are insufficient until their targets are read.
+	launcher := ext == ".cmd" || ext == ".bat" || ext == ".ps1"
+	if !launcher && (bytes.HasPrefix(body, []byte("MZ")) || bytes.HasPrefix(body, []byte("\x7fELF")) || bytes.ContainsRune(body, '\x00')) {
+		return verified, nil
+	}
+	if len(body) > discoveryLauncherReadLimit {
+		return false, fmt.Errorf("launcher exceeds inspection limit")
+	}
+	if bytes.HasPrefix(body, []byte{0xff, 0xfe}) || bytes.HasPrefix(body, []byte{0xfe, 0xff}) {
+		var order binary.ByteOrder = binary.LittleEndian
+		if body[0] == 0xfe {
+			order = binary.BigEndian
+		}
+		units := make([]uint16, (len(body)-2)/2)
+		for i := range units {
+			units[i] = order.Uint16(body[2+i*2:])
+		}
+		body = []byte(string(utf16.Decode(units)))
+	}
+	if bytes.ContainsRune(body, '\x00') {
+		return false, fmt.Errorf("launcher is not inspectable text")
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"))
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "::") || strings.HasPrefix(strings.ToLower(line), "rem ") {
+			continue
+		}
+		references := discoveryLauncherReference.FindAllString(line, -1)
+		// POSIX wrappers often exec an extensionless CLI.
+		command := strings.TrimSpace(strings.TrimPrefix(line, "exec "))
+		fields := strings.Fields(command)
+		if len(fields) > 0 {
+			references = append(references, strings.Trim(fields[0], `"'`))
+		}
+		for _, reference := range references {
+			reference = strings.Trim(reference, `"'`)
+			targetOwner := discoveryExecutableOwner(reference)
+			if targetOwner != "" && targetOwner != agentID {
+				return false, fmt.Errorf("launcher redirects to %s instead of %s", targetOwner, agentID)
+			}
+			verified = verified || targetOwner == agentID
+			target := discoveryLauncherTarget(canonical, reference)
+			if target == "" {
+				continue
+			}
+			if _, statErr := os.Stat(target); statErr != nil {
+				continue
+			}
+			targetVerified, inspectErr := inspectDiscoveryExecutable(ctx, agentID, target, seen)
+			if inspectErr != nil {
+				return false, inspectErr
+			}
+			verified = verified || targetVerified
+		}
+	}
+	return verified, nil
+}
+
+func discoveryLauncherTarget(launcher, reference string) string {
+	reference = strings.ReplaceAll(reference, `\`, "/")
+	for _, prefix := range []string{"%~dp0", "%dp0%", "%SCRIPT_DIR%", "$PSScriptRoot", "$scriptPath", "$basedir", "${basedir}"} {
+		if strings.HasPrefix(strings.ToLower(reference), strings.ToLower(prefix)) {
+			relative := strings.TrimPrefix(reference[len(prefix):], "/")
+			if relative == "" {
+				return "" // A directory-variable assignment is not an executable.
+			}
+			return filepath.Join(filepath.Dir(launcher), filepath.FromSlash(relative))
+		}
+	}
+	if strings.ContainsAny(reference, "%$") {
+		return ""
+	}
+	if filepath.IsAbs(filepath.FromSlash(reference)) {
+		return filepath.FromSlash(reference)
+	}
+	return ""
+}
