@@ -989,6 +989,7 @@
 	"mobile.connectionMethod": "Verbindungsmethode",
 	"mobile.copyPassword": "Passwort kopieren",
 	"mobile.keepAwake.label": "Diesen Mac wach halten",
+	"mobile.keepAwake.combinedHelp": "Bleibe unterwegs über dein Smartphone erreichbar, auch bei geschlossenem Deckel.",
 	"mobile.keepAwake.help": "Bleibt von deinem Telefon aus erreichbar, während du weg bist.",
 	"mobile.keepAwake.laptopNote": "Beim Zuklappen geht ein MacBook trotzdem in den Ruhezustand, außer es ist am Strom und mit einem externen Display verbunden.",
 	"mobile.keepAwake.lidLabel": "Bei geschlossenem Deckel wach bleiben",

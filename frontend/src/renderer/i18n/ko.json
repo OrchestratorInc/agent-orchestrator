@@ -989,6 +989,7 @@
 	"mobile.connectionMethod": "연결 방법",
 	"mobile.copyPassword": "비밀번호 복사",
 	"mobile.keepAwake.label": "이 Mac 깨어 있게 유지",
+	"mobile.keepAwake.combinedHelp": "자리를 비운 동안에도 덮개를 닫은 Mac에 휴대폰으로 연결할 수 있습니다.",
 	"mobile.keepAwake.help": "자리를 비운 동안에도 휴대폰에서 접속할 수 있습니다.",
 	"mobile.keepAwake.laptopNote": "MacBook은 전원과 외장 디스플레이에 연결되어 있지 않으면 덮개를 닫을 때 잠자기 모드로 전환됩니다.",
 	"mobile.keepAwake.lidLabel": "덮개를 닫아도 깨어 있게 유지",
