@@ -85,6 +85,8 @@ import {
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
 import { attachAppShortcuts } from "./main/app-shortcuts";
+import { startScrollPhaseRelay } from "./main/scroll-phase";
+import { SCROLL_PHASE_CHANNEL } from "./shared/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
@@ -3369,6 +3371,9 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
+	startScrollPhaseRelay((phase) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(SCROLL_PHASE_CHANNEL, phase);
+	});
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
 		authority,
