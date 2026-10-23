@@ -83,6 +83,10 @@ export function createMobileTelemetry(
 	let liveStateApplied = false;
 	let adoptedKey: string | null = null;
 	let pairedInstallId: string | null = null;
+	let cloudUserId: string | null = null;
+	let githubActor: string | null = null;
+	void client.unregister("ao_cloud_user_id");
+	void client.unregister("github_actor");
 
 	// With awaitPreference the facade's initial `optedOut` is a guess, not what the
 	// SDK and the saved marker hold (a previous run may have left both opted out).
@@ -104,6 +108,8 @@ export function createMobileTelemetry(
 			void client.optOut();
 			adoptedKey = null;
 			pairedInstallId = null;
+			cloudUserId = null;
+			githubActor = null;
 			return;
 		}
 		void client.optIn();
@@ -125,6 +131,8 @@ export function createMobileTelemetry(
 			...sanitizeMobileProperties(event, properties),
 			...(phoneInstallId ? { install_id: phoneInstallId } : {}),
 			...(pairedInstallId ? { paired_install_id: pairedInstallId } : {}),
+			ao_cloud_user_id: cloudUserId,
+			github_actor: githubActor,
 			$process_person_profile: false,
 		});
 	};
@@ -140,6 +148,8 @@ export function createMobileTelemetry(
 	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity | null): void => {
 		if (!identity) {
 			pairedInstallId = null;
+			cloudUserId = null;
+			githubActor = null;
 			void client.unregister("paired_install_id");
 			void client.unregister("github_actor");
 			void client.unregister("ao_cloud_user_id");
@@ -150,6 +160,8 @@ export function createMobileTelemetry(
 		setOptedOut(identity.optedOut);
 		if (optedOut || !identity.distinctId) {
 			pairedInstallId = null;
+			cloudUserId = null;
+			githubActor = null;
 			void client.unregister("paired_install_id");
 			void client.unregister("github_actor");
 			void client.unregister("ao_cloud_user_id");
@@ -159,14 +171,8 @@ export function createMobileTelemetry(
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
 		adoptedKey = key;
-		// Remove stale account properties before adding the current desktop's.
-		const props: Record<string, string> = {};
-		if (identity.githubLogin) props.github_actor = identity.githubLogin;
-		if (identity.cloudUserId) props.ao_cloud_user_id = identity.cloudUserId;
-		for (const name of ["github_actor", "ao_cloud_user_id"]) {
-			if (!(name in props)) void client.unregister(name);
-		}
-		if (Object.keys(props).length > 0) void client.register(props);
+		cloudUserId = identity.cloudUserId ?? null;
+		githubActor = identity.githubLogin ?? null;
 	};
 
 	return {
