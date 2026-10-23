@@ -7,10 +7,25 @@ AO leaves automatic updates unavailable until a newer release is qualified.
 This supersedes the closed, unmerged contract-only [PR5503](https://github.com/OrchestratorInc/agent-orchestrator/pull/5503).
 
 Configure native CodeBuddy login or its third-party provider before creating a
-session. [Native environment configuration](https://www.codebuddy.cn/docs/cli/env-vars)
-and [models.json](https://www.codebuddy.cn/docs/cli/models) remain CodeBuddy-owned.
-Local environment credentials report **configured**, never authorized merely
-because they exist. Other CLIs' OAuth logins are not automatically imported.
+session. Harness settings can open the native setup terminal: first-run login
+opens automatically; after startup, **Open setup** sends native `/login`.
+[Native environment configuration](https://www.codebuddy.ai/docs/cli/env-vars)
+and [models.json](https://www.codebuddy.ai/docs/cli/models) remain CodeBuddy-owned.
+AO verifies the native user's selected provider with a bounded, tool-free,
+one-turn request. The probe disables hooks and session persistence, uses an empty
+AO-owned workspace, and excludes project/local settings. It preserves the native
+user profile and inherited provider environment; project-specific access must be
+checked from that project's native session. A check can consume a small amount
+of provider quota. Only successful completed inference reports **authorized**.
+Credential presence alone remains **configured**; quota, transport failures and
+unrecognized responses do not report Connected. Other CLIs' OAuth logins are not
+automatically imported. Standalone `ZAI_API_KEY` or `MINIMAX_API_KEY` variables
+need a matching documented CodeBuddy model/endpoint configuration. For an
+environment-based custom route, set `CODEBUDDY_API_KEY`,
+`CODEBUDDY_BASE_URL` and `CODEBUDDY_MODEL` together in the environment AO
+inherits. A `models.json` route can instead use a complete API URL and a
+credential environment reference. Select the provider's matching API endpoint;
+a general API key and a Coding Plan subscription can require different routes.
 Native model IDs use direct text selection; AO does not invent a model catalog.
 The runtime qualification used Z.ai's OpenAI-compatible coding endpoint and
 `glm-5.3-flash`; a models.json-only startup still required native Tencent login.

@@ -58,7 +58,8 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
-	documentationPlan("codebuddy", "Set up CodeBuddy Code", "Use native CodeBuddy login or configure its documented third-party endpoint and credential environment; AO does not import other CLIs login", "https://www.codebuddy.cn/docs/cli/env-vars"),
+	terminalInputPlan("codebuddy", ActionSetup, "Set up CodeBuddy Code", []string{"codebuddy"}, "/login\r", "Use native first-run login, or select Open setup after CodeBuddy finishes starting to open /login; configure third-party endpoints and keys in CodeBuddy", "https://www.codebuddy.ai/docs/cli/quickstart"),
+	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

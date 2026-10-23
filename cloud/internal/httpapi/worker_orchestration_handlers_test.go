@@ -699,3 +699,25 @@ func TestListSessionChildrenRejectsBadUUID(t *testing.T) {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
+
+type notChildStore struct{ Store }
+
+func (notChildStore) DeleteOrchestratorChild(context.Context, string, string, string) error {
+	return postgres.ErrNotOrchestratorChild
+}
+
+// `ao kill` on a session the orchestrator did not spawn says so, instead of
+// the organization access error a plain ErrForbidden maps to.
+func TestDeleteWorkerChildNamesASessionTheOrchestratorDidNotSpawn(t *testing.T) {
+	s := testServer(notChildStore{})
+	r := workerRequest(t, http.MethodDelete, "/worker/children/"+childOrgID, "", "worker:orchestrate")
+	route := chi.NewRouteContext()
+	route.URLParams.Add("sessionId", childOrgID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, route))
+	w := httptest.NewRecorder()
+	s.deleteWorkerChild(w, r)
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "not_orchestrator_child") ||
+		strings.Contains(w.Body.String(), "organization") {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+}

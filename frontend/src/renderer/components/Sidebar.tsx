@@ -44,7 +44,6 @@ import {
 import {
 	useCallback,
 	useEffect,
-	useId,
 	useLayoutEffect,
 	memo,
 	useMemo,
@@ -75,12 +74,12 @@ import {
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import { getSessionStatusDotView } from "../lib/session-presentation";
-import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
@@ -130,6 +129,7 @@ import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -637,7 +637,12 @@ export function Sidebar({
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
-	const artifactTotal = useMemo(() => artifactCount(groupArtifactsByProject(workspaces)), [workspaces]);
+	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
+	const cloudArtifacts = useCloudOffering().artifacts;
+	const artifactTotal = useMemo(
+		() => artifactCount(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))),
+		[cloudArtifacts, workspaces],
+	);
 	const existingProjectPaths = useMemo(
 		() => workspaces
 			.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND)
@@ -1288,19 +1293,22 @@ export function Sidebar({
 							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
 					</button>
-					<button
-						aria-label={t("shell.settings")}
-						className={FOOTER_NAV_BUTTON_CLASS}
-						onClick={() => selection.goGlobalSettings()}
-						tabIndex={isCollapsed ? -1 : 0}
-						type="button"
-					>
-						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-							<Settings aria-hidden="true" />
-							<span className="tracking-tight">{t("shell.settings")}</span>
-						</span>
-					</button>
+					<div className="flex w-full items-center gap-1">
+						<button
+							aria-label={t("shell.settings")}
+							className={cn(FOOTER_NAV_BUTTON_CLASS, "min-w-0 flex-1")}
+							onClick={() => selection.goGlobalSettings()}
+							tabIndex={isCollapsed ? -1 : 0}
+							type="button"
+						>
+							<NavRowHighlight />
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+								<Settings aria-hidden="true" />
+								<span className="tracking-tight">{t("shell.settings")}</span>
+							</span>
+						</button>
+						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
+					</div>
 				</div>
 				<div
 					aria-hidden={!isCollapsed || undefined}
@@ -2355,12 +2363,6 @@ const SessionRow = memo(function SessionRow({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
-	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
-	const switchLabel = switchPresentation
-		? t(switchPresentation.compactLabelKey, switchPresentation.values)
-		: undefined;
-	const switchStatusId = useId();
-	const describedBy = switchLabel ? switchStatusId : undefined;
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2462,7 +2464,6 @@ const SessionRow = memo(function SessionRow({
 						<button
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
-							aria-describedby={describedBy}
 							aria-keyshortcuts="F2"
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
@@ -2527,11 +2528,6 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-2xs">{hostLabel}</Badge> : null}
-								{switchLabel ? (
-									<span id={switchStatusId} className="max-w-28 shrink-0 truncate text-2xs text-muted-foreground">
-										{switchLabel}
-									</span>
-								) : null}
 							</span>
 						</button>
 					</div>

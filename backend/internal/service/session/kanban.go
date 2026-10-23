@@ -11,11 +11,12 @@ func deriveKanbanPresentation(
 	rec domain.SessionRecord,
 	prs []domain.PRFacts,
 	runs []domain.CurrentHeadReviewRun,
+	interrupted bool,
 	now time.Time,
 	signalCapable bool,
 ) contract.KanbanPresentation {
 	return contract.DeriveKanbanPresentation(
-		toContractKanbanSessionFacts(rec, signalCapable),
+		toContractKanbanSessionFacts(rec, interrupted, signalCapable),
 		toContractKanbanPRFacts(prs, runs),
 		now,
 		noSignalGrace,
@@ -26,9 +27,10 @@ func deriveKanbanPresentation(
 // lifecycle.Manager.ReconcileSessionOutputType maintains, as the source of
 // truth for artifact-output placement rather than re-scanning the artifact
 // directory on every Kanban derivation.
-func toContractKanbanSessionFacts(rec domain.SessionRecord, signalCapable bool) contract.KanbanSessionFacts {
+func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalCapable bool) contract.KanbanSessionFacts {
 	return contract.KanbanSessionFacts{
 		SessionFacts:      toContractSessionFacts(rec, signalCapable),
+		Interrupted:       interrupted,
 		HasArtifactOutput: rec.OutputType.HasArtifact(),
 		AutoReview:        rec.AutoReviewEnabled,
 		AutoInjectReview:  rec.AutoInjectReview,

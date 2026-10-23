@@ -41,6 +41,9 @@ type Supervisor struct {
 	Logger              *slog.Logger
 	PullRequestClaimer  func(context.Context, string) error
 	GitRefReporter      func(context.Context) error
+	// TurnEnded, when set, runs after each Chat turn has run, before the
+	// turn is reported complete.
+	TurnEnded func()
 
 	// busy covers both a claim in flight and its turn until completion. A
 	// handoff must not cancel Run between a durable claim and turn completion.
@@ -52,6 +55,9 @@ type Supervisor struct {
 	// A timed-out handoff releases its own fence so the source can keep running.
 	drainFences           atomic.Int32
 	workspaceStartupError atomic.Pointer[string]
+	// claimedTurn is set once this controller claimed a turn: the session's
+	// task (its first turn) has run in Chat.
+	claimedTurn atomic.Bool
 
 	activeMu    sync.Mutex
 	active      *activeExecution
@@ -60,9 +66,13 @@ type Supervisor struct {
 	prObserver  *pullRequestObserver
 }
 
-// SetWorkspaceStartupError keeps Chat from running a prompt in an empty
-// checkout. The controller still claims queued turns so each receives a
-// durable failure instead of waiting forever for a workspace that cannot load.
+// SetWorkspaceStartupError keeps Chat from running a prompt in a workspace
+// whose checkout or Setup failed. While it is set the controller claims no
+// turn: queued turns (a new session's task first) stay queued, as a failed
+// local start keeps its messages. The desktop shows the failure with Retry,
+// and the turns run once a retry prepares the workspace and this is cleared.
+// A claimed turn would fail for good, so the task would never run after a
+// successful retry.
 func (s *Supervisor) SetWorkspaceStartupError(message string) {
 	if message == "" {
 		s.workspaceStartupError.Store(nil)
@@ -74,6 +84,13 @@ func (s *Supervisor) SetWorkspaceStartupError(message string) {
 type activeExecution struct {
 	cancel      context.CancelFunc
 	interrupted atomic.Bool
+}
+
+// ClaimedTurn reports whether this controller has claimed a turn, so the
+// session's task already ran in Chat and a terminal agent started later must
+// not get it on its command line again.
+func (s *Supervisor) ClaimedTurn() bool {
+	return s.claimedTurn.Load()
 }
 
 // Idle reports whether the Chat controller has no currently executing turn.
@@ -157,7 +174,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	for {
-		if s.stopping.Load() || s.drainFences.Load() > 0 {
+		if s.stopping.Load() || s.drainFences.Load() > 0 || s.workspaceStartupError.Load() != nil {
 			if !wait(ctx, s.PollInterval) {
 				return nil
 			}
@@ -191,6 +208,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		s.claimedTurn.Store(true)
 		err = s.execute(ctx, *turn)
 		s.busy.Store(false)
 		if err != nil {
@@ -210,9 +228,6 @@ func (s *Supervisor) Run(ctx context.Context) error {
 func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 	if turn.CancelRequested || s.stopping.Load() {
 		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
-	}
-	if failure := s.workspaceStartupError.Load(); failure != nil {
-		return s.retryFailure(ctx, turn.ID, turn.Attempt, *failure)
 	}
 	executionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -395,6 +410,9 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 			s.Logger.Warn("report worker branch heads", "error", err)
 		}
 		cancel()
+	}
+	if s.TurnEnded != nil {
+		s.TurnEnded()
 	}
 	if runErr != nil {
 		return s.retryFailure(ctx, turn.ID, turn.Attempt, boundedError(runErr.Error()))

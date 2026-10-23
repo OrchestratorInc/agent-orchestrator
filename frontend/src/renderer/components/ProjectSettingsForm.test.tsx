@@ -491,7 +491,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("GPT Test · High");
+		await waitFor(() => expect(picker).toHaveTextContent("GPT Test · High"));
 		expect(screen.queryByRole("button", { name: "Worker Effort" })).not.toBeInTheDocument();
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
@@ -520,7 +520,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Opus · Medium");
+		await waitFor(() => expect(picker).toHaveTextContent("Opus · Medium"));
 		expect(picker).not.toHaveTextContent("Claude");
 		await userEvent.click(picker);
 		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
@@ -1163,7 +1163,7 @@ describe("ProjectSettingsForm", () => {
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", {
 			params: {
 				path: { agent: "codex" },
-				query: { projectId: "proj-1", revalidate: true },
+				query: { projectId: undefined, revalidate: true },
 			},
 		});
 	});

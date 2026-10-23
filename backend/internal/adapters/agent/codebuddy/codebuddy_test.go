@@ -197,13 +197,14 @@ func TestCurrentSurfaceProtectsDecisionsAndDrafts(t *testing.T) {
 func TestConfiguredCredentialIsNeverReportedAuthorized(t *testing.T) {
 	t.Setenv("CODEBUDDY_API_KEY", "configured-only")
 	t.Setenv("CODEBUDDY_AUTH_TOKEN", "")
-	status, err := New().AuthStatus(context.Background())
+	plugin := fakeAuthCLI(t, "No structured provider result", "1")
+	status, err := plugin.AuthStatus(context.Background())
 	if err != nil || status != ports.AgentAuthStatusConfigured {
 		t.Fatalf("auth=%s err=%v", status, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := New().AuthStatus(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := plugin.AuthStatus(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation=%v", err)
 	}
 }

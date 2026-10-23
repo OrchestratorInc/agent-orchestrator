@@ -17,7 +17,7 @@ func TestCodeBuddyMigrationAllowsCodeBuddyAndReversesBothHistoricalSchemas(t *te
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 215)
+			db := openMigratedDatabaseCopy(t, 20261022172135175)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
 				// 'codewhale' in every variant the CodeBuddy migration rewrites, so anchor
@@ -36,20 +36,20 @@ func TestCodeBuddyMigrationAllowsCodeBuddyAndReversesBothHistoricalSchemas(t *te
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 20261019155340715)
+			upTo(t, db, 20261023181512240)
 			if _, err := db.Exec(insert, "cc-session", 3, "codebuddy"); err != nil {
 				t.Fatalf("insert codebuddy session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261019155340715 {
-				t.Fatalf("migration version = %d, err = %v; want 20261019155340715", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261023181512240 {
+				t.Fatalf("migration version = %d, err = %v; want 20261023181512240", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'codebuddy'`)
-			downTo(t, db, 215)
+			downTo(t, db, 20261022172135175)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -105,7 +105,7 @@ func TestReconcileCodeBuddyAfterBurnedMigration(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (165, 1)`); err != nil {
 		t.Fatalf("seed burned MiMo migration: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (20261019155340715, 1)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (20261023181512240, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := migrate(db); err != nil {

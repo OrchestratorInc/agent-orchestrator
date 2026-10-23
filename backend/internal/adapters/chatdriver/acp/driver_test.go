@@ -1249,7 +1249,7 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 			return Launch{Command: "fake"}, nil
 		},
 		SessionMeta: func(cfg LaunchConfig) map[string]any {
-			return map[string]any{"systemPrompt": map[string]any{"append": cfg.SystemPrompt}}
+			return map[string]any{"systemPrompt": map[string]any{"append": cfg.SystemPrompt}, "disableTools": cfg.DisableTools}
 		},
 		SessionMode: func(permission ports.PermissionMode) string {
 			if permission == ports.PermissionModeAcceptEdits {
@@ -1267,7 +1267,7 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	driver.useTestProcess(fakeSpawn(agent))
 
 	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
-		WorkspacePath: t.TempDir(), SystemPrompt: "AO instructions",
+		WorkspacePath: t.TempDir(), SystemPrompt: "AO instructions", DisableTools: true,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1281,6 +1281,9 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	agent.mu.Unlock()
 	if meta["systemPrompt"] == nil {
 		t.Fatal("session/new did not receive provider metadata")
+	}
+	if meta["disableTools"] != true {
+		t.Fatal("session/new did not receive the background tool restriction")
 	}
 
 	// Consume controller.ready from session setup.
@@ -1788,8 +1791,16 @@ func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, tex
 	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatalf("StartDeferredTurn: %v", err)
 	}
+	// The turn is released only after it completes, just before the driver
+	// announces it is ready; wait for that, as a caller sending the next turn
+	// must, or the next SendTurn can find the turn still in flight.
+	completed := false
 	for {
-		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventTurnCompleted {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			completed = true
+		}
+		if completed && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
 			break
 		}
 	}
@@ -2343,6 +2354,18 @@ func TestNormalizeACPLoadErrorKeepsOtherCodes(t *testing.T) {
 	}
 	if err := normalizeACPError("ACP session/prompt", acpsdk.NewInternalError(nil)); errors.Is(err, ports.ErrChatHistoryLoadFailed) {
 		t.Fatalf("normalizeACPError(prompt -32603) = %v, must not read as a history load rejection", err)
+	}
+}
+
+func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
+	standing := StandingInstructionsBlock("AO standing instructions")
+	// Cursor replays the first prompt's text blocks joined into one.
+	joined := acpsdk.TextBlock(standing.Text.Text + "\nFix the failing test")
+	if got := historicalUserContent(joined); got != "Fix the failing test" {
+		t.Fatalf("replayed first message = %q, want only what the user typed", got)
+	}
+	if got := historicalUserContent(acpsdk.TextBlock("Fix the failing test")); got != "Fix the failing test" {
+		t.Fatalf("ordinary message = %q", got)
 	}
 }
 
@@ -3490,7 +3513,8 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	model, modelCalls := agent.model, agent.modelCalls
 	mode, modeCalls, configCalls := agent.mode, agent.modeCalls, agent.configCalls
 	agent.mu.Unlock()
-	if model != "kimi-code/kimi-for-coding" || modelCalls != 2 ||
+	// Start finds the session already on the model and sends nothing; the explicit set does.
+	if model != "kimi-code/kimi-for-coding" || modelCalls != 1 ||
 		mode != "default" || modeCalls != 1 || configCalls != 0 {
 		t.Fatalf("legacy setters: model=%q/%d mode=%q/%d config=%d",
 			model, modelCalls, mode, modeCalls, configCalls)

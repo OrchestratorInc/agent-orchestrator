@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -120,7 +121,7 @@ func TestProjectScriptStepJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`["make up",{"command":"npm ci","repository":" https://github.com/acme/web "}]`), &steps); err != nil {
 		t.Fatal(err)
 	}
-	want := []ProjectScriptStep{{Command: "make up"}, {Command: "npm ci", Repository: "https://github.com/acme/web"}}
+	want := []ProjectScriptStep{{Command: "make up"}, {Command: "npm ci", Repository: "https://github.com/acme/web", object: true}}
 	if !reflect.DeepEqual(steps, want) {
 		t.Fatalf("steps = %+v", steps)
 	}
@@ -352,5 +353,131 @@ func TestStandaloneProjectRejectsRepoPlaceholderInWorkingFolder(t *testing.T) {
 	}
 	if _, err := NormalizeProjectRepoSettings("https://github.com/acme/alice", json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`)); err != nil {
 		t.Fatalf("a repository project refused {repo}: %v", err)
+	}
+}
+
+// An ao-worker session's checkout folder is the project's working folder with
+// {repo} resolved from the main repository; "~/" stays for the workspace to
+// resolve. A {repo} without a repository, or an invalid folder, is refused,
+// and so is one inside a hidden folder, whose parents the bootstrap would let
+// the worker user enter; the checkout's own folder may be hidden, but not
+// directly in the home (a ~/.local owned by ao-worker would hold the login
+// user's ~/.local/bin).
+func TestCoderCheckoutDirectory(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ template, repository, want string }{
+		{"~/work/{repo}", "https://github.com/acme/alice.git", "~/work/alice"},
+		{"$HOME/{repo}/src", "https://github.com/acme/alice", "$HOME/alice/src"},
+		{"/srv/work/{repo}", "git@github.com:acme/Voice_AI.git", "/srv/work/Voice_AI"},
+		{"~/work/fixed", "", "~/work/fixed"},
+		{"~/work/{repo}", "https://github.com/acme/.github", "~/work/.github"},
+		{"/home/ubuntu/{repo}", "https://github.com/acme/.github", "/home/ubuntu/.github"},
+	} {
+		got, err := CoderCheckoutDirectory(tc.template, tc.repository)
+		if err != nil || got != tc.want {
+			t.Errorf("CoderCheckoutDirectory(%q, %q) = %q, %v; want %q", tc.template, tc.repository, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct{ template, repository string }{
+		{"", "https://github.com/acme/alice"},
+		{"~/work/{repo}", ""},
+		{"work/{repo}", "https://github.com/acme/alice"},
+		{"~/work/{name}", "https://github.com/acme/alice"},
+		{"~/../{repo}", "https://github.com/acme/alice"},
+		{"~/.ssh/{repo}", "https://github.com/acme/alice"},
+		{"$HOME/.aws/x", ""},
+		{"/srv/.config/app", ""},
+		{"~/{repo}/src", "https://github.com/acme/.github"},
+		{"~/{repo}", "https://github.com/acme/.local"},
+		{"$HOME/{repo}", "https://github.com/acme/.github"},
+		{"~/.local", ""},
+	} {
+		if got, err := CoderCheckoutDirectory(tc.template, tc.repository); err == nil {
+			t.Errorf("CoderCheckoutDirectory(%q, %q) = %q, want an error", tc.template, tc.repository, got)
+		}
+	}
+	// The refusal names what is wrong with the folder.
+	for template, want := range map[string]string{
+		"~/.local":         "The working folder must not be a hidden folder directly in the home folder.",
+		"~/.config/{repo}": "The working folder must not be inside a hidden folder.",
+	} {
+		if _, err := CoderCheckoutDirectory(template, "https://github.com/acme/alice"); err == nil || err.Error() != want {
+			t.Errorf("CoderCheckoutDirectory(%q) error = %v, want %q", template, err, want)
+		}
+	}
+}
+
+// A session's stored checkout folder is checked again on every start. One
+// directly in the home that a session created before that rule holds
+// (~/.github) still passes; one inside a hidden folder never does.
+func TestValidateCoderCheckoutDirectoryKeepsAnExistingHiddenFolderInTheHome(t *testing.T) {
+	t.Parallel()
+	for _, folder := range []string{"~/.github", "$HOME/.github", "~/work/.github"} {
+		if err := ValidateCoderCheckoutDirectory(folder); err != nil {
+			t.Errorf("ValidateCoderCheckoutDirectory(%q) = %v, want nil", folder, err)
+		}
+	}
+	if err := ValidateCoderCheckoutDirectory("~/.ssh/alice"); err == nil {
+		t.Error("a checkout inside a hidden folder passed")
+	}
+}
+
+// The additional repositories' folders beside a working-folder checkout match
+// the worker's: RepoDirName of each, without dot folders, the main checkout's
+// folder or duplicates, in project order.
+func TestCoderCheckoutSiblings(t *testing.T) {
+	t.Parallel()
+	config := json.RawMessage(`{"repos":[` +
+		`{"url":"https://github.com/acme/billing"},` +
+		`{"url":"https://github.com/acme/.github"},` +
+		`{"url":"https://github.com/acme/alice-api.git","branch":"develop"},` +
+		`{"url":"https://github.com/fork/billing"},` +
+		`{"url":"https://github.com/other/alice"}]}`)
+	got := CoderCheckoutSiblings(config, "~/work/alice")
+	if want := []string{"billing", "alice-api"}; !slices.Equal(got, want) {
+		t.Fatalf("siblings = %q, want %q", got, want)
+	}
+	// "repository" (the durable root's own checkout folder) is never
+	// pre-created; the worker clones it only into a folder it can create.
+	reserved := json.RawMessage(`{"repos":[{"url":"https://github.com/acme/repository"},{"url":"https://github.com/acme/billing"}]}`)
+	if got, want := CoderCheckoutSiblings(reserved, "~/alice"), []string{"billing"}; !slices.Equal(got, want) {
+		t.Fatalf("siblings = %q, want %q", got, want)
+	}
+	if got := CoderCheckoutSiblings(json.RawMessage(`{}`), "~/work/alice"); got != nil {
+		t.Fatalf("siblings without additional repositories = %q", got)
+	}
+	for name, want := range map[string]bool{
+		"billing": true, "alice-api_v2.0": true, "": false, ".ao": false, "a/b": false, "a b": false, "..": false,
+	} {
+		if got := ValidCoderCheckoutSibling(name); got != want {
+			t.Errorf("ValidCoderCheckoutSibling(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A saved working folder is stored canonical (no repeated or trailing
+// slashes), and a folder inside AO's own .ao state is refused, as are . and ..
+// segments.
+func TestProjectWorkingFolderIsNormalizedAndKeptOutOfAOsState(t *testing.T) {
+	t.Parallel()
+	const mainURL = "https://github.com/acme/alice"
+	for saved, want := range map[string]string{
+		"/work/{repo}/":     "/work/{repo}",
+		" ~/work//{repo}/ ": "~/work/{repo}",
+		"$HOME//src/":       "$HOME/src",
+		"~/work/{repo}":     "~/work/{repo}",
+	} {
+		config, err := NormalizeProjectRepoSettings(mainURL, json.RawMessage(`{"workingDirectory":"`+saved+`"}`))
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		if got := ProjectWorkingDirectory(config); got != want || !strings.Contains(string(config), `"workingDirectory":"`+want+`"`) {
+			t.Errorf("%q saved as %s, want %q", saved, config, want)
+		}
+	}
+	for _, saved := range []string{"~/.ao/{repo}", "$HOME/.ao/work", "/home/coder/.ao/x", "~/work/../{repo}", "~/./work", "~//"} {
+		if config, err := NormalizeProjectRepoSettings(mainURL, json.RawMessage(`{"workingDirectory":"`+saved+`"}`)); err == nil {
+			t.Errorf("%q was accepted as %s", saved, config)
+		}
 	}
 }

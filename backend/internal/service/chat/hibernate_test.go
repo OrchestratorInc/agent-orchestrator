@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1207,5 +1208,24 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	rec, found, err = st.GetSession(ctx, testSession)
 	if err != nil || !found || rec.HibernatedAt != nil {
 		t.Fatalf("session after wake = %+v, %v, %v", rec.HibernatedAt, found, err)
+	}
+}
+
+// A switch on a chat that went to sleep wakes it first, as a message would,
+// instead of being refused because the source agent is not running.
+func TestProviderSwitchWakesASleepingChatFirst(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
+		t.Fatalf("HibernateChat = %v, %v", hibernated, err)
+	}
+	woken := false
+	h.svc.SetWakeCallback(func(context.Context, domain.SessionID) error {
+		woken = true
+		return errors.New("provider would not start")
+	})
+	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex})
+	if !woken || err == nil || !strings.Contains(err.Error(), "could not be woken") {
+		t.Fatalf("woken=%v err=%v; want the switch to wake the chat first", woken, err)
 	}
 }

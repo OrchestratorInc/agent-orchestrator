@@ -58,11 +58,17 @@ ao list [--json] [--all]
 ```
 
 Shows the workers this orchestrator spawned: id, name, harness, branch,
-status, whether the worker runtime is connected, and its pull request (number
-and CI state) once one exists. Terminated workers are hidden unless `--all`.
+status, whether the worker runtime is connected, its pull request (number
+and CI state) once one exists, and the files in its artifact directory once it
+has written any. Terminated workers are hidden unless `--all`.
 
 `--json` includes per-PR detail (`prs`: url, number, state, ci, review,
-mergeability, source/target branch) plus `activityState` and `isTerminated`.
+mergeability, source/target branch), the worker's artifact files
+(`artifactCount`, `artifactsUpdatedAt`, and `artifactFiles` with path, kind,
+size, and updatedAt for the most recently changed: at most 10, fewer when
+their paths are very long, with `artifactFilesTruncated` set when there are
+more), plus `activityState` and
+`isTerminated`.
 
 Status vocabulary: `working`, `idle`, `needs_input`, `pr_open`, `draft`,
 `ci_failed`, `review_pending`, `changes_requested`, `commented`, `approved`,

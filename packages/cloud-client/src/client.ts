@@ -30,6 +30,8 @@ import type {
   RedactedProviderConnection,
   RequestOptions,
   Session,
+  SessionArtifactAccess,
+  SessionArtifactList,
   SessionInterfaceTransition,
   SessionInterfaceTransitionStatus,
   StartSessionInterfaceTransitionInput,
@@ -337,6 +339,33 @@ export class CloudClient {
     return this.request(
       this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
       options,
+    );
+  }
+
+  /** Lists a session's committed artifact files without waking its sandbox. */
+  listArtifacts(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactList> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts`),
+      options,
+    );
+  }
+
+  /**
+   * Returns a short-lived path prefix that serves the session's artifact files
+   * without a bearer header. Append a file's URL-escaped path to filesPrefix.
+   */
+  getArtifactAccess(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactAccess> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/access`),
+      { method: "POST", signal: options.signal },
     );
   }
 

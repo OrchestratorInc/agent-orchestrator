@@ -185,22 +185,12 @@ func (*Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.Ses
 	return info, ok, nil
 }
 
-// AuthStatus reports credential configuration without claiming remote authorization.
-func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	}
-	// Environment presence is not a provider authorization round trip. Native
-	// login/model configuration remains native-owned; never import another CLI's login.
-	for _, k := range []string{"CODEBUDDY_API_KEY", "CODEBUDDY_AUTH_TOKEN"} {
-		if strings.TrimSpace(os.Getenv(k)) != "" {
-			return ports.AgentAuthStatusConfigured, nil
-		}
-	}
-	return ports.AgentAuthStatusUnknown, nil
-}
-
 // ExitDetectionMode delegates process exit facts to the runtime supervisor.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
+
+// SupportsTerminalVersionRefresh explicitly leaves unattended upgrades disabled:
+// exact user-requested restore is supported, but automatic cross-version restore
+// has not been qualified for this native harness.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return false }

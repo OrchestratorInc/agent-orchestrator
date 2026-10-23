@@ -15,6 +15,7 @@ import {
 	gitHubFullName,
 	isStandaloneCloudProject,
 	MAX_PROJECT_RULES_BYTES,
+	normalizeWorkingDirectory,
 	projectAdditionalRepos,
 	projectAgentStartsIn,
 	projectConfigText,
@@ -28,7 +29,7 @@ import { CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { Button } from "./ui/button";
+import { SettingsSaveFooter as SaveFooter } from "./settings/SettingsSaveFooter";
 import { Input } from "./ui/input";
 
 type LoadedProps = { project: CloudCpProject; readOnly: boolean; onSaveState?: (state: ProjectSettingsSaveState) => void };
@@ -87,19 +88,6 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 	return { mutation, edited: () => setSavedAt(false) };
 }
 
-function SaveFooter({ dirty, disabled, error }: { dirty: boolean; disabled: boolean; error?: string }) {
-	const { t } = useTranslation();
-	return <>
-		{/* Pinned to the bottom of the scrolling page so Save stays in view however long the page is. */}
-		<div className="sticky -bottom-(--size-modal-padding) z-[1] -mx-(--size-modal-padding) -mb-(--size-modal-padding) border-t border-border bg-card px-(--size-modal-padding) py-4">
-			{error ? <p role="alert" className="mb-3 text-sm text-error">{error}</p> : null}
-			<div className="flex items-center justify-end gap-3">
-				<Button disabled={!dirty || disabled} type="submit">{t("settings.project.saveChanges")}</Button>
-			</div>
-		</div>
-	</>;
-}
-
 function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: ReactNode; children: ReactNode }) {
 	return <div className="space-y-2">
 		<label className="block text-sm font-medium text-settings-label" htmlFor={htmlFor}>{label}</label>
@@ -113,17 +101,19 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: st
 function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workingDirectoryProblem>): string {
 	switch (problem) {
 		case "length":
-			return t("settings.cloudProject.workingDirectoryTooLong", { defaultValue: "The working folder must be at most 512 characters." });
+			return t("settings.cloudProject.workingDirectoryTooLong");
 		case "characters":
-			return t("settings.cloudProject.workingDirectoryCharacters", { defaultValue: "The working folder contains invalid characters." });
+			return t("settings.cloudProject.workingDirectoryCharacters");
 		case "segments":
-			return t("settings.cloudProject.workingDirectorySegments", { defaultValue: "The working folder must not contain . or .. segments." });
+			return t("settings.cloudProject.workingDirectorySegments");
+		case "aoState":
+			return t("settings.cloudProject.workingDirectoryAOState");
 		case "standaloneRepo":
-			return t("settings.cloudProject.workingDirectoryStandaloneRepo", { defaultValue: "This project has no repository, so its working folder cannot use {repo}. Name the folder, for example ~/work/scratch." });
+			return t("settings.cloudProject.workingDirectoryStandaloneRepo");
 		case "placeholder":
-			return t("settings.cloudProject.workingDirectoryPlaceholderOnly", { defaultValue: "The working folder may only use {repo} as a placeholder." });
+			return t("settings.cloudProject.workingDirectoryPlaceholderOnly");
 		default:
-			return t("settings.cloudProject.workingDirectoryInvalid", { defaultValue: "The working folder must be an absolute path or start with ~/ or $HOME/, and name a folder below it." });
+			return t("settings.cloudProject.workingDirectoryInvalid");
 	}
 }
 
@@ -144,14 +134,17 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const [extras, setExtras] = useState<string[]>(() => storedRepos.map((repo) => repo.url));
 	const [startsIn, setStartsIn] = useState<CloudCpAgentStartsIn>(() => projectAgentStartsIn(project.config));
 	const [workingDirectory, setWorkingDirectory] = useState(() => projectConfigText(project.config, "workingDirectory"));
-	const [saved, setSaved] = useState(() => ({ extras: storedRepos.map((repo) => repo.url), startsIn: projectAgentStartsIn(project.config), workingDirectory: projectConfigText(project.config, "workingDirectory").trim() }));
+	const [saved, setSaved] = useState(() => ({ extras: storedRepos.map((repo) => repo.url), startsIn: projectAgentStartsIn(project.config), workingDirectory: normalizeWorkingDirectory(projectConfigText(project.config, "workingDirectory")) }));
 	const filledExtras = extras.filter((url) => url !== "");
 	const reposChanged = JSON.stringify(filledExtras) !== JSON.stringify(saved.extras);
-	const dirty = reposChanged || startsIn !== saved.startsIn || workingDirectory.trim() !== saved.workingDirectory;
+	const dirty = reposChanged || startsIn !== saved.startsIn || normalizeWorkingDirectory(workingDirectory) !== saved.workingDirectory;
 	const repos = useCloudGitHubAppRepositories(project.orgId, !standalone);
-	// The working folder only applies to a bring-your-own Coder workspace run as
-	// its own user; show it there, or while a value is stored so it can be cleared.
-	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder).data != null;
+	// The working folder is the folder a session run as the workspace user
+	// adopts, and, once the control plane checks ao-worker sessions out there
+	// (offering.coderWorkerWorkingFolder), where any Coder session checks the
+	// main repository out; show it for a bring-your-own Coder org, or while a
+	// value is stored so it can be cleared.
+	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder, project.orgId).data != null;
 	const showWorkingDirectory = (orgOwnsCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER) || saved.workingDirectory !== "";
 	// A Setup or Cleanup step runs in its repository's folder, so a repository a
 	// step still uses cannot be removed until that step is moved or deleted (the
@@ -176,9 +169,14 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			});
 		}
 		if (startsIn !== saved.startsIn) config.agentStartsIn = startsIn;
-		if (workingDirectory.trim() !== saved.workingDirectory) config.workingDirectory = workingDirectory.trim();
+		// Saved as the control plane stores it, so the field shows what was saved.
+		const normalizedDirectory = normalizeWorkingDirectory(workingDirectory);
+		if (normalizedDirectory !== saved.workingDirectory) config.workingDirectory = normalizedDirectory;
 		mutation.mutate({ config }, {
-			onSuccess: () => setSaved({ extras: filledExtras, startsIn, workingDirectory: workingDirectory.trim() }),
+			onSuccess: () => {
+				setWorkingDirectory(normalizedDirectory);
+				setSaved({ extras: filledExtras, startsIn, workingDirectory: normalizedDirectory });
+			},
 		});
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -225,14 +223,16 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			</Field>
 		</>}
 		{showWorkingDirectory ? (
-			<Field label={t("settings.cloudProject.workingDirectory", { defaultValue: "Working folder" })} htmlFor="cloudProjectWorkingDirectory"
+			<Field label={t("settings.cloudProject.workingDirectory")} htmlFor="cloudProjectWorkingDirectory"
 				hint={workingDirectoryInvalid
 					? <span role="alert" className="text-error">{workingDirectoryMessage(t, workingDirectoryError)}</span>
 					: standalone
-						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "Where sessions start in your Coder workspace. Leave empty for the default." })
-						: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty to use your Coder connection's folder." })}>
+						? t("settings.cloudProject.workingDirectoryHintStandalone")
+						: offering.coderWorkerWorkingFolder
+							? t("settings.cloudProject.workingDirectoryHintCheckout")
+							: t("settings.cloudProject.workingDirectoryHint")}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
-					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone", { defaultValue: "~/work/scratch" }) : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
+					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone") : t("settings.cloudProject.workingDirectoryPlaceholder")} spellCheck={false} autoCapitalize="off" autoComplete="off"
 					aria-invalid={workingDirectoryInvalid || undefined}
 					onChange={(event) => { setWorkingDirectory(event.target.value); edited(); }} />
 			</Field>

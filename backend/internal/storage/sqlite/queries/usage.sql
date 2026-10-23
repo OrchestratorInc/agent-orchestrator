@@ -485,14 +485,17 @@ WHERE id = sqlc.arg(id)
 RETURNING binding_id;
 
 -- name: ListLegacyUsageSourceIDs :many
-SELECT DISTINCT us.id
-FROM usage_sources us
-JOIN model_usage_events mue ON mue.usage_source_id = us.id
 -- Open attribution: never attributed, or attributed only by inference and so
--- still replaceable by an observation.
+-- still replaceable by an observation. This is exactly what the partial index
+-- idx_model_usage_events_open_attribution holds, so the sources are read from
+-- that index alone. Every event's usage_source_id references usage_sources, so
+-- no join is needed; with the join the planner left the partial index for the
+-- full usage_source index once sqlite_stat1 existed.
+SELECT DISTINCT mue.usage_source_id
+FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
-ORDER BY us.id;
+ORDER BY mue.usage_source_id;
 
 -- name: ListLegacyUsageEvents :many
 SELECT

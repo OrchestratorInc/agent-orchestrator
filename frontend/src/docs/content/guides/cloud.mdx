@@ -30,6 +30,12 @@ Cloud stores project, session, conversation, and event records in its hosted con
 
 Commit and push important work to the repository. A provider failure or missing checkpoint can leave work unavailable. Signing out clears the desktop's Cloud view but does not delete remote sessions.
 
+## Artifacts
+
+When your Cloud deployment keeps artifacts, the agent writes deliverables that are not part of a pull request (a report, plan, or HTML page) to the session's artifacts folder, and the files in that folder are copied to Cloud as they are written. Files elsewhere in the workspace are not copied. Open them from the session's **Artifacts** tab or the **Artifacts** page in the sidebar. Cloud keeps them when the session is paused or archived; to open an archived session's files, restore it from the project's **Archive** section. To start a session whose goal is a file rather than a pull request, choose **New artifact** on the Artifacts page and pick a Cloud project.
+
+HTML artifacts open in a sandboxed view: their scripts run, but they cannot fetch data, open windows, or use your account, so a page that loads data at runtime may not work and its links do not open. Markdown and text open in the file viewer, read-only. A file can be up to 25 MiB, and a session can keep 200 files or 500 MiB. If a file says it is no longer available, ask the agent to write it again.
+
 ## Costs and limits
 
 This repository does not publish Cloud pricing or account entitlements. The desktop does not show a billing or plan page, so provider defaults in development files are not customer pricing. Your account, organization, and selected sandbox provider determine which Cloud option and agents you can use.

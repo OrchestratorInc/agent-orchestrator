@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -648,7 +649,7 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	case codexproto.MethodError:
 		var p codexproto.ErrorNotification
 		if err := json.Unmarshal(n.Params, &p); err == nil &&
-			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil) {
+			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil || p.Error.CodexErrorInfo != nil) {
 			failure := codexProviderFailure(p.Error)
 			if failure == nil {
 				return nil
@@ -694,21 +695,35 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	}
 }
 
-// codexErrorInfo is metadata, not display copy. Only an explicit unauthorized
-// reason invokes the existing authentication path; other errors remain readable.
+// Native reasons distinguish quota exhaustion from throttling and authentication
+// failures even when the provider's display copy does not name the limit.
 func codexProviderFailure(turnErr codexproto.TurnError) error {
 	detail := ""
 	if turnErr.AdditionalDetails != nil {
 		detail = *turnErr.AdditionalDetails
 	}
 	var cause error
-	if turnErr.CodexErrorInfo != nil && string(*turnErr.CodexErrorInfo) == `"unauthorized"` {
-		cause = ports.ErrChatAuthRequired
+	if turnErr.CodexErrorInfo != nil {
+		var reason string
+		_ = json.Unmarshal(*turnErr.CodexErrorInfo, &reason)
+		switch reason {
+		case "unauthorized":
+			cause = ports.ErrChatAuthRequired
+		case "usageLimitExceeded":
+			cause = errCodexUsageLimitExceeded
+		}
 	}
 	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && cause == nil {
 		return nil
 	}
-	return ports.NewChatProviderFailure(turnErr.Message, detail, cause)
+	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && errors.Is(cause, errCodexUsageLimitExceeded) {
+		return ports.NewChatProviderFailure("Usage limit exceeded", "", cause)
+	}
+	failure := ports.NewChatProviderFailure(turnErr.Message, detail, cause)
+	if errors.Is(cause, errCodexUsageLimitExceeded) && domain.ParseConversationUsageLimit(failure.Error(), nil) == nil {
+		return ports.NewChatProviderFailure("Usage limit exceeded", failure.Error(), cause)
+	}
+	return failure
 }
 
 // turnIDFallback reads a top-level turnId, which some builds send instead of
@@ -1159,9 +1174,15 @@ func activityDetail(it threadItem) []byte {
 		detail["processId"] = *it.ProcessID
 	}
 	if out := deref(it.AggregatedOutput); out != "" {
+		// The whole output in one field: past the cap only its end is kept, and the
+		// cut is marked the way the streamed copy's is.
+		kept, cut := commanddetail.TailChars(out, commanddetail.MaxOutputChars)
+		detail["output"] = kept
+		if cut {
+			detail["outputTruncated"] = true
+		}
 		// Marked partial because the provider's own aggregation was observed to
 		// drop leading output. A reader must not present it as the full record.
-		detail["output"] = out
 		detail["outputMayBePartial"] = true
 		// Named so a reader can tell this from the accumulated delta stream. Only
 		// the aggregate exists for a fast command, where the provider finishes
@@ -1268,15 +1289,6 @@ type fileChangeDetail struct {
 	PatchTruncated bool `json:"patchTruncated,omitempty"`
 }
 
-// maxPatchChars caps one file's stored patch.
-//
-// A new file's "patch" is its entire contents, and this payload is re-read by every
-// conversation snapshot poll, so an agent generating a 5000-line file would otherwise
-// put it in a row that is fetched once a second. 16K is well past what a diff card
-// shows; past it the worktree and the turn's aggregate diff are where the full change
-// lives.
-const maxPatchChars = 16 * 1024
-
 // fileChanges converts the provider's per-file patches into AO's diff shape.
 //
 // Counts are read out of the patch text here because the provider does not send
@@ -1304,8 +1316,8 @@ func fileChanges(changes []codexproto.FileUpdateChange) []fileChangeDetail {
 		// Counted from the WHOLE patch, before any truncation: the figures describe
 		// the change, not how much of it AO chose to store.
 		file.Additions, file.Deletions = countPatchLines(change.Diff, file.Status)
-		if len(file.Patch) > maxPatchChars {
-			file.Patch = file.Patch[:maxPatchChars]
+		if len(file.Patch) > commanddetail.MaxPatchChars {
+			file.Patch = commanddetail.Head(file.Patch, commanddetail.MaxPatchChars)
 			file.PatchTruncated = true
 		}
 		files = append(files, file)

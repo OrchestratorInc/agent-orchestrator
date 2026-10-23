@@ -31,6 +31,35 @@ WHERE session_id = ? AND provider = ?
 ORDER BY bound_at DESC
 LIMIT 1;
 
+-- Only a known source-time binding can prove that a turn used another account.
+-- name: SessionAgentAccountChangedSince :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions s
+    JOIN session_agent_accounts source ON source.session_id = s.id
+      AND source.provider = CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END
+    WHERE s.id = sqlc.arg(session_id)
+      AND source.bound_at = (
+          SELECT MAX(a.bound_at) FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+            AND a.bound_at <= sqlc.arg(requested_at)
+      )
+      AND source.account_id <> (
+          SELECT a.account_id FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+          ORDER BY a.bound_at DESC LIMIT 1
+      )
+);
+
+-- Account changes invalidate only this session's active provider's pending work.
+-- name: CancelSessionTurnAutoResume :exec
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE handled_by_session_id = sqlc.arg(session_id) AND usage_limit_auto_resume = 1
+  AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = conversation_turns.handled_by_session_id
+        AND CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END = CAST(sqlc.arg(provider) AS TEXT)
+  );
+
 -- Each usage event counts for the account its session used when the event
 -- happened; an event older than the session's first binding counts for that
 -- first account. Days are UTC calendar days.
