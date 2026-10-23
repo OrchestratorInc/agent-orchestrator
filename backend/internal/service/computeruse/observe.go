@@ -25,6 +25,8 @@ import (
 var observedTools = map[string]bool{
 	"click": true, "double_click": true, "right_click": true, "set_value": true,
 	"type_text": true, "press_key": true, "hotkey": true, "scroll": true, "drag": true,
+	// A window brought to the front draws again; the read shows it.
+	"bring_to_front": true,
 }
 
 // keepSnapshots bounds how many snapshot windows the service remembers.

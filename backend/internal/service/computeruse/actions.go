@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -38,6 +39,9 @@ var stepKeys = map[string]bool{"tool": true, "args": true, "wait_for": true, "ex
 func checkActions(tool string, arguments map[string]any) error {
 	if tool != "run_steps" {
 		return checkAction(tool, arguments, nil, 0)
+	}
+	if arguments["delivery_mode"] == "foreground" || arguments["foreground_fallback"] == true {
+		return actionRefused("COMPUTER_USE_FOREGROUND_DISABLED", tool, 0, foregroundRefusal)
 	}
 	steps, _ := arguments["steps"].([]any)
 	for index, raw := range steps {
@@ -74,6 +78,9 @@ func checkAction(tool string, arguments, batch map[string]any, step int) error {
 	if !actionTools[tool] {
 		return nil
 	}
+	if arguments["delivery_mode"] == "foreground" {
+		return actionRefused("COMPUTER_USE_FOREGROUND_DISABLED", tool, step, foregroundRefusal)
+	}
 	if arguments["scope"] == "desktop" || targetKind(arguments) == "desktop" {
 		return actionRefused("COMPUTER_USE_DESKTOP_SCOPE_DISABLED", tool, step,
 			"AO does not act on the whole screen, which may be in use. Pass the pid and window_id of the window you read with get_window_state instead of scope \"desktop\".")
@@ -90,6 +97,51 @@ func checkAction(tool string, arguments, batch map[string]any, step int) error {
 			"type_text needs the element_token of the field to type into. Without one it types into whatever field has focus, which may be a different field or chat.")
 	}
 	return nil
+}
+
+// foregroundRefusal explains why AO refuses foreground delivery: the driver
+// raises the window and sends real input to whatever has focus, which may be
+// the window the user is typing in.
+const foregroundRefusal = "AO does not send foreground input: the driver would raise the window and send real keys and clicks to whatever has focus, which may be the user's own window. Act in the background; if the window is not rendering, ask the user, then bring it to the front with bring_to_front."
+
+// foregroundAdvice replaces the driver's own suggestion to retry an action
+// with delivery_mode "foreground", which AO refuses.
+const foregroundAdvice = "AO refuses delivery_mode \"foreground\". If the action did not land because the window is not rendering, ask the user, then bring it to the front with bring_to_front and act again."
+
+// adviceKeys are the result fields where the driver gives advice. The window's
+// tree is left out: an app's own labels can mention "foreground".
+var adviceKeys = map[string]bool{"hint": true, "suggestion": true, "escalation": true, "message": true, "reason": true, "detail": true, "recommended": true}
+
+// noteForegroundAdvice adds ao_note to a result whose driver advice suggests
+// foreground delivery.
+func noteForegroundAdvice(result any) {
+	output, ok := result.(map[string]any)
+	if ok && suggestsForeground(output, false) {
+		output["ao_note"] = foregroundAdvice
+	}
+}
+
+func suggestsForeground(value any, advice bool) bool {
+	switch v := value.(type) {
+	case string:
+		return advice && strings.Contains(strings.ToLower(v), "foreground")
+	case map[string]any:
+		for key, item := range v {
+			if key == "tree_markdown" || key == "tree_diff" || key == "elements" {
+				continue
+			}
+			if suggestsForeground(item, advice || adviceKeys[key]) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if suggestsForeground(item, advice) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // namesWindow reports whether a pixel action names the window it measured.

@@ -7,6 +7,8 @@ started while it is on get these tools from AO's `ao` tool server:
 
 - `list_windows`: the open windows, with each one's `pid` and `window_id`.
 - `launch_app`: open an app in the background.
+- `bring_to_front`: bring a window to the front so it draws again. It takes
+  keyboard focus from the user, so ask first (see below).
 - `get_window_state`: a window's accessibility tree and screenshot.
 - `click`, `type_text`, `press_key`: act on one element or window.
 - `run_steps`: several actions in one call. `hotkey`, `scroll`, `set_value`,
@@ -71,11 +73,19 @@ Background windows do not always render. Chromium-based browsers and apps
 (Chrome, Brave, Edge, Electron), on Windows especially, throttle or stop
 painting windows that are hidden behind others, so `get_window_state` can
 return a blank page, or a lazily loaded dialog that never gets past its
-loading skeleton. If a window reads blank or stuck loading twice, stop
-retrying: ask the user to bring it to the front and leave it visible, then
-read it again. You have no tool that raises a window, and an action's
-`delivery_mode: "foreground"` fronts the window only for that one action, so
-it does not keep a page painting.
+loading skeleton; AO marks such a read with a `warning:` line. If a window
+reads blank or stuck loading twice, stop retrying and ask the user whether
+you may bring it to the front. If they agree, call `bring_to_front` with its
+`pid` and `window_id`, which sends no keys or clicks, and act on the window
+it returns. If they say no, or are working in another app, leave the window
+alone and tell them what you could not do. Skip asking only when the user
+said they are away from the computer. The window stays drawn only while it
+is in front: if the user switches away, it can go blank again.
+
+AO refuses foreground input (`delivery_mode: "foreground"` and `run_steps`'
+`foreground_fallback`): it would raise the window and send real keys and
+clicks to whatever has focus, which may be the user's own window. When the
+driver suggests it, bring the window to the front instead, as above.
 
 `run_steps` runs several actions in one call and returns one line per step
 (`2. click failed (find): ...` names the step that stopped the batch), then the
@@ -107,12 +117,32 @@ Tips:
   `max_depth` bound very large trees.
 - Screenshots are saved under AO's data directory, grouped by session, and old
   ones are pruned automatically.
-- For web pages, prefer `ao browser`, which drives the AO Browser panel.
-  Drive the user's own browser with these tools only when they ask for it or
-  the task needs its signed-in session, and expect that browser to have to
-  stay in front (see "Background windows do not always render" above). Cua
-  Driver's own browser tools are turned off because they conflict with
+- Cua Driver's own browser tools are turned off because they conflict with
   `ao browser`.
+
+## Web pages and the user's own browser
+
+Use `ao browser` for web pages. It drives the AO Browser panel, which keeps
+drawing when it is not on top. Its profile is temporary unless the user gives
+the session a named one; if a page needs the user's sign-ins, ask them to give
+this session a signed-in browser profile (Settings > Browser can import one
+from Chrome, Firefox, or Safari).
+
+Drive the user's own browser on this computer (Chrome, Brave, Edge, Firefox,
+Safari) with these tools only when the user explicitly asks for it, such as
+"use my Brave". Then:
+
+- Check which account it is signed in to before anything outward-facing (see
+  Safety).
+- Chromium-based browsers stop drawing while hidden. If the browser is not
+  running and you start it with `launch_app`, pass
+  `--disable-backgrounding-occluded-windows` and
+  `--disable-renderer-backgrounding` in `additional_arguments` (on Windows
+  also `--disable-features=CalculateNativeWinOcclusion`) so it keeps drawing
+  behind other windows. These take effect only when the browser starts.
+- If it is already open, do not close or restart it to add them: that closes
+  the user's windows. Ask the user first, or bring it to the front when it
+  reads blank, as above.
 
 ## Safety
 
@@ -146,6 +176,9 @@ account rather than posting, sending, or buying as the wrong person.
   window and pass the field's `element_token`.
 - `COMPUTER_USE_DESKTOP_SCOPE_DISABLED`: AO does not act on the whole screen.
   Name the window instead, even if a driver error suggests `scope="desktop"`.
+- `COMPUTER_USE_FOREGROUND_DISABLED`: AO does not send foreground input. Act
+  in the background; if the window is not drawing, ask the user, then use
+  `bring_to_front`.
 - `COMPUTER_USE_CALL_FAILED`: the driver's own message follows. For example,
   `window_id_not_found` means the window closed, so list windows again;
   `stale_element_token` means a newer read replaced that token, so read again

@@ -112,3 +112,12 @@ func TestRenderCuaWindowWarnsWhenUnrendered(t *testing.T) {
 		t.Fatalf("text =\n%s", text)
 	}
 }
+
+func TestRenderCuaPrintsAONote(t *testing.T) {
+	response := decodeCuaResponse(t, `{"tool":"press_key","result":{"summary":"Sent end","ao_note":"AO refuses delivery_mode foreground.",
+		"observation":{"ok":false,"skipped":"no window"}},"images":[]}`)
+	text, _ := renderCuaCall(response)
+	if !strings.HasSuffix(text, "note: AO refuses delivery_mode foreground.\n") {
+		t.Fatalf("text =\n%s", text)
+	}
+}

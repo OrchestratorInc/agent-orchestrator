@@ -62,7 +62,7 @@ func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 				}
 				continue
 			}
-			for _, want := range []string{"## Computer use", "AO's `ao` tool server", "`get_window_state`", "screenshot as an image", "commands/cua.md", "not available in this session", "Settings > Computer use agents", "untrusted", "which account the app or browser is signed in to", "prefer `ao browser`", "the user's own browser"} {
+			for _, want := range []string{"## Computer use", "AO's `ao` tool server", "`get_window_state`", "screenshot as an image", "commands/cua.md", "not available in this session", "Settings > Computer use agents", "untrusted", "which account the app or browser is signed in to", "use `ao browser`", "only when they explicitly ask", "`bring_to_front` takes keyboard focus", "AO refuses foreground input"} {
 				if !strings.Contains(sp, want) {
 					t.Fatalf("%s: chat prompt missing %q", kind, want)
 				}

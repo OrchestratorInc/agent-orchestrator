@@ -31,6 +31,9 @@ func renderCuaCall(response cuaCallResponse) (string, bool) {
 	default:
 		return "", false
 	}
+	if note := cuaString(result["ao_note"]); note != "" {
+		out.line("note: " + note)
+	}
 	return out.String(), true
 }
 
