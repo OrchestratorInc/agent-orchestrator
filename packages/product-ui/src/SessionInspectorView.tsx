@@ -268,8 +268,8 @@ export function SessionInspectorSummaryView({
 	usage,
 	workers,
 }: {
-	activity: ReactNode;
-	activityTitle: string;
+	activity?: ReactNode;
+	activityTitle?: string;
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
@@ -307,8 +307,7 @@ export function SessionInspectorSummaryView({
 			{reviews}
 			{completion}
 			{scripts}
-			{/* Activity is temporarily hidden during the sidebar redesign. */}
-			{false && <InspectorSection title={activityTitle}>{activity}</InspectorSection>}
+			{activityTitle ? <InspectorSection title={activityTitle}>{activity}</InspectorSection> : null}
 			{usage}
 		</div>
 	);

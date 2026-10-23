@@ -568,19 +568,9 @@ const SummaryView = memo(function SummaryView({
 	const accountsPreview = useUiStore((state) => state.developerMode);
 	return (
 		<SessionInspectorSummaryView
-			activity={
-				<>
-					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
-					<ResumeAgentControl
-						className="w-full"
-						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
-						hostId={hostId}
-						session={session}
-					/>
-				</>
-			}
-			activityTitle={t("inspector.activity")}
+			// Activity is temporarily hidden during the sidebar redesign.
+			// activity={<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />}
+			// activityTitle={t("inspector.activity")}
 			artifactCards={
 				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} session={session} /> : undefined
 			}
@@ -614,7 +604,13 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			}
-			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			completion={
+				<>
+					{showSessionControls ? <SessionControls hostId={hostId} session={session} /> : null}
+					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					<ResumeAgentControl className="w-full" hostId={hostId} session={session} />
+				</>
+			}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
@@ -1551,7 +1547,7 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 // ponytail: newest 5 commits only; a "show all" control when long sessions need it.
 const TIMELINE_COMMIT_LIMIT = 5;
 
-function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+export function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
