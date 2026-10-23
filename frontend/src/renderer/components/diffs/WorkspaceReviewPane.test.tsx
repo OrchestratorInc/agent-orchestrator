@@ -146,6 +146,15 @@ function commitTarget(data: WorkspaceFilesResponse, sha = data.commits[0].sha): 
 	return reviewTarget(data, { kind: "commits", shas: [sha] });
 }
 
+function ReviewWithCollapseControls(props: ComponentProps<typeof WorkspaceReviewPane>) {
+	const [allCollapsed, setAllCollapsed] = useState(false);
+	const [request, setRequest] = useState<{ expand: boolean; key: number }>();
+	return <>
+		<button onClick={() => setRequest((current) => ({ expand: allCollapsed, key: (current?.key ?? 0) + 1 }))}>{allCollapsed ? "Expand all files" : "Collapse all files"}</button>
+		<WorkspaceReviewPane {...props} collapseRequest={request} onAllCollapsedChange={setAllCollapsed} />
+	</>;
+}
+
 describe("WorkspaceReviewPane", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -173,6 +182,7 @@ describe("WorkspaceReviewPane", () => {
 		);
 		const view = render(pane());
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(scrollToMock).not.toHaveBeenCalled();
 
 		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
@@ -239,21 +249,21 @@ describe("WorkspaceReviewPane", () => {
 		const files: WorkspaceFilesResponse["files"] = ["sample.png", "archive.bin"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true, fileFingerprint: `v1:${path}` }));
 		if (mixed) files.unshift({ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false, fileFingerprint: "text-v1" });
 		const data = workspace(files);
-		const pane = () => <WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />;
+		const pane = () => <WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />;
 		const first = renderWithQuery(pane());
 		if (mixed) await screen.findByTestId("review-patch");
 		for (const file of files) {
 			await userEvent.click(await screen.findByRole("checkbox", { name: `Mark ${file.path} as viewed` }));
 			expect(screen.getByRole("button", { name: `Expand ${file.path}` })).toHaveAttribute("aria-expanded", "false");
 		}
-		expect(screen.getByText(`${files.length} of ${files.length} viewed`)).toBeInTheDocument();
+		expect(screen.getAllByRole("checkbox").filter((box) => box.getAttribute("data-state") === "checked")).toHaveLength(files.length);
 		expect(screen.queryByRole("img")).not.toBeInTheDocument();
 		first.unmount();
 		renderWithQuery(pane());
-		expect(screen.getByText(`${files.length} of ${files.length} viewed`)).toBeInTheDocument();
+		expect(screen.getAllByRole("checkbox").filter((box) => box.getAttribute("data-state") === "checked")).toHaveLength(files.length);
 		for (const file of files) expect(await screen.findByRole("checkbox", { name: `Mark ${file.path} as not viewed` })).toBeChecked();
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark sample.png as not viewed" }));
-		expect(screen.getByText(`${files.length - 1} of ${files.length} viewed`)).toBeInTheDocument();
+		expect(screen.getAllByRole("checkbox").filter((box) => box.getAttribute("data-state") === "checked")).toHaveLength(files.length - 1);
 		expect(screen.getByRole("button", { name: "Expand sample.png" })).toHaveAttribute("aria-expanded", "false");
 		await userEvent.click(screen.getByRole("button", { name: "Expand sample.png" }));
 		expect(screen.getByRole("img", { name: "After version of sample.png" })).toBeInTheDocument();
@@ -262,7 +272,7 @@ describe("WorkspaceReviewPane", () => {
 	it.each([false, true])("collapses image bodies individually and together with text files (mixed: %s)", async (mixed) => {
 		const images: WorkspaceFilesResponse["files"] = ["one.png", "two.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true }));
 		const data = workspace(mixed ? [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }, ...images] : images);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		const firstImage = await screen.findByAltText("After version of one.png");
 		// Image-only reviews must mount CodeView too, so its footer owns scrolling.
@@ -341,6 +351,7 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
 			body: expect.objectContaining({ commitSha: "commit-1", paths: ["src/App.tsx"], scope: "committed", workspaceVersion: "workspace-1" }),
 		}));
@@ -515,6 +526,7 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 		expect(getMock).not.toHaveBeenCalled();
 	});
@@ -523,6 +535,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await screen.findByTestId("review-patch");
 		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
@@ -538,6 +551,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" });
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
@@ -561,6 +575,7 @@ describe("WorkspaceReviewPane", () => {
 		}
 		renderWithQuery(<Harness />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
 		// The pane carries no title row of its own: the Files header names the review.
 		expect(screen.queryByText(/of 1 viewed/)).not.toBeInTheDocument();
@@ -615,6 +630,7 @@ describe("WorkspaceReviewPane", () => {
 		const pane = () => <QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>;
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const { rerender } = render(pane());
+		await screen.findByTestId("review-patch");
 		await userEvent.click(await screen.findByRole("button", { name: "Collapse src/App.tsx" }));
 		await userEvent.click(screen.getAllByRole("button", { name: "Add feedback" })[0]);
 		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({ path: "src/App.tsx", side: "file", surface: "review" }));
@@ -637,6 +653,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "README.md", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={model} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		const inlineFeedback = screen.getAllByRole("button", { name: "Add feedback" })[1];
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-gutter-enabled", "true");
@@ -652,6 +669,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await userEvent.click(screen.getByRole("button", { name: "Open diff in center" }));
 		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"diff",center:true,scope:"committed"}));
@@ -661,6 +679,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} canOpenInCenter={false} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
 		expect(await screen.findByRole("button", { name: "Open full file" })).toBeInTheDocument();
@@ -671,6 +690,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={{...commitTarget(data),source:undefined}} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { editing: true, mode: "file", scope: "committed" });
@@ -680,6 +700,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
 	});
@@ -711,6 +732,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "README.md", status: "deleted", additions: 0, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("README.md", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"file",scope:"committed"}));
@@ -778,7 +800,8 @@ describe("WorkspaceReviewPane", () => {
 		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual([path]);
-		expect(await screen.findByRole("checkbox", { name: `Mark ${path} as viewed` })).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
+		expect(screen.getByRole("checkbox", { name: `Mark ${path} as viewed` })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Load diff" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: `Collapse ${path}` }));
@@ -864,6 +887,7 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open diff in center" })).toBeInTheDocument();
@@ -887,6 +911,7 @@ describe("WorkspaceReviewPane", () => {
 			</TooltipProvider></QueryClientProvider>
 		);
 		const { rerender } = render(pane(commitTarget(data, "a".repeat(40))));
+		await screen.findByTestId("review-patch");
 		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(JSON.parse(window.localStorage.getItem(`ao.files.viewed.sess-1.commit:${"a".repeat(40)}`) ?? "{}")).toEqual({ "src/App.tsx": "file-1" });
 

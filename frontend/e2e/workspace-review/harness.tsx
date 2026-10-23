@@ -1,6 +1,7 @@
 /// <reference path="../../src/renderer/global.d.ts" />
 // Real review pane and Pierre virtualizer with deterministic query data. No
 // daemon or filesystem writes; image responses are supplied by the browser test.
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
@@ -8,7 +9,7 @@ import { appI18n } from "../../src/renderer/i18n";
 import { WorkspaceReviewPane } from "../../src/renderer/components/diffs/WorkspaceReviewPane";
 import type { FileAnnotationModel } from "../../src/renderer/components/WorkspaceDiffView";
 import { TooltipProvider } from "../../src/renderer/components/ui/tooltip";
-import { sessionWorkspaceDiffsQueryOptions, type WorkspaceFilesResponse } from "../../src/renderer/hooks/useSessionWorkspaceFiles";
+import { defaultWorkspaceReviewTarget, sessionWorkspaceDiffsQueryOptions, type WorkspaceFilesResponse } from "../../src/renderer/hooks/useSessionWorkspaceFiles";
 import { REVIEW_CONTEXT_LINES } from "../../src/renderer/components/diffs/trailingContext";
 import { setApiBaseUrl } from "../../src/renderer/lib/api-client";
 import "../../src/renderer/styles.css";
@@ -44,6 +45,15 @@ client.setQueryData(sessionWorkspaceDiffsQueryOptions({ contextLines: REVIEW_CON
 const noop = () => {};
 const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {} };
 
+function Review() {
+	const [allCollapsed, setAllCollapsed] = useState(false);
+	const [request, setRequest] = useState<{ expand: boolean; key: number }>();
+	return <>
+		<button onClick={() => setRequest((current) => ({ expand: allCollapsed, key: (current?.key ?? 0) + 1 }))}>{allCollapsed ? "Expand all files" : "Collapse all files"}</button>
+		<WorkspaceReviewPane annotation={annotation} target={defaultWorkspaceReviewTarget(data)} collapseRequest={request} onAllCollapsedChange={setAllCollapsed} filter="" onBrowseAll={noop} sessionId={sessionId} split={false} />
+	</>;
+}
+
 createRoot(document.getElementById("review-root")!).render(
 	<QueryClientProvider client={client}>
 		<I18nextProvider i18n={appI18n}>
@@ -52,8 +62,8 @@ createRoot(document.getElementById("review-root")!).render(
 					<nav className="flex shrink-0 gap-4 border-b border-border p-3 text-sm">
 						<a href={reviewLink(false)}>Image-only review</a><a href={reviewLink(true)}>Mixed review</a>
 					</nav>
-					<section className="min-h-0 flex-1" aria-label="Workspace review">
-						<WorkspaceReviewPane annotation={annotation} data={data} filter="" onBrowseAll={noop} sessionId={sessionId} split={false} />
+					<section className="flex min-h-0 flex-1 flex-col" aria-label="Workspace review">
+						<Review />
 					</section>
 				</main>
 			</TooltipProvider>

@@ -59,12 +59,12 @@ for (const mixed of [false, true]) {
 				await expect(review.getByRole("button", { name: `Expand ${file}`, exact: true })).toHaveAttribute("aria-expanded", "false");
 			}
 			const total = mixed ? 4 : 3;
-			await expect(review.getByText(`${total} of ${total} viewed`, { exact: true })).toBeVisible();
+			await expect(review.getByRole("checkbox", { checked: true })).toHaveCount(total);
 			await expect(images).toHaveCount(0);
 			await page.reload();
-			await expect(review.getByText(`${total} of ${total} viewed`, { exact: true })).toBeVisible();
+			await expect(review.getByRole("checkbox", { checked: true })).toHaveCount(total);
 			await review.getByRole("checkbox", { name: "Mark first.png as not viewed", exact: true }).uncheck();
-			await expect(review.getByText(`${total - 1} of ${total} viewed`, { exact: true })).toBeVisible();
+			await expect(review.getByRole("checkbox", { checked: true })).toHaveCount(total - 1);
 			await expect(review.getByRole("button", { name: "Expand first.png", exact: true })).toHaveAttribute("aria-expanded", "false");
 		});
 	}
