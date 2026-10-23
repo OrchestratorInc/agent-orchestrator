@@ -192,6 +192,14 @@ export const TOUCHPOINTS = Object.freeze([
   { id: "docs-agents-index", surface: "docs", required: false, file: "frontend/src/docs/content/plugins/agents/index.mdx",
     check: (ctx, text) => ({ ok: text.toLowerCase().includes(ctx.id) }),
     like: ref => new RegExp(escapeRe(ref.id), "i") },
+  // The Chat UI's "switch agent" picker only offers harnesses listed here.
+  { id: "chat-switch-target", surface: "chat", required: true, file: "frontend/src/renderer/lib/agent-switch-targets.ts",
+    check: (ctx, text) => ({ ok: new RegExp(`CHAT_SWITCH_TARGETS\\s*=\\s*\\[[^\\]]*"${escapeRe(ctx.id)}"`).test(text), detail: "add the ID to CHAT_SWITCH_TARGETS" }),
+    like: ref => new RegExp(`"${escapeRe(ref.id)}"`) },
+  // Multi-provider CLIs list models per provider before login.
+  { id: "multi-provider-models", surface: "chat", required: false, file: "frontend/src/renderer/components/settings/harness/HarnessModelsPanel.tsx",
+    check: (ctx, text) => ({ ok: new RegExp(`MULTI_PROVIDER_HARNESSES[^\\]]*"${escapeRe(ctx.id)}"`).test(text), detail: "only for CLIs that offer many providers' models (OpenCode, Kilo Code)" }),
+    like: ref => new RegExp(`"${escapeRe(ref.id)}"`) },
   { id: "chat-registry", surface: "chat", required: true, file: "backend/internal/adapters/chatdriver/registry/registry.go",
     // Inline `driver.New(pkg.New(...))`, or the current two-line form:
     // `codexPlugin := codex.New()` then `add(codexappserver.New(codexPlugin, ...))`.

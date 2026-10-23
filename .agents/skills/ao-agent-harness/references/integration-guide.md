@@ -15,7 +15,7 @@ Pin a released version, then fill this table from the CLI's real behaviour
 | Install | Official installers per OS (npm, brew, curl script, winget…) |
 | Login | How it logs in (CLI login, API key, config), and a command that **verifies** the login |
 | TUI | An interactive mode AO can launch, and how a first prompt reaches it |
-| Chat | A structured protocol: ACP (Agent Client Protocol) or an SDK/app server |
+| Chat | An ACP (Agent Client Protocol) mode, usually `<cli> acp`, with session load or resume |
 | System prompt | How to pass hidden instructions: a flag or file argument, a Chat session parameter, or a config file |
 | Activity | Hooks or events for working / idle / waiting, and the CLI's own session ID |
 | Restore | Resume a session **by ID** (never "the latest one") |
@@ -40,9 +40,9 @@ where that harness is wired in every file. Rerun it after each merge from main.
      map the callbacks in `activitydispatch/dispatch.go`. Without both, status
      is silently never reported. The SessionStart hook also gives AO the
      CLI's session ID, which restore needs.
-2. **Chat driver** (`backend/internal/adapters/chatdriver/<id>acp/` or an SDK
-   driver), only when the protocol works for session start, load or resume,
-   permissions and cancel.
+2. **Chat driver** (`backend/internal/adapters/chatdriver/<id>acp/`), only when
+   the CLI's ACP mode works for session start, load or resume, permissions
+   and cancel.
 3. **Installer** for every OS and installer the CLI officially supports, so the
    Install button works (`install-target`, `install-plan`).
 4. **Models:** a real catalog (`selectionMode: catalog`) from the CLI's list or
@@ -55,9 +55,9 @@ where that harness is wired in every file. Rerun it after each merge from main.
 
 ### Code to write
 
-Paths are under `backend/internal/`. Use these adapters as reference:
-`adapters/agent/codex/`, `claudecode/` and `opencode/`, plus their Chat
-drivers.
+Backend paths are under `backend/internal/`. Use `adapters/agent/opencode/`
+with `chatdriver/opencodeacp/` as the reference for a CLI with TUI and ACP
+Chat; `codex/` and `claudecode/` show richer hooks.
 
 **TUI adapter.** Embed `agentbase.Base` for defaults and implement
 `ports.Agent` (`ports/agent.go`):
@@ -98,23 +98,41 @@ matters.
 it to the domain harness list (`domain/harness.go`), the SQLite harness
 constraint and the API enums. `harness_touchpoints.mjs` lists every one.
 
-**Chat, ACP-native CLIs.** When the CLI speaks ACP (`<cli> acp`), the driver is
-small: call `nativeacp.New(plugin, nativeacp.Config{...})`, as
-`chatdriver/opencodeacp/driver.go` does in about 100 lines. Fill in:
-- `Harness`;
-- `Configure`: the ACP argv plus env, and the system prompt as a session
-  parameter or config;
-- `SessionOptions`: the model and effort, as ACP config options;
-- `PermissionPolicy`;
-- `ValidateTurnSettings`;
-- `DecodeProviderConversationID`, for resume.
+**Chat driver (ACP).** AO's Chat runs CLIs that speak ACP (Agent Client
+Protocol, usually `<cli> acp`). The driver is small: call
+`nativeacp.New(plugin, nativeacp.Config{...})` in
+`chatdriver/<id>acp/driver.go`, as `chatdriver/opencodeacp/driver.go` does in
+about 100 lines. Fill in:
 
-**Chat, SDK or app-server CLIs.** These need a full driver like
-`chatdriver/codexappserver/`.
+| Field | What it does |
+| --- | --- |
+| `Harness` | The AO harness ID |
+| `Configure` | Returns the ACP argv (e.g. `acp`) and env. AO's system prompt goes in here as a config or env overlay, or as an ACP session parameter |
+| `SessionOptions` | Applies the Chat's model and effort as ACP config options (model first, effort second) |
+| `PermissionPolicy` | Maps AO's approval modes to the CLI's permission requests |
+| `ValidateTurnSettings` | Rejects a model or effort the CLI cannot use, as a typed error |
+| `DecodeProviderConversationID` | Reads AO's stored conversation ID back, so restore loads the same session |
 
-**Register the Chat driver** in `chatdriver/registry/registry.go` with
-`add(driver, plugin)`, paired with the TUI adapter. The Chat UI is shared, so a
-harness normally needs no frontend changes.
+Pass the TUI adapter as `plugin`, so Chat launches the same binary AO already
+resolved. Register the driver in `chatdriver/registry/registry.go` with
+`add(<id>acp.New(plugin, log), plugin)`. The ACP runtime and transport live in
+`chatdriver/acp/` and `nativeacp/`; don't change them for one harness.
+
+**Chat UI.** The Chat screen is shared and reads everything from the driver
+through the conversation API: messages, turns, approvals, and the model,
+effort and mode pickers (built from the CLI's ACP config options). A new
+harness normally changes only these frontend lists:
+
+| File | Change |
+| --- | --- |
+| `frontend/src/renderer/lib/agent-switch-targets.ts` | Add the ID to `CHAT_SWITCH_TARGETS`, so a Chat session can switch to it (touchpoint `chat-switch-target`) |
+| `packages/product-ui/src/agents.ts` | Its display name (`product-ui-label`) |
+| `frontend/src/renderer/components/AgentAvatar.tsx` | Its logo (`avatar-map`) |
+| `frontend/src/renderer/components/settings/harness/HarnessModelsPanel.tsx` | Add to `MULTI_PROVIDER_HARNESSES` only if the CLI offers many providers' models |
+| `frontend/src/renderer/components/chat/TurnSettingsBar.tsx` | Only when its approval modes need their own labels, as Codex and AGY have |
+
+Anything else harness-specific in the Chat UI means the driver is not
+reporting something through ACP. Fix the driver, not the UI.
 
 ### Avoid (from earlier PRs)
 
