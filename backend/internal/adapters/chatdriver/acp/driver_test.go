@@ -1788,8 +1788,16 @@ func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, tex
 	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatalf("StartDeferredTurn: %v", err)
 	}
+	// The turn is released only after it completes, just before the driver
+	// announces it is ready; wait for that, as a caller sending the next turn
+	// must, or the next SendTurn can find the turn still in flight.
+	completed := false
 	for {
-		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventTurnCompleted {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			completed = true
+		}
+		if completed && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
 			break
 		}
 	}
