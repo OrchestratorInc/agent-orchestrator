@@ -444,10 +444,15 @@ function MermaidFence({ code }: { code: string }) {
 		: diagram;
 }
 
+/** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
+export function useChatLinkWorkspaces() {
+	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
+	return useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind).workspaces;
+}
+
 /** Inline code naming a listed session artifact, linked to that artifact. */
 export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
-	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
-	const { workspaces } = useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind);
+	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
 	return href ? <MarkdownLink href={href}>{children}</MarkdownLink> : <>{children}</>;
 }

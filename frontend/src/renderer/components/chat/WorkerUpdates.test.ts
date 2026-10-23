@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import {
-	isQuietWorkerTurn,
+	asksUser,
 	piggybackedUpdates,
-	renamedTitle,
+	quietWorkerReply,
 	spawnedSessionIds,
 	splitHeadline,
-	splitOrchestratorReply,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 
@@ -42,9 +41,19 @@ describe("worker updates", () => {
 		]);
 	});
 
-	it("reads a direct worker message without its sender prefix", () => {
+	it("keeps a malformed session link from breaking the timeline", () => {
+		const text = "Reports since your previous turn:\n\n[done] [x](ao://sessions/p/100%)\nok";
+		expect(workerUpdatesOf(message({ text }))).toMatchObject([{ projectId: "p", sessionId: "100%" }]);
+	});
+
+	it("reads a direct worker message or mid-turn steer without its sender prefix", () => {
 		const direct = message({ text: '[from proj-151 "sqlc generation"] Regenerated the queries', senderSessionId: "proj-151", senderProjectId: "proj", senderDisplayName: "sqlc generation" });
 		expect(workerUpdatesOf(direct)).toMatchObject([{ name: "sqlc generation", sessionId: "proj-151", body: "Regenerated the queries" }]);
+		const steer: ConversationActivity = {
+			kind: "activity", id: "s1", sequence: 3, revision: 0, activityKind: "system", status: "completed", summary: "Steer", createdAt,
+			detail: { event: "steer", text: "[from proj-286] Loopback works", senderSessionId: "proj-286", senderProjectId: "proj" },
+		};
+		expect(workerUpdatesOf(steer)).toMatchObject([{ name: "proj-286", sessionId: "proj-286", body: "Loopback works" }]);
 	});
 
 	it("leaves the user's own messages alone, but finds reports folded into them", () => {
@@ -59,28 +68,28 @@ describe("worker updates", () => {
 		expect(splitHeadline("Rebased **#5051**; disk full during validation. Retrying.").headline).toBe("Rebased #5051");
 	});
 
-	it("keeps only the question as the orchestrator's reply", () => {
-		expect(splitOrchestratorReply("Merged #7054.\n\nShould I start a fix for #7043?\n\nIt traces to #6652.")).toEqual({
-			actions: ["Merged #7054."],
-			question: "Should I start a fix for #7043?\n\nIt traces to #6652.",
-		});
-		expect(splitOrchestratorReply("Merged #7054.").question).toBe("");
+	it("tells a question from a ? in code, links and chained calls", () => {
+		expect(asksUser("Merged #7054. Should I start a fix?")).toBe(true);
+		expect(asksUser("#7043 の修正を始めますか？")).toBe(true);
+		expect(asksUser("Opened [the run](https://ci.example/run?id=4).")).toBe(false);
+		expect(asksUser("Guarded `config?.retries` and https://x.dev/a?b=1 now.")).toBe(false);
+		expect(asksUser("Used value?.trim() for the name.")).toBe(false);
 	});
 
-	it("reads task titles and spawned workers from the orchestrator's commands", () => {
+	it("reads spawned workers from what `ao spawn` prints", () => {
 		const items: ConversationItem[] = [
-			command("ao session rename proj-290 \"Triage recent merges\""),
-			command("ao spawn --prompt 'check regressions'", "Spawned session proj-288\n"),
-			command("ao spawn --prompt 'fix menus'", "Spawned proj-285"),
+			command("ao spawn --prompt 'check regressions'", 'spawned session proj-288 "Check regressions" (working)\n'),
+			command("ao spawn --prompt 'fix menus'", 'spawned session proj-285 "Fix menus" (working) [prompt 812 B, system 4096 B]'),
+			command("ao status", "spawned session proj-1 (listing, not a spawn)"),
 		];
-		expect(renamedTitle(items)).toBe("Triage recent merges");
 		expect(spawnedSessionIds(items)).toEqual(["proj-288", "proj-285"]);
 	});
 
-	it("treats a settled worker turn without a question as quiet", () => {
+	it("finds a worker turn's quiet reply only when it asks nothing", () => {
 		const reply = (text: string) => message({ id: "a1", role: "assistant", origin: "provider", text });
-		expect(isQuietWorkerTurn([message({ text: batch }), reply("Noted.")])).toBe(true);
-		expect(isQuietWorkerTurn([message({ text: batch }), reply("Tunnel or loopback?")])).toBe(false);
-		expect(isQuietWorkerTurn([message({ origin: "human", text: "Hi" }), reply("Noted.")])).toBe(false);
+		expect(quietWorkerReply([message({ text: batch }), reply("Noted.")])?.text).toBe("Noted.");
+		expect(quietWorkerReply([message({ text: batch }), reply("Tunnel or loopback?")])).toBeUndefined();
+		expect(quietWorkerReply([message({ text: batch }), command("gh pr merge 7054")])).toBeUndefined();
+		expect(quietWorkerReply([message({ origin: "human", text: "Hi" }), reply("Noted.")])).toBeUndefined();
 	});
 });

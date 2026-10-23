@@ -128,16 +128,12 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
-	indexWorkerUpdates,
-	isQuietWorkerTurn,
-	isTaskTitleUpdate,
-	OrchestratorAction,
+	OrchestratorReply,
 	piggybackedUpdates,
-	renamedTitle,
+	quietWorkerReply,
 	SpawnedAgents,
 	spawnedSessionIds,
-	splitOrchestratorReply,
-	TaskNamedLine,
+	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
 	WorkerUpdateRows,
 	workerUpdatesOf,
@@ -3426,12 +3422,7 @@ export function Timeline({
 		);
 	}, [openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
-	const workerUpdateIndex = useMemo(
-		() => (workerUpdates ? indexWorkerUpdates(snapshot.items) : null),
-		[workerUpdates, snapshot.items],
-	);
-	const quietWorkerGroup = (group: TimelineGroup | undefined) =>
-		Boolean(workerUpdates && group?.outcome?.state === "completed" && isQuietWorkerTurn(group.items));
+	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
 	// once real conversation content exists (history can load after the chat opens).
 	const groupCountRef = useRef(groups.length);
@@ -4044,7 +4035,7 @@ export function Timeline({
 									group={group}
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
-									tight={quietWorkerGroup(group) && quietWorkerGroup(groups[index - 1])}
+									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
 									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -4442,24 +4433,18 @@ const TurnGroup = memo(function TurnGroup({
 	// One flat keyed list rather than a slot per section, so a run keeps its element
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
-	// Orchestrator chat: a worker's message or report opens its turn as rows, and
-	// once the turn settles the orchestrator's reply splits into action lines under
-	// them and, only when it asks the user something, a reply.
-	const lead = workerUpdates ? humanRuns[0]?.items[0] : undefined;
-	const leadMessage = lead?.kind === "message" ? lead : undefined;
-	const leadUpdates = leadMessage ? workerUpdatesOf(leadMessage) : [];
-	const namedTitle = leadMessage && isTaskTitleUpdate(leadMessage) ? renamedTitle(group.items) : undefined;
-	const finalMessage = finalRun?.items[0]?.kind === "message" ? finalRun.items[0] : undefined;
-	const renderLeadRun = (run: TimelineRun): ReactNode | ReactNode[] => {
-		const item = run.items[0];
-		if (!workerUpdates || item?.kind !== "message") return renderRun(run);
-		if (item === leadMessage && leadUpdates.length > 0) return <WorkerUpdateRows key={run.key} updates={leadUpdates} />;
-		if (item === leadMessage && namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
+	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
+	// report batch, or reports folded into the user's message) draws as rows.
+	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
+		const item = run.kind === "single" ? run.items[0] : undefined;
+		if (!workerUpdates || !item) return renderRun(run);
+		const updates = workerUpdatesOf(item);
+		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
 		const piggybacked = piggybackedUpdates(item);
 		if (piggybacked.length === 0) return renderRun(run);
 		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
 	};
-	const body: ReactNode[] = humanRuns.flatMap(renderLeadRun);
+	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	// A live provider failure replaces the Working row with its reconnect card, and a
 	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
 	// The setup checklist sits exactly where the Working row will, so the handoff
@@ -4478,23 +4463,15 @@ const TurnGroup = memo(function TurnGroup({
 		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
-	const workerReply = outcome && (leadUpdates.length > 0 || namedTitle)
-		? splitOrchestratorReply(finalMessage?.text ?? "")
-		: undefined;
-	if (workerReply && !namedTitle) {
-		const work = workerReply.question || foldedRuns.length === 0 ? undefined : foldedRuns.map(renderRun);
-		body.push(...workerReply.actions.map((action, index) => (
-			<OrchestratorAction key={`action-${index}`} text={action}>
-				{index === workerReply.actions.length - 1 ? work : undefined}
-			</OrchestratorAction>
-		)));
-	}
+	// A settled worker turn whose answer asks the user nothing draws that answer as
+	// one line under the rows, with the work folded into it instead of "Worked for".
+	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
+	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
+	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && group.items[0] !== undefined && workerUpdatesOf(group.items[0]).length > 0;
+	const disclosureKey = `${group.key}:worked`;
 	if (!outcome) {
-		body.push(...workedRuns.map(renderRun));
-	} else if (workerReply && !workerReply.question) {
-		// Nothing to ask: the action lines above are the whole answer.
-	} else {
-		const disclosureKey = `${group.key}:worked`;
+		body.push(...workedRuns.flatMap(renderWorkerRun));
+	} else if (!quietReply && !onlyRead) {
 		body.push(
 			<TurnWorkSummary
 				key="turn-worked"
@@ -4502,13 +4479,23 @@ const TurnGroup = memo(function TurnGroup({
 				open={Boolean(activityDisclosureOverrides[disclosureKey])}
 				onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 			>
-				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
+				{foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
 			</TurnWorkSummary>,
 		);
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
-	if (finalRun && finalMessage && workerReply) {
-		if (workerReply.question) body.push(renderRun({ ...finalRun, items: [{ ...finalMessage, text: workerReply.question }] }));
+	if (quietReply && finalRun) {
+		body.push(
+			<OrchestratorReply
+				key={finalRun.key}
+				message={quietReply}
+				work={foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
+				workOpen={Boolean(activityDisclosureOverrides[disclosureKey])}
+				onWorkOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
+				onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
+				rollbackDisabled={rollbackDisabled}
+			/>,
+		);
 	} else if (finalRun) {
 		body.push(renderRun(finalRun));
 	}
@@ -5170,11 +5157,36 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	const item = run.items[0];
-	if (run.kind !== "single" || item?.kind !== "activity") return false;
+	return run.kind === "single" && isNoticeItem(run.items[0]);
+}
+
+function isNoticeItem(item: ConversationItem | undefined): boolean {
+	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+}
+
+const quietWorkerGroups = new WeakMap<TimelineGroup, boolean>();
+
+/**
+ * A settled worker turn that draws only rows and a quiet reply, so it can sit
+ * tight against its neighbours. Groups keep their identity while unchanged, so
+ * each is judged once rather than on every streamed delta.
+ */
+function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
+	if (!group) return false;
+	let quiet = quietWorkerGroups.get(group);
+	if (quiet === undefined) {
+		quiet = group.outcome?.state === "completed"
+			&& !group.plan
+			&& !group.diff
+			&& quietWorkerReply(group.items) !== undefined
+			&& !group.items.some(isNoticeItem)
+			&& spawnedSessionIds(group.items).length === 0;
+		quietWorkerGroups.set(group, quiet);
+	}
+	return quiet;
 }
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
