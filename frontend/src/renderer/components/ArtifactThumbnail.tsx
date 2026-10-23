@@ -16,7 +16,7 @@ import { TableFileView } from "./TableFileView";
 
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
-const MARKDOWN_PAGE_WIDTH = 850;
+const MARKDOWN_PAGE_WIDTH = 700;
 
 /** Gallery previews load near the viewport; pages keep the isolated inline origin. */
 export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRow; previewLive?: boolean }) {

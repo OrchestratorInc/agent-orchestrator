@@ -31,6 +31,7 @@ import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import { useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useMarkdownFontsReady } from "../../hooks/useMarkdownFontsReady";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
 import { isWebLink } from "../../lib/external-link-policy";
@@ -95,6 +96,7 @@ export function MarkdownFileView({
 	presentation?: "document" | "thumbnail";
 }) {
 	const { t } = useTranslation();
+	const fontsReady = useMarkdownFontsReady();
 	const thumbnail = presentation === "thumbnail";
 	const body = stripMarkdownFrontmatter(content);
 	const bodyRef = useRef<HTMLDivElement>(null);
@@ -199,7 +201,7 @@ export function MarkdownFileView({
 				{/* github-markdown-css hangs each heading's `.anchor` link icon 20px
 				    into the left gutter (`margin-left: -20px`), so the inline padding
 				    must be wider than that or the scroll container clips the icon. */}
-				<div className={cn("markdown-body ao-markdown", thumbnail && "min-h-full")} ref={bodyRef}>
+				<div className={cn("markdown-body ao-markdown", thumbnail && "min-h-full")} ref={bodyRef} style={{ visibility: fontsReady ? "visible" : "hidden" }}>
 					<Markdown remarkPlugins={renderMath ? MATH_REMARK_PLUGINS : REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
 						{thumbnail ? body.slice(0, 4000) : body}
 					</Markdown>

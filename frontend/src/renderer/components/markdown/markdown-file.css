@@ -1,13 +1,3 @@
-/* EB Garamond, upstream 106a4a6d377987459ae5e68673a4570f13b957fb.
- * The bundled font's OFL license lives beside the asset. */
-@font-face {
-	font-family: "EB Garamond";
-	font-style: normal;
-	font-weight: 400 800;
-	font-display: swap;
-	src: url("../../assets/fonts/eb-garamond/EBGaramond-Variable.ttf") format("truetype");
-}
-
 .ao-markdown-surface {
 	--markdown-canvas: light-dark(
 		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 20%, white),
