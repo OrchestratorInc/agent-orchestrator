@@ -3,7 +3,13 @@ package sessionmanager
 import (
 	"context"
 	"path/filepath"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
+
+// envComputerUse on a chat session's `ao mcp` server makes it offer the
+// computer-use tools. The name is defined once, in config, for the CLI too.
+const envComputerUse = config.EnvComputerUse
 
 // SetComputerUseEnabled supplies the "Let agents use this computer" setting.
 // While it reports true, new chat sessions get the computer-use tools and
@@ -20,10 +26,6 @@ func (m *Manager) computerUseEnabled(ctx context.Context) bool {
 	m.computerUseMu.Unlock()
 	return enabled != nil && enabled(ctx)
 }
-
-// envComputerUse on a chat session's `ao mcp` server makes it offer the
-// computer-use tools; the CLI reads the same name.
-const envComputerUse = "AO_COMPUTER_USE"
 
 // computerUsePrompt tells a chat agent it can drive desktop apps with the
 // computer-use tools its `ao mcp` server offers, whose results carry

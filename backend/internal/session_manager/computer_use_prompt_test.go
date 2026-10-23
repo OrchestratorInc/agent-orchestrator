@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -91,7 +92,7 @@ func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
 		if len(servers) != 1 {
 			t.Fatalf("ao tool servers = %v", servers)
 		}
-		if got := servers[0].Env[envComputerUse] == "1"; got != on {
+		if got := servers[0].Env[config.EnvComputerUse] == "1"; got != on {
 			t.Fatalf("setting %v: server env = %v", on, servers[0].Env)
 		}
 	}

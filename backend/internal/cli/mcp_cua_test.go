@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 // cuaDaemon serves the computer-use routes `ao mcp` uses. A nil tools body
@@ -42,7 +44,7 @@ const cuaToolsBody = `{"tools":[
 	{"name":"click","description":"Click a target pid.","inputSchema":{"type":"object","properties":{"element_token":{"type":"string"}}}}]}`
 
 func TestMCPOffersComputerUseToolsWhenTheSessionHasIt(t *testing.T) {
-	t.Setenv(envComputerUse, "1")
+	t.Setenv(config.EnvComputerUse, "1")
 	tools := cuaToolsBody
 	cuaDaemon(t, &tools, nil)
 	listed := runMCP(t, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)[0].Result.Tools
@@ -65,7 +67,7 @@ func TestMCPHasNoComputerUseToolsWithoutIt(t *testing.T) {
 			cuaDaemon(t, &tools, nil)
 		},
 		"driver missing": func(t *testing.T) {
-			t.Setenv(envComputerUse, "1")
+			t.Setenv(config.EnvComputerUse, "1")
 			cuaDaemon(t, nil, nil)
 		},
 	} {
@@ -85,7 +87,7 @@ func TestMCPHasNoComputerUseToolsWithoutIt(t *testing.T) {
 // A call goes to the daemon for this AO session and comes back as text plus
 // the screenshot itself.
 func TestMCPComputerUseCallReturnsTextAndTheScreenshot(t *testing.T) {
-	t.Setenv(envComputerUse, "1")
+	t.Setenv(config.EnvComputerUse, "1")
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	shot := filepath.Join(t.TempDir(), "shot.png")
 	if err := os.WriteFile(shot, []byte(pngSignature), 0o600); err != nil {
@@ -122,7 +124,7 @@ func TestMCPComputerUseCallReturnsTextAndTheScreenshot(t *testing.T) {
 }
 
 func TestMCPComputerUseFailureIsAToolResult(t *testing.T) {
-	t.Setenv(envComputerUse, "1")
+	t.Setenv(config.EnvComputerUse, "1")
 	tools := cuaToolsBody
 	cuaDaemon(t, &tools, func(cuaCallRequest) string {
 		return `{"tool":"list_windows","result":{"windows":[{"pid":7}]},"images":[]}`

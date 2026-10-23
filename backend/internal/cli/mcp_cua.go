@@ -7,13 +7,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
-)
 
-// envComputerUse is set on a chat session's `ao mcp` server when the user had
-// "Let agents use this computer" on as the session started. The server then
-// also offers Cua Driver tools, and a call returns the screenshot as an image
-// the agent sees.
-const envComputerUse = "AO_COMPUTER_USE"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+)
 
 // maxMCPImageBytes bounds one screenshot sent inline.
 const maxMCPImageBytes = 10 << 20
@@ -57,7 +53,7 @@ var readOnlyCuaTools = map[string]bool{"list_windows": true, "get_window_state":
 // session has computer use, and none while the daemon cannot list them (Cua
 // Driver not installed); the list is asked for again on the next tools/list.
 func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[string]any {
-	if os.Getenv(envComputerUse) != "1" {
+	if os.Getenv(config.EnvComputerUse) != "1" {
 		return nil
 	}
 	if state.cuaLoaded {

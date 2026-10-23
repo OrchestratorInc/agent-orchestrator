@@ -24,18 +24,14 @@ func renderCuaCall(response cuaCallResponse) (string, bool) {
 		out.window(result)
 	case response.Tool == "run_steps":
 		out.runSteps(result)
-	case cuaObservedTools[response.Tool]:
+	case result["observation"] != nil:
+		// The daemon attaches its read of the window to every action it
+		// observed (or says why it could not), so the layout follows that.
 		out.action(result)
 	default:
 		return "", false
 	}
 	return out.String(), true
-}
-
-// cuaObservedTools are the actions the daemon follows with a window read.
-var cuaObservedTools = map[string]bool{
-	"click": true, "double_click": true, "right_click": true, "set_value": true,
-	"type_text": true, "press_key": true, "hotkey": true, "scroll": true, "drag": true,
 }
 
 type cuaText struct {
