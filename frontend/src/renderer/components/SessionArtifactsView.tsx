@@ -88,11 +88,9 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 	);
 }
 
-// Full screen covers the whole app window. A wide markdown body keeps
-// GitHub's reading width, centred on the app's own background; the `!`
-// overrides github-markdown-css, which sets both outside Tailwind's layers.
+// Full screen covers the whole app window; Markdown keeps its shared reading layout.
 const FULLSCREEN_FRAME_CLASS =
-	"fixed inset-0 z-overlay flex flex-col bg-background outline-none [&_.markdown-body]:mx-auto! [&_.markdown-body]:max-w-[980px] [&_.markdown-body]:bg-transparent!";
+	"fixed inset-0 z-overlay flex flex-col bg-background outline-none";
 // The window's macOS traffic lights sit over the overlay's header unless the
 // window itself is full screen.
 const FULLSCREEN_MAC_HEADER_CLASS = "pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:pl-1";
