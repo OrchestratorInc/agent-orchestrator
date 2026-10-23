@@ -38,16 +38,6 @@ func Dir(dataDir string) string {
 	return filepath.Join(dataDir, "skills", SkillName)
 }
 
-// CommandGuide returns one embedded command guide, e.g. "cua" for
-// commands/cua.md, so a CLI command can print the same text the skill ships.
-func CommandGuide(name string) (string, error) {
-	body, err := files.ReadFile("using-ao/commands/" + name + ".md")
-	if err != nil {
-		return "", fmt.Errorf("skillassets: no guide for %q: %w", name, err)
-	}
-	return string(body), nil
-}
-
 // Install writes the embedded using-ao skill into <dataDir>/skills/using-ao,
 // replacing any existing copy. It runs once at daemon boot, before any session
 // spawns, so a plain clobber-and-write needs no locking: there are no
