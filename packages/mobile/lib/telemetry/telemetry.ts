@@ -92,6 +92,15 @@ export function createMobileTelemetry(
 	let githubActor: string | null = null;
 	void client.unregister("ao_cloud_user_id");
 	void client.unregister("github_actor");
+	const clearPairedAttribution = (): void => {
+		adoptedKey = null;
+		pairedInstallId = null;
+		cloudUserId = null;
+		githubActor = null;
+		void client.unregister("paired_install_id");
+		void client.unregister("github_actor");
+		void client.unregister("ao_cloud_user_id");
+	};
 
 	// With awaitPreference the facade's initial `optedOut` is a guess, not what the
 	// SDK and the saved marker hold (a previous run may have left both opted out).
@@ -152,24 +161,13 @@ export function createMobileTelemetry(
 
 	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity | null): void => {
 		if (!identity) {
-			pairedInstallId = null;
-			cloudUserId = null;
-			githubActor = null;
-			void client.unregister("paired_install_id");
-			void client.unregister("github_actor");
-			void client.unregister("ao_cloud_user_id");
-			adoptedKey = null;
+			clearPairedAttribution();
 			return;
 		}
 		liveStateApplied = true;
 		setOptedOut(identity.optedOut);
 		if (optedOut || !identity.distinctId) {
-			pairedInstallId = null;
-			cloudUserId = null;
-			githubActor = null;
-			void client.unregister("paired_install_id");
-			void client.unregister("github_actor");
-			void client.unregister("ao_cloud_user_id");
+			clearPairedAttribution();
 			return;
 		}
 		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;

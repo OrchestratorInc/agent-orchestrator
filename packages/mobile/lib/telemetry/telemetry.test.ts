@@ -170,6 +170,31 @@ describe("createMobileTelemetry", () => {
 			expect(captures[0].props?.$process_person_profile).toBe(false);
 		});
 
+		it("restores paired attribution after an incomplete identity refresh", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			const desktop = {
+				distinctId: "user_A",
+				cloudUserId: "user_A",
+				githubLogin: "octocat",
+				installId: "ins_123e4567-e89b-12d3-a456-426614174000",
+				optedOut: false,
+			};
+			t.adoptDesktopIdentity(desktop);
+			t.adoptDesktopIdentity({ optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_install_id");
+			expect(captures.at(-1)?.props?.ao_cloud_user_id).toBeNull();
+
+			t.adoptDesktopIdentity(desktop);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toMatchObject({
+				paired_install_id: desktop.installId,
+				ao_cloud_user_id: "user_A",
+				github_actor: "octocat",
+			});
+		});
+
 		it("keeps the phone anonymous across a desktop Cloud sign-in", () => {
 			const { client, captures, calls } = fakeClient();
 			const t = createMobileTelemetry(client, {});
