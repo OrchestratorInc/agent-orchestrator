@@ -286,9 +286,15 @@ if __name__ == "__main__":
 class ArtifactBucketCheckTest(unittest.TestCase):
     """check_artifact_bucket with a stubbed aws_cli."""
 
-    def check(self, denied_objects="", denied_bucket="", versioning="Enabled", artifacts="1"):
+    def check(self, denied_objects="", denied_bucket="", versioning="Enabled", artifacts="1", fail=""):
+        # fail names a call (a pattern of its arguments) that exits 254 with
+        # nothing on stdout, as the CLI does for AccessDenied.
         stub = f"""
 aws_cli() {{
+	if [[ -n "{fail}" && "$*" == *"{fail}"* ]]; then
+		echo "An error occurred (AccessDenied)" >&2
+		return 254
+	fi
 	case "$*" in
 	*head-bucket*) return 0 ;;
 	*get-bucket-versioning*) echo "{versioning}" ;;
@@ -300,7 +306,8 @@ aws_cli() {{
 }}
 AO_CLOUD_ARTIFACTS={artifacts}
 AO_CLOUD_ARTIFACT_BUCKET=ao-cloud-staging-tenant-artifacts
-check_artifact_bucket ao-cloud-staging ao-cloud-staging-api
+# The deploy scripts' own call form, which turns errexit off inside the helper.
+check_artifact_bucket ao-cloud-staging ao-cloud-staging-api || exit 1
 """
         return bash(stub)
 
@@ -322,6 +329,19 @@ check_artifact_bucket ao-cloud-staging ao-cloud-staging-api
         result = self.check(versioning="Suspended")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("versioning", result.stderr)
+
+    def test_fails_when_an_aws_call_fails(self):
+        for call in (
+            "get-bucket-versioning",
+            "describe-services",
+            "describe-task-definition",
+            "s3:PutObject",
+            "s3:ListBucket",
+        ):
+            with self.subTest(call=call):
+                result = self.check(fail=call)
+                self.assertNotEqual(result.returncode, 0, f"{call} failed but the check passed")
+                self.assertIn("Could not", result.stderr)
 
     def test_skips_every_check_with_artifacts_off(self):
         result = self.check(denied_objects="s3:PutObject", artifacts="0")

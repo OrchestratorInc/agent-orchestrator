@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1024,5 +1025,64 @@ func TestDeleteArtifactRouteNeedsArtifactsOn(t *testing.T) {
 	route := "/api/cloud/v1/orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/artifacts?path=report.html"
 	if rec := h.do(http.MethodDelete, route, "Bearer "+artifactTokenA, nil, nil); rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("delete with artifacts off: %d", rec.Code)
+	}
+}
+
+// cliMaxResponseBody mirrors the ao CLI's response limit (maxResponseBody in
+// cmd/ao-cloud-agent), which decodes this listing.
+const cliMaxResponseBody = 2 << 20
+
+func TestWorkerChildrenListingFitsTheCLIResponseLimit(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	rows := newMemoryArtifactRows()
+	children := make([]domain.Session, 0, 100)
+	// The longest path that still fits a bucket key under orgs/<uuid>/sessions/<uuid>/.
+	longest := strings.Repeat("p", 1024-len("orgs/00000000-0000-0000-0000-000000000000/sessions/00000000-0000-0000-0000-000000000000/")-len("/000.md")) + "/"
+	for index := range 100 {
+		id := fmt.Sprintf("c0c0c0c0-0000-4000-8000-%012d", index)
+		children = append(children, domain.Session{ID: id, OrgID: testOrgID, Kind: "worker", UpdatedAt: now, CreatedAt: now})
+		rows.sessions[id] = testOrgID
+		rows.rows[id] = map[string]domain.SessionArtifact{}
+		for file := range domain.MaxSessionArtifactFiles {
+			path := fmt.Sprintf("%s%03d.md", longest, file)
+			rows.rows[id][path] = domain.SessionArtifact{Path: path, Name: path, Kind: "markdown", Size: 1, SHA256: strings.Repeat("a", 64), UpdatedAt: now.Add(time.Duration(file) * time.Second)}
+		}
+	}
+	store := &stubStore{
+		listChildren: func(context.Context, string, string, bool, *domain.Cursor, int) ([]domain.Session, bool, error) {
+			return children, false, nil
+		},
+	}
+	server := testServer(store)
+	server.artifacts, _ = artifactstore.New(context.Background(), s3fake.New(t).Config())
+	server.artifactRows = rows
+	server.artifactAccessKey = []byte("key")
+
+	w := httptest.NewRecorder()
+	server.listWorkerChildren(w, workerRequest(t, http.MethodGet, "/worker/children?limit=100", "", "worker:orchestrate"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if size := w.Body.Len(); size > cliMaxResponseBody {
+		t.Fatalf("a full page of children with the most and longest artifact paths is %d bytes, over the CLI's %d", size, cliMaxResponseBody)
+	}
+	var response struct {
+		Items []struct {
+			ArtifactCount          *int `json:"artifactCount"`
+			ArtifactFilesTruncated bool `json:"artifactFilesTruncated"`
+			ArtifactFiles          []struct {
+				Path string `json:"path"`
+			} `json:"artifactFiles"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	first := response.Items[0]
+	if first.ArtifactCount == nil || *first.ArtifactCount != domain.MaxSessionArtifactFiles || !first.ArtifactFilesTruncated || len(first.ArtifactFiles) != maxChildArtifactFiles {
+		t.Fatalf("child = count %v truncated %t files %d", first.ArtifactCount, first.ArtifactFilesTruncated, len(first.ArtifactFiles))
+	}
+	if want := fmt.Sprintf("%s%03d.md", longest, domain.MaxSessionArtifactFiles-1); first.ArtifactFiles[0].Path != want {
+		t.Fatal("the most recently changed file is not listed first")
 	}
 }
