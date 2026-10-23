@@ -9,7 +9,10 @@
 }
 
 .ao-markdown-surface {
-	--markdown-canvas: var(--solid-muted, var(--muted));
+	--markdown-canvas: light-dark(
+		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 20%, white),
+		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 75%, black)
+	);
 	background-color: var(--markdown-canvas);
 }
 
