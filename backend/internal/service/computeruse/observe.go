@@ -248,7 +248,7 @@ func blankScreenshot(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	picture, _, err := image.Decode(file)
 	if err != nil {
 		return false
