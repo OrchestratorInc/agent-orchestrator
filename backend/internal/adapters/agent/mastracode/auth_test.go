@@ -72,6 +72,8 @@ func fixtureNativeAuth(t *testing.T, credential, model, outcome string) string {
  if(!process.env.ZHIPU_API_KEY&&!process.env.MINIMAX_API_KEY&&!['oauth','custom'].includes(process.env.AO_TEST_MASTRA_CREDENTIAL))throw Error('credential resolution missing');
  if(process.env.AO_TEST_MASTRA_OUTCOME==='transport')throw Error('fixture-secret raw transport');
  if(process.env.AO_TEST_MASTRA_OUTCOME==='malformed')return {};
+ if(['error-result','empty-model','no-inference'].includes(process.env.AO_TEST_MASTRA_OUTCOME))return {text:'',usage:{inputTokens:1,outputTokens:0},response:{modelId:process.env.AO_TEST_MASTRA_OUTCOME==='empty-model'?'':options.model.modelId},finishReason:process.env.AO_TEST_MASTRA_OUTCOME==='error-result'?'error':'stop'};
+
  if(!['success','reasoning'].includes(process.env.AO_TEST_MASTRA_OUTCOME)){const err=Error('fixture-secret raw provider');err.statusCode=process.env.AO_TEST_MASTRA_OUTCOME==='quota403'?403:Number(process.env.AO_TEST_MASTRA_OUTCOME);if(process.env.AO_TEST_MASTRA_OUTCOME==='quota403')err.data={error:{code:'insufficient_quota'}};throw err}
  return {text:process.env.AO_TEST_MASTRA_OUTCOME==='reasoning'?'':'fixture-secret provider output',usage:{inputTokens:1,outputTokens:1,totalTokens:2},response:{modelId:options.model.modelId},finishReason:process.env.AO_TEST_MASTRA_OUTCOME==='reasoning'?'length':'stop'};
  }`)
@@ -109,6 +111,9 @@ func TestNativeAuthUsesSelectedProviderAndVerifiedResult(t *testing.T) {
 		{"stored key", "stored", "zai/glm-test", "success", ports.AgentAuthStatusAuthorized},
 		{"reasoning length limit", "stored", "zai/glm-test", "reasoning", ports.AgentAuthStatusAuthorized},
 		{"malformed result", "stored", "zai/glm-test", "malformed", ports.AgentAuthStatusConfigured},
+		{"error result", "stored", "zai/glm-test", "error-result", ports.AgentAuthStatusConfigured},
+		{"empty response model", "stored", "zai/glm-test", "empty-model", ports.AgentAuthStatusConfigured},
+		{"no inference evidence", "stored", "zai/glm-test", "no-inference", ports.AgentAuthStatusConfigured},
 		{"native environment", "env", "minimax/model-test", "success", ports.AgentAuthStatusAuthorized},
 		{"OAuth", "oauth", "zai/glm-test", "success", ports.AgentAuthStatusAuthorized},
 		{"custom provider", "custom", "local/test", "success", ports.AgentAuthStatusAuthorized},

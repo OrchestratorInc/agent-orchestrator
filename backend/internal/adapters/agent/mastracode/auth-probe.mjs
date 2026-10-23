@@ -93,8 +93,11 @@ try {
           maxOutputTokens: 16, maxRetries: 0, abortSignal: AbortSignal.timeout(15000) });
         // A bounded reasoning-only response still proves provider access.
         // A missing/malformed SDK result does not.
-        if (result?.response && typeof result.response.modelId === 'string' &&
-            result.usage && typeof result.usage === 'object' && typeof result.finishReason === 'string') {
+        const inference = (typeof result?.text === 'string' && result.text.trim() !== '') ||
+          (Number.isFinite(result?.usage?.outputTokens) && result.usage.outputTokens > 0);
+        if (typeof result?.response?.modelId === 'string' && result.response.modelId.trim() &&
+            result.usage && typeof result.usage === 'object' && typeof result.finishReason === 'string' &&
+            result.finishReason !== 'error' && inference) {
           status = 'authorized'; code = 'provider_accepted';
         }
       } catch (error) {
