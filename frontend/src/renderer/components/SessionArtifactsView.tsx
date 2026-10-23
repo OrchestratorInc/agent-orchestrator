@@ -2,18 +2,20 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal } from "lucide-react";
+import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, Minimize2, SquareTerminal } from "lucide-react";
+import { isAgentActivityWorking } from "@aoagents/product-ui";
+import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
-import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { formatTimeTerse } from "../lib/format-time";
+import type { ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
 import { Button } from "./ui/button";
@@ -160,6 +162,8 @@ function ArtifactViewerFrame({
 function ArtifactViewerBody({
 	artifact,
 	feedbackRequestKey,
+	initialEditing,
+	htmlSource,
 	hostId,
 	onFeedbackRequestConsumed,
 	onPreviewVersion,
@@ -170,6 +174,8 @@ function ArtifactViewerBody({
 }: {
 	artifact: SessionArtifact;
 	feedbackRequestKey?: number;
+	initialEditing?: boolean;
+	htmlSource: boolean;
 	hostId?: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
 	onPreviewVersion: (version: number | null) => void;
@@ -180,6 +186,8 @@ function ArtifactViewerBody({
 }) {
 	const restore = useRestoreArtifactVersion({ hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
+	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
+	const showingPage = Boolean(page) && !htmlSource && !previewing;
 	// An error from one version's restore does not belong to the next one looked at.
 	const resetRestore = restore.reset;
 	useEffect(() => resetRestore(), [previewVersion, resetRestore]);
@@ -193,9 +201,10 @@ function ArtifactViewerBody({
 	return (
 		<div className="flex h-full min-h-0">
 			<div className="relative min-h-0 min-w-0 flex-1">
-				<div className={cn("h-full", previewing && "hidden")}>
+				<div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactFileView
 						artifactName={artifact.name}
+						initialEditing={initialEditing}
 						feedbackRequestKey={feedbackRequestKey}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onFeedbackRequestConsumed}
@@ -203,9 +212,10 @@ function ArtifactViewerBody({
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
 						sessionId={sessionId}
-						toolbarHost={previewing ? null : toolbarHost}
+						toolbarHost={previewing || showingPage ? null : toolbarHost}
 					/>
 				</div>
+				{showingPage ? <iframe className="absolute inset-0 h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} /> : null}
 				{previewing ? (
 					<ArtifactVersionPreview
 						artifactOrigin={artifactOrigin}
@@ -228,9 +238,8 @@ function ArtifactViewerBody({
 
 /**
  * The inspector's Artifacts view (its own inspector tab): every file in
- * the session's artifact directory. HTML artifacts open in the Browser panel;
- * markdown and other files open in a viewer in place of the list, which can
- * go full screen.
+ * the session's artifact directory. Files open in place of the gallery,
+ * with isolated inline HTML previews and an optional full-screen view.
  */
 export function SessionArtifactsView({
 	hostId,
@@ -246,21 +255,37 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	const [editingPath, setEditingPath] = useState<string | null>(null);
+	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
-	const openArtifactPreview = useOpenArtifactPreview(session.id, hostId);
 	const uiKey = sessionUiKey(session.id, hostId);
 
-	useEffect(() => setSelectedPath(null), [uiKey]);
+	useEffect(() => { setSelectedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
 	const exitFullscreen = useMemo(() => () => setFullscreen(false), []);
 	useEffect(() => {
-		if (request) setSelectedPath(request.path);
+		if (request) {
+			setEditingPath(null);
+			setHtmlSourcePath(null);
+			setSelectedPath(request.path);
+		}
 	}, [request]);
 
 	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
+	const artifactRow = (artifact: SessionArtifact): ArtifactRow => ({
+		...artifact,
+		sessionId: session.id,
+		sessionTitle: session.title ?? "",
+		generating: isAgentActivityWorking(session.activity),
+	});
+	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
+		setEditingPath(null);
+		setHtmlSourcePath(null);
+		setSelectedPath(artifact.path);
+	};
 	// Versions are read back as text, so a binary file such as an image gets no
 	// History. This shares the viewer's cached read of the file.
 	const selectedFile = useQuery({
@@ -273,6 +298,8 @@ export function SessionArtifactsView({
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "artifacts.exitFullscreen" : "artifacts.fullscreen");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
+		const hasHtmlPreview = selected.kind === "html" && selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl);
+		const showingHtmlSource = htmlSourcePath === selected.path;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onExitFullscreen={exitFullscreen}>
 				{/* One header row: back, the file's menu, the viewer's action buttons, and full screen. */}
@@ -288,6 +315,12 @@ export function SessionArtifactsView({
 					</Button>
 					<ArtifactActionsMenu artifact={selected} hostId={hostId} key={selected.path} session={session} />
 					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
+					{hasHtmlPreview && previewVersion === null ? (
+						<div className="flex shrink-0 items-center gap-0.5">
+							<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
+							<Button className="transition-none" aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
+						</div>
+					) : null}
 					{session.cloud || selectedFile.data?.binary ? null : (
 						<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 					)}
@@ -311,6 +344,8 @@ export function SessionArtifactsView({
 				<div className="min-h-0 flex-1">
 					<ArtifactViewerBody
 						artifact={selected}
+						htmlSource={showingHtmlSource}
+						initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated && !session.cloud}
 						feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onRequestConsumed}
@@ -326,7 +361,7 @@ export function SessionArtifactsView({
 	}
 
 	return (
-		<div className="flex h-full min-h-0 flex-col" role="tabpanel">
+		<div className="@container/session-artifacts flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
 			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
@@ -335,25 +370,25 @@ export function SessionArtifactsView({
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul className="board-scrollbar flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-3 pt-1">
+				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">
 					{artifacts.map((artifact) => {
-						const html = artifact.kind === "html" && Boolean(artifact.previewUrl);
-						const Icon = html ? Globe : FileText;
+						const row = artifactRow(artifact);
 						return (
-							<li key={artifact.path}>
-								<button
-									className="flex w-full min-w-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) px-2.5 py-1.5 text-left text-sm outline-none transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
-									onClick={() => (html ? openArtifactPreview(artifact.previewUrl!) : setSelectedPath(artifact.path))}
-									title={artifact.path}
-									type="button"
-								>
-									<Icon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-									<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-									{Date.parse(artifact.updatedAt) ? (
-										<span className="shrink-0 text-caption text-passive">{formatTimeTerse(artifact.updatedAt)}</span>
-									) : null}
-								</button>
-							</li>
+							<ArtifactGalleryCard
+								key={artifact.path}
+								row={row}
+								context={session.title ?? ""}
+								onPreview={() => openArtifact(artifact)}
+								actions={<ArtifactActionsMenu
+									artifact={artifact}
+									hostId={hostId}
+									session={session}
+									iconOnly
+									variant="sidebar"
+									onEdit={() => { setEditingPath(artifact.path); setHtmlSourcePath(artifact.path); setSelectedPath(artifact.path); }}
+									className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
+								/>}
+							/>
 						);
 					})}
 				</ul>

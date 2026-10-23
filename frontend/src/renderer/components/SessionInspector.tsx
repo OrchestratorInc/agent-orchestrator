@@ -45,7 +45,6 @@ import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
@@ -268,8 +267,8 @@ export const SessionInspector = memo(function SessionInspector({
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The Artifacts tab shows only when the session has artifact files to list.
-			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+			// The tab is contextual: an artifact click opens it; leaving it hides it.
+			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
@@ -457,7 +456,6 @@ const SummaryView = memo(function SummaryView({
 							artifact={artifact}
 							key={artifact.path}
 							onOpenArtifact={onOpenArtifact}
-							session={session}
 						/>
 					))
 				) : undefined
@@ -1022,28 +1020,15 @@ function PRSummaryCard({
 	);
 }
 
-/**
- * One row in the Summary panel's Artifacts list. HTML artifacts open in the
- * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
- * since artifact files live outside the git workspace.
- */
+/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
 function ArtifactSummaryCard({
 	artifact,
 	onOpenArtifact,
-	session,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
-	session: WorkspaceSession;
 }) {
-	const openArtifactPreview = useOpenArtifactPreview(session.id, session.hostId);
-	const handleOpen = () => {
-		if (artifact.kind === "html" && artifact.previewUrl) {
-			openArtifactPreview(artifact.previewUrl);
-			return;
-		}
-		onOpenArtifact?.({ path: artifact.path });
-	};
+	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
 	return (
 		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
 			<button

@@ -2874,7 +2874,7 @@
 	"chat.render.openInBrowser": "Abrir no navegador externo",
 	"chat.render.sourceError": "Não foi possível carregar o código-fonte da página.",
 	"chat.render.remoteHost": "Abra esta sessão no host dela para ver a página.",
-	"chat.artifact.openInPanel": "Abrir no painel Navegador",
+	"chat.artifact.openInPanel": "Abrir na aba Artefatos",
 	"chat.artifact.label": "Artifact",
 	"chat.image.numbered": "Imagem {{index}}",
 	"chat.edit.cancel": "Cancelar edição",
