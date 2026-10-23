@@ -69,6 +69,8 @@ import type {
 import type {
 	BrowserProfile,
 	BrowserProfileListState,
+	BrowserProfileUsageResult,
+	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
 	BrowserProfileViewState,
@@ -610,7 +612,8 @@ const api = {
 		rename: (input: { id: string; name: string }) =>
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
-		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
+		usage: (id: string) => ipcRenderer.invoke("browserProfiles:usage", { id }) as Promise<BrowserProfileUsageResult>,
+		delete: (id: string, confirmedViewIds: string[]) => ipcRenderer.invoke("browserProfiles:delete", { id, confirmedViewIds }) as Promise<BrowserProfileDeleteResult>,
 		setDefault: (id: string | null) => ipcRenderer.invoke("browserProfiles:setDefault", { id }) as Promise<void>,
 		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
 			(input === undefined

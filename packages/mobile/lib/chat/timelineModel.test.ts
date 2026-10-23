@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, groupConversationByTurn, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -176,6 +176,20 @@ function activity(kind: ConversationActivity["activityKind"], sequence: number, 
 	return { kind: "activity", id: `${kind}-${sequence}`, turnId, sequence, revision: 1, activityKind: kind, status: "completed", summary: kind, createdAt: "" };
 }
 
+describe("activity run summary", () => {
+	it("labels consecutive AO actions as actions", () => {
+		const renamed = { ...activity("ao_action", 1), summary: "Renamed a session" };
+		const switched = { ...activity("ao_action", 2), summary: "Switched agent" };
+		expect(summarizeActivities([renamed, switched])).toBe("Performed 2 actions");
+	});
+
+	it("counts AO actions separately from commands", () => {
+		const command = { ...activity("command", 1), summary: "npm test" };
+		const renamed = { ...activity("ao_action", 2), summary: "Renamed a session" };
+		expect(summarizeActivities([command, renamed])).toBe("Ran 1 command, 1 action");
+	});
+});
+
 describe("partitionTurnItems", () => {
 	const message = (id: string, sequence: number, role: "user" | "assistant", text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text, streaming: false, createdAt: "" });
 	const activity = (id: string, sequence: number, extra: Partial<ConversationActivity> = {}): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "completed", summary: id, createdAt: "", ...extra } as ConversationActivity);
@@ -221,5 +235,84 @@ describe("partitionTurnItems", () => {
 	it("leaves queued and unrecorded turns flat", () => {
 		expect(partitionTurnItems([message("u", 1, "user", "go")], turn("queued"))).toBeUndefined();
 		expect(partitionTurnItems([message("u", 1, "user", "go")], undefined)).toBeUndefined();
+	});
+});
+
+describe("streamingCursorMessageId", () => {
+	const message = (id: string, sequence: number, streaming: boolean, role: "user" | "assistant" = "assistant"): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text: id, streaming, createdAt: "" });
+	const command = (id: string, sequence: number): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "running", summary: id, createdAt: "" });
+
+	it("puts the cursor only on the newest streaming reply", () => {
+		// ACP providers settle a turn's text blocks only when the turn ends, so
+		// earlier blocks still arrive marked streaming.
+		const items = [message("u", 1, false, "user"), message("a", 2, true), command("ls", 3), message("b", 4, true)];
+		expect(timelineModel.streamingCursorMessageId(items)).toBe("b");
+	});
+
+	it("shows no cursor while work runs after the last reply", () => {
+		expect(timelineModel.streamingCursorMessageId([message("a", 1, true), command("ls", 2)])).toBeUndefined();
+	});
+
+	it("shows no cursor once the reply has settled", () => {
+		expect(timelineModel.streamingCursorMessageId([message("a", 1, false)])).toBeUndefined();
+		expect(timelineModel.streamingCursorMessageId([])).toBeUndefined();
+	});
+});
+
+describe("editable human prompts", () => {
+	function editable(): ConversationSnapshot {
+		const value = snapshot();
+		value.capabilities = ["fork"];
+		value.nativeForkAvailableAfterSequence = 1;
+		value.items = value.items.map((item) => item.kind === "message" && item.role === "user" ? { ...item, editAvailable: true } : item);
+		return value;
+	}
+
+	it("offers the first prompt and natively forkable later prompts once their turns settle", () => {
+		const { editable: turns, reconstructed } = editableHumanTurns(editable());
+		expect([...turns]).toEqual(["t1", "t2"]);
+		expect(reconstructed.size).toBe(0);
+	});
+
+	it("offers nothing while the agent is working or not ready", () => {
+		for (const state of ["busy", "connecting", "recovering", "hibernated", "stopped"] as const) {
+			const value = editable();
+			value.controller.state = state;
+			expect(editableHumanTurns(value).editable.size).toBe(0);
+		}
+	});
+
+	it("skips prompts the daemon cannot edit and turns that never settled", () => {
+		const value = editable();
+		value.items = value.items.map((item) => item.id === "u1" ? { ...item, editAvailable: false } : item);
+		value.turns[1] = { ...value.turns[1], state: "running" };
+		expect(editableHumanTurns(value).editable.size).toBe(0);
+	});
+
+	it("needs a fork or replay to edit a later prompt", () => {
+		const value = editable();
+		value.capabilities = [];
+		expect([...editableHumanTurns(value).editable]).toEqual(["t1"]);
+		value.capabilities = ["prompt_replay", "embedded_context"];
+		const replay = editableHumanTurns(value);
+		expect([...replay.editable]).toEqual(["t1", "t2"]);
+		expect([...replay.reconstructed]).toEqual(["t2"]);
+	});
+
+	it("treats a refresh with the same editable turns as unchanged", () => {
+		const first = editableHumanTurns(editable());
+		expect(sameEditableTurns(first, editableHumanTurns(editable()))).toBe(true);
+		const busy = editable();
+		busy.controller.state = "busy";
+		expect(sameEditableTurns(first, editableHumanTurns(busy))).toBe(false);
+		expect(sameEditableTurns(undefined, undefined)).toBe(true);
+		expect(sameEditableTurns(first, undefined)).toBe(false);
+	});
+
+	it("does not treat the oldest loaded prompt as the first while older history is unloaded", () => {
+		const value = editable();
+		value.capabilities = [];
+		value.hasMoreBefore = true;
+		expect(editableHumanTurns(value).editable.size).toBe(0);
 	});
 });
