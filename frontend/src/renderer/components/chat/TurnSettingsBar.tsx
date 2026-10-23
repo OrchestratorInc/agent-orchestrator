@@ -1472,7 +1472,7 @@ function Picker({
 	disabled?: boolean;
 	/** The current choice will not hold for the next message: marked red. */
 	alert?: boolean;
-	/** Set on the permission control when it leads the row: marked with this, with a caret, opening rightwards. */
+	/** Set on the permission control when it leads the row: marked with this, opening rightwards. */
 	leadIcon?: LucideIcon;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
@@ -1482,7 +1482,7 @@ function Picker({
 	return (
 		<OptionMenu>
 				<OptionMenuTrigger
-					showCaret={Boolean(LeadIcon)}
+					showCaret={false}
 					aria-label={title}
 					title={title}
 					disabled={disabled}
