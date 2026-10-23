@@ -2,13 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { File, FileText, Globe, Image } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import type { ArtifactRow } from "../lib/artifacts";
 import { isRasterImagePath, isSvgPath } from "../lib/image-files";
+import { isMarkdownPreviewPath, stripMarkdownFrontmatter } from "../lib/markdown-frontmatter";
+import { MarkdownFileView } from "./markdown/MarkdownFileView";
 
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
@@ -25,11 +25,12 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 	const image = isRasterImagePath(row.path) || isSvgPath(row.path)
 		? contentUrl : undefined;
 	const plainText = /\.txt$/i.test(row.path);
+	const isMarkdown = row.kind === "markdown" || isMarkdownPreviewPath(row.path);
 	const fileOptions = sessionArtifactFileQueryOptions(row.sessionId, row.path, row.rawUrl);
 	const file = useQuery({
 		...fileOptions,
 		queryKey: [...fileOptions.queryKey, row.updatedAt],
-		enabled: visible && Boolean(contentUrl) && (row.kind === "markdown" || plainText),
+		enabled: visible && Boolean(contentUrl) && (isMarkdown || plainText),
 		staleTime: Infinity,
 		gcTime: 10 * 60_000,
 		retry: false,
@@ -62,12 +63,11 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 		return () => observer.disconnect();
 	}, [page]);
 	const content = file.data && !file.data.binary ? file.data.content : "";
-	const markdown = row.kind === "markdown"
-		? content.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "").trim().slice(0, 4000) : "";
+	const markdown = isMarkdown ? stripMarkdownFrontmatter(content).trim() : "";
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
-	const Icon = image ? Image : row.kind === "html" ? Globe : row.kind === "markdown" || plainText ? FileText : File;
-	const unavailable = failed || file.isError || ((row.kind === "markdown" || plainText) && !contentUrl)
-		|| (!page && !image && !markdown && !text && !(row.kind === "markdown" || plainText))
+	const Icon = image ? Image : row.kind === "html" ? Globe : isMarkdown || plainText ? FileText : File;
+	const unavailable = failed || file.isError || ((isMarkdown || plainText) && !contentUrl)
+		|| (!page && !image && !markdown && !text && !(isMarkdown || plainText))
 		|| (file.isSuccess && !page && !image && !markdown && !text);
 	return (
 		<span ref={container} className="pointer-events-none absolute inset-0 block overflow-hidden bg-[var(--solid-muted,var(--muted))]" aria-hidden="true">
@@ -91,12 +91,16 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 			) : plainText ? (
 				<pre className="m-0 h-full overflow-hidden whitespace-pre-wrap break-words p-4 font-mono text-caption leading-relaxed text-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]">{text}</pre>
 			) : (
-				<span className="block h-full overflow-hidden p-4 text-caption leading-relaxed text-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)] [&_h1]:mb-3 [&_h1]:text-heading-sm [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-control [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_pre]:overflow-hidden [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-2 [&_code]:font-mono [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_table]:w-full [&_td]:border-b [&_td]:border-border [&_td]:py-1 [&_th]:border-b [&_th]:border-border [&_th]:py-1 [&_th]:text-left">
-					<Markdown remarkPlugins={[remarkGfm]} components={{
-						a: ({ children }) => <span>{children}</span>,
-						img: ({ alt }) => <span>{alt}</span>,
-						input: () => null,
-					}}>{markdown}</Markdown>
+				<span className="block h-full overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]">
+					<MarkdownFileView
+						artifactOrigin={contentUrl ? new URL(row.rawUrl ?? contentUrl).origin : undefined}
+						content={content}
+						filePath={row.path}
+						presentation="thumbnail"
+						sessionId={row.sessionId}
+						truncated={file.data?.contentTruncated ?? false}
+						version={file.dataUpdatedAt}
+					/>
 				</span>
 			)}
 		</span>

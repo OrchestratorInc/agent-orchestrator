@@ -3,12 +3,13 @@ import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
 import { isSvgPath } from "../lib/image-files";
+import { isMarkdownPreviewPath } from "../lib/markdown-frontmatter";
 
 // Mirrors FileContentPane's own canRenderMarkdown/canRenderSvg extension checks:
 // a markdown or SVG artifact should open already rendered, the same way GitHub
 // opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) ? "rendered" : "file";
+	return isMarkdownPreviewPath(path) || isSvgPath(path) ? "rendered" : "file";
 }
 
 /**

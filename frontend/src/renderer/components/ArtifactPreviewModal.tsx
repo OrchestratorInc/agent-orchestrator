@@ -9,6 +9,7 @@ import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isSvgPath } from "../lib/image-files";
+import { isMarkdownPreviewPath } from "../lib/markdown-frontmatter";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
@@ -119,7 +120,7 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	if (query.isError) return <div role="alert"><PanelMessage action={<RetryButton onClick={() => { void query.refetch(); }} />}>{query.error.message}</PanelMessage></div>;
 	if (!query.data || query.data.binary) return <PanelMessage>{t("files.binaryUnavailable")}</PanelMessage>;
 	const detail = query.data;
-	const markdown = artifact.kind === "markdown" || /\.(md|markdown)$/i.test(artifact.path);
+	const markdown = artifact.kind === "markdown" || isMarkdownPreviewPath(artifact.path);
 	return (
 		<div className="board-scrollbar h-full min-h-0 select-text overflow-auto overscroll-contain">
 			{markdown ? (
