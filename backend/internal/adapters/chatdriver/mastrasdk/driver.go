@@ -5,6 +5,7 @@
 package mastrasdk
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -106,20 +107,20 @@ func binding(plugin nativeacp.Plugin) acpdriver.Config {
 				return acpdriver.Launch{}, err
 			}
 			if !filepath.IsAbs(cfg.DataDir) || !filepath.IsAbs(cfg.WorkspacePath) || cfg.SessionID == "" {
-				return acpdriver.Launch{}, fmt.Errorf("Mastra SDK requires an absolute data/workspace path and session owner")
+				return acpdriver.Launch{}, fmt.Errorf("mastra SDK requires an absolute data/workspace path and session owner")
 			}
 			if len(cfg.SystemPrompt) > 512*1024 {
-				return acpdriver.Launch{}, fmt.Errorf("Mastra host instructions exceed 512 KiB")
+				return acpdriver.Launch{}, fmt.Errorf("mastra host instructions exceed 512 KiB")
 			}
 			sharedProfile := filepath.Join(cfg.DataDir, "mastra-code", "profile")
 			for _, profile := range []string{cfg.Env["MASTRA_APP_DATA_DIR"], os.Getenv("MASTRA_APP_DATA_DIR")} {
 				if profile != "" && filepath.Clean(profile) != sharedProfile {
-					return acpdriver.Launch{}, fmt.Errorf("Mastra SDK candidate refuses an unrelated native profile")
+					return acpdriver.Launch{}, fmt.Errorf("mastra SDK candidate refuses an unrelated native profile")
 				}
 			}
 			for _, key := range []string{"MASTRA_DB_PATH", "MASTRA_DB_URL", "MASTRA_STORAGE_BACKEND", "MASTRACODE_YOLO"} {
 				if cfg.Env[key] != "" || os.Getenv(key) != "" {
-					return acpdriver.Launch{}, fmt.Errorf("Mastra SDK candidate refuses native storage/approval override %s", key)
+					return acpdriver.Launch{}, fmt.Errorf("mastra SDK candidate refuses native storage/approval override %s", key)
 				}
 			}
 			native, err := plugin.ResolveBinary(ctx)
@@ -179,7 +180,7 @@ func binding(plugin nativeacp.Plugin) acpdriver.Config {
 
 func validateInitialize(response acpsdk.InitializeResponse) error {
 	if response.ProtocolVersion != acpsdk.ProtocolVersionNumber || response.AgentInfo == nil || response.AgentInfo.Name != "ao-mastra-sdk-candidate" || response.AgentInfo.Version != "1.11.0" || !response.AgentCapabilities.LoadSession {
-		return fmt.Errorf("Mastra SDK candidate identity or exact-load contract changed")
+		return fmt.Errorf("mastra SDK candidate identity or exact-load contract changed")
 	}
 	return nil
 }
@@ -221,14 +222,14 @@ func writePrivate(path string, content []byte) error {
 			return statErr
 		}
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-			return fmt.Errorf("Mastra owned runtime file has unsafe type or permissions: %s", filepath.Base(path))
+			return fmt.Errorf("mastra owned runtime file has unsafe type or permissions: %s", filepath.Base(path))
 		}
 		existing, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
-		if string(existing) != string(content) {
-			return fmt.Errorf("Mastra owned runtime file changed: %s", filepath.Base(path))
+		if !bytes.Equal(existing, content) {
+			return fmt.Errorf("mastra owned runtime file changed: %s", filepath.Base(path))
 		}
 		return nil
 	}
