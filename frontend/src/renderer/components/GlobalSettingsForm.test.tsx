@@ -347,7 +347,6 @@ describe("GlobalSettingsForm", () => {
 
 	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
 		const user = userEvent.setup();
-		useUiStore.getState().setDeveloperMode(true);
 		renderForm("remoteHosts");
 		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
 		expect(remoteHosts).toHaveAttribute("aria-checked", "false");

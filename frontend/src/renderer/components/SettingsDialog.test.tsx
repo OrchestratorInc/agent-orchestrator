@@ -266,22 +266,13 @@ describe("SettingsDialog", () => {
 		));
 	});
 
-	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
-		useUiStore.setState({ developerMode: true, remoteHosts: false });
+	it("shows Remote hosts without Developer mode even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: false });
 		useUiStore.getState().openGlobalSettings("remoteHosts");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
 		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("data-active", "true");
-	});
-
-	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
-		useUiStore.setState({ developerMode: false, remoteHosts: true });
-		useUiStore.getState().openGlobalSettings("remoteHosts");
-		renderSettingsDialog();
-
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
 	});
 
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {

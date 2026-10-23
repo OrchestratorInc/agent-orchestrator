@@ -61,22 +61,6 @@ it("requires AO sign-in and disconnects remote hosts on sign-out", async () => {
 	expect(connectedHosts()).toEqual([]);
 });
 
-it("keeps remote hosts disconnected until Developer mode is enabled", async () => {
-	useUiStore.setState({ developerMode: false, remoteHosts: true });
-	const { result } = renderHook(() => useRemoteHosts());
-	const connections = renderHook(() => useConnectedHosts());
-	expect(result.current.hosts).toEqual([]);
-	expect(connections.result.current).toEqual([]);
-	expect(remotes.list).not.toHaveBeenCalled();
-	act(() => useUiStore.setState({ developerMode: true }));
-	await waitFor(() => expect(result.current.hosts).toHaveLength(2));
-	expect(connections.result.current).toEqual(["box-a", "box-b"]);
-	act(() => useUiStore.setState({ developerMode: false }));
-	await waitFor(() => expect(result.current.hosts).toEqual([]));
-	expect(connections.result.current).toEqual([]);
-	expect(connectedHosts()).toEqual([]);
-});
-
 it("connects both saved boxes and exposes their stable IDs", async () => {
 	useUiStore.setState({ remoteHosts: true });
 	const { result } = renderHook(() => useRemoteHosts());
