@@ -3,12 +3,15 @@ import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
 import { isSvgPath } from "../lib/image-files";
+import { isMarkdownPreviewPath } from "../lib/markdown-frontmatter";
+import { fileMediaKind } from "../lib/file-media";
+import { cn } from "../lib/utils";
 
 // Mirrors FileContentPane's own canRenderMarkdown/canRenderSvg extension checks:
 // a markdown or SVG artifact should open already rendered, the same way GitHub
 // opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) ? "rendered" : "file";
+	return isMarkdownPreviewPath(path) || isSvgPath(path) ? "rendered" : "file";
 }
 
 /**
@@ -64,7 +67,7 @@ export function ArtifactFileView({
 	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
 
 	return (
-		<div className="flex h-full min-h-0 flex-col bg-background">
+		<div className={cn("flex h-full min-h-0 flex-col", !fileMediaKind(path) && !isSvgPath(path) ? "ao-document-surface" : "bg-background")}>
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
 				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
