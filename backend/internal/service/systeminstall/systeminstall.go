@@ -844,11 +844,13 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if err != nil {
 			return Job{}, err
 		}
+		// effectiveUpdateLevel takes s.mu itself, so it runs before the lock.
+		level := s.effectiveUpdateLevel(plan.UpdateWhileRunning)
 		s.mu.Lock()
 		if s.updateLevels == nil {
 			s.updateLevels = make(map[Target]UpdateWhileRunning)
 		}
-		s.updateLevels[target] = s.effectiveUpdateLevel(plan.UpdateWhileRunning)
+		s.updateLevels[target] = level
 		s.mu.Unlock()
 		plan.keepPreviousRelease = withSessions
 	}

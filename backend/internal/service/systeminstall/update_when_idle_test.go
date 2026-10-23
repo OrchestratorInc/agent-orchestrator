@@ -280,3 +280,31 @@ func TestUpdatesThatCannotRunBesideSessionsWaitForIdleOnEveryPlatform(t *testing
 		}
 	}
 }
+
+// Regression: StartAgentOperation recorded the level under s.mu, and
+// effectiveUpdateLevel locks s.mu to check the coordinator, so an update with
+// update-when-idle on and no live session hung the daemon.
+func TestUpdateWhenIdleWithoutSessionsDoesNotDeadlock(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows"} {
+		s, coordinator, ran := windowsIdleService(t, false)
+		s.goos = goos
+		*coordinator.sessions = nil
+		started := make(chan error, 1)
+		go func() {
+			_, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "")
+			started <- err
+		}()
+		select {
+		case err := <-started:
+			if err != nil {
+				t.Fatalf("%s: update = %v", goos, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: StartAgentOperation deadlocked", goos)
+		}
+		waitForJob(t, s, TargetAuggie, func(job Job) bool { return job.Status == StatusSucceeded })
+		if len(*ran) != 1 {
+			t.Fatalf("%s: installs = %v", goos, *ran)
+		}
+	}
+}
