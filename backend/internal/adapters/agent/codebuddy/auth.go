@@ -62,7 +62,10 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	}
 	// AO-owned transient files stay under AO_DATA_DIR (or ~/.ao), never the
 	// invoking checkout or a provider profile. Each check has an empty directory.
-	base := strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
+	base := ports.AgentAuthDataDir(ctx)
+	if base == "" {
+		base = strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
+	}
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -115,7 +118,9 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 
 func authProbeEnv() []string {
 	env := os.Environ()
-	for _, binding := range []string{"CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS=1", "CODEBUDDY_DISABLE_CRON=1", "DISABLE_AUTOUPDATER=1"} {
+	// Function-hook mods have a separate native startup gate from disableAllHooks.
+	// Override only the probe child; normal sessions retain their plugin setup.
+	for _, binding := range []string{"CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS=1", "CODEBUDDY_DISABLE_CRON=1", "DISABLE_AUTOUPDATER=1", "CBC_ENABLE_FUNCTION_HOOKS=0", "CODEBUDDY_PLUGIN_DIRS="} {
 		key, _, _ := strings.Cut(binding, "=")
 		filtered := env[:0]
 		for _, existing := range env {

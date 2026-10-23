@@ -184,3 +184,65 @@ func TestOtherProviderEnvironmentDoesNotConfigureCodeBuddy(t *testing.T) {
 		t.Fatalf("unrelated provider environment=%s err=%v", got, err)
 	}
 }
+
+func TestAuthProbeDisablesFunctionHookMods(t *testing.T) {
+	t.Setenv("CBC_ENABLE_FUNCTION_HOOKS", "1")
+	t.Setenv("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", "1")
+	t.Setenv("CODEBUDDY_PLUGIN_DIRS", "/fixture/native-plugins")
+	t.Setenv("CODEBUDDY_API_KEY", "fixture-provider-key")
+	t.Setenv("CODEBUDDY_MODEL", "fixture-provider-model")
+	marker := filepath.Join(t.TempDir(), "function-mod-ran")
+	t.Setenv("AO_TEST_MOD_MARKER", marker)
+	p := fakeAuthCLI(t, "", "0")
+	script := `#!/bin/sh
+if [ "$CBC_ENABLE_FUNCTION_HOOKS" != "0" ] || [ -n "$CODEBUDDY_PLUGIN_DIRS" ]; then
+  : > "$AO_TEST_MOD_MARKER"
+fi
+if [ "$CODEBUDDY_API_KEY" != "fixture-provider-key" ] || [ "$CODEBUDDY_MODEL" != "fixture-provider-model" ]; then
+  exit 4
+fi
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"OK","usage":{"output_tokens":1}}'
+`
+	if err := os.WriteFile(p.binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := p.AuthStatus(t.Context()); err != nil || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("isolated provider check = %s, %v", status, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("function-hook mod could run during auth check: %v", err)
+	}
+	if os.Getenv("CBC_ENABLE_FUNCTION_HOOKS") != "1" || os.Getenv("CODEBUDDY_PLUGIN_DIRS") != "/fixture/native-plugins" {
+		t.Fatal("probe changed the normal native session environment")
+	}
+}
+
+func TestAuthProbeUsesCanonicalDataDirAfterDaemonChdir(t *testing.T) {
+	p := fakeAuthCLI(t, "", "0")
+	dataDir := filepath.Join(t.TempDir(), "relative-data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dataDir)
+	t.Setenv("AO_DATA_DIR", "relative-data")
+	capture := filepath.Join(t.TempDir(), "probe-dir")
+	t.Setenv("AO_TEST_PROBE_DIR_FILE", capture)
+	script := `#!/bin/sh
+printf '%s' "$PWD" > "$AO_TEST_PROBE_DIR_FILE"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"OK","usage":{"output_tokens":1}}'
+`
+	if err := os.WriteFile(p.binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := ports.WithAgentAuthDataDir(t.Context(), dataDir)
+	if status, err := p.AuthStatus(ctx); err != nil || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("canonical data-dir probe = %s, %v", status, err)
+	}
+	dir, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(string(dir)) != filepath.Join(dataDir, "auth-probes") {
+		t.Fatalf("probe resolved relative override a second time: %q", dir)
+	}
+}
