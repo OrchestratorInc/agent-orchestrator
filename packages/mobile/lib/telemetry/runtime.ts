@@ -97,6 +97,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
 		phoneInstallId: cachedInstallId,
+		awaitIdentityMigration: true,
 		allow: allowEvent,
 		// Nothing is captured until loadMobileOptOut() has read the saved preference.
 		awaitPreference: true,
@@ -113,9 +114,25 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 // The desktop's opt-out is sticky on the phone: it survives unpairing and only a
 // paired desktop that is opted in lifts it.
 const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
+const PHONE_IDENTITY_MIGRATION_KEY = "ao.telemetry.phoneIdentity.v2";
 
 /** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
 export async function loadMobileOptOut(): Promise<void> {
+	if (telemetry) {
+		let reset = false;
+		try {
+			if ((await AsyncStorage.getItem(PHONE_IDENTITY_MIGRATION_KEY)) !== "1") {
+				telemetry.resetPhoneIdentity();
+				reset = true;
+				await AsyncStorage.setItem(PHONE_IDENTITY_MIGRATION_KEY, "1");
+			} else {
+				telemetry.releasePhoneIdentity();
+			}
+		} catch {
+			// If the marker is unreadable, reset again on the next launch.
+			if (!reset) telemetry.resetPhoneIdentity();
+		}
+	}
 	let stored = false;
 	try {
 		stored = (await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1";

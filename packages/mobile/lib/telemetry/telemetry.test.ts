@@ -103,6 +103,36 @@ describe("createMobileTelemetry", () => {
 	});
 
 	describe("desktop identity", () => {
+		it("holds capture until a legacy identity is cleared", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitIdentityMigration: true });
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			t.resetPhoneIdentity();
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+		it("does not consume the daily heartbeat before migration completes", async () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitIdentityMigration: true });
+			const store = memory();
+			const now = new Date("2026-08-06T01:00:00Z");
+			await t.active(store, now);
+			expect(await store.getItem(ACTIVE_STORAGE_KEY)).toBeNull();
+			t.releasePhoneIdentity();
+			await t.active(store, now);
+			expect(captures).toHaveLength(1);
+		});
+		it("resets a legacy desktop distinct id without changing the phone installation ID", () => {
+			const { client, calls, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { phoneInstallId: () => "phone_install" });
+			t.resetPhoneIdentity();
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual(["reset", "optIn"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.install_id).toBe("phone_install");
+			expect(calls.some((call) => call.startsWith("identify:"))).toBe(false);
+		});
 		it("keeps the phone identity and stamps only the authenticated paired install", () => {
 			const { client, captures, calls } = fakeClient();
 			const t = createMobileTelemetry(client, {}, { phoneInstallId: () => "phone_install" });

@@ -169,6 +169,9 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   the old value until the new desktop responds. These properties allow events
   from the same installation to be associated across accounts and with the
   GitHub handle sent on a session-start event.
+  On upgrade from a build that used the desktop account as the phone's PostHog
+  identity, the phone resets that SDK identity once before sending new events.
+  Its stored phone installation identifier is retained.
   While signed in, the daemon reports under the AO Cloud user ID. On sign-out
   or account switch, its anonymous `distinct_id` changes to avoid attributing
   new anonymous events to the previous person.

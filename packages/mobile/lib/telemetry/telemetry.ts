@@ -39,6 +39,9 @@ export type MobileTelemetry = {
 	active(storage?: ActiveStorage, now?: Date): Promise<void>;
 	/** Apply the paired desktop's properties and opt-out. */
 	adoptDesktopIdentity(identity: DesktopTelemetryIdentity | null): void;
+	/** Remove an SDK identity inherited from older desktop adoption code. */
+	resetPhoneIdentity(): void;
+	releasePhoneIdentity(): void;
 	setOptedOut(optedOut: boolean): void;
 	/**
 	 * Applies the saved opt-out read from storage and releases capture. Ignored
@@ -52,6 +55,7 @@ export type MobileTelemetryOptions = {
 	disabledEvents?: readonly string[];
 	/** The phone's existing persisted installation ID, when primed. */
 	phoneInstallId?: () => string | null;
+	awaitIdentityMigration?: boolean;
 	/**
 	 * Returns false to drop an event that has hit the per-name rate cap. Sync so
 	 * capture() stays non-blocking; runtime.ts backs it with an in-memory,
@@ -80,6 +84,7 @@ export function createMobileTelemetry(
 	const allow = options.allow ?? (() => true);
 	let optedOut = false;
 	let blocked = options.awaitPreference ?? false;
+	let identityPending = options.awaitIdentityMigration ?? false;
 	let liveStateApplied = false;
 	let adoptedKey: string | null = null;
 	let pairedInstallId: string | null = null;
@@ -119,7 +124,7 @@ export function createMobileTelemetry(
 	const capture = (event: MobileEventName, properties?: Record<string, unknown>): void => {
 		// Fail closed on the event name: an event not in the allowlist is never
 		// sent, so a typo cannot ship a bare untracked event.
-		if (blocked || optedOut) return;
+		if (blocked || identityPending || optedOut) return;
 		if (!(event in MOBILE_ALLOWLIST)) return;
 		// Build-time kill switch, mirroring the desktop denylist.
 		if (denied.has(event)) return;
@@ -178,9 +183,17 @@ export function createMobileTelemetry(
 	return {
 		capture,
 		adoptDesktopIdentity,
+		resetPhoneIdentity: () => {
+			client.reset();
+			void (optedOut ? client.optOut() : client.optIn());
+			void client.register(context);
+			identityPending = false;
+		},
+		releasePhoneIdentity: () => { identityPending = false; },
 		setOptedOut,
 		restoreOptOut,
 		active: async (storage, now) => {
+			if (blocked || identityPending || optedOut) return;
 			if (await reserveDailyActive(storage, now)) {
 				capture(MOBILE_EVENTS.active);
 			}
