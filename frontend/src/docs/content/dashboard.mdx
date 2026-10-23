@@ -3,7 +3,7 @@ title: Dashboard
 description: Use the AO desktop app to supervise projects, sessions, pull requests, reviews, and previews.
 ---
 
-The Orchestrator desktop app is where you manage projects and sessions. Open a worker's Chat or terminal, review its pull request and changed files, and preview its web app.
+The Orchestrator desktop app is where you manage projects and sessions. Plan with the project orchestrator, open a worker's Chat or terminal, review its pull request and changed files, preview its web app, and open the artifacts it writes.
 
 ## The app shell
 
@@ -12,13 +12,23 @@ The Orchestrator desktop app is where you manage projects and sessions. Open a w
 | **Sidebar** | Registered projects and their worker or orchestrator sessions. |
 | **Board / center pane** | Sessions grouped by their current derived state. |
 | **Session view** | Structured Chat or the live native Terminal UI. |
-| **Inspector** | Pull request, reviews, files, and browser preview for the selected session. |
+| **Inspector** | Pull request, reviews, files, artifacts, browser preview, and (in Developer mode) side chats for the selected session. |
 
 Orchestrator remembers the session's committed interface mode. Opening a Chat session restores its paged conversation timeline; opening a TUI session reconnects to its terminal through the daemon mux.
 
+## Plan with the orchestrator
+
+Each project can have a persistent orchestrator session. Use it to explore an idea, weigh approaches, and turn an outcome into a plan. When the plan is actionable, the orchestrator splits it into focused tasks, spawns or redirects workers with the context they need, and follows their pull requests, CI, and reviews. Open it with **Open orchestrator** (⌘⇧O on macOS, Ctrl+Shift+G on Windows and Linux), from the command palette, or from the project in the sidebar. Workers it spawns appear on the same board as the ones you start yourself.
+
+Choose the orchestrator's agent in Project settings, separately from the worker agent. See [Per-role agents](/guides/per-role-agents).
+
+## The board
+
+The board places every worker in a column derived from its live session and pull-request state: working, needs you, in review, and ready to merge. Cards show the task, agent, branch, activity, pull request, and the session's latest artifacts.
+
 Open **Automations** from the sidebar to create recurring work, edit its prompt and schedule, enable or pause it, delete a definition, and inspect run history. Local schedules run in the daemon: keep the host awake and Orchestrator running. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
 
-Projectless standalone tasks do not need a Git project. Cloud sessions appear only when the build and account enable that integration; their execution and data live remotely.
+Projectless standalone tasks do not need a Git project. Cloud sessions run in hosted sandboxes; their execution and data live remotely. See [Cloud sessions](/guides/cloud).
 
 ## Read session state
 
@@ -41,6 +51,10 @@ Chat sessions show durable messages, provider activities, commands, plans, chang
 The composer sends a provider turn through the daemon. A Chat session can also open a session-scoped worktree shell without creating an agent TUI pane.
 
 Chat controls depend on the provider. Where supported, choose a model, reasoning effort, and permissions; attach images; inspect skills and Model Context Protocol (MCP) tools; and use slash commands such as compaction. Session links and reported artifacts keep related work together.
+
+After a reply completes, Chat can suggest a next message in gray in the empty composer. Press **Tab** to insert it as an editable draft, or keep typing or press **Escape** to dismiss it.
+
+Side chats are a Developer mode preview. Turn on **Settings → General → Developer mode**, then **Side chats**, to open separate side conversations in the inspector. A side chat starts from the main conversation's latest completed turn, then runs independently with its own draft, queue, and approvals. Type `/btw` or `/side` in the main composer to send a question to a new side chat. Where the provider supports native conversation forks, the side chat is a native fork of the main conversation; otherwise Orchestrator rebuilds the context from the visible history. Side chats are local to the desktop and do not survive an app restart.
 
 **Run a cue** sends a saved project instruction or opens a shell command in a fresh terminal. See [Project settings](#project-settings).
 
@@ -71,13 +85,21 @@ Orchestrator can run configured reviewer agents, send review findings back to th
 
 Enable **Auto review** for one session, or set the project default for new sessions. Orchestrator starts a review only when the pull request is eligible and the worker is idle. This does not enable automatic merge.
 
-In **Files**, choose workspace changes or pull-request changes. You can inspect commits where available. Looking at local changes does not publish a review to the repository.
+In **Files**, choose workspace changes or pull-request changes. Files previews images, SVGs, audio, and video as well as code and diffs. You can inspect commits where available. Looking at local changes does not publish a review to the repository.
+
+## Artifacts
+
+Artifacts are files an agent writes as deliverables, such as a Markdown report, an SVG diagram, an image, or an HTML page. Open them from the session's **Artifacts** inspector tab, from links in Chat, or from **Artifacts** in the sidebar, which lists every artifact across sessions and links back to the session that made it. Start a session whose deliverable is an artifact instead of a pull request with `ao spawn --output artifact`.
+
+Markdown and SVG artifacts open rendered, images and media open in a viewer, and HTML artifacts open in the Browser panel. Expand the viewer to cover the whole window, edit a text artifact in place, or select rendered text to send feedback to the worker. The **Version history** menu keeps earlier versions of each artifact and can **Restore this version**. When you archive a session, choose whether to keep or delete its artifacts.
 
 ## Browser preview
 
 The Browser tab displays the preview target explicitly selected for the session with `ao preview`, `ao preview <url>`, or `ao preview start`. The default temporary browser profile is isolated per session. Named browser profiles persist cookies and storage and can be reused across sessions; sessions using the same named profile deliberately share that browser state.
 
 Orchestrator's browser bridge can support agent-driven navigation, snapshots, clicks, typing, screenshots, console inspection, and temporary network-metadata capture. Network capture is off by default, bounded, omits bodies and sensitive values, and expires automatically.
+
+When a remote or Cloud session's agent opens a browser, it appears as a tab in the Browser panel.
 
 Use the Browser toolbar to select a profile, open DevTools, pop out the view, or annotate the page and send feedback to Chat. Orchestrators can open a browser on demand. Keep the panel visible for screenshots and human-style pointer actions.
 
@@ -93,7 +115,11 @@ Opening the panel marks loaded unread alerts as read, but leaves them in the fee
 
 In **Settings → Connect Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
 
-Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Mute or unpair a device in Connect Mobile. On supported Macs, **Keep awake** can help keep the computer reachable.
+From the mobile app you can manage several paired computers, start new sessions, use Chat and the Terminal UI, answer approvals, and follow pull requests and reviews. Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Mute or unpair a device in Connect Mobile.
+
+## Stay Awake (macOS)
+
+**Settings → Stay Awake** keeps a Mac awake while agents work. Start an indefinite session from the toolbar or a session's Summary, or choose a duration, an end time, or while a specific app is running. Supported Apple Silicon MacBooks can stay awake with the lid closed. Battery and critical-heat protection still apply. See [Keeping a MacBook reachable with its lid closed](/configuration/remote-access#keeping-a-macbook-reachable-with-its-lid-closed).
 
 ## Project settings
 
@@ -101,7 +127,7 @@ Project settings configure worker and orchestrator roles without changing the re
 
 GitHub and GitLab provide pull-request and issue data. **Cues** belong to a project. Create a Cue to save an agent instruction or shell command. An agent Cue sends a prompt to an eligible session or starts a worker. A blocked session cannot accept an ordinary prompt. A command Cue runs the exact command in a fresh local terminal; it does not ask an agent to interpret it.
 
-Use **General** to choose the default session interface. **Harness** shows setup and readiness. **Agents → Codex** manages device accounts. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
+Use **General** to choose the default session interface, a light or dark mode, and one of 20 color themes. **Harness** installs and updates agent CLIs, sets model defaults, and shows readiness. **Agents** manages several Codex subscription accounts. With **Developer mode** on, a preview moves accounts to **Harness → Claude Code** or **Codex → Account**: each account is a separate CLI config folder, sessions on different accounts run side by side, and a session can move to another account between turns. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
 
 Closing a terminal or switching views does not archive a session. Some detached terminal and Chat processes can survive a daemon restart; reconnecting depends on the computer and provider state. **Archive** ends the Orchestrator session. Stopping only its agent leaves a session you can resume. See [session commands](/cli#ao-session) for resume, restore, and cleanup.
 

@@ -1,15 +1,15 @@
 ---
 title: FAQ
-description: Common questions about the current Agent Orchestrator desktop product.
+description: Common questions about Orchestrator.inc (formerly Agent Orchestrator, AO).
 ---
 
 <Accordions expandAll>
 	<Accordion title="How is Orchestrator different from several agent terminals?">
-		Orchestrator adds isolated worktrees, durable session identity, Chat or TUI control, pull-request observation, lifecycle reactions, review runs, notifications, and browser previews around those agents.
+		A project orchestrator agent plans larger work and spawns focused workers. Each worker gets an isolated worktree and a durable session with Chat or Terminal UI control. Orchestrator follows each pull request and routes CI failures, review comments, and merge conflicts back to the worker that owns it. It also runs AO reviewer agents on pull requests, renders session artifacts, and provides an agent-controllable browser, notifications, and a companion mobile app.
 	</Accordion>
 
 	<Accordion title="Do I have to use Claude Code?">
-		No. Orchestrator includes adapters for more than twenty harnesses, including Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and others. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Unreal Agent is Chat-only; most remaining harnesses also have terminal interfaces.
+		No. Orchestrator ships adapters for 37 coding agent harnesses, including Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Aider, OpenCode, Droid, Kimi Code, and others. Each project can choose different agents for its workers, orchestrator, and reviewers. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Unreal Agent is Chat-only; most remaining harnesses also have terminal interfaces.
 	</Accordion>
 
 	<Accordion title="Does Orchestrator merge pull requests?">
@@ -36,8 +36,8 @@ description: Common questions about the current Agent Orchestrator desktop produ
 		Do not expose the primary daemon listener. It is unauthenticated and fixed to `127.0.0.1`. Connect Mobile creates a separate authenticated path. Its direct LAN listener is plaintext for trusted networks; an advertised managed HTTPS endpoint supports remote pairing. The current Tailscale pairing flow has additional limits, especially on iPhone. See [Connect Mobile](/configuration/remote-access).
 	</Accordion>
 
-	<Accordion title="What does Orchestrator cost?">
-		Orchestrator is Apache-2.0 licensed. Agent usage is billed according to the provider account or subscription used by each installed harness. Chat records usage data when the provider reports it. Cloud is a separately gated service; check the account offering shown in your app rather than assuming the local license includes remote execution or provider credits.
+	<Accordion title="Is Orchestrator free?">
+		The local app is free and open source under Apache-2.0, with unlimited local agents. Agent usage is billed according to the provider account or subscription used by each installed harness. Chat records usage data when the provider reports it. Paid Orchestrator Cloud plans start at $20/month (Starter); Pro is $40/month and Enterprise has custom pricing. See [Plans](/guides/cloud#plans). Teams and enterprises can join the [Teams & Enterprise waitlist](https://orchestrator.inc/waitlist).
 	</Accordion>
 
 	<Accordion title="Does Orchestrator upload my source code?">
@@ -49,7 +49,7 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	</Accordion>
 
 	<Accordion title="Can I still install Orchestrator from npm?">
-		The legacy `@aoagents/ao` package remains available, but `0.10.0` is its final release and it will not receive updates. Prefer the [desktop download](/installation). Existing npm users can run `ao start` to fetch and open the desktop build.
+		The legacy `@aoagents/ao` package remains available, but it trails the desktop app: its latest release is `0.10.3`. Prefer the [desktop download](/installation). Existing npm users can run `ao start` to fetch and open the desktop build.
 	</Accordion>
 
 	<Accordion title="Can Chat and Terminal UI run at the same time for one session?">

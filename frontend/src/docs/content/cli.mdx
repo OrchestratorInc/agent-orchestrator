@@ -13,11 +13,12 @@ ao
 ├── stop                          Stop the local daemon
 ├── status                        Show daemon health
 ├── doctor                        Check the local Orchestrator environment
+├── remote-host                   status, enable, disable this machine's remote listener
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
-├── session                       ls, get, kill, restore, rename, cleanup, claim-pr,
-│                                 exit-agent, resume-agent
+├── session                       ls, top, get, kill, restore, rename, cleanup, claim-pr,
+│                                 exit-agent, resume-agent, history
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
 ├── report                        Report worker progress or artifacts
@@ -26,6 +27,7 @@ ao
 ├── pr                             merge, resolve-comments
 ├── review                         ls, trigger, cancel, submit
 ├── preview                        select/clear a target; start, status, stop a server
+├── render                         Show a self-contained HTML page inline in a Chat thread
 ├── browser                        Control the selected session browser
 ├── import                         Import projects from legacy product data
 ├── completion                     Generate shell completions
@@ -125,6 +127,8 @@ Important flags include:
 | `--prompt <text>` | Initial prompt. |
 | `--standalone` | Projectless worker; requires an explicit agent and excludes project, branch, issue, PR, and orchestrator options. |
 | `--model <model>` | Override the selected provider model for this spawn. |
+| `--effort <level>` | Override reasoning effort for this session only. |
+| `--output artifact` | Ask the agent to write a file to its artifact directory instead of opening a pull request. |
 | `--tracker-provider github\|gitlab` | Select the issue provider for `--issue`. |
 | `--issue <id>` | Associate a tracker issue. |
 | `--claim-pr <ref>` | Claim an existing pull request after spawning. |
@@ -138,7 +142,9 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | Command | Purpose |
 | --- | --- |
 | `ao session ls` | List active worker sessions. Use `--all` for orchestrators and `--include-terminated` for history. |
+| `ao session top` | Show memory used by each live session, largest first. |
 | `ao session get <id>` | Show one session. |
+| `ao session history [id]` | Print a session's turns, newest first. Defaults to the current session. |
 | `ao session kill <id>` | Terminate a session. Dirty workspaces are preserved. |
 | `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
 | `ao session exit-agent <id>` | Stop the controller while retaining the session. |
@@ -213,6 +219,10 @@ Selects what the desktop Browser panel displays for the session identified by `A
 
 `.ao/launch.json` is optional project configuration. Orchestrator does not infer or scaffold development servers, and static files do not require one.
 
+### `ao render <file.html> --title <name>`
+
+Shows a self-contained HTML page, such as a chart, table, diagram, or mockup, inline in the current Chat session's thread. `--title` is required. `--height` sets the first-paint frame height, and `--artifact` also keeps the page as a session artifact. Run `ao render --check <file.html>` first to get a screenshot, content height, and console messages from the desktop app; `--width` and `--out` apply to the check. Terminal UI sessions use `ao preview` instead.
+
 ### `ao browser`
 
 Controls the live, session-isolated Electron browser owned by the desktop app. It also resolves its target from `AO_SESSION_ID`; the desktop app must be open.
@@ -226,6 +236,18 @@ The first `ao browser snapshot --delta` returns the full page tree. Later calls 
 `click` and `drag` accept `--human` for pages that ignore instant pointer movement. Keep the Browser panel visible when using `--human` or taking screenshots. Hidden or covered windows stop painting, so these commands time out.
 
 Network capture is off by default. When enabled, it records bounded metadata only, excludes request and response bodies and sensitive values, and expires automatically.
+
+## Remote access
+
+### `ao remote-host`
+
+| Command | Purpose |
+| --- | --- |
+| `ao remote-host status` | Show the remote listener's addresses and connection password without changing it. |
+| `ao remote-host enable` | Turn on the authenticated LAN listener. Add `--tunnel` for an HTTPS tunnel as well, or `--tunnel-only` for HTTPS access without LAN. |
+| `ao remote-host disable` | Turn the listener off. |
+
+See [Remote access and mobile](/configuration/remote-access) for pairing phones and connecting another desktop.
 
 ## Migration and shell integration
 

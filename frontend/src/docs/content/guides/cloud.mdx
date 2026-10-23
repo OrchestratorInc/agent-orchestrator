@@ -3,19 +3,23 @@ title: Cloud sessions
 description: Set up a hosted project and work on a remote session from the desktop app.
 ---
 
-Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud requires an enabled desktop build, an account with access, and a reachable service. The Cloud choice may be absent in your app. The local product still works without Cloud.
+**Orchestrator Cloud is available now in the desktop app** (turn on **Settings → General → Developer mode**, then **Cloud**). Sign in and run agents in the cloud. Anyone can sign in and start; no invitation is needed.
 
-## Before you start
+Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Sessions run in remote sandboxes that can be slow to start or lose uncommitted work, so commit and push important work often. The local product works the same with or without Cloud.
 
-1. Install the current [desktop release](/installation) and sign in using **Sign in to Orchestrator Cloud** in the sidebar. If that entry is missing, Cloud is not enabled for your build or account. Contact the team that granted access; a local GitHub sign-in alone does not enable it.
-2. In **Settings → Harness**, switch to **Cloud** and connect a supported coding agent. On v0.13.3, open **Settings → Cloud** and choose **Open Harness settings**. The Cloud worker picker offers Claude Code, Codex, Cursor, and OpenCode only when the corresponding Cloud connection is valid. This coding-agent connection is separate from the sandbox provider choice; a local agent installation or local CLI login does not supply a Cloud credential.
-3. Have access to the GitHub repository you want to work on. Cloud project creation uses a GitHub installation and repository grant, separate from the `gh` login used by local projects. Follow the **Connect GitHub** flow in project setup if the repository is missing.
+## Get started
 
-Cloud authorization is scoped to the signed-in account and its organizations. The desktop currently uses the first organization returned for that account, creates one if none exists, and has no organization switcher. If the wrong organization appears, sign in with the account that has the intended access or contact the team that manages your Cloud access. If access expires, sign in again and retry the action. Do not paste provider keys or GitHub tokens into a task prompt.
+1. Install or update the desktop app from the [download page](https://orchestrator.inc/download/).
+2. Turn on Cloud. Open **Settings → General**, turn on **Developer mode**, then turn on **Cloud** and confirm **Enable Cloud**.
+3. Sign in. Choose **Sign in to AO Cloud** in the sidebar and complete the browser sign-in. Signing in creates an organization for your account if it has none. A local GitHub or `gh` sign-in does not sign you in to Cloud.
+4. Connect a harness. In **Settings → Harness**, switch to **Cloud** and log in to a coding agent for cloud sessions: Claude Code, Codex, Cursor, or OpenCode. Each login is personal to you. The Cloud worker picker offers an agent only when its Cloud connection is valid. A local agent installation or CLI login does not supply a Cloud credential. The same page shows the organization's **Cloud sandbox provider**.
+5. Have access to the GitHub repository you want to work on. Cloud project creation uses a GitHub installation and repository grant, separate from the `gh` login used by local projects. Follow the **Connect GitHub** flow in project setup if the repository is missing.
+
+Cloud authorization is scoped to the signed-in account and its organizations. The desktop currently uses the first organization returned for that account, creates one if none exists, and has no organization switcher. If the wrong organization appears, sign in with the account that has the intended access. If access expires, sign in again and retry the action. Do not paste provider keys or GitHub tokens into a task prompt.
 
 ## Create a project and session
 
-Choose **Clone to the cloud** from Home or the new-project picker, select a granted GitHub repository, then choose worker and orchestrator agents from the connected Cloud providers. Complete the project setup and open it from the sidebar. A Cloud project is labeled as such; it does not use a local folder picker or create a worktree on your computer.
+Choose **Clone to the cloud** in the new-project picker, select a granted GitHub repository, then choose worker and orchestrator agents from the connected Cloud providers. Complete the project setup and open it from the sidebar. A Cloud project is labeled as such; it does not use a local folder picker or create a worktree on your computer.
 
 Create a task inside that Cloud project. Choose an available agent and enter a focused prompt. Cloud tasks currently reject file attachments at creation, so put required files in the repository or send supported content after the session starts. The control plane provisions a remote workspace and starts the worker; initial setup can take time. If creation fails, check the account session, repository grant, provider connection, and the error shown in the app before retrying. Avoid repeatedly creating the same task while provisioning is in progress.
 
@@ -30,15 +34,26 @@ Cloud stores project, session, conversation, and event records in its hosted con
 
 Commit and push important work to the repository. A provider failure or missing checkpoint can leave work unavailable. Signing out clears the desktop's Cloud view but does not delete remote sessions.
 
-## Costs and limits
+## Plans
 
-This repository does not publish Cloud pricing or account entitlements. The desktop does not show a billing or plan page, so provider defaults in development files are not customer pricing. Your account, organization, and selected sandbox provider determine which Cloud option and agents you can use.
+Local use is free. Local agents have no plan limits; the local daemon has no plan checks. Paid plans add cloud agents, and a cloud relay for cross-device connectivity is coming soon.
 
-Cloud also has a configurable concurrent-sandbox limit. A provider can have a lower capacity or reject a request while it is full. If session creation reports that the organization has reached its limit, archive an unused session, wait for provider teardown to finish, and try again. Ask the team that granted Cloud access or your organization admin for current pricing, limits, or an access change.
+| Plan | Price | Includes |
+| --- | --- | --- |
+| **Free** | $0 | Unlimited local agents on your machine with any supported harness. Orchestrator, workers, and PR reviews. Connect over the same network, or from anywhere with your own Tailscale or the managed HTTPS tunnel; see [Remote access and mobile](/configuration/remote-access). No cloud agents. |
+| **Starter** | $20/month | Everything in Free, plus cloud agents. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes, and reviews in the cloud. 1 cloud project and 1 simultaneous cloud agent. Coming soon: a cloud relay for access across devices. |
+| **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 15 simultaneous cloud agents. |
+| **Enterprise** | Custom | Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
 
-## If access stops working
+Plans are billed monthly; see [orchestrator.inc/pricing](https://orchestrator.inc/pricing). Organization admins on self-serve billing choose or change a plan in **Settings → Upgrade** after signing in to AO Cloud. For Enterprise, use **Talk to founder** on the same page, or join the [Teams & Enterprise waitlist](https://orchestrator.inc/waitlist). Organizations on a contract plan have it managed by their administrator.
 
-- **Cloud option missing:** verify that the build and account have Cloud enabled. A local project remains available.
+## Limits
+
+Each plan limits running cloud sessions. A provider can have a lower capacity or reject a request while it is full. If session creation reports that the organization has reached its limit, archive an unused session, wait for provider teardown to finish, and try again, or upgrade the plan. **Settings → Upgrade** shows current usage.
+
+## Troubleshooting
+
+- **Cloud option missing:** update the desktop app, then check that **Developer mode** and **Cloud** are on in **Settings → General**, and that you are signed in to AO Cloud. A local project remains available.
 - **Repository missing:** reconnect GitHub or check installation and repository grants for the organization shown in the desktop.
 - **Agent unavailable:** reconnect its Cloud credential in **Settings → Harness → Cloud**. Local harness readiness is a separate check.
 - **Session stuck or disconnected:** reopen the session and check its state. A sleeping or replacing remote worker can need time to reconnect; retry a failed action only after checking whether it already completed.
@@ -47,6 +62,6 @@ Cloud also has a configurable concurrent-sandbox limit. A provider can have a lo
 <details>
 <summary>Verification scope</summary>
 
-This guide was checked against the desktop Cloud source and the control-plane implementation on 3 October 2026. An authenticated production session was not tested. Cloud entitlements, sandbox providers, capacity, and available agents can differ by organization; use the choices shown in your app as the final check.
+This guide was checked against the desktop Cloud source and the control-plane implementation on 19 October 2026. An authenticated production session was not tested. Cloud entitlements, sandbox providers, capacity, and available agents can differ by organization; use the choices shown in your app as the final check.
 
 </details>
