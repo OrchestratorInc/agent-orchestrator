@@ -12,8 +12,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -22,12 +20,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"golang.org/x/text/unicode/norm"
-)
 
-// VersionsDir is the local artifact history directory. Paths inside it are
-// never stored.
-const VersionsDir = ".versions"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+)
 
 // maxKeyBytes is the S3 object key length limit.
 const maxKeyBytes = 1024
@@ -38,8 +33,6 @@ var (
 	// ErrChecksumMismatch reports that S3 rejected an upload whose body did not
 	// match its claimed SHA-256.
 	ErrChecksumMismatch = errors.New("artifact checksum mismatch")
-	// ErrInvalidPath reports an artifact path that cannot be stored.
-	ErrInvalidPath = errors.New("invalid artifact path")
 )
 
 // Kind values, matching the local session artifact kinds.
@@ -100,59 +93,13 @@ func Key(orgID, sessionID, cleanPath string) (string, error) {
 		return "", errors.New("artifact key requires an organization and session")
 	}
 	if cleanPath == "" {
-		return "", ErrInvalidPath
+		return "", domain.ErrInvalidArtifactPath
 	}
 	key := "orgs/" + orgID + "/sessions/" + sessionID + "/" + cleanPath
 	if len(key) > maxKeyBytes {
-		return "", fmt.Errorf("%w: path is too long", ErrInvalidPath)
+		return "", fmt.Errorf("%w: path is too long", domain.ErrInvalidArtifactPath)
 	}
 	return key, nil
-}
-
-// reservedNames are file names Windows reserves for devices, with or without
-// an extension.
-var reservedNames = map[string]bool{
-	"CON": true, "PRN": true, "AUX": true, "NUL": true,
-	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
-	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
-	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
-	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
-}
-
-// CleanPath validates a slash-separated path relative to the session's
-// artifact directory and returns it in Unicode NFC form. It rejects control
-// and invisible format characters, dot segments, Windows device names, and
-// any path under the versions directory in any letter case.
-func CleanPath(raw string) (string, error) {
-	if raw == "" || !utf8.ValidString(raw) {
-		return "", ErrInvalidPath
-	}
-	cleaned := norm.NFC.String(raw)
-	if strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "\\") {
-		return "", ErrInvalidPath
-	}
-	if len(cleaned) >= 2 && cleaned[1] == ':' {
-		return "", ErrInvalidPath
-	}
-	for _, r := range cleaned {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return "", ErrInvalidPath
-		}
-	}
-	segments := strings.Split(cleaned, "/")
-	for _, segment := range segments {
-		if segment == "" || segment == "." || segment == ".." {
-			return "", ErrInvalidPath
-		}
-		base, _, _ := strings.Cut(segment, ".")
-		if reservedNames[strings.ToUpper(base)] {
-			return "", ErrInvalidPath
-		}
-	}
-	if strings.EqualFold(segments[0], VersionsDir) {
-		return "", ErrInvalidPath
-	}
-	return cleaned, nil
 }
 
 // KindOf returns the artifact kind for a path.

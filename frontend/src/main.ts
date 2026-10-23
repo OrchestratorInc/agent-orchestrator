@@ -52,7 +52,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
-import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
@@ -161,6 +161,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -916,6 +917,18 @@ async function createWindowInternal(): Promise<void> {
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// A cloud artifact frame's page can open another file of its session; the
+	// renderer follows it (the file's name, a refused link) by its URL.
+	shellWebContents.on("did-frame-navigate", (_event, url, httpResponseCode, _statusText, isMainFrame) => {
+		if (isMainFrame) return;
+		try {
+			if (cloudArtifactPrefix(new URL(url)) === undefined) return;
+		} catch {
+			return;
+		}
+		shellWebContents.send("cloudArtifact:frameNavigated", { url, status: httpResponseCode });
 	});
 
 	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
@@ -2904,6 +2917,7 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
+registerCloudArtifactIpc({ ipcMain });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

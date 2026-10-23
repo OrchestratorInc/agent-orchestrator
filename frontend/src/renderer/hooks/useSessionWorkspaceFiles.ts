@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
+import { appI18n } from "../i18n";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { CHECKED_OUT_BRANCH, buildReviewTarget, defaultChanges, followsDefaultSelection, isLegacyManifest, workspaceSelectionKey } from "../lib/files-review-selection";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -71,8 +73,12 @@ export type FilesSource =
 	| { kind: "workspace" }
  | { kind: "snapshot"; view?: WorkspaceViewParams; commitShas?: readonly string[]; label: string }
 	| { kind: "pull_request"; number: number; url: string; label: string; snapshot?: string }
-	/** `readOnly` hides the edit action, as for a cloud session's artifacts. */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean };
+	/**
+	 * `readOnly` hides the edit action, as for a cloud session's artifacts.
+	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
+	 * `artifactRoot` is the URL relative links resolve against.
+	 */
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void };
 
 /** The branch the Files review reads. Only the checked-out branch reads the worktree; the others read revisions. */
 export type FilesBranchTarget =
@@ -280,26 +286,37 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 	return data as WorkspaceFileDetail;
 }
 
+/** Cloud artifact files read as text; any other cloud file is shown as binary. */
+export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|txt|log|csv|tsv|json|ya?ml|toml|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|html?)$/i;
+
+/** A cloud artifact read refused because the access prefix expired or the user lost access. */
+export class CloudArtifactAccessError extends Error {}
+
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
 // workspace-files endpoint. Local preview hostnames can resolve to ::1, where
 // another app may own the daemon's port. Read through the trusted daemon API
 // instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
 // already identify their content endpoint and must keep their original routing.
-async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
+// A cloud file is read through the cloud bridge, which carries the whole body
+// as text; media and other non-text files are asked for with HEAD only.
+async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string, cloud = false): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	const contentUrl = artifactContentUrl(sessionId, path, rawUrl);
+	const contentUrl = cloud ? rawUrl : artifactContentUrl(sessionId, path, rawUrl);
 	if (!contentUrl) throw new Error(errorMessage);
 	const media = fileMediaKind(path);
+	const headOnly = cloud && (media !== undefined || !CLOUD_TEXT_ARTIFACT.test(path));
 	// The artifact route only supports GET; media elements stream their own body.
-	const response = await fetch(contentUrl);
-	if (media) void response.body?.cancel();
+	const response = cloud ? await cloudCpFetch(contentUrl, { method: headOnly ? "HEAD" : "GET" }) : await fetch(contentUrl);
+	if (media && !cloud) void response.body?.cancel();
+	if (cloud && (response.status === 401 || response.status === 403)) throw new CloudArtifactAccessError(appI18n.t("artifacts.accessError"));
+	if (cloud && response.status === 404) throw new Error(appI18n.t("artifacts.unavailable"));
 	if (!response.ok) throw new Error(errorMessage);
-	const { binary, bytes, content, size, truncated } = media
+	const { binary, bytes, content, size, truncated } = media || headOnly
 		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
 		: await readArtifactTextResponse(response);
-	// Only a complete text file can be edited: the save sends it back whole.
-	const editable = !binary && !truncated;
+	// Only a complete local text file can be edited: the save sends it back whole.
+	const editable = !cloud && !binary && !truncated;
 	return {
 		additions: 0,
 		binary,
@@ -391,10 +408,14 @@ function decodeArtifactText(bytes: Uint8Array, truncated: boolean): { binary: bo
 	}
 }
 
-export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact"): UseQueryOptions<WorkspaceFileDetail> {
+export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact", cloud = false): UseQueryOptions<WorkspaceFileDetail> {
 	return {
 		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
-		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage),
+		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage, cloud),
+		// A missing cloud file or a refused link does not change on retry. A
+		// cloud file's URL changes with the file, so a read never goes stale
+		// (and window focus does not carry the file over IPC again).
+		...(cloud ? { retry: false, staleTime: Infinity } : {}),
 	};
 }
 
@@ -435,7 +456,7 @@ export function sessionSourceFileQueryOptions(
 			staleTime: Infinity,
 		};
 	if (source.kind === "workspace") return sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId);
-	if (source.kind === "artifact") return sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl, errorMessage);
+	if (source.kind === "artifact") return sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl, errorMessage, source.cloud);
 	return {
 		queryKey: hostId
 			? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path]

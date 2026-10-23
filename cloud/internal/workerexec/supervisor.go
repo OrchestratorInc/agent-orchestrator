@@ -41,6 +41,9 @@ type Supervisor struct {
 	Logger              *slog.Logger
 	PullRequestClaimer  func(context.Context, string) error
 	GitRefReporter      func(context.Context) error
+	// TurnEnded, when set, runs after each Chat turn has run, before the
+	// turn is reported complete.
+	TurnEnded func()
 
 	// busy covers both a claim in flight and its turn until completion. A
 	// handoff must not cancel Run between a durable claim and turn completion.
@@ -407,6 +410,9 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 			s.Logger.Warn("report worker branch heads", "error", err)
 		}
 		cancel()
+	}
+	if s.TurnEnded != nil {
+		s.TurnEnded()
 	}
 	if runErr != nil {
 		return s.retryFailure(ctx, turn.ID, turn.Attempt, boundedError(runErr.Error()))
