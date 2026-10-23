@@ -584,6 +584,7 @@ describe("CloudSessionChatSurface", () => {
 			cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 			cloudMocks.listChatModels.mockReset()
 				.mockRejectedValueOnce(new CloudCpError("The worker did not answer in time.", { status: 504, code: "TRANSPORT_TIMEOUT" }))
+				.mockRejectedValueOnce(new CloudCpError("The worker did not complete the request in time.", { status: 504, code: "WORKER_TIMEOUT" }))
 				.mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true }] });
 			const first = render(
 				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -592,8 +593,11 @@ describe("CloudSessionChatSurface", () => {
 			);
 			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
 			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
-			await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+			// Both timeout codes (the queued request expired, or the control plane's
+			// own wait ran out) are asked again.
+			await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
 			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toHaveLength(1));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(3);
 			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
 			first.unmount();
 

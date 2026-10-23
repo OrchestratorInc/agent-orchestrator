@@ -943,9 +943,24 @@ func (s *Store) IssueAccessTicket(
 	return token, nil
 }
 
+// WorkerBootstrapRetryWindow is how long after a bootstrap ticket is first
+// redeemed the same worker may redeem it again, even past the ticket's expiry,
+// as long as no worker has checked in on its epoch (see
+// RedeemWorkerBootstrapTicket). It outlasts the worker's bootstrap retry
+// budget, which starts no earlier than the first redemption.
+const WorkerBootstrapRetryWindow = 10 * time.Minute
+
 // RedeemWorkerBootstrapTicket atomically consumes a bootstrap ticket. Its
 // worker epoch was reserved when the ticket was issued, which fences the prior
 // worker before a repair or recreate begins.
+//
+// Redeeming is committed before the bootstrap response is written, so a
+// response the worker never received (a slow control plane past the worker's
+// request timeout) would otherwise leave it holding a spent ticket and no
+// credential until the startup ceiling. A ticket redeemed within
+// WorkerBootstrapRetryWindow may therefore be redeemed again, for the same
+// epoch, until a worker checks in on that epoch, the epoch is fenced, or a
+// newer bootstrap ticket replaces it.
 func (s *Store) RedeemWorkerBootstrapTicket(
 	ctx context.Context,
 	token string,
@@ -953,7 +968,7 @@ func (s *Store) RedeemWorkerBootstrapTicket(
 	hash := sha256.Sum256([]byte(token))
 	var ticket domain.AccessTicket
 	err := s.withService(ctx, func(tx pgx.Tx) error {
-		err := tx.QueryRow(
+		err := scanAccessTicket(tx.QueryRow(
 			ctx,
 			`UPDATE ao_access_tickets
 			SET consumed_at = now(),
@@ -965,17 +980,9 @@ func (s *Store) RedeemWorkerBootstrapTicket(
 			RETURNING id, org_id, session_id, purpose, scopes,
 				COALESCE(worker_epoch, 0), expires_at`,
 			hash[:],
-		).Scan(
-			&ticket.ID,
-			&ticket.OrgID,
-			&ticket.SessionID,
-			&ticket.Purpose,
-			&ticket.Scopes,
-			&ticket.WorkerEpoch,
-			&ticket.ExpiresAt,
-		)
+		), &ticket)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidTicket
+			return redeemBootstrapTicketAgain(ctx, tx, hash[:], &ticket)
 		}
 		if err != nil {
 			return fmt.Errorf("consume access ticket: %w", err)
@@ -986,6 +993,84 @@ func (s *Store) RedeemWorkerBootstrapTicket(
 		return domain.AccessTicket{}, err
 	}
 	return ticket, nil
+}
+
+// redeemBootstrapTicketAgain answers a worker retrying a bootstrap whose
+// response it lost (RedeemWorkerBootstrapTicket). The window runs from the
+// first redemption, not the ticket's expiry: a ticket issued while the
+// workspace was still installing the worker can be close to expiring when the
+// worker first reaches the control plane. The row lock only orders retries'
+// checks; two that pass both register the same worker and epoch, which is
+// idempotent.
+func redeemBootstrapTicketAgain(
+	ctx context.Context,
+	tx pgx.Tx,
+	hash []byte,
+	ticket *domain.AccessTicket,
+) error {
+	err := scanAccessTicket(tx.QueryRow(
+		ctx,
+		`SELECT id, org_id, session_id, purpose, scopes, worker_epoch, expires_at
+		FROM ao_access_tickets
+		WHERE token_hash = $1
+			AND purpose = 'worker_bootstrap'
+			AND worker_epoch IS NOT NULL
+			AND consumed_at > now() - $2::interval
+		FOR UPDATE`,
+		hash,
+		intervalString(WorkerBootstrapRetryWindow),
+	), ticket)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalidTicket
+	}
+	if err != nil {
+		return fmt.Errorf("read redeemed access ticket: %w", err)
+	}
+	// Worker connections are tenant rows, so the check below runs scoped to
+	// the ticket's organization as well as the service context.
+	if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, ticket.OrgID); err != nil {
+		return fmt.Errorf("scope redeemed access ticket: %w", err)
+	}
+	var settled bool
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT EXISTS (
+			-- A newer bootstrap ticket replaced this one (issuing it also
+			-- marked this one consumed).
+			SELECT 1 FROM ao_access_tickets
+			WHERE org_id = $1 AND session_id = $2
+				AND purpose = 'worker_bootstrap'
+				AND worker_epoch > $3
+		) OR EXISTS (
+			-- A worker checked in on this epoch, or the epoch was fenced or
+			-- superseded.
+			SELECT 1 FROM ao_worker_connections
+			WHERE org_id = $1 AND session_id = $2
+				AND (epoch > $3 OR ready_at IS NOT NULL OR disconnected_at IS NOT NULL)
+				AND epoch >= $3
+		)`,
+		ticket.OrgID,
+		ticket.SessionID,
+		ticket.WorkerEpoch,
+	).Scan(&settled); err != nil {
+		return fmt.Errorf("check redeemed access ticket: %w", err)
+	}
+	if settled {
+		return ErrInvalidTicket
+	}
+	return nil
+}
+
+func scanAccessTicket(row pgx.Row, ticket *domain.AccessTicket) error {
+	return row.Scan(
+		&ticket.ID,
+		&ticket.OrgID,
+		&ticket.SessionID,
+		&ticket.Purpose,
+		&ticket.Scopes,
+		&ticket.WorkerEpoch,
+		&ticket.ExpiresAt,
+	)
 }
 
 // WorkerLaunchSpec returns the durable context a bootstrapped worker needs.
