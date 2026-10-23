@@ -9,9 +9,9 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Undo2 } from "lucide-react";
+import { Bot, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
@@ -32,11 +32,18 @@ export interface WorkerUpdate {
 }
 
 const REPORTS_HEADER = "Reports since your previous turn:";
-// One entry per `[state] [name](ao://sessions/<project>/<session>)`, as report.PreparedBatch.Render writes it.
+// One entry per `[state] [name](ao://sessions/<project>/<session>)`, as report.PreparedBatch.Render writes it,
+// or `[state] ao://sessions/<project>/<session>` with no name, as older daemons wrote it.
 // ponytail: parses the prompt text the daemon renders, so a worker's note can mimic an entry; structured report rows on the message would end the guess.
-const REPORT_ENTRY = /\n\n\[([a-z_]+)\] \[((?:\\.|[^\]\\])*)\]\(ao:\/\/sessions\/([^/)\s]+)\/([^)\s]+)\)(?: \(repeated \d+ times\))?/g;
+const REPORT_ENTRY = /\n\n\[([a-z_]+)\] (?:\[((?:\\.|[^\]\\])*)\]\(ao:\/\/sessions\/([^/)\s]+)\/([^)\s]+)\)|ao:\/\/sessions\/([^/\s]+)\/(\S+))(?: \(repeated \d+ times\))?/g;
 // The `artifact: <path>` line a report gets per attached artifact, as report.PreparedBatch.Render writes it.
 const ARTIFACT_LINE = /^artifact: (\S+)$/;
+// The `[from <session> "<name>"]` prefix `ao send` puts on a worker's message. Messages from before AO
+// stored the sender alongside carry only this.
+const SENDER_PREFIX = /^\[from (?:worker\s+)?([\w.-]+)(?:\s+"([^"]*)")?\]/;
+// The prompt AO used to send the orchestrator to name a new task, and the command it answered with.
+const TITLE_UPDATE = "AO TASK TITLE UPDATE";
+const RENAME_COMMAND = /\bao'?\s+session\s+rename\s+\S+\s+(["'])(.+?)\1/;
 
 const STATES: Record<string, { label: string; attention?: boolean }> = {
 	needs_input: { label: "needs you", attention: true },
@@ -55,15 +62,18 @@ function decode(value: string): string {
 function parseReports(text: string, createdAt: string, keyPrefix: string): WorkerUpdate[] {
 	if (!text.startsWith(REPORTS_HEADER)) return [];
 	const entries = [...text.matchAll(REPORT_ENTRY)];
-	return entries.map((entry, index) => ({
-		key: `${keyPrefix}:${index}`,
-		state: entry[1],
-		name: entry[2]!.replace(/\\(.)/g, "$1"),
-		projectId: decode(entry[3]!),
-		sessionId: decode(entry[4]!),
-		body: text.slice(entry.index! + entry[0].length, entries[index + 1]?.index ?? text.length).trim(),
-		createdAt,
-	}));
+	return entries.map((entry, index) => {
+		const sessionId = decode(entry[4] ?? entry[6]!);
+		return {
+			key: `${keyPrefix}:${index}`,
+			state: entry[1],
+			name: entry[2]?.replace(/\\(.)/g, "$1") ?? sessionId,
+			projectId: decode(entry[3] ?? entry[5]!),
+			sessionId,
+			body: text.slice(entry.index! + entry[0].length, entries[index + 1]?.index ?? text.length).trim(),
+			createdAt,
+		};
+	});
 }
 
 /** Items never change in place, so each is parsed once however often the timeline renders. */
@@ -93,11 +103,12 @@ export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 		}];
 	}
 	if (item.role !== "user" || item.origin === "human") return [];
-	const sender = item.senderSessionId?.trim();
+	const prefix = SENDER_PREFIX.exec(item.text);
+	const sender = item.senderSessionId?.trim() || prefix?.[1];
 	if (sender) {
 		return [{
 			key: item.id,
-			name: item.senderDisplayName?.trim() || sender,
+			name: item.senderDisplayName?.trim() || prefix?.[2]?.trim() || sender,
 			sessionId: sender,
 			projectId: item.senderProjectId,
 			body: stripSteerSenderPrefix(item.text, sender).trim(),
@@ -106,6 +117,25 @@ export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 	}
 	return parseReports(item.text, item.createdAt, item.id);
 });
+
+export function isTaskTitleUpdate(item: ConversationItem): boolean {
+	return item.kind === "message" && item.role === "user" && item.origin !== "human" && item.text.startsWith(TITLE_UPDATE);
+}
+
+/** The title the orchestrator gave a new task, read from its `ao session rename`. */
+export function renamedTitle(items: readonly ConversationItem[]): string | undefined {
+	for (const item of items) {
+		if (item.kind !== "activity" || item.activityKind !== "command") continue;
+		const match = RENAME_COMMAND.exec(item.detail?.command ?? item.summary);
+		if (match) return match[2];
+	}
+	return undefined;
+}
+
+/** A turn a worker or AO opened rather than the user: worker traffic, or a task-naming prompt. */
+export function isWorkerLead(item: ConversationItem | undefined): boolean {
+	return item !== undefined && (workerUpdatesOf(item).length > 0 || isTaskTitleUpdate(item));
+}
 
 /** Reports the daemon folded into a human message because the orchestrator was busy. */
 export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
@@ -142,7 +172,7 @@ function finalReply(items: readonly ConversationItem[]): ConversationMessage | u
  */
 export function quietWorkerReply(items: readonly ConversationItem[]): ConversationMessage | undefined {
 	const lead = items[0];
-	if (!lead || workerUpdatesOf(lead).length === 0) return undefined;
+	if (!isWorkerLead(lead)) return undefined;
 	const reply = finalReply(items);
 	return reply && !asksUser(reply.text) ? reply : undefined;
 }
@@ -229,19 +259,20 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);
-	const provider = useWorkerSession(update.sessionId, update.projectId)?.provider;
+	const session = useWorkerSession(update.sessionId, update.projectId);
 	const index = useContext(WorkerUpdateIndexContext);
 	const { text, artifacts } = splitArtifacts(update.body);
 	const { headline, detail } = splitHeadline(text);
 	const state = update.state ? STATES[update.state] : undefined;
 	const attention = state?.attention && isCurrent(index, update);
-	const href = sessionHref(update);
-	const name = <span className="block truncate">{update.name}</span>;
+	// An older message names its sender only by session id; the session supplies its project and title.
+	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session?.workspaceId });
+	const name = <span className="block truncate">{update.name === update.sessionId ? session?.title || update.name : update.name}</span>;
 	return (
 		<div className="min-w-0 text-xs" data-testid="worker-update">
 			<div className="group -mx-1.5 flex h-7 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover">
-				{provider ? (
-					<AgentAvatar provider={provider} decorative className="size-4 shrink-0" />
+				{session?.provider ? (
+					<AgentAvatar provider={session.provider} decorative className="size-4 shrink-0" />
 				) : (
 					<Bot aria-hidden="true" className="size-3.5 shrink-0" />
 				)}
@@ -304,6 +335,19 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 				<WorkerUpdateRow key={update.key} update={update} />
 			))}
 		</div>
+	);
+}
+
+/** A task-naming prompt and its rename, drawn as the one fact they produced. */
+export function TaskNamedLine({ title }: { title: string }) {
+	const { t } = useTranslation();
+	return (
+		<p className="flex h-7 min-w-0 items-center gap-2 text-xs text-muted-foreground">
+			<Tag aria-hidden="true" className="size-3.5 shrink-0" />
+			<span className="min-w-0 truncate">
+				<Trans t={t} i18nKey="chat.taskNamed" values={{ title }} components={{ task: <span className="font-medium text-foreground" /> }} />
+			</span>
+		</p>
 	);
 }
 

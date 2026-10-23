@@ -3293,6 +3293,7 @@
 	"chat.workedFor": "Temps de travail",
 	"chat.rollBackToHere": "Revenir jusqu'ici",
 	"chat.showReplyWork": "Afficher le travail derrière cette réponse",
+	"chat.taskNamed": "Nouvelle tâche nommée <task>{{title}}</task>",
 	"sideChat.deleteConfirm": "Supprimer le chat latéral ?",
 	"sideChat.deleteExplanation": "Ce chat latéral et ses messages seront supprimés.",
 	"sideChat.delete": "Supprimer",

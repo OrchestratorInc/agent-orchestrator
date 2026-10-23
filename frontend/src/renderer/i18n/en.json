@@ -3162,6 +3162,7 @@
 	"chat.workedFor": "Worked for",
 	"chat.rollBackToHere": "Roll back to here",
 	"chat.showReplyWork": "Show the work behind this reply",
+	"chat.taskNamed": "New task named <task>{{title}}</task>",
 	"sideChat.deleteConfirm": "Delete side chat?",
 	"sideChat.deleteExplanation": "This will remove this side chat and its messages.",
 	"sideChat.delete": "Delete",

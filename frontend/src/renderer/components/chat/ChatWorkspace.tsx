@@ -128,11 +128,15 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
+	isTaskTitleUpdate,
+	isWorkerLead,
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
+	renamedTitle,
 	SpawnedAgents,
 	spawnedSessionIds,
+	TaskNamedLine,
 	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
 	WorkerUpdateRows,
@@ -4434,12 +4438,15 @@ const TurnGroup = memo(function TurnGroup({
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
-	// report batch, or reports folded into the user's message) draws as rows.
+	// report batch, or reports folded into the user's message) draws as rows, and
+	// AO's task-naming prompt as the name it produced.
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
 		const updates = workerUpdatesOf(item);
 		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
+		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
 		const piggybacked = piggybackedUpdates(item);
 		if (piggybacked.length === 0) return renderRun(run);
 		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
@@ -4467,7 +4474,7 @@ const TurnGroup = memo(function TurnGroup({
 	// one line under the rows, with the work folded into it instead of "Worked for".
 	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
-	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && group.items[0] !== undefined && workerUpdatesOf(group.items[0]).length > 0;
+	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
 	const disclosureKey = `${group.key}:worked`;
 	if (!outcome) {
 		body.push(...workedRuns.flatMap(renderWorkerRun));

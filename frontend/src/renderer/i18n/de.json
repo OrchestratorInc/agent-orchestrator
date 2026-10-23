@@ -3244,6 +3244,7 @@
 	"chat.workedFor": "Arbeitszeit",
 	"chat.rollBackToHere": "Bis hierher zurücksetzen",
 	"chat.showReplyWork": "Arbeit hinter dieser Antwort anzeigen",
+	"chat.taskNamed": "Neue Aufgabe benannt: <task>{{title}}</task>",
 	"sideChat.deleteConfirm": "Seitenchat löschen?",
 	"sideChat.deleteExplanation": "Dieser Seitenchat und seine Nachrichten werden entfernt.",
 	"sideChat.delete": "Löschen",

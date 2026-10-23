@@ -3226,6 +3226,7 @@
 	"chat.workedFor": "工作用时",
 	"chat.rollBackToHere": "回滚到此处",
 	"chat.showReplyWork": "显示此回复背后的工作",
+	"chat.taskNamed": "新任务已命名为 <task>{{title}}</task>",
 	"sideChat.deleteConfirm": "删除侧边聊天？",
 	"sideChat.deleteExplanation": "此侧边聊天及其消息将被删除。",
 	"sideChat.delete": "删除",

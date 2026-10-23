@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import {
 	asksUser,
+	isWorkerLead,
 	piggybackedUpdates,
 	quietWorkerReply,
+	renamedTitle,
 	spawnedSessionIds,
 	splitHeadline,
 	workerUpdatesOf,
@@ -41,6 +43,14 @@ describe("worker updates", () => {
 		]);
 	});
 
+	it("reads the older report format that linked the session without a name", () => {
+		const text = "Reports since your previous turn:\n\n[done] ao://sessions/proj/proj-208\nInvestigated the screenshot.\n\n[checkpoint] ao://sessions/proj/proj-191 (repeated 2 times)\nPR #5391 updated";
+		expect(workerUpdatesOf(message({ text }))).toMatchObject([
+			{ state: "done", name: "proj-208", projectId: "proj", sessionId: "proj-208", body: "Investigated the screenshot." },
+			{ state: "checkpoint", name: "proj-191", projectId: "proj", sessionId: "proj-191", body: "PR #5391 updated" },
+		]);
+	});
+
 	it("keeps a malformed session link from breaking the timeline", () => {
 		const text = "Reports since your previous turn:\n\n[done] [x](ao://sessions/p/100%)\nok";
 		expect(workerUpdatesOf(message({ text }))).toMatchObject([{ projectId: "p", sessionId: "100%" }]);
@@ -54,6 +64,24 @@ describe("worker updates", () => {
 			detail: { event: "steer", text: "[from proj-286] Loopback works", senderSessionId: "proj-286", senderProjectId: "proj" },
 		};
 		expect(workerUpdatesOf(steer)).toMatchObject([{ name: "proj-286", sessionId: "proj-286", body: "Loopback works" }]);
+	});
+
+	it("reads the sender from the prefix when an older message has no sender metadata", () => {
+		expect(workerUpdatesOf(message({ text: "[from proj-155] Session proj-155 finished the rebase" }))).toMatchObject([
+			{ name: "proj-155", sessionId: "proj-155", projectId: undefined, body: "Session proj-155 finished the rebase" },
+		]);
+		expect(workerUpdatesOf(message({ text: '[from worker a1b2c3d4 "Builder"] Please help' }))).toMatchObject([
+			{ name: "Builder", sessionId: "a1b2c3d4", body: "Please help" },
+		]);
+		expect(workerUpdatesOf(message({ origin: "human", text: '[from worker a1b2c3d4 "Builder"] Please help' }))).toEqual([]);
+	});
+
+	it("treats AO's task-naming prompt as a worker turn and reads the name it produced", () => {
+		const prompt = message({ text: "AO TASK TITLE UPDATE\nChoose a concise task title and run:\nao session rename proj-150 \"<title>\"" });
+		expect(isWorkerLead(prompt)).toBe(true);
+		expect(isWorkerLead(message({ origin: "human", text: "AO TASK TITLE UPDATE" }))).toBe(false);
+		expect(renamedTitle([prompt, command('ao session rename proj-150 "Chat Link Browser"')])).toBe("Chat Link Browser");
+		expect(renamedTitle([prompt])).toBeUndefined();
 	});
 
 	it("leaves the user's own messages alone, but finds reports folded into them", () => {

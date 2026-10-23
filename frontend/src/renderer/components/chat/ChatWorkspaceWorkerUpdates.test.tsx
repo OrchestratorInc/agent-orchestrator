@@ -12,16 +12,20 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { WorkspaceSummary } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 
 const at = (minute: number) => `2026-10-22T03:${String(minute).padStart(2, "0")}:00Z`;
 
-function report(turnId: string, minute: number, entry: string): ConversationMessage {
+function automation(turnId: string, minute: number, text: string): ConversationMessage {
 	return {
 		kind: "message", id: `${turnId}-report`, turnId, sequence: minute * 10, revision: 0, role: "user", origin: "automation",
-		streaming: false, createdAt: at(minute), text: `Reports since your previous turn:\n\n${entry}`,
+		streaming: false, createdAt: at(minute), text,
 	};
 }
+
+const report = (turnId: string, minute: number, entry: string) =>
+	automation(turnId, minute, `Reports since your previous turn:\n\n${entry}`);
 
 function command(turnId: string, minute: number, text: string): ConversationActivity {
 	return {
@@ -51,9 +55,9 @@ function snapshot(items: ConversationItem[]): ConversationSnapshot {
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn()) {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = []) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	queryClient.setQueryData(workspaceQueryKey, []);
+	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
@@ -102,6 +106,34 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("Checked its logs.")).toBeInTheDocument();
 		expect(screen.getByText("Should it load over the tunnel?")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();
+	});
+
+	it("draws an older worker message that names its sender only in its prefix as a row titled by the session", () => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: [{ id: "proj-187", workspaceId: "proj", title: "PR 5051 rebase", provider: "codex", kind: "worker", status: "idle", prs: [] }],
+		}] as unknown as WorkspaceSummary[];
+		renderOrchestrator([
+			automation("t1", 1, "[from proj-187] Rebased #5051; disk full during validation, retrying."),
+			reply("t1", 2, "Noted."),
+		], vi.fn(), workspaces);
+
+		const row = screen.getByTestId("worker-update");
+		expect(row).toHaveTextContent("PR 5051 rebase");
+		expect(row).toHaveTextContent("Rebased #5051");
+		expect(row).not.toHaveTextContent("[from");
+		expect(within(row).getByRole("link", { name: "PR 5051 rebase" })).toHaveAttribute("href", "ao://sessions/proj/proj-187");
+	});
+
+	it("draws AO's task-naming prompt as the name it produced", () => {
+		renderOrchestrator([
+			automation("t1", 1, "AO TASK TITLE UPDATE\nChoose a concise task title from the brief and run:\nao session rename proj-150 \"<title>\""),
+			command("t1", 1, 'ao session rename proj-150 "Chat Link Browser"'),
+			reply("t1", 2, "Renamed the worker task to **Chat Link Browser**."),
+		]);
+
+		expect(screen.getByText("Chat Link Browser", { selector: "span" }).closest("p")).toHaveTextContent("New task named Chat Link Browser");
+		expect(screen.queryByText(/AO TASK TITLE UPDATE/)).not.toBeInTheDocument();
 	});
 
 	it("still shows the work of a turn that answered with tools only", () => {
