@@ -63,6 +63,9 @@ msgstr "Link naar deze sectie kopiëren"
 msgid "Copy Markdown"
 msgstr "Markdown kopiëren"
 
+msgid "Docs"
+msgstr "Documentatie"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Aan de slag"

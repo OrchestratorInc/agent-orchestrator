@@ -63,6 +63,9 @@ msgstr "このセクションへのリンクをコピー"
 msgid "Copy Markdown"
 msgstr "Markdown をコピー"
 
+msgid "Docs"
+msgstr "ドキュメント"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "はじめに"

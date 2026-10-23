@@ -63,6 +63,9 @@ msgstr "Kopírovat odkaz na tuto sekci"
 msgid "Copy Markdown"
 msgstr "Kopírovat Markdown"
 
+msgid "Docs"
+msgstr "Dokumentace"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Začínáme"

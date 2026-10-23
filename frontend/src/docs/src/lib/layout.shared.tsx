@@ -5,21 +5,20 @@ import { LanguageSelect, LanguageSelectText } from "@/components/language-select
 import { COMPANY } from "./constants";
 
 export function baseOptions(i18n: I18n, homeUrl = "/"): BaseLayoutProps {
-  const name = COMPANY.NAME;
   return {
     nav: {
       url: homeUrl,
       title: (
         <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+          {/* The logo carries the company name, so the label only says "Docs". */}
           <img
             src={`${COMPANY.MARKETING_URL}/ao-logo.svg`}
-            alt=""
+            alt={COMPANY.NAME}
             width={20}
             height={20}
-            aria-hidden="true"
             className="size-5 shrink-0"
           />
-          <span>{i18n._(msg`${name} Docs`)}</span>
+          <span>{i18n._(msg`Docs`)}</span>
         </span>
       ),
     },

@@ -63,6 +63,9 @@ msgstr "이 섹션 링크 복사"
 msgid "Copy Markdown"
 msgstr "Markdown 복사"
 
+msgid "Docs"
+msgstr "문서"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "시작하기"

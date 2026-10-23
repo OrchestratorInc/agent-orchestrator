@@ -63,6 +63,9 @@ msgstr "Salin tautan ke bagian ini"
 msgid "Copy Markdown"
 msgstr "Salin Markdown"
 
+msgid "Docs"
+msgstr "Dokumentasi"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Memulai"

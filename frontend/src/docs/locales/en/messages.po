@@ -63,6 +63,9 @@ msgstr "Copy link to this section"
 msgid "Copy Markdown"
 msgstr "Copy Markdown"
 
+msgid "Docs"
+msgstr "Docs"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Getting Started"

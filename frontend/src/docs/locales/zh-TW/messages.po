@@ -63,6 +63,9 @@ msgstr "複製此章節的連結"
 msgid "Copy Markdown"
 msgstr "複製 Markdown"
 
+msgid "Docs"
+msgstr "文件"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "入門"

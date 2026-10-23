@@ -63,6 +63,9 @@ msgstr "Bu bölümün bağlantısını kopyala"
 msgid "Copy Markdown"
 msgstr "Markdown'ı kopyala"
 
+msgid "Docs"
+msgstr "Belgeler"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Başlarken"

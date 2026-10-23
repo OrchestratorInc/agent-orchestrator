@@ -63,6 +63,9 @@ msgstr "Sao chép liên kết đến mục này"
 msgid "Copy Markdown"
 msgstr "Sao chép Markdown"
 
+msgid "Docs"
+msgstr "Tài liệu"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Bắt đầu"
