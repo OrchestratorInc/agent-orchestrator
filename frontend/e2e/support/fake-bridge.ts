@@ -130,6 +130,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				cloudArtifact: {
+					fetch: async () => new Uint8Array(),
+					onFrameNavigated: () => () => undefined,
+				},
 				daemon: {
 					getStatus: async () => status,
 					start: async () => status,
@@ -1017,6 +1021,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				cloudArtifact: {
+					fetch: async () => new Uint8Array(),
+					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {
 					getStatus: async () => status,
