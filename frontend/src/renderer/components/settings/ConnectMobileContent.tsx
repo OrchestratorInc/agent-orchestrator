@@ -950,8 +950,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						if (next && (status.keepAwake?.lidSupported || stayAwake.lidOn)) stayAwake.setLid(true);
-						else stayAwake.set(next, true);
+						if (next) stayAwake.setLid(true);
+						else stayAwake.set(false, true);
 					}}
 				/>
 			)}
@@ -987,8 +987,9 @@ function KeepAwakeRow({
 	onCheckedChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
-	const closedLid = !!(keepAwake.lidSupported || keepAwake.lidClosed);
+	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
 	const lidNeedsAttention =
+		lidUnavailable ||
 		(keepAwake.enabled && keepAwake.lidClosed) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
@@ -1000,25 +1001,16 @@ function KeepAwakeRow({
 			label={t("mobile.keepAwake.label")}
 			description={
 				<>
-					{closedLid ? (
-						<>
-							{t("mobile.keepAwake.combinedHelp", "Stay reachable from your phone while you're away, even with the lid closed.")}
-							<span className="mt-1 block">{t("mobile.keepAwake.lidHelp")}</span>
-						</>
-					) : (
-						<>
-							{t("mobile.keepAwake.help")}
-							{keepAwake.hasBattery && <span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>}
-						</>
-					)}
+					{t("mobile.keepAwake.combinedHelp", "Keep your Mac running even with the lid closed. Stay reachable from your phone while you're away.")}
+					<span className="mt-1 block">{t("mobile.keepAwake.lidHelp")}</span>
 					{lidNeedsAttention && (
 						<span className="mt-1 block" role="status">
 							{keepAwake.lidActive && keepAwake.enabled
 								? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-								: keepAwake.lidReason
+								: keepAwake.lidReason || lidUnavailable
 									? t(
-										`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
-										"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
+										`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`,
+										"Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.",
 									)
 									: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
 						</span>
@@ -1028,8 +1020,8 @@ function KeepAwakeRow({
 		>
 			<Switch
 				aria-label={t("mobile.keepAwake.label")}
-				checked={keepAwake.enabled && (!closedLid || keepAwake.lidClosed === true)}
-				disabled={disabled}
+				checked={keepAwake.enabled && keepAwake.lidClosed === true}
+				disabled={disabled || lidUnavailable}
 				onCheckedChange={onCheckedChange}
 			/>
 		</SettingsRow>
