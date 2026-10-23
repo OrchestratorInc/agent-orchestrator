@@ -61,10 +61,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt: they no longer serve but still use a slot, so used counts them. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links. */
+        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. A revoked link is restored the same way. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links; revoked links count toward it. */
         post: operations["createArtifactShare"];
         delete?: never;
         options?: never;
@@ -85,7 +85,7 @@ export interface paths {
         /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. */
         put: operations["updateArtifactShare"];
         post?: never;
-        /** @description Revokes a link and deletes its stored file, freeing a slot. */
+        /** @description Revokes a link: it stops serving at once and its stored file is deleted after a grace period. The link still uses its slot, so revoking never makes room for a new document. Publishing the same document again restores it. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
         options?: never;
         head?: never;
@@ -2945,6 +2945,11 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /**
+             * Format: date-time
+             * @description When the link was revoked. A revoked link serves nothing but still uses a slot.
+             */
+            revokedAt?: string;
         };
         ArtifactShareEnvelope: {
             share: components["schemas"]["ArtifactShare"];

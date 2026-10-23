@@ -10,11 +10,12 @@ import (
 )
 
 const artifactShareColumns = `id::text, user_id::text, slug, name, content_type,
-	size, sha256, s3_key, version_id, created_at, updated_at`
+	size, sha256, s3_key, version_id, created_at, updated_at, revoked_at`
 
 // ArtifactSharePublishAllowed reports whether the user can publish the
-// document: it already has a link, which publishing replaces, or the user
-// holds fewer than limit links. PublishArtifactShare enforces the same rule
+// document: it already has a link, which publishing replaces (or restores,
+// when revoked), or the user has used fewer than limit link slots. Revoked
+// links keep their slot. PublishArtifactShare enforces the same rule
 // exactly; this check only avoids storing an object that would be refused.
 func (s *Store) ArtifactSharePublishAllowed(ctx context.Context, userID, documentKey string, limit int) (bool, error) {
 	var allowed bool
@@ -98,11 +99,12 @@ func queueReplacedShareVersionTx(ctx context.Context, tx pgx.Tx, userID, s3Key, 
 
 // PublishArtifactShare publishes share.UserID's document. When the user
 // already has a link for documentKey, that link now serves the new version,
-// which keeps its URL and slot, the version it served is queued for the
-// sweeper, and replaced is true. Otherwise it inserts a new link under the
-// first free slug of baseSlug, baseSlug-2, baseSlug-3, and so on, returning
-// ErrArtifactShareLimit, and inserting nothing, when the user already holds
-// limit links. Either way the link claims its upload, recorded by
+// which keeps its URL and slot, and replaced is true; a revoked link is
+// restored, and the version an active link served is queued for the sweeper.
+// Otherwise it inserts a new link under the first free slug of baseSlug,
+// baseSlug-2, baseSlug-3, and so on, returning ErrArtifactShareLimit, and
+// inserting nothing, when the user has used limit link slots. Revoked links
+// keep their slot. Either way the link claims its upload, recorded by
 // RecordArtifactShareUpload, from the sweeper's queue. A per-user advisory
 // lock makes the lookup, the count and the write one step, so concurrent
 // requests can neither pass the limit nor make two links for one document.
@@ -121,11 +123,12 @@ func (s *Store) PublishArtifactShare(
 		}
 		var existingID, previousKey, previousVersion string
 		var previousSize int64
+		var wasRevoked bool
 		err := tx.QueryRow(ctx,
-			`SELECT id::text, s3_key, version_id, size FROM ao_artifact_shares
+			`SELECT id::text, s3_key, version_id, size, revoked_at IS NOT NULL FROM ao_artifact_shares
 			WHERE user_id = $1 AND document_key = $2`,
 			share.UserID, documentKey,
-		).Scan(&existingID, &previousKey, &previousVersion, &previousSize)
+		).Scan(&existingID, &previousKey, &previousVersion, &previousSize, &wasRevoked)
 		switch {
 		case err == nil:
 			replaced = true
@@ -135,7 +138,7 @@ func (s *Store) PublishArtifactShare(
 			rows, err := tx.Query(ctx,
 				`UPDATE ao_artifact_shares
 				SET content_type = $3, size = $4, sha256 = $5, s3_key = $6,
-					version_id = $7, updated_at = now()
+					version_id = $7, updated_at = now(), revoked_at = NULL
 				WHERE id = $1 AND user_id = $2
 				RETURNING `+artifactShareColumns,
 				existingID, share.UserID, share.ContentType, share.Size, share.SHA256,
@@ -145,7 +148,8 @@ func (s *Store) PublishArtifactShare(
 				return fmt.Errorf("replace artifact share version: %w", normalizeConstraintError(err))
 			}
 			published, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
-			if err != nil {
+			if err != nil || wasRevoked {
+				// Revoking already queued the version a revoked link served.
 				return err
 			}
 			return queueReplacedShareVersionTx(ctx, tx, share.UserID, previousKey, previousVersion, previousSize)
@@ -198,7 +202,7 @@ func (s *Store) UpdateArtifactShare(ctx context.Context, share domain.ArtifactSh
 		var previousSize int64
 		if err := tx.QueryRow(ctx,
 			`SELECT s3_key, version_id, size FROM ao_artifact_shares
-			WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+			WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL FOR UPDATE`,
 			share.ID, share.UserID,
 		).Scan(&s3Key, &previousVersion, &previousSize); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -233,12 +237,14 @@ func (s *Store) UpdateArtifactShare(ctx context.Context, share domain.ArtifactSh
 	return updated, err
 }
 
-// GetArtifactShare returns one of the user's share links, or ErrNotFound.
+// GetArtifactShare returns one of the user's active share links, or
+// ErrNotFound.
 func (s *Store) GetArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error) {
 	var share domain.ArtifactShare
 	err := s.withUser(ctx, userID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT `+artifactShareColumns+` FROM ao_artifact_shares WHERE id = $1 AND user_id = $2`,
+			`SELECT `+artifactShareColumns+` FROM ao_artifact_shares
+			WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
 			shareID, userID,
 		)
 		if err != nil {
@@ -253,7 +259,8 @@ func (s *Store) GetArtifactShare(ctx context.Context, userID, shareID string) (d
 	return share, err
 }
 
-// ListArtifactShares returns the user's share links, newest first.
+// ListArtifactShares returns the user's share links, revoked ones included
+// because they still use a slot, newest first.
 func (s *Store) ListArtifactShares(ctx context.Context, userID string) ([]domain.ArtifactShare, error) {
 	var shares []domain.ArtifactShare
 	err := s.withUser(ctx, userID, func(tx pgx.Tx) error {
@@ -271,39 +278,42 @@ func (s *Store) ListArtifactShares(ctx context.Context, userID string) ([]domain
 	return shares, err
 }
 
-// DeleteArtifactShare removes one of the user's share links, queues the
-// version it served for the sweeper, and returns the deleted row, or
+// RevokeArtifactShare stops one of the user's active links serving and queues
+// the version it served for the sweeper. The row stays, so the link keeps
+// using its slot. A link the user does not own, or already revoked, is
 // ErrNotFound.
-func (s *Store) DeleteArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error) {
-	var deleted domain.ArtifactShare
+func (s *Store) RevokeArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error) {
+	var revoked domain.ArtifactShare
 	err := s.withUser(ctx, userID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`DELETE FROM ao_artifact_shares WHERE id = $1 AND user_id = $2
+			`UPDATE ao_artifact_shares SET revoked_at = now(), updated_at = now()
+			WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
 			RETURNING `+artifactShareColumns,
 			shareID, userID,
 		)
 		if err != nil {
-			return fmt.Errorf("delete artifact share: %w", err)
+			return fmt.Errorf("revoke artifact share: %w", err)
 		}
-		deleted, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
+		revoked, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		return queueReplacedShareVersionTx(ctx, tx, userID, deleted.S3Key, deleted.VersionID, deleted.Size)
+		return queueReplacedShareVersionTx(ctx, tx, userID, revoked.S3Key, revoked.VersionID, revoked.Size)
 	})
-	return deleted, err
+	return revoked, err
 }
 
-// ArtifactShareBySlug returns the share link a public subdomain names, or
-// ErrNotFound.
+// ArtifactShareBySlug returns the active share link a public subdomain names,
+// or ErrNotFound.
 func (s *Store) ArtifactShareBySlug(ctx context.Context, slug string) (domain.ArtifactShare, error) {
 	var share domain.ArtifactShare
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT `+artifactShareColumns+` FROM ao_artifact_shares WHERE slug = $1`, slug,
+			`SELECT `+artifactShareColumns+` FROM ao_artifact_shares
+			WHERE slug = $1 AND revoked_at IS NULL`, slug,
 		)
 		if err != nil {
 			return fmt.Errorf("get artifact share by slug: %w", err)
@@ -322,7 +332,7 @@ func scanArtifactShare(row pgx.CollectableRow) (domain.ArtifactShare, error) {
 	err := row.Scan(
 		&share.ID, &share.UserID, &share.Slug, &share.Name, &share.ContentType,
 		&share.Size, &share.SHA256, &share.S3Key, &share.VersionID,
-		&share.CreatedAt, &share.UpdatedAt,
+		&share.CreatedAt, &share.UpdatedAt, &share.RevokedAt,
 	)
 	return share, err
 }

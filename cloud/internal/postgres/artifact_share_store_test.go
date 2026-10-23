@@ -138,8 +138,8 @@ func TestArtifactShareOwnershipUpdateAndDelete(t *testing.T) {
 	if _, err := store.UpdateArtifactShare(ctx, stolen); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other user update err = %v, want ErrNotFound", err)
 	}
-	if _, err := store.DeleteArtifactShare(ctx, otherUserID, share.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("other user delete err = %v, want ErrNotFound", err)
+	if _, err := store.RevokeArtifactShare(ctx, otherUserID, share.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other user revoke err = %v, want ErrNotFound", err)
 	}
 	if listed, err := store.ListArtifactShares(ctx, otherUserID); err != nil || len(listed) != 0 {
 		t.Fatalf("other user list = %+v, %v", listed, err)
@@ -169,18 +169,44 @@ func TestArtifactShareOwnershipUpdateAndDelete(t *testing.T) {
 		t.Fatalf("by slug = %+v, %v", served, err)
 	}
 
-	deleted, err := store.DeleteArtifactShare(ctx, fixture.userID, share.ID)
-	if err != nil || deleted.VersionID != "v2" {
-		t.Fatalf("delete = %+v, %v", deleted, err)
+	revoked, err := store.RevokeArtifactShare(ctx, fixture.userID, share.ID)
+	if err != nil || revoked.VersionID != "v2" || revoked.RevokedAt == nil {
+		t.Fatalf("revoke = %+v, %v", revoked, err)
+	}
+	if _, err := store.RevokeArtifactShare(ctx, fixture.userID, share.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoking twice err = %v, want ErrNotFound", err)
 	}
 	if _, err := store.ArtifactShareBySlug(ctx, share.Slug); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("deleted slug err = %v, want ErrNotFound", err)
+		t.Fatalf("revoked slug err = %v, want ErrNotFound", err)
 	}
-	if listed, err := store.ListArtifactShares(ctx, fixture.userID); err != nil || len(listed) != 0 {
-		t.Fatalf("listed after delete = %d, %v", len(listed), err)
+	if _, err := store.GetArtifactShare(ctx, fixture.userID, share.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get revoked err = %v, want ErrNotFound", err)
+	}
+	listed, err := store.ListArtifactShares(ctx, fixture.userID)
+	if err != nil || len(listed) != 1 || listed[0].RevokedAt == nil {
+		t.Fatalf("listed after revoke = %+v, %v; want the revoked link still listed", listed, err)
 	}
 	if queued := queuedShareVersions(t, admin, share.S3Key); len(queued) != 2 || queued["v2"] != "replaced" {
-		t.Fatalf("queue after delete = %v, want both versions replaced", queued)
+		t.Fatalf("queue after revoke = %v, want both versions replaced", queued)
+	}
+	// A revoked link keeps its slot: at a limit of 1 a new document is
+	// refused, and publishing the revoked document again restores it.
+	if allowed, err := store.ArtifactSharePublishAllowed(ctx, fixture.userID, "proj-feat-a/new.html", 1); err != nil || allowed {
+		t.Fatalf("new document after a revoke allowed = %v, %v", allowed, err)
+	}
+	if _, _, err := store.PublishArtifactShare(ctx, recordedShare(t, store, fixture.userID, "new.html"), "proj-feat-a", "proj-feat-a/new.html", 1); !errors.Is(err, ErrArtifactShareLimit) {
+		t.Fatalf("new document after a revoke err = %v, want ErrArtifactShareLimit", err)
+	}
+	again := recordedShare(t, store, fixture.userID, "report.html")
+	restored, replaced, err := store.PublishArtifactShare(ctx, again, "proj-feat-a", "proj-feat-a/report.html", 1)
+	if err != nil || !replaced || restored.ID != share.ID || restored.RevokedAt != nil || restored.VersionID != again.VersionID {
+		t.Fatalf("restore = %+v, replaced %v, %v", restored, replaced, err)
+	}
+	if served, err := store.ArtifactShareBySlug(ctx, share.Slug); err != nil || served.VersionID != again.VersionID {
+		t.Fatalf("restored slug = %+v, %v", served, err)
+	}
+	if queued := queuedShareVersions(t, admin, share.S3Key); len(queued) != 2 {
+		t.Fatalf("restoring queued the revoked version again: %v", queued)
 	}
 }
 

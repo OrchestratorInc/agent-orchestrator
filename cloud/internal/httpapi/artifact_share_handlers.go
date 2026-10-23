@@ -33,7 +33,7 @@ type artifactShareStore interface {
 	UpdateArtifactShare(ctx context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error)
 	GetArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error)
 	ListArtifactShares(ctx context.Context, userID string) ([]domain.ArtifactShare, error)
-	DeleteArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error)
+	RevokeArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error)
 	ArtifactShareBySlug(ctx context.Context, slug string) (domain.ArtifactShare, error)
 }
 
@@ -111,18 +111,24 @@ func (s *Server) artifactSharesEnabled() bool {
 }
 
 type artifactShareResponse struct {
-	ID          string    `json:"id"`
-	Slug        string    `json:"slug"`
-	URL         string    `json:"url"`
-	Name        string    `json:"name"`
-	ContentType string    `json:"contentType"`
-	Size        int64     `json:"size"`
-	SHA256      string    `json:"sha256"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID          string     `json:"id"`
+	Slug        string     `json:"slug"`
+	URL         string     `json:"url"`
+	Name        string     `json:"name"`
+	ContentType string     `json:"contentType"`
+	Size        int64      `json:"size"`
+	SHA256      string     `json:"sha256"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
 }
 
 func (s *Server) toArtifactShareResponse(share domain.ArtifactShare) artifactShareResponse {
+	var revokedAt *time.Time
+	if share.RevokedAt != nil {
+		at := share.RevokedAt.UTC()
+		revokedAt = &at
+	}
 	return artifactShareResponse{
 		ID:          share.ID,
 		Slug:        share.Slug,
@@ -133,10 +139,12 @@ func (s *Server) toArtifactShareResponse(share domain.ArtifactShare) artifactSha
 		SHA256:      share.SHA256,
 		CreatedAt:   share.CreatedAt.UTC(),
 		UpdatedAt:   share.UpdatedAt.UTC(),
+		RevokedAt:   revokedAt,
 	}
 }
 
 // listArtifactShares returns the signed-in user's links and their limit.
+// Revoked links are listed with revokedAt because they still use a slot.
 func (s *Server) listArtifactShares(w http.ResponseWriter, r *http.Request) {
 	shares, err := s.shareRows.ListArtifactShares(r.Context(), principalFrom(r).UserID)
 	if err != nil {
@@ -251,15 +259,16 @@ func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"share": s.toArtifactShareResponse(share)})
 }
 
-// deleteArtifactShare revokes a link, freeing a slot under the limit. The
-// sweeper deletes its stored file after a grace period.
-func (s *Server) deleteArtifactShare(w http.ResponseWriter, r *http.Request) {
+// revokeArtifactShare takes a link down. It still uses its slot under the
+// limit, and publishing the same document again restores it. The sweeper
+// deletes its stored file after a grace period.
+func (s *Server) revokeArtifactShare(w http.ResponseWriter, r *http.Request) {
 	shareID := chi.URLParam(r, "shareId")
 	if requireUUID(shareID, "shareId") != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "shareId must be a UUID.")
 		return
 	}
-	if _, err := s.shareRows.DeleteArtifactShare(r.Context(), principalFrom(r).UserID, shareID); err != nil {
+	if _, err := s.shareRows.RevokeArtifactShare(r.Context(), principalFrom(r).UserID, shareID); err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}

@@ -23,7 +23,8 @@ const (
 
 // ArtifactShare is one public link to a single file a user published from a
 // local session. The bytes live in the artifact bucket at S3Key; VersionID
-// names the object version the link serves.
+// names the object version the link serves. A revoked link serves nothing but
+// still uses one of the user's link slots.
 type ArtifactShare struct {
 	ID          string
 	UserID      string
@@ -36,6 +37,7 @@ type ArtifactShare struct {
 	VersionID   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	RevokedAt   *time.Time
 }
 
 // ArtifactShareSlug builds the subdomain label project-feature-email for a

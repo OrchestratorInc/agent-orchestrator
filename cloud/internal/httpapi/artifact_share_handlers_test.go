@@ -156,7 +156,10 @@ func (m *memoryShareRows) PublishArtifactShare(_ context.Context, share domain.A
 			return domain.ArtifactShare{}, false, err
 		}
 		current := m.shares[existingID]
-		m.queueLocked(current.S3Key, current.VersionID, "replaced", false)
+		if current.RevokedAt == nil {
+			m.queueLocked(current.S3Key, current.VersionID, "replaced", false)
+		}
+		current.RevokedAt = nil
 		m.clock = m.clock.Add(time.Second)
 		current.ContentType, current.Size, current.SHA256 = share.ContentType, share.Size, share.SHA256
 		current.S3Key, current.VersionID, current.UpdatedAt = share.S3Key, share.VersionID, m.clock
@@ -191,7 +194,7 @@ func (m *memoryShareRows) UpdateArtifactShare(_ context.Context, share domain.Ar
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.shares[share.ID]
-	if !ok || current.UserID != share.UserID {
+	if !ok || current.UserID != share.UserID || current.RevokedAt != nil {
 		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
 	if err := m.claimUploadLocked(current.S3Key, share.VersionID); err != nil {
@@ -211,7 +214,7 @@ func (m *memoryShareRows) GetArtifactShare(_ context.Context, userID, shareID st
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	share, ok := m.shares[shareID]
-	if !ok || share.UserID != userID {
+	if !ok || share.UserID != userID || share.RevokedAt != nil {
 		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
 	return share, nil
@@ -230,19 +233,17 @@ func (m *memoryShareRows) ListArtifactShares(_ context.Context, userID string) (
 	return shares, nil
 }
 
-func (m *memoryShareRows) DeleteArtifactShare(_ context.Context, userID, shareID string) (domain.ArtifactShare, error) {
+func (m *memoryShareRows) RevokeArtifactShare(_ context.Context, userID, shareID string) (domain.ArtifactShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	share, ok := m.shares[shareID]
-	if !ok || share.UserID != userID {
+	if !ok || share.UserID != userID || share.RevokedAt != nil {
 		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
-	delete(m.shares, shareID)
-	for document, id := range m.documents {
-		if id == shareID {
-			delete(m.documents, document)
-		}
-	}
+	m.clock = m.clock.Add(time.Second)
+	revokedAt := m.clock
+	share.RevokedAt = &revokedAt
+	m.shares[shareID] = share
 	m.queueLocked(share.S3Key, share.VersionID, "replaced", false)
 	return share, nil
 }
@@ -251,7 +252,7 @@ func (m *memoryShareRows) ArtifactShareBySlug(_ context.Context, slug string) (d
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, share := range m.shares {
-		if share.Slug == slug {
+		if share.Slug == slug && share.RevokedAt == nil {
 			return share, nil
 		}
 	}
@@ -523,7 +524,43 @@ func TestArtifactShareLimitAndRevoke(t *testing.T) {
 	if versions := h.fake.Versions("shares/" + shares[0].ID); versions != 0 {
 		t.Fatalf("revoked share kept %d stored versions after the sweep", versions)
 	}
-	h.mustPublish(artifactTokenA, "four.html", "proj", "four", []byte("four"))
+	// The revoked link keeps its slot, so a new document is still refused.
+	if rec := h.publish(artifactTokenA, "four.html", "proj", "four", []byte("four")); rec.Code != http.StatusConflict {
+		t.Fatalf("new document after a revoke: %d, want the limit", rec.Code)
+	}
+	if rec := h.request(http.MethodDelete, "/api/cloud/v1/me/artifact-shares/"+shares[0].ID, "", artifactTokenA, nil, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("revoking twice: %d", rec.Code)
+	}
+	if rec := h.republish(artifactTokenA, shares[0].ID, "one.html", []byte("x")); rec.Code != http.StatusNotFound {
+		t.Fatalf("PUT on a revoked link: %d", rec.Code)
+	}
+	list := h.request(http.MethodGet, "/api/cloud/v1/me/artifact-shares", "", artifactTokenA, nil, nil)
+	listed := decodeBody[struct {
+		Shares []artifactShareResponse `json:"shares"`
+		Used   int                     `json:"used"`
+	}](t, list)
+	revoked := 0
+	for _, share := range listed.Shares {
+		if share.RevokedAt != nil {
+			revoked++
+		}
+	}
+	if listed.Used != 3 || revoked != 1 {
+		t.Fatalf("list after revoke: used %d, revoked %d", listed.Used, revoked)
+	}
+	// Publishing the revoked document again restores its own link.
+	restored := h.publish(artifactTokenA, "one.html", "proj", "one.html", []byte("back"))
+	if restored.Code != http.StatusOK {
+		t.Fatalf("republishing the revoked document: %d %s", restored.Code, restored.Body.String())
+	}
+	if share := decodeBody[struct {
+		Share artifactShareResponse `json:"share"`
+	}](t, restored).Share; share.ID != shares[0].ID || share.RevokedAt != nil {
+		t.Fatalf("restored share = %+v", share)
+	}
+	if page := h.visit(shares[0].URL, nil); page.Code != http.StatusOK || page.Body.String() != "back" {
+		t.Fatalf("restored link: %d %q", page.Code, page.Body.String())
+	}
 }
 
 func TestArtifactShareUploadValidation(t *testing.T) {
@@ -750,12 +787,17 @@ func TestArtifactSharePublishingTheSameDocumentReplacesItsLink(t *testing.T) {
 		t.Fatalf("first link now serves %q", page.Body.String())
 	}
 
-	// After a revoke the document can be published again as a new link.
+	// After a revoke, publishing the document again restores its link.
 	if rec := h.request(http.MethodDelete, "/api/cloud/v1/me/artifact-shares/"+first.ID, "", artifactTokenA, nil, nil); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke: %d", rec.Code)
 	}
-	fresh := h.mustPublish(artifactTokenA, "report.html", "proj", "feat", []byte("v3"))
-	if fresh.ID == first.ID {
-		t.Fatal("publishing after a revoke reused the revoked link")
+	restored := h.publish(artifactTokenA, "report.html", "proj", "feat", []byte("v3"))
+	if restored.Code != http.StatusOK {
+		t.Fatalf("publishing after a revoke: %d %s", restored.Code, restored.Body.String())
+	}
+	if share := decodeBody[struct {
+		Share artifactShareResponse `json:"share"`
+	}](t, restored).Share; share.ID != first.ID {
+		t.Fatalf("publishing after a revoke made link %s, want %s restored", share.ID, first.ID)
 	}
 }

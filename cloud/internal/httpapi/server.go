@@ -515,7 +515,7 @@ func New(options Options) *Server {
 			router.With(server.authenticate).Get("/me/artifact-shares", server.listArtifactShares)
 			router.With(server.authenticate).Post("/me/artifact-shares", server.createArtifactShare)
 			router.With(server.authenticate).Put("/me/artifact-shares/{shareId}", server.updateArtifactShare)
-			router.With(server.authenticate).Delete("/me/artifact-shares/{shareId}", server.deleteArtifactShare)
+			router.With(server.authenticate).Delete("/me/artifact-shares/{shareId}", server.revokeArtifactShare)
 		}
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)

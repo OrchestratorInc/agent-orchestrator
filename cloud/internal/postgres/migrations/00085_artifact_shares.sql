@@ -1,7 +1,9 @@
 -- +goose Up
 
 -- ao_artifact_shares lists the public links users created for single files
--- from local sessions. One row is one active link; revoking deletes the row.
+-- from local sessions. Every row uses one of the user's link slots, revoked or
+-- not: revoking sets revoked_at, which stops the link serving, and keeps the
+-- row so the slot stays used.
 -- The bytes live in the artifact bucket at s3_key and version_id names the
 -- object version the link serves. document_key identifies the published
 -- document (its project, feature and file name), so publishing the same
@@ -19,7 +21,8 @@ CREATE TABLE ao_artifact_shares (
     s3_key TEXT NOT NULL,
     version_id TEXT NOT NULL CHECK (version_id <> ''),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX ao_artifact_shares_document_key ON ao_artifact_shares(user_id, document_key);
 
