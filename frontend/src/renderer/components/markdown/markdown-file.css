@@ -13,10 +13,6 @@
 	background-color: var(--markdown-canvas);
 }
 
-.ao-markdown-surface[data-presentation="thumbnail"] {
-	--markdown-canvas: var(--solid-muted, var(--muted));
-}
-
 /* Keep the Markdown structure, with colors inherited from the active AO theme. */
 .markdown-body.ao-markdown {
 	--fontStack-sansSerif: var(--font-family-base);
