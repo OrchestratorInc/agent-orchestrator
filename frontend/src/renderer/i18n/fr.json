@@ -3291,6 +3291,8 @@
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "Temps de travail",
+	"chat.rollBackToHere": "Revenir jusqu'ici",
+	"chat.showReplyWork": "Afficher le travail derrière cette réponse",
 	"sideChat.deleteConfirm": "Supprimer le chat latéral ?",
 	"sideChat.deleteExplanation": "Ce chat latéral et ses messages seront supprimés.",
 	"sideChat.delete": "Supprimer",

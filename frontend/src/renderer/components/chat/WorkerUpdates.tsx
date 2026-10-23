@@ -11,6 +11,7 @@
 
 import { Bot, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Undo2 } from "lucide-react";
 import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
@@ -325,6 +326,7 @@ export function OrchestratorReply({
 	onRollback?: () => void;
 	rollbackDisabled?: boolean;
 }) {
+	const { t } = useTranslation();
 	const control = "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground";
 	return (
 		<div
@@ -352,8 +354,8 @@ export function OrchestratorReply({
 								type="button"
 								onClick={onRollback}
 								disabled={rollbackDisabled}
-								aria-label="Roll back to here"
-								title="Roll back to here"
+								aria-label={t("chat.rollBackToHere")}
+								title={t("chat.rollBackToHere")}
 								className={cn(control, "disabled:pointer-events-none disabled:opacity-40")}
 							>
 								<Undo2 aria-hidden="true" className="size-3" />
@@ -364,7 +366,7 @@ export function OrchestratorReply({
 						<button
 							type="button"
 							aria-expanded={workOpen}
-							aria-label="Show the work behind this reply"
+							aria-label={t("chat.showReplyWork")}
 							onClick={() => onWorkOpenChange(!workOpen)}
 							className={control}
 						>
