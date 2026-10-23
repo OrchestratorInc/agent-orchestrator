@@ -13,7 +13,6 @@ import {
 } from "../lib/artifact-share";
 import { aoBridge } from "../lib/bridge";
 import { isCloudSignInConfigured, useCloudSession } from "../lib/cloud-session";
-import { IS_DEV } from "../lib/is-dev";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useUiStore } from "../stores/ui-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -21,9 +20,20 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
-/** Share links are development-only until the control plane offers them in hosted environments. */
+/**
+ * Shows the artifact Share button. Off until the control plane with share
+ * links is deployed to production. VITE_AO_ARTIFACT_SHARES=1 turns it on in a
+ * build without this change, for testing against a local control plane.
+ */
+export const ARTIFACT_SHARING_ENABLED = false;
+
+function artifactSharingFlagOn(): boolean {
+	return ARTIFACT_SHARING_ENABLED || import.meta.env.VITE_AO_ARTIFACT_SHARES === "1";
+}
+
+/** Whether this session's artifacts can be shared: the flag is on and they are local files. */
 export function artifactSharingAvailable(session: WorkspaceSession, hostId?: string): boolean {
-	return IS_DEV && isCloudSignInConfigured() && !hostId && !session.cloud;
+	return artifactSharingFlagOn() && isCloudSignInConfigured() && !hostId && !session.cloud;
 }
 
 /**

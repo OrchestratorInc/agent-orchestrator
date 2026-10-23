@@ -502,11 +502,21 @@ describe("SessionArtifactsView", () => {
 		openArtifacts.mockRestore();
 	});
 
-	it("offers Share in the open artifact's header for a local session only", () => {
-		const { rerender } = renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
-		expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
-		rerender(<SessionArtifactsView hostId="remote-1" request={{ key: 2, path: "notes.md" }} session={session()} />);
+	it("keeps Share hidden while the sharing flag is off", () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
 		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+	});
+
+	it("offers Share in the open artifact's header for a local session only, with the flag on", () => {
+		vi.stubEnv("VITE_AO_ARTIFACT_SHARES", "1");
+		try {
+			const { rerender } = renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+			expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
+			rerender(<SessionArtifactsView hostId="remote-1" request={{ key: 2, path: "notes.md" }} session={session()} />);
+			expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {
