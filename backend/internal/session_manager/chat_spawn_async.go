@@ -471,6 +471,9 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	// Retry the original launch choice, including an unspecified effort, rather
+	// than inheriting project defaults that may have changed since creation.
+	config.Effort = rec.Metadata.Effort
 	if rec.Metadata.Model != "" {
 		config.Model = rec.Metadata.Model
 	}

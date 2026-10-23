@@ -259,6 +259,79 @@ func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindWorker)
 }
 
+func TestResumeFailedAsyncChatSpawnPreservesSelectedEffort(t *testing.T) {
+	for _, selection := range []struct {
+		name   string
+		effort string
+	}{
+		{name: "high", effort: "high"},
+		{name: "extra_high", effort: "xhigh"},
+		{name: "unspecified"},
+	} {
+		for _, projectDefault := range []struct {
+			name   string
+			effort string
+		}{
+			{name: "unchanged_defaults"},
+			{name: "changed_defaults", effort: "low"},
+		} {
+			t.Run(selection.name+"/"+projectDefault.name, func(t *testing.T) {
+				launcher := &recordingLauncher{}
+				m, st, _ := newChatManager(launcher)
+				m.dataDir = t.TempDir()
+				m.browserCapabilities = browsersvc.NewAuthority()
+				m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+					{ID: "gpt-test", Efforts: []string{"low", "medium", "high", "xhigh"}},
+				}}}
+				deferred := deferredBackground(m)
+				ws := m.workspace.(*fakeWorkspace)
+				ws.createErr = errors.New("temporary git failure")
+				cfg := asyncChatSpawnConfig("do the thing")
+				cfg.AgentConfig = ports.AgentConfig{Model: "gpt-test", Effort: selection.effort}
+				cfg.EffortOverride = selection.effort != ""
+				rec, _, _, err := m.Spawn(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				(*deferred)[0]()
+				failed := st.sessions[rec.ID]
+				if failed.ProvisionState != domain.SessionProvisionFailed {
+					t.Fatalf("initial provision state = %q, want failed", failed.ProvisionState)
+				}
+				if failed.Metadata.Effort != selection.effort {
+					t.Fatalf("saved effort = %q, want %q", failed.Metadata.Effort, selection.effort)
+				}
+
+				project := st.projects[string(chatTestProject)]
+				project.Config.AgentConfig.Effort = projectDefault.effort
+				st.projects[string(chatTestProject)] = project
+				ws.createErr = nil
+				retried, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+				if err != nil {
+					t.Fatalf("retry failed start: %v", err)
+				}
+				if retried.Session.ID != rec.ID || len(*deferred) != 2 {
+					t.Fatal("retry did not reuse the failed session with one background start")
+				}
+				(*deferred)[1]()
+				if len(launcher.started) != 1 {
+					t.Fatalf("controllers started = %d, want 1", len(launcher.started))
+				}
+				if got := launcher.started[0]; got.Model != "gpt-test" || got.Effort != selection.effort {
+					t.Fatalf("retried model/effort = %q/%q, want gpt-test/%q", got.Model, got.Effort, selection.effort)
+				}
+				ready := st.sessions[rec.ID]
+				if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Effort != selection.effort {
+					t.Fatalf("retry state/effort = %q/%q, want ready/%q", ready.ProvisionState, ready.Metadata.Effort, selection.effort)
+				}
+				if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
+					t.Fatalf("prompts queued = %d, queues drained = %d, want 1 each", len(launcher.queued), len(launcher.drained))
+				}
+			})
+		}
+	}
+}
+
 func testResumeFailedAsyncChatSpawn(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
