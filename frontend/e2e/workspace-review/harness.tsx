@@ -23,7 +23,7 @@ function reviewLink(mixed: boolean) {
 }
 const sessionId = "review-fixture";
 setApiBaseUrl(params.get("api") ?? location.origin);
-const images: WorkspaceFilesResponse["files"] = ["first.png", "second.png", "last.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true }));
+const images: WorkspaceFilesResponse["files"] = ["first.png", "second.png", "last.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 600_000, binary: true }));
 const files: WorkspaceFilesResponse["files"] = mixed
 	? [{ path: "example.ts", status: "modified", additions: 1, deletions: 1, size: 128, binary: false }, ...images]
 	: images;
@@ -48,9 +48,11 @@ const annotation: FileAnnotationModel = { targets: [], status: "idle", error: ""
 function Review() {
 	const [allCollapsed, setAllCollapsed] = useState(false);
 	const [request, setRequest] = useState<{ expand: boolean; key: number }>();
+	const [scrollRequest, setScrollRequest] = useState<{ path: string; key: number }>();
 	return <>
+		<nav className="flex shrink-0 gap-2" aria-label="Changed files">{images.map(({ path }) => <button key={path} onClick={() => setScrollRequest((current) => ({ path, key: (current?.key ?? 0) + 1 }))}>Reveal {path}</button>)}</nav>
 		<button onClick={() => setRequest((current) => ({ expand: allCollapsed, key: (current?.key ?? 0) + 1 }))}>{allCollapsed ? "Expand all files" : "Collapse all files"}</button>
-		<WorkspaceReviewPane annotation={annotation} target={defaultWorkspaceReviewTarget(data)} collapseRequest={request} onAllCollapsedChange={setAllCollapsed} filter="" onBrowseAll={noop} sessionId={sessionId} split={false} />
+		<WorkspaceReviewPane annotation={annotation} target={defaultWorkspaceReviewTarget(data)} collapseRequest={request} scrollRequest={scrollRequest} onAllCollapsedChange={setAllCollapsed} filter="" onBrowseAll={noop} sessionId={sessionId} split={false} />
 	</>;
 }
 

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -243,6 +243,56 @@ describe("WorkspaceReviewPane", () => {
 			expect.stringContaining("/api/v1/sessions/sess-1/workspace/file/blob"),
 		);
 		expect(screen.queryByText("Binary file preview is not available.")).not.toBeInTheDocument();
+	});
+
+	it.each(["shot.png", "archive.bin"])("keeps large binary %s expanded and reuses its prefetched batch", async (path) => {
+		const data = workspace([
+			{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+			{ path, status: "added", additions: 0, deletions: 0, size: 600_000, binary: true },
+		]);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
+		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["src/App.tsx", path]);
+		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		const collapse = screen.getByRole("button", { name: `Collapse ${path}` });
+		expect(collapse).toHaveAttribute("aria-expanded", "true");
+		if (path.endsWith(".png")) expect(screen.getByRole("img", { name: `After version of ${path}` })).toBeInTheDocument();
+		await userEvent.click(collapse);
+		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
+		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([false, true])("keeps loaded text mounted while deferred files load (expand all: %s)", async (expandAll) => {
+		const data = workspace([
+			{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+			{ path: "package-lock.json", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+		]);
+		let finish!: (value: unknown) => void;
+		postMock.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: "diff --git a/src/App.tsx b/src/App.tsx\n", truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } });
+		postMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(data)} filter="" sessionId="sess-1" split={false} />);
+		const existing = await screen.findByTestId("review-patch");
+		await userEvent.click(screen.getByRole("button", { name: expandAll ? "Collapse all files" : "Expand package-lock.json" }));
+		if (expandAll) await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		expect(postMock.mock.calls[1]?.[1]?.body.paths).toEqual(["package-lock.json"]);
+		expect(existing).toBeInTheDocument();
+		expect(screen.getByTestId("review-patch")).toBe(existing);
+		await act(async () => finish({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: "diff --git a/package-lock.json b/package-lock.json\n", truncated: false, includedPaths: ["package-lock.json"], deferred: [] }] } }));
+		await waitFor(() => expect(screen.getAllByTestId("review-patch")).toHaveLength(2));
+		expect(existing).toBeInTheDocument();
+	});
+
+	it("opens fallback files with the header icon and status", async () => {
+		const onOpenFile = vi.fn();
+		const data = workspace([{ path: "shot.png", status: "added", additions: 0, deletions: 0, size: 128, binary: true }]);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} onOpenFile={onOpenFile} filter="" sessionId="sess-1" split={false} />);
+		expect(screen.getByText("A")).toBeInTheDocument();
+		const open = screen.getByRole("button", { name: "Open full file" });
+		expect(open.querySelector("svg")).not.toBeNull();
+		expect(open).toHaveClass("border-transparent");
+		await userEvent.click(open);
+		expect(onOpenFile).toHaveBeenCalledWith("shot.png", expect.objectContaining({ mode: "file", scope: "combined" }));
 	});
 
 	it.each([false, true])("marks image and binary files viewed with saved progress (mixed: %s)", async (mixed) => {
@@ -783,7 +833,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
-		await userEvent.click(screen.getByRole("button", { name: "File" }));
+		await userEvent.click(within(screen.getByRole("button", { name: "Collapse beta/workspace-test.txt" }).parentElement!).getByRole("button", { name: "Open full file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("beta/workspace-test.txt", expect.objectContaining({ mode: "file", scope: "combined" }));
 	});
 
@@ -889,7 +939,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 		await screen.findByTestId("review-patch");
 		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
+		expect(screen.getAllByRole("button", { name: "Open full file" })).toHaveLength(2);
 		expect(screen.getByRole("button", { name: "Open diff in center" })).toBeInTheDocument();
 		expect(screen.getAllByRole("button", { name: "Add feedback" }).length).toBeGreaterThan(0);
 		// The image preview reads the worktree, so another branch's image falls back to the placeholder.

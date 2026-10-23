@@ -52,6 +52,17 @@ for (const mixed of [false, true]) {
 			await page.mouse.wheel(0, 3000);
 			await expect(lastImage).toBeInViewport({ ratio: 0.9 });
 
+			// The changed-files rail must reach footer rows, including a collapsed image.
+			await review.getByRole("button", { name: "Collapse last.png", exact: true }).click();
+			await scroller.hover();
+			await page.mouse.wheel(0, -3000);
+			await expect.poll(() => scroller.evaluate((node) => node.scrollTop)).toBe(0);
+			await review.getByRole("button", { name: "Reveal last.png", exact: true }).click();
+			await expect(review.getByRole("button", { name: "Collapse last.png", exact: true })).toBeInViewport();
+			await expect(lastImage).toBeVisible();
+			await expect.poll(() => scroller.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+			expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
+
 			const firstHeader = review.getByRole("button", { name: "Collapse first.png", exact: true }).locator("..");
 			await expect(firstHeader).toHaveJSProperty("clientHeight", 36);
 			for (const file of ["first.png", "second.png", "last.png", ...(mixed ? ["example.ts"] : [])]) {

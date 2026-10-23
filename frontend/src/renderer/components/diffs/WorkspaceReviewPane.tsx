@@ -117,6 +117,7 @@ function parseGroupPatch(workspaceVersion: string | undefined, scope: WorkspaceD
 }
 
 function isDeferredByDefault(file: WorkspaceFileSummary) {
+	if (file.binary) return false;
 	const name = file.path.split("/").pop()?.toLowerCase() ?? "";
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
@@ -218,6 +219,7 @@ export function WorkspaceReviewPane({
 	const [loadedDeferredPaths, setLoadedDeferredPaths] = useState<Set<string>>(() => new Set());
 	const [activeBatchCount, setActiveBatchCount] = useState(WORKSPACE_REVIEW_INITIAL_BATCHES);
 	const reviewRef = useRef<HTMLDivElement>(null);
+	const fallbackRows = useRef(new Map<string, HTMLDivElement>());
 	const codeViewRef = useRef<CodeViewHandle<"feedback", undefined> | null>(null);
 	const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null);
 	const gutterHover = usePersistentGutterUtility(reviewRef);
@@ -262,11 +264,12 @@ export function WorkspaceReviewPane({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
 	}, [workspaceVersion, reviewSelectionKey, filesKnown, viewedSessionKey]);
 
-	const requestedFiles = useMemo(
-		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
-		[files, loadedDeferredPaths],
-	);
-	const batches = useMemo(() => chunked(requestedFiles.map((file) => file.path), WORKSPACE_REVIEW_BATCH_SIZE), [requestedFiles]);
+	// Opening a deferred file must not change the regular batches' query keys.
+	const regularBatches = useMemo(() => chunked(files.filter((file) => !isDeferredByDefault(file)).map((file) => file.path), WORKSPACE_REVIEW_BATCH_SIZE), [files]);
+	const batches = useMemo(() => [
+		...regularBatches,
+		...Array.from(loadedDeferredPaths).filter((path) => files.some((file) => file.path === path && isDeferredByDefault(file))).map((path) => [path]),
+	], [files, loadedDeferredPaths, regularBatches]);
 	const patchQueries = useQueries({
 		queries: batches.map((paths, index) => ({
 			...sessionWorkspaceDiffsQueryOptions({
@@ -281,17 +284,17 @@ export function WorkspaceReviewPane({
 				commitShas: target.commitShas,
 				view: target.view,
 			}),
-			enabled: target.state === "ready" && paths.length > 0 && index < activeBatchCount,
+			enabled: target.state === "ready" && paths.length > 0 && (index < activeBatchCount || index >= regularBatches.length),
 			staleTime: Infinity,
 		})),
 	});
 	useEffect(() => {
-		const active = patchQueries.slice(0, activeBatchCount);
-		if (active.length < activeBatchCount || active.some((query) => query.isPending || query.isFetching)) return;
-		if (activeBatchCount < batches.length) {
-			setActiveBatchCount((current) => Math.min(current + WORKSPACE_REVIEW_BATCH_WAVE, batches.length));
+		const active = patchQueries.slice(0, Math.min(activeBatchCount, regularBatches.length));
+		if (active.some((query) => query.isPending || query.isFetching)) return;
+		if (activeBatchCount < regularBatches.length) {
+			setActiveBatchCount((current) => Math.min(current + WORKSPACE_REVIEW_BATCH_WAVE, regularBatches.length));
 		}
-	}, [activeBatchCount, batches.length, patchQueries]);
+	}, [activeBatchCount, regularBatches.length, patchQueries]);
 
 	const { metadataByPath, endOfFilePaths } = useMemo(() => {
 		const result = new Map<string, FileDiffMetadata>();
@@ -535,15 +538,19 @@ export function WorkspaceReviewPane({
 			return;
 		}
 		const batchIndex = batches.findIndex((paths) => paths.includes(pendingScrollPath));
-		if (batchIndex >= activeBatchCount) {
+		if (batchIndex >= activeBatchCount && batchIndex < regularBatches.length) {
 			setActiveBatchCount(batchIndex + 1);
 			return;
 		}
-		// Still loading; once its batch settles without a diff (a binary or
-		// unavailable file) there is nothing in the list to scroll to.
 		if (batchIndex >= 0 && pendingDiffPaths.has(pendingScrollPath)) return;
-		setPendingScrollPath(null);
-	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, reviewSelectionKey]);
+		// Footer rows are real DOM elements rather than virtualized items. Wait
+		// for CodeView's footer portal to commit before bringing one into view.
+		const frame = requestAnimationFrame(() => {
+			fallbackRows.current.get(pendingScrollPath)?.scrollIntoView({ block: "start" });
+			setPendingScrollPath(null);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, regularBatches.length, reviewSelectionKey]);
 	const retryAll = () => patchQueries.forEach((query) => void query.refetch());
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
@@ -575,7 +582,7 @@ export function WorkspaceReviewPane({
 				const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
 				const isViewed = viewed.has(file.path);
 				return (
-					<div className="bg-background" key={file.path}>
+					<div className="bg-background" key={file.path} ref={(node) => { if (node) fallbackRows.current.set(file.path, node); else fallbackRows.current.delete(file.path); }}>
 						<div className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
 							<button
 								aria-expanded={!collapsed}
@@ -588,7 +595,12 @@ export function WorkspaceReviewPane({
 								<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 								<span className="truncate" title={file.path}>{file.path}</span>
 							</button>
-							{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
+							<span className={cn("shrink-0 text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
+							{onOpenFile ? (
+								<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
+									<Button aria-label={t("files.openFullFileGeneric")} className="size-6 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+								</HeaderActionTooltip>
+							) : null}
 							<HeaderActionTooltip label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}>
 								<span className="grid size-6 shrink-0 place-items-center">
 									<Checkbox

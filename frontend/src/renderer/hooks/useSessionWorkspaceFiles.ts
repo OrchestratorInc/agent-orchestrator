@@ -845,6 +845,7 @@ const REVIEW_PREFETCH_EOF_MAX_BYTES = 128 * 1024;
 const lastPrefetchedReview = new Map<string, string>();
 
 function isDeferredReviewFile(file: WorkspaceFileSummary) {
+	if (file.binary) return false;
 	const name = file.path.split("/").pop()?.toLowerCase() ?? "";
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
