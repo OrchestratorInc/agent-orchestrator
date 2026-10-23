@@ -918,9 +918,11 @@ describe("startRemoteProxy streams", () => {
 
 	it("tunnels a WebSocket upgrade with the credential injected", async () => {
 		const sawAuth: Array<string | undefined> = [];
+		const sawFetchSite: unknown[] = [];
 		upstream = createServer();
 		upstream.on("upgrade", (req, socket) => {
 			sawAuth.push(req.headers.authorization);
+			sawFetchSite.push(req.headers["sec-fetch-site"]);
 			socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
 			socket.on("data", (d) => socket.write(d)); // echo frames back verbatim
 			// Upgraded sockets are half-open by default and would hold close() open.
@@ -940,7 +942,7 @@ describe("startRemoteProxy streams", () => {
 		await new Promise<void>((resolve) => socket.on("connect", () => resolve()));
 		socket.on("data", (d) => received.push(d));
 		socket.write(
-			`GET ${proxyUrl.pathname}/mux HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+			`GET ${proxyUrl.pathname}/mux HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: app://renderer\r\nSec-Fetch-Site: cross-site\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
 		);
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		socket.write("payload-bytes");
@@ -951,6 +953,7 @@ describe("startRemoteProxy streams", () => {
 		expect(all).toContain("101 Switching Protocols");
 		expect(all).toContain("payload-bytes"); // echoed through both pipes
 		expect(sawAuth).toEqual(["Bearer pw"]);
+		expect(sawFetchSite).toEqual([undefined]);
 	});
 
 	it("destroys an upgrade that carries no token", async () => {

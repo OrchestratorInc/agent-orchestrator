@@ -705,6 +705,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (socket.destroyed) return;
 			const upstreamSocket = dialUpstream(() => {
 				const headers = forwardHeaders(req.headers, preview?.kind);
+				if (!preview) {
+					delete headers["sec-fetch-site"];
+					delete headers["sec-fetch-mode"];
+					delete headers["sec-fetch-dest"];
+				}
 				const lines = [`${req.method} ${path} HTTP/1.1`];
 				// The WebSocket-specific headers were stripped as hop-by-hop; restore
 				// the two the handshake requires, with the credential injected above.
