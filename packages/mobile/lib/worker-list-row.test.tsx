@@ -291,6 +291,26 @@ describe("archived workers", () => {
 		act(() => renderer.unmount());
 	});
 
+	// Tabs keep visited screens mounted, so leaving the board for another tab or
+	// session blurs it without unmounting. A restore that finishes then must not
+	// pull the user back, and must not leave Restore disabled either.
+	it("does not open a restored session after the board loses focus", async () => {
+		router.push.mockClear();
+		let finish!: () => void;
+		boardStore.restore.mockReset().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([archivedA])); });
+		let blur!: () => void;
+		act(() => { blur = (counters.focus as () => () => void)(); });
+		act(() => { restoreButtons(renderer)[0].props.onPress(); });
+		act(() => blur());
+		await act(async () => { finish(); await Promise.resolve(); });
+		expect(boardStore.restore).toHaveBeenCalledTimes(1);
+		expect(router.push).not.toHaveBeenCalled();
+		expect(restoreButtons(renderer)[0].props.disabled).toBe(false);
+		act(() => renderer.unmount());
+	});
+
 	it("runs one restore at a time", async () => {
 		let finish!: () => void;
 		boardStore.restore.mockReset().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));

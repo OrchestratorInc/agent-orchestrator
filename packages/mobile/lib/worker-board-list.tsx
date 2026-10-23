@@ -202,8 +202,13 @@ export function WorkerBoardList({
 		listRef?.current?.scrollToOffset({ offset: 0, animated: false });
 	}, [snapshot, listRef]);
 	// Opening the board, coming back to the app, or a different set of workers
-	// is looking again, so each re-sorts.
-	useFocusEffect(resort);
+	// is looking again, so each re-sorts. Leaving it counts too: tabs keep
+	// visited screens mounted, so unmounting alone does not say the user moved on.
+	const focusEpoch = useRef(0);
+	useFocusEffect(useCallback(() => {
+		resort();
+		return () => { focusEpoch.current += 1; };
+	}, [resort]));
 	useEffect(() => {
 		const sub = AppState.addEventListener("change", (state) => {
 			if (state === "active") resort();
@@ -322,7 +327,9 @@ export function WorkerBoardList({
 
 	// Desktop's archive: one restore at a time, the error under the card it
 	// belongs to, and a successful restore opens the session. A restore that
-	// finishes after the user has moved to another board must not navigate.
+	// finishes after the user has moved to another board must not navigate, nor
+	// one that finishes after they left this one for another tab or session:
+	// the board stays mounted then, so only the focus epoch says they went.
 	const [restoringKey, setRestoringKey] = useState<string>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
 	const restoringRef = useRef<string | undefined>(undefined);
@@ -350,6 +357,7 @@ export function WorkerBoardList({
 		const key = hostedSessionKey(session);
 		const generation = restoreGeneration.current;
 		const current = () => generation === restoreGeneration.current;
+		const focus = focusEpoch.current;
 		restoringRef.current = key;
 		setRestoringKey(key);
 		setRestoreErrors(({ [key]: _cleared, ...rest }) => rest);
@@ -358,6 +366,8 @@ export function WorkerBoardList({
 			await restore(session.id, sessionHostId(session));
 			if (!current()) return;
 			haptics.success();
+			// The busy state below still clears; only the navigation is dropped.
+			if (focus !== focusEpoch.current) return;
 			router.push({
 				pathname: "/session/[id]",
 				params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? currentHostId },
