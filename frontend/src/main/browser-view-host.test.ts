@@ -3754,6 +3754,37 @@ describe("agent browser runtime", () => {
 		expect(replacement.id).toBe("t3");
 	});
 
+	it("updates the AO active tab when native selection only brings the page to front", async () => {
+		const { activeTargets, host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				// Native agent-browser uses Page.bringToFront, not Target.activateTarget.
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		for (const [tabId, url] of [["t1", "https://first.example.test/"], ["t2", "https://second.example.test/"]]) {
+			await host.execute("sess-1", "tab-select", { tabId });
+			expect(await host.execute("sess-1", "tabs")).toMatchObject({
+				activeTabId: tabId,
+				tabs: [
+					{ id: "t1", active: tabId === "t1" },
+					{ id: "t2", active: tabId === "t2" },
+				],
+			});
+			expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+				value: url,
+				target: { tabId },
+			});
+		}
+	});
+
 	it("keeps popup reads and mutations on the reported tab and returns their AO target identity", async () => {
 		const { activeTargets, host, runtime, views } = setupTabHost();
 		await host.execute("sess-1", "open", { url: "https://a.example.test/page" });

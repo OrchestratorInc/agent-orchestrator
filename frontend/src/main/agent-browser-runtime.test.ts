@@ -602,9 +602,12 @@ describe("agent-browser structured output", () => {
 
 const nativeBinary = process.env.AO_AGENT_BROWSER_TEST_BINARY;
 describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
-	it("connects the pinned native daemon and keeps native tab lifecycle commands aligned", async () => {
+	function setupNativeFixture() {
 		class DebuggerFixture extends EventEmitter {
 			attached = false;
+			constructor(private readonly url = "http://localhost:5173/") {
+				super();
+			}
 			attach() {
 				this.attached = true;
 			}
@@ -617,7 +620,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			}
 			async sendCommand(method: string) {
 				if (method === "Runtime.evaluate") {
-					return { result: { type: "string", value: "http://localhost:5173/" } };
+					return { result: { type: "string", value: this.url } };
 				}
 				if (method === "Accessibility.getFullAXTree") {
 					return {
@@ -655,7 +658,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 					id: `t${targets.length + 1}`,
 					url,
 					title: "New tab",
-					debugger: new DebuggerFixture(),
+					debugger: new DebuggerFixture(url),
 				};
 				targets.push(target);
 				return target;
@@ -670,6 +673,11 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			binaryPath: nativeBinary!,
 			dataDir: path.join(shortTempDir, "ao-agent-browser-native-test"),
 		});
+		return { runtime, provider, targets, DebuggerFixture };
+	}
+
+	it("connects the pinned native daemon and keeps native tab lifecycle commands aligned", async () => {
+		const { runtime, provider, targets } = setupNativeFixture();
 		try {
 			const result = await runtime.runAction("native-fixture", "get", { property: "url" }, provider);
 			expect(result.url).toBe("http://localhost:5173/");
@@ -691,6 +699,38 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			expect(["full", "unchanged", "delta"]).toContain(next.kind);
 			expect(next.revision).toBeGreaterThan(baselineRevision);
 			if (next.kind !== "full") expect(next.baseRevision).toBe(baselineRevision);
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it("discovers externally opened tabs and forgets externally closed tabs without renumbering", async () => {
+		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
+		const sessionId = "native-external-tabs";
+		try {
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/",
+			});
+			for (const tabId of ["t2", "t3"]) {
+				const url = `http://localhost:5173/${tabId}`;
+				// Electron registers a page-opened popup without Target.createTarget.
+				targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
+				await runtime.runAction(sessionId, "tab-select", { tabId }, provider);
+				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+					tabs: [
+						{ tabId: "t1", targetId: "t1", active: false },
+						{ tabId, targetId: tabId, active: true, url },
+					],
+				});
+				expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({ url });
+				expect(await runtime.runAction(sessionId, "snapshot", {}, provider)).toMatchObject({
+					snapshot: expect.stringContaining('button "Save"'),
+				});
+				targets.splice(1, 1);
+				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+					tabs: [{ tabId: "t1", targetId: "t1", active: true }],
+				});
+			}
 		} finally {
 			await runtime.dispose();
 		}
