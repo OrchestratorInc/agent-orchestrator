@@ -14,6 +14,7 @@ import { cn } from "../../lib/utils";
 
 export function AgentModelField({
 	role,
+	label: labelOverride,
 	agentId,
 	projectId,
 	hostId,
@@ -31,6 +32,7 @@ export function AgentModelField({
 	independentMode = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
+	label?: string;
 	agentId: string;
 	projectId: string;
 	hostId?: string;
@@ -69,7 +71,7 @@ export function AgentModelField({
 		}
 	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
 	const isMode = !independentMode && catalog?.selectionMode === "mode";
-	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
+	const label = labelOverride ?? t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
 	const warning =
 		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
 		catalog?.warning ??

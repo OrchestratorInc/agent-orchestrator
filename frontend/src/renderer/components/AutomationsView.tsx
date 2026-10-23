@@ -460,10 +460,11 @@ function AutomationFormDialog({
 							/>
 							{open ? (
 								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy}>
-									<span className={onboardingFormLabelClass}>{t("settings.models.workerModel")}</span>
+									<span className={onboardingFormLabelClass}>{t("automations.model")}</span>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
+										label={t("automations.model")}
 										agentId={selectedHarness}
 										projectId={projectId}
 										model={model}

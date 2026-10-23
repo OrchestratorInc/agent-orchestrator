@@ -83,7 +83,7 @@ describe("AutomationsView", () => {
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
-		expect(await within(dialog).findByRole("button", { name: "Worker model" })).toHaveTextContent("GPT-5");
+		expect(await within(dialog).findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
 		expect(screen.queryByRole("option", { name: "Project default" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
 	});
@@ -130,7 +130,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
-		await user.click(await within(dialog).findByRole("button", { name: "Worker model" }));
+		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
 		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
 		await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
@@ -143,7 +143,7 @@ describe("AutomationsView", () => {
 		renderView();
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		const picker = await within(dialog).findByRole("button", { name: "Worker model" });
+		const picker = await within(dialog).findByRole("button", { name: "Model" });
 		expect(picker).toHaveTextContent("Capable");
 		expect(picker).toHaveTextContent("High");
 		await user.click(picker);
@@ -336,7 +336,7 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeInTheDocument();
 		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toBeInTheDocument();
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toBeInTheDocument();
-		expect(await within(dialog).findByRole("button", { name: "Worker model" })).toHaveTextContent("GPT-5");
+		expect(await within(dialog).findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
 	});
 
