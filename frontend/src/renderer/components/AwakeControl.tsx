@@ -65,8 +65,8 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						<NavRowHighlight active={stay.active} disabled={!stay.supported || stay.busy} />
 						<span className="relative z-[1] grid place-items-center">
 							{stay.attention
-								? <TriangleAlert data-testid="awake-inactive-indicator" className="size-icon-md" aria-hidden="true" />
-								: <Coffee className="size-icon-md" aria-hidden="true" />}
+								? <TriangleAlert data-testid="awake-inactive-indicator" className="size-4" aria-hidden="true" />
+								: <Coffee className="size-4" aria-hidden="true" />}
 						</span>
 					</Button>
 				</TooltipTrigger>

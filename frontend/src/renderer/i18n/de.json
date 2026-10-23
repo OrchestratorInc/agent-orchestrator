@@ -2,6 +2,8 @@
 	"sideChat.closingTab": "Wird geschlossen",
 	"sideChat.closing": "Seitenchat wird geschlossen. Er verschwindet nach bestätigtem Herunterfahren.",
 	"sideChat.retryClose": "Schließen erneut versuchen",
+	"tray.awakeActive": "Wach bleiben: Dieser Mac wird wach gehalten",
+	"tray.awakeUnknown": "Wach bleiben: Status nicht verfügbar",
 	"awake.stopReason.low_battery": "Gestoppt, weil der Akku den eingestellten Sicherheitsgrenzwert erreicht hat. Lade deinen Mac auf und schalte Stay Awake anschließend aus und wieder ein.",
 	"awake.stopReason.critical_heat": "Gestoppt, weil der Mac abkühlen muss. Schalte Stay Awake nach dem Abkühlen aus und wieder ein.",
 	"awake.stopReason.battery_unknown": "Gestoppt, weil der Akkustand nicht gelesen werden konnte. Schalte Stay Awake aus und wieder ein, um es erneut zu versuchen.",

@@ -2,6 +2,8 @@
 	"sideChat.closingTab": "終了中",
 	"sideChat.closing": "サイドチャットを閉じています。終了が確認されると消えます。",
 	"sideChat.retryClose": "閉じる操作を再試行",
+	"tray.awakeActive": "スリープ防止：この Mac を起動状態に維持しています",
+	"tray.awakeUnknown": "スリープ防止：状態を取得できません",
 	"awake.stopReason.low_battery": "バッテリー残量が設定された安全基準に達したため停止しました。Mac を充電してから、Stay Awake をオフにして再度オンにしてください。",
 	"awake.stopReason.critical_heat": "Mac の冷却が必要なため停止しました。冷却後、Stay Awake をオフにして再度オンにしてください。",
 	"awake.stopReason.battery_unknown": "バッテリーの状態を読み取れなかったため停止しました。Stay Awake をオフにして再度オンにすると再試行できます。",

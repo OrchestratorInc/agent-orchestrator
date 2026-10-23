@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 const frontend = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LOCALES = ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR", "ru"];
 const KEYS = [
+	"tray.awakeActive",
+	"tray.awakeUnknown",
 	"tray.untitledSession",
 	"tray.attentionTooltip_one",
 	"tray.attentionTooltip_other",

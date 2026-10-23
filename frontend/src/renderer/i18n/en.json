@@ -2,6 +2,8 @@
 	"sideChat.closingTab": "Closing",
 	"sideChat.closing": "Closing side chat. It will disappear once shutdown is confirmed.",
 	"sideChat.retryClose": "Retry close",
+	"tray.awakeActive": "Stay Awake: keeping this Mac awake",
+	"tray.awakeUnknown": "Stay Awake: status unavailable",
 	"awake.stopReason.low_battery": "Stopped because the battery reached the configured safety limit. Charge your Mac, then turn Stay Awake off and on to restart.",
 	"awake.stopReason.critical_heat": "Stopped because the Mac needs to cool down. After it cools, turn Stay Awake off and on to restart.",
 	"awake.stopReason.battery_unknown": "Stopped because battery state could not be read. Turn Stay Awake off and on to retry.",
