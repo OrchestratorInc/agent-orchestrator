@@ -1775,6 +1775,7 @@
 	"artifacts.share.upgrade": "Passer à AO Cloud",
 	"artifacts.share.notNow": "Pas maintenant",
 	"artifacts.share.unavailable": "Le partage n’est pas disponible sur ce serveur AO Cloud.",
+	"artifacts.share.signInRequired": "Connectez-vous à AO Cloud pour partager.",
 	"artifacts.delete": "Supprimer l'artefact",
 	"artifacts.deleteTitle": "Supprimer l'artefact ?",
 	"artifacts.deleteDescription": "Cette action supprime définitivement {{name}} du dossier d'artefacts de cette session.",

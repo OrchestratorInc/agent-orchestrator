@@ -1746,6 +1746,7 @@
 	"artifacts.share.upgrade": "AO Cloud にアップグレード",
 	"artifacts.share.notNow": "後で",
 	"artifacts.share.unavailable": "この AO Cloud サーバーでは共有を利用できません。",
+	"artifacts.share.signInRequired": "共有するには AO Cloud にサインインしてください。",
 	"artifacts.delete": "アーティファクトを削除",
 	"artifacts.deleteTitle": "アーティファクトを削除しますか？",
 	"artifacts.deleteDescription": "{{name}} をこのセッションのアーティファクトフォルダから完全に削除します。",

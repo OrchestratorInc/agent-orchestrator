@@ -9,6 +9,7 @@ import { isCloudSignInConfigured, useCloudSession } from "../lib/cloud-session";
 import { IS_DEV } from "../lib/is-dev";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useUiStore } from "../stores/ui-store";
+import type { CloudAccount } from "../../shared/cloud-account";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
@@ -20,27 +21,41 @@ export function artifactSharingAvailable(session: WorkspaceSession, hostId?: str
 
 export type ArtifactShareState = "idle" | "signingIn" | "sharing";
 
+/** Identifies one signed-in cloud session; a new sign-in or account changes it. */
+function cloudSessionKey(account: CloudAccount | null): string {
+	return account ? `${account.user.id}|${account.storedAt}` : "";
+}
+
 /**
- * Shares one local artifact as a public link. A signed-out user is sent to
- * cloud sign-in first, and the share continues once they are signed in. On
- * success the link is copied and announced; at the link limit the upgrade
- * dialog opens.
+ * Shares one local artifact as a public link. A signed-out user, or one whose
+ * session the control plane refuses, is sent to cloud sign-in once; the share
+ * continues only when a new session arrives, and closing the sign-in dialog
+ * cancels it. On success the link is copied and announced; at the link limit
+ * the upgrade dialog opens.
  */
 export function useArtifactShare(session: WorkspaceSession, artifact: SessionArtifact) {
 	const { t } = useTranslation();
 	const { baseUrl } = useCloudCp();
-	const { status, signIn } = useCloudSession();
+	const { session: cloudSession, status, signIn } = useCloudSession();
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
+	const localSignInOpen = useLocalSignInDialogStore((s) => s.open);
 	const [state, setState] = useState<ArtifactShareState>("idle");
 	const [error, setError] = useState("");
 	const [limitOpen, setLimitOpen] = useState(false);
 	const inFlight = useRef(false);
+	// The session that was current when this share sent the user to sign in.
+	const signInFrom = useRef<string | null>(null);
+	const currentSessionKey = cloudSessionKey(cloudSession);
+	const sessionKeyRef = useRef(currentSessionKey);
+	sessionKeyRef.current = currentSessionKey;
 
-	const startSignIn = useCallback(
-		() => (localAuthAvailable ? openLocalSignIn() : signIn()),
-		[localAuthAvailable, openLocalSignIn, signIn],
-	);
+	const startSignIn = useCallback(() => {
+		signInFrom.current = sessionKeyRef.current;
+		setState("signingIn");
+		if (localAuthAvailable) openLocalSignIn();
+		else signIn();
+	}, [localAuthAvailable, openLocalSignIn, signIn]);
 
 	const publish = useCallback(async () => {
 		if (inFlight.current) return;
@@ -66,7 +81,6 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 			setState("idle");
 		} catch (failure) {
 			if (failure instanceof ArtifactShareAuthError) {
-				setState("signingIn");
 				startSignIn();
 				return;
 			}
@@ -91,14 +105,29 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 			void publish();
 			return;
 		}
-		setState("signingIn");
 		startSignIn();
 	};
 
-	// The share the user asked for continues once sign-in completes.
+	// The share continues once sign-in brings a new session. The session that
+	// sent the user to sign in never retries on its own, so a session the
+	// control plane refuses cannot reopen sign-in in a loop.
 	useEffect(() => {
-		if (state === "signingIn" && status === "authenticated" && baseUrl) void publish();
-	}, [baseUrl, publish, state, status]);
+		if (signInFrom.current === null || status !== "authenticated" || !baseUrl) return;
+		if (currentSessionKey === signInFrom.current) return;
+		signInFrom.current = null;
+		void publish();
+	}, [baseUrl, currentSessionKey, publish, status]);
+
+	// Closing the local sign-in dialog without signing in cancels the share.
+	const localSignInWasOpen = useRef(false);
+	useEffect(() => {
+		const closed = localSignInWasOpen.current && !localSignInOpen;
+		localSignInWasOpen.current = localSignInOpen;
+		if (!closed || signInFrom.current === null || sessionKeyRef.current !== signInFrom.current) return;
+		signInFrom.current = null;
+		setState("idle");
+		setError(t("artifacts.share.signInRequired"));
+	}, [localSignInOpen, t]);
 
 	const openUpgrade = () => {
 		setLimitOpen(false);

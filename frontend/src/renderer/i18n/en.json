@@ -2008,6 +2008,7 @@
 	"artifacts.share.upgrade": "Upgrade to AO Cloud",
 	"artifacts.share.notNow": "Not now",
 	"artifacts.share.unavailable": "Sharing isn’t available on this AO Cloud server.",
+	"artifacts.share.signInRequired": "Sign in to AO Cloud to share.",
 	"artifacts.delete": "Delete artifact",
 	"artifacts.deleteTitle": "Delete artifact?",
 	"artifacts.deleteDescription": "This permanently deletes {{name}} from this session's artifacts folder.",
