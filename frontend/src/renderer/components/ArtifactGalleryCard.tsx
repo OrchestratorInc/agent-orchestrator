@@ -16,7 +16,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	const { t } = useTranslation();
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 	return (
-		<li className="group relative min-w-0 rounded-md bg-card">
+		<li className="group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10">
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
 				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
 			</span>
