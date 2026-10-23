@@ -65,8 +65,9 @@ has written any. Terminated workers are hidden unless `--all`.
 `--json` includes per-PR detail (`prs`: url, number, state, ci, review,
 mergeability, source/target branch), the worker's artifact files
 (`artifactCount`, `artifactsUpdatedAt`, and `artifactFiles` with path, kind,
-size, and updatedAt for at most the 10 most recently changed, with
-`artifactFilesTruncated` set when there are more), plus `activityState` and
+size, and updatedAt for the most recently changed: at most 10, fewer when
+their paths are very long, with `artifactFilesTruncated` set when there are
+more), plus `activityState` and
 `isTerminated`.
 
 Status vocabulary: `working`, `idle`, `needs_input`, `pr_open`, `draft`,
