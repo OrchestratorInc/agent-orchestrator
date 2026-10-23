@@ -373,7 +373,7 @@ export function AgentModelPicker({
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
 				title={title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
-				showCaret={!terminal}
+				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
