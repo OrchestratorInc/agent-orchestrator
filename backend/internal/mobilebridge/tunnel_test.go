@@ -75,6 +75,125 @@ func TestTunnelLogNotReadyWithoutHostname(t *testing.T) {
 	}
 }
 
+// Verbatim cloudflared 2026.9.1 stderr from a connector pinned to HTTP/2
+// behind a proxy in TUN mode (hostname, connection ids, addresses and times are synthetic). The edge
+// connection drops and re-registers on the same hostname while the process
+// keeps running — twice here, once announced by "Lost connection" and once only
+// by "Retrying connection". Interleaved per-request proxy errors carry
+// connIndex too and must not read as the edge going down.
+const cloudflaredEdgeFlap = `2026-01-01T10:00:00Z INF |  https://quiet-river-sample-label.trycloudflare.com                                      |
+2026-01-01T10:00:00Z INF Settings: map[ha-connections:1 metrics:127.0.0.1:20241 no-autoupdate:true p:http2 protocol:http2 url:http://127.0.0.1:3000]
+2026-01-01T10:00:00Z INF Initial protocol http2
+2026-01-01T10:00:07Z INF Registered tunnel connection connIndex=0 connection=00000000-0000-4000-8000-000000000003 event=0 ip=203.0.113.10 location=ams01 protocol=http2
+2026-01-01T10:00:14Z ERR  error="context canceled" connIndex=0 event=1 ingressRule=0 originService=http://127.0.0.1:3000
+2026-01-01T10:00:14Z ERR failed to serve incoming request error="Failed to proxy HTTP: context canceled"
+2026-01-01T10:00:21Z INF Lost connection with the edge connIndex=0
+2026-01-01T10:00:21Z ERR failed to serve incoming request error="Error shutting down control stream: client disconnected"
+2026-01-01T10:00:21Z ERR Serve tunnel error error="connection with edge closed" connIndex=0 event=0 ip=203.0.113.10
+2026-01-01T10:00:21Z INF Retrying connection in up to 1s connIndex=0 event=0 ip=203.0.113.10
+2026-01-01T10:00:28Z ERR Connection terminated error="connection with edge closed" connIndex=0
+2026-01-01T10:00:35Z INF Registered tunnel connection connIndex=0 connection=00000000-0000-4000-8000-000000000001 event=0 ip=203.0.113.10 location=ams01 protocol=http2
+2026-01-01T10:00:42Z ERR failed to serve incoming request error="Error shutting down control stream: context canceled"
+2026-01-01T10:00:42Z INF Retrying connection in up to 1s connIndex=0 event=0 ip=203.0.113.10
+2026-01-01T10:00:49Z ERR Connection terminated error="Error shutting down control stream: context canceled" connIndex=0
+2026-01-01T10:00:56Z INF Registered tunnel connection connIndex=0 connection=00000000-0000-4000-8000-000000000004 event=0 ip=203.0.113.10 location=ams02 protocol=http2`
+
+type edgeStep struct {
+	line    string
+	change  EdgeChange
+	changed bool
+	ready   bool
+}
+
+func TestTunnelLogFollowsEdgeConnectionsAcrossAFlap(t *testing.T) {
+	log := &TunnelLog{}
+	var steps []edgeStep
+	for _, line := range splitLines(cloudflaredEdgeFlap) {
+		change, changed := log.Feed(line)
+		steps = append(steps, edgeStep{line: line, change: change, changed: changed, ready: log.Ready()})
+	}
+
+	var changes []EdgeChange
+	for _, s := range steps {
+		if s.changed {
+			changes = append(changes, s.change)
+		}
+	}
+	want := []EdgeChange{
+		{Up: true, ConnIndex: "0", Location: "ams01", Protocol: "http2"},
+		{ConnIndex: "0", Reason: "Lost connection with the edge"},
+		{Up: true, ConnIndex: "0", Location: "ams01", Protocol: "http2"},
+		{ConnIndex: "0", Reason: "Retrying connection in"},
+		{Up: true, ConnIndex: "0", Location: "ams02", Protocol: "http2"},
+	}
+	if len(changes) != len(want) {
+		t.Fatalf("edge changes = %+v, want %+v", changes, want)
+	}
+	for i := range want {
+		if changes[i] != want[i] {
+			t.Errorf("change %d = %+v, want %+v", i, changes[i], want[i])
+		}
+	}
+
+	readyAt := func(substr string) bool {
+		t.Helper()
+		for _, s := range steps {
+			if strings.Contains(s.line, substr) {
+				return s.ready
+			}
+		}
+		t.Fatalf("fixture has no line containing %q", substr)
+		return false
+	}
+	if !readyAt(`originService=`) {
+		t.Error("a per-request proxy error took the tunnel down")
+	}
+	if readyAt(`Lost connection with the edge`) {
+		t.Error("still ready after the edge connection was lost")
+	}
+	if readyAt(`Connection terminated error="connection with edge closed"`) {
+		t.Error("ready while cloudflared was still redialling")
+	}
+	if !log.Ready() {
+		t.Error("not ready after the connection re-registered")
+	}
+	if log.Connections != 3 || log.LiveConnections() != 1 {
+		t.Errorf("Connections = %d, LiveConnections = %d; want 3 registrations, 1 live", log.Connections, log.LiveConnections())
+	}
+	if log.Location != "ams02" {
+		t.Errorf("Location = %q, want the latest edge ams02", log.Location)
+	}
+}
+
+func TestTunnelLogReportsTheEdgeErrorAsTheReason(t *testing.T) {
+	log := feedLines(t, `INF |  https://abc.trycloudflare.com  |
+INF Registered tunnel connection connIndex=0 location=ams01 protocol=http2`)
+
+	change, changed := log.Feed(`2026-01-01T10:01:03Z ERR Serve tunnel error error="Error shutting down control stream: client disconnected" connIndex=0 event=0 ip=203.0.113.10`)
+	if !changed || change.Up || change.Reason != "Error shutting down control stream: client disconnected" {
+		t.Fatalf("change = %+v (changed=%v), want a down change carrying the error text", change, changed)
+	}
+	// Retries repeat the same lines while the connection is already down.
+	if _, again := log.Feed(`2026-01-01T10:01:10Z ERR Connection terminated error="TLS handshake with edge error: EOF" connIndex=0`); again {
+		t.Error("reported a second down change for a connection that was already down")
+	}
+}
+
+func TestTunnelLogTracksConnectionsIndependently(t *testing.T) {
+	log := feedLines(t, `INF |  https://abc.trycloudflare.com  |
+INF Registered tunnel connection connIndex=0 location=ams01 protocol=http2
+INF Registered tunnel connection connIndex=1 location=fra01 protocol=http2
+INF Lost connection with the edge connIndex=0`)
+
+	if !log.Ready() || log.LiveConnections() != 1 {
+		t.Fatalf("Ready = %v, LiveConnections = %d; one surviving connection still carries traffic", log.Ready(), log.LiveConnections())
+	}
+	log.Feed(`INF Lost connection with the edge connIndex=1`)
+	if log.Ready() {
+		t.Error("ready with every edge connection down")
+	}
+}
+
 func TestParseCloudflaredVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, out string
@@ -373,6 +492,37 @@ func TestTunnelRuntimeForgetsTheOldHostnameOnRestart(t *testing.T) {
 	got := r.Endpoint()
 	if got == nil || got.Hostname != "second-name.trycloudflare.com" {
 		t.Fatalf("got %+v want the new hostname", got)
+	}
+}
+
+// cloudflared outlives an edge disconnect and re-registers on the same
+// hostname. While it is down the hostname answers nothing, so the endpoint is
+// withdrawn; once it re-registers it is advertised again without a fresh
+// settling delay, because the name never stopped resolving.
+func TestTunnelRuntimeWithdrawsTheEndpointWhileTheEdgeIsDown(t *testing.T) {
+	r := &TunnelRuntime{}
+	r.Started()
+	r.Line(`INF |  https://abc.trycloudflare.com  |`)
+	r.Line(`INF Registered tunnel connection connIndex=0 location=ams01 protocol=http2`)
+	r.Settled()
+	if r.Endpoint() == nil {
+		t.Fatal("precondition: expected a live endpoint")
+	}
+
+	if _, changed := r.Line(`INF Lost connection with the edge connIndex=0`); !changed {
+		t.Fatal("edge loss not reported")
+	}
+	if got := r.Endpoint(); got != nil {
+		t.Fatalf("still advertising %+v while the edge connection is down", got)
+	}
+	if s := r.Snapshot(); s.Ready || !s.Running || s.LastError != "" {
+		t.Fatalf("snapshot = %+v, want running, not ready, no error", s)
+	}
+
+	r.Line(`INF Registered tunnel connection connIndex=0 location=ams02 protocol=http2`)
+	got := r.Endpoint()
+	if got == nil || got.Hostname != "abc.trycloudflare.com" {
+		t.Fatalf("endpoint = %+v after re-registration, want the same hostname", got)
 	}
 }
 
