@@ -872,6 +872,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the model, reasoning effort, mode and approval mode the session's turns run with. Only the session's owner may; everyone else gets 403 and sees the change on their live stream. */
+        put: operations["sessionSetChatSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
         parameters: {
             query?: never;
@@ -3377,6 +3397,9 @@ export interface components {
         SessionLiveState: {
             /** @constant */
             type: "session.live";
+            chatSettings: components["schemas"]["SessionChatSettings"];
+            /** @description Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings). */
+            canConfigure: boolean;
             /**
              * Format: uuid
              * @description The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
@@ -3387,6 +3410,15 @@ export interface components {
             /** @description Everyone with the session open right now, once each, in the order they joined. */
             viewers: components["schemas"]["SessionViewer"][];
             composer: components["schemas"]["ComposerLeaseState"];
+        };
+        /** @description The settings a session's turns run with, set by its owner (its creator, or an organization owner or admin). Everyone else's messages run with them whatever they ask for. Empty fields mean the defaults. */
+        SessionChatSettings: {
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
         };
         ComposerParticipant: {
             /** Format: uuid */
@@ -5337,6 +5369,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sessionSetChatSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionChatSettings"];
+            };
+        };
+        responses: {
+            /** @description The session's chat settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        chatSettings: components["schemas"]["SessionChatSettings"];
+                    };
                 };
             };
             default: components["responses"]["Error"];
