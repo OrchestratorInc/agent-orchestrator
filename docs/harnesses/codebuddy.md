@@ -23,8 +23,19 @@ automatically imported. Standalone `ZAI_API_KEY` or `MINIMAX_API_KEY` variables
 need a matching documented CodeBuddy model/endpoint configuration. For an
 environment-based custom route, set `CODEBUDDY_API_KEY`,
 `CODEBUDDY_BASE_URL` and `CODEBUDDY_MODEL` together in the environment AO
-inherits. A `models.json` route can instead use a complete API URL and a
-credential environment reference. Select the provider's matching API endpoint;
+inherits. In the qualified 2.164.0 release this route uses OpenAI Chat
+Completions; the base URL is not an Anthropic Messages endpoint. General API
+examples (subject to the selected account's model access and quota):
+
+| Provider | `CODEBUDDY_BASE_URL` | `CODEBUDDY_MODEL` |
+| --- | --- | --- |
+| Z.ai | `https://api.z.ai/api/paas/v4` | `glm-5.2` |
+| MiniMax | `https://api.minimax.io/v1` | `MiniMax-M3` |
+
+Use the corresponding key as `CODEBUDDY_API_KEY`. A `models.json` route can
+instead use the complete Chat Completions URL and a credential environment
+reference. An existing model-specific URL takes precedence over the environment
+base URL. Select the provider's matching API endpoint;
 a general API key and a Coding Plan subscription can require different routes.
 Native model IDs use direct text selection; AO does not invent a model catalog.
 The runtime qualification used Z.ai's OpenAI-compatible coding endpoint and
