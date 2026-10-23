@@ -595,8 +595,8 @@ export function WorkspaceReviewPane({
 								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
 								<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 								<span className="truncate" title={file.path}>{file.path}</span>
+								<span className={cn("shrink-0 text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
 							</button>
-							<span className={cn("shrink-0 text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
 							{onOpenFile ? (
 								<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
 									<Button aria-label={t("files.openFullFileGeneric")} className="size-6 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>

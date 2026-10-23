@@ -291,7 +291,7 @@ describe("WorkspaceReviewPane", () => {
 		const onOpenFile = vi.fn();
 		const data = workspace([{ path: "shot.png", status: "added", additions: 0, deletions: 0, size: 128, binary: true }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} onOpenFile={onOpenFile} filter="" sessionId="sess-1" split={false} />);
-		expect(screen.getByText("A")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Collapse shot.png" })).toContainElement(screen.getByText("A"));
 		const open = screen.getByRole("button", { name: "Open full file" });
 		expect(open.querySelector("svg")).not.toBeNull();
 		expect(open).toHaveClass("border-transparent");
