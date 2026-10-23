@@ -221,7 +221,7 @@ var shippedMigrations = map[int64]string{
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
-	201: "0201_provider_event_retention_cursor.sql",
+	20261023045324404: "20261023045324404_provider_event_retention_cursor.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
