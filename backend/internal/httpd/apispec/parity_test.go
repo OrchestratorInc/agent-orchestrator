@@ -26,7 +26,6 @@ import (
 type stubDeviceRoster struct{}
 
 func (stubDeviceRoster) List() []mobilebridge.PushDevice { return nil }
-func (stubDeviceRoster) SetMuted(string, bool) error     { return nil }
 func (stubDeviceRoster) Delete(string) error             { return nil }
 
 type stubDeviceLive struct{}
