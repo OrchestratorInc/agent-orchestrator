@@ -4483,7 +4483,9 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
+            requiresVersion?: string;
             supportsFast?: boolean;
+            unavailableReason?: string;
         };
         AgentModelsResponse: {
             agentId: string;

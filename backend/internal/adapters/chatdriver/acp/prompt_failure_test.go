@@ -115,7 +115,7 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 				Harness:      domain.HarnessClaudeCode,
 				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-				PromptResponseFailure: func(response acpsdk.PromptResponse) error {
+				PromptResponseFailure: func(response acpsdk.PromptResponse, _ string) error {
 					return promptResponseFailure(response.Meta)
 				},
 				OnAuthRejected: func() {

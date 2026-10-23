@@ -119,8 +119,14 @@ type Config struct {
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
 	// PromptResponseFailure lets a provider binding interpret its own structured
-	// terminal metadata after a nominally successful ACP prompt response.
-	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// terminal metadata after a nominally successful ACP prompt response. model
+	// is the session's selected model when the turn ran, or "" when unknown.
+	PromptResponseFailure func(response acpsdk.PromptResponse, model string) error
+	// ServedModel optionally reports the model that actually answered the turn
+	// that just completed, when it differs from selectedModel in a way worth
+	// showing (for example an alias resolving to a concrete model). It returns
+	// "" when there is nothing to report. Optional.
+	ServedModel func(ctx context.Context, cfg LaunchConfig, sessionID, selectedModel string) (served, reason string)
 	// SessionPromptResponseFailure is PromptResponseFailure given the provider
 	// session, for a binding that reads the failure from the agent's own record,
 	// and whether the turn brought any reply text or tool call.
@@ -724,6 +730,12 @@ func (d *Driver) initialize(
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
+	if d.cfg.ServedModel != nil {
+		servedModel := d.cfg.ServedModel
+		conv.servedModel = func(ctx context.Context, sessionID, selectedModel string) (string, string) {
+			return servedModel(ctx, cfg, sessionID, selectedModel)
+		}
+	}
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || state.SessionID == "" {
