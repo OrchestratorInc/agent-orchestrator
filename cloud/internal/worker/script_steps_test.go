@@ -188,6 +188,8 @@ func TestSetupStepEventsLiveUpdates(t *testing.T) {
 // A step that keeps writing output without finishing a new line (a progress
 // line redrawn with \r) still sends live updates at least every heartbeat,
 // each saying how long ago it last wrote a byte, so it never reads as silent.
+// The script never ends the progress line: a closing newline would complete it,
+// and a live update racing the step's final event could then publish it.
 func TestSetupStepEventsHeartbeatWhileOutputKeepsArriving(t *testing.T) {
 	t.Parallel()
 	// Keep the progress line unfinished: a final echo would complete it and
