@@ -14,7 +14,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions }: {
 	const { t } = useTranslation();
 	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
 	return (
-		<li className="group relative min-w-0 rounded-md bg-card">
+		<li className="group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10">
 			<button
 				type="button"
 				className="block w-full overflow-hidden rounded-md text-left transition-none hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"

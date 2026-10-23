@@ -175,7 +175,7 @@ export function MarkdownFileView({
 	);
 	return (
 		<MarkdownFileContext.Provider value={contextValue}>
-			<div className={cn("ao-markdown-surface min-h-full", thumbnail && "h-full")} inert={thumbnail || undefined}>
+			<div className={cn("ao-markdown-surface min-h-full", thumbnail && "h-full")} data-presentation={presentation} inert={thumbnail || undefined}>
 				{truncated && !thumbnail ? (
 					<div className="shrink-0 border-b border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">
 						{t("files.contentTruncated")}
