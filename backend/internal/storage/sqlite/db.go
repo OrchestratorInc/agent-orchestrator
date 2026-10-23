@@ -2123,7 +2123,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsStakpak := !strings.Contains(schema, "'stakpak'")
+	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2137,6 +2138,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsStakpak {
+		// Stakpak's migration also inserts it before 'fake', so remove it the
+		// same way before the exact repairs and append it again below.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''stakpak'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Stakpak constraint: %w", err)
+		}
+		needsStakpak = true
 	}
 	type replacement struct {
 		old string
@@ -2253,6 +2262,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsStakpak {
+		repairs = append(repairs, replacement{"'fake'))", "'stakpak', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2310,6 +2322,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'stakpak'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
 	}
 	return nil
 }
