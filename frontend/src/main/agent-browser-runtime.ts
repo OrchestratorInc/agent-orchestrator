@@ -115,7 +115,7 @@ export type AgentBrowserRuntimeOptions = {
 
 export type AgentBrowserJSONResult = Record<string, unknown>;
 
-export type AgentBrowserBridge = Pick<AgentBrowserCDPBridge, "start" | "close">;
+export type AgentBrowserBridge = Pick<AgentBrowserCDPBridge, "start" | "close" | "reconcileTargets">;
 
 export type NativeProcessRunner = (
 	binaryPath: string,
@@ -188,6 +188,7 @@ export class AgentBrowserRuntime {
 		const runtime = await this.ensureSession(sessionId, provider);
 		await this.touchRuntimeRoot();
 		const environment = this.environment(runtime);
+		runtime.bridge.reconcileTargets();
 		// The native daemon can expire and be recreated independently while this
 		// AO session runtime remains alive. Its replacement starts streaming by
 		// default, so reassert the input-surface policy immediately before every

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { app, BrowserWindow, WebContentsView } from "electron";
-import type { AgentBrowserRuntime } from "./agent-browser-runtime";
+import { AgentBrowserRuntime } from "./agent-browser-runtime";
 import { createBrowserViewHost } from "./browser-view-host";
 import type { BrowserTabsState } from "./browser-view-host";
 
@@ -22,6 +22,19 @@ async function run(): Promise<void> {
 	const fixture = await readFile(fixturePath, "utf8");
 	const dragFixture = await readFile(path.join(path.dirname(fixturePath), "drag-regions.html"), "utf8");
 	const server = createServer((request, response) => {
+		if (request.url === "/native-popup-opener") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(`<!doctype html><title>Native popup opener</title>
+				<a href="/native-popup-child" target="_blank">Open report link</a>
+				<button onclick="window.open('/native-popup-child', '_blank')">Open report window</button>`);
+			return;
+		}
+		if (request.url === "/native-popup-child") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(`<!doctype html><title>Native popup child</title><h1>Child report</h1>
+				<button onclick="this.textContent='Child changed'">Change child</button>`);
+			return;
+		}
 		if (request.url === "/drag-regions") {
 			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 			response.end(dragFixture);
@@ -244,7 +257,7 @@ async function run(): Promise<void> {
 		send: () => undefined,
 		on: () => undefined,
 	} as never;
-	const host = createBrowserViewHost({
+	const hostOptions = {
 		mainWindow: {
 			contentView: window.contentView,
 			getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
@@ -261,7 +274,10 @@ async function run(): Promise<void> {
 		annotatePreloadPath: path.join(path.dirname(fixturePath), "empty-preload.cjs"),
 		rendererOrigin: "http://127.0.0.1:1",
 		agentBrowserRuntime: runtime,
-	});
+	};
+	const host = createBrowserViewHost(hostOptions);
+	let nativeRuntime: AgentBrowserRuntime | undefined;
+	let nativeHost: ReturnType<typeof createBrowserViewHost> | undefined;
 
 	try {
 		// Exercise Chromium's actual CSS cascade: a mock of insertCSS cannot
@@ -404,8 +420,63 @@ async function run(): Promise<void> {
 		assert.equal((await host.execute("integration-session", "tabs") as BrowserTabsState).tabs.length, 1);
 		process.stdout.write("browser popup handle, cross-origin messaging, shared browser profile and self-close integration passed\n");
 
+		host.destroyAll();
+		nativeRuntime = new AgentBrowserRuntime({
+			binaryPath: path.resolve("agent-browser", process.platform === "win32" ? "agent-browser.exe" : "agent-browser"),
+			dataDir: path.join(userDataPath, "native-runtime"),
+		});
+		nativeHost = createBrowserViewHost({ ...hostOptions, agentBrowserRuntime: nativeRuntime });
+		const liveHost = nativeHost;
+		async function nativeCommand(sessionId: string, action: string, args: Record<string, unknown> = {}) {
+			return liveHost.execute(sessionId, action, args);
+		}
+		async function nativeSnapshot(sessionId: string, expected: string, tabId: string) {
+			const result = await nativeCommand(sessionId, "snapshot", { interactive: true }) as {
+				text: string; target: { tabId: string };
+			};
+			assert.equal(result.target.tabId, tabId);
+			assert.ok(result.text.includes(expected), `Expected ${expected} in ${tabId}: ${result.text}`);
+			return result.text;
+		}
+		function refFor(snapshot: string, name: string): string {
+			const line = snapshot.split("\n").find(line => line.includes(`"${name}"`));
+			const ref = line?.match(/\[ref=(e\d+)\]/)?.[1];
+			assert.ok(ref, `Missing ${name} in snapshot: ${snapshot}`);
+			return ref;
+		}
+		for (const name of ["Open report link", "Open report window"]) {
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const sessionId = `native-popup-${name.endsWith("link") ? "link" : "window"}-${attempt}`;
+				await nativeCommand(sessionId, "open", { url: `http://127.0.0.1:${address.port}/native-popup-opener` });
+				const openerSnapshot = await nativeSnapshot(sessionId, name, "t1");
+				await nativeCommand(sessionId, "click", { ref: refFor(openerSnapshot, name) });
+				await deadline((async () => {
+					for (;;) {
+						const state = await nativeCommand(sessionId, "tabs") as BrowserTabsState;
+						if (state.activeTabId === "t2" && state.tabs.length === 2) return;
+						await new Promise(resolve => setTimeout(resolve, 10));
+					}
+				})());
+				const childSnapshot = await nativeSnapshot(sessionId, "Change child", "t2");
+				assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Native popup child");
+				await nativeCommand(sessionId, "click", { ref: refFor(childSnapshot, "Change child") });
+				await nativeSnapshot(sessionId, "Child changed", "t2");
+				await nativeCommand(sessionId, "tab-select", { tabId: "t1" });
+				await nativeSnapshot(sessionId, "Open report link", "t1");
+				assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Native popup opener");
+				await nativeCommand(sessionId, "tab-select", { tabId: "t2" });
+				await nativeSnapshot(sessionId, "Child changed", "t2");
+				await nativeCommand(sessionId, "tab-close", { tabId: "t2" });
+				await nativeSnapshot(sessionId, "Open report link", "t1");
+				await nativeCommand(sessionId, "__destroy-session");
+				process.stdout.write(`browser native popup ${name.endsWith("link") ? "link" : "window"} attempt ${attempt + 1} passed\n`);
+			}
+		}
+
 		process.stdout.write("browser action postcondition integration passed\n");
 	} finally {
+		nativeHost?.destroyAll();
+		await nativeRuntime?.dispose();
 		// Tear down native views synchronously before exiting. Electron can leave a
 		// graceful app-level dispose pending after a beforeunload interaction even
 		// though all assertions completed; the standalone process must not turn that

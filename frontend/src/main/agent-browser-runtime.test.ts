@@ -118,6 +118,7 @@ describe("agent-browser runtime lifecycle", () => {
 		const bridge = {
 			start: vi.fn(overrides.start ?? (async () => "ws://127.0.0.1:1/fixture")),
 			close: vi.fn(overrides.close ?? (async () => undefined)),
+			reconcileTargets: vi.fn(),
 		};
 		const processRunner = vi.fn(
 			overrides.processRunner ?? (async () => ({ stdout: "", stderr: "", exitCode: 0 })),
@@ -629,7 +630,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 								nodeId: "1",
 								ignored: false,
 								role: { type: "role", value: "button" },
-								name: { type: "computedString", value: "Save" },
+								name: { type: "computedString", value: this.url === "http://localhost:5173/" ? "Save" : "Popup action" },
 								childIds: [],
 							},
 						],
@@ -724,7 +725,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 				});
 				expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({ url });
 				expect(await runtime.runAction(sessionId, "snapshot", {}, provider)).toMatchObject({
-					snapshot: expect.stringContaining('button "Save"'),
+					snapshot: expect.stringContaining('button "Popup action"'),
 				});
 				targets.splice(1, 1);
 				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
