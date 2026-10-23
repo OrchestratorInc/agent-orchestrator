@@ -1769,6 +1769,7 @@
 	"artifacts.share.upgrade": "Zu AO Cloud wechseln",
 	"artifacts.share.notNow": "Nicht jetzt",
 	"artifacts.share.unavailable": "Teilen ist auf diesem AO Cloud-Server nicht verfügbar.",
+	"artifacts.share.signInRequired": "Melde dich bei AO Cloud an, um zu teilen.",
 	"artifacts.delete": "Artefakt löschen",
 	"artifacts.deleteTitle": "Artefakt löschen?",
 	"artifacts.deleteDescription": "Dadurch wird {{name}} endgültig aus dem Artefaktordner dieser Sitzung gelöscht.",

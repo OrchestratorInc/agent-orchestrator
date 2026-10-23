@@ -1753,6 +1753,7 @@
 	"artifacts.share.upgrade": "升级到 AO Cloud",
 	"artifacts.share.notNow": "暂不",
 	"artifacts.share.unavailable": "此 AO Cloud 服务器不支持共享。",
+	"artifacts.share.signInRequired": "请登录 AO Cloud 后再共享。",
 	"artifacts.delete": "删除产物",
 	"artifacts.deleteTitle": "删除产物？",
 	"artifacts.deleteDescription": "这会从此会话的产物文件夹中永久删除 {{name}}。",

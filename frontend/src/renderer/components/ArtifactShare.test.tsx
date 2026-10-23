@@ -2,14 +2,19 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
+import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useUiStore } from "../stores/ui-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactShareButton, useArtifactShare } from "./ArtifactShare";
 
-const { publishMock, signInMock, sessionState } = vi.hoisted(() => ({
+const { publishMock, signInMock, sessionState, localAuth } = vi.hoisted(() => ({
 	publishMock: vi.fn(),
 	signInMock: vi.fn(),
-	sessionState: { status: "authenticated" as "authenticated" | "unauthenticated" },
+	sessionState: {
+		status: "authenticated" as "authenticated" | "unauthenticated",
+		session: { user: { id: "u1", email: "me@example.com", displayName: "Me" }, storedAt: "t1", authProvider: "local" } as object | null,
+	},
+	localAuth: { available: false },
 }));
 
 vi.mock("../lib/artifact-share", async (importOriginal) => ({
@@ -18,9 +23,9 @@ vi.mock("../lib/artifact-share", async (importOriginal) => ({
 }));
 vi.mock("../lib/cloud-session", () => ({
 	isCloudSignInConfigured: () => true,
-	useCloudSession: () => ({ status: sessionState.status, signIn: signInMock }),
+	useCloudSession: () => ({ status: sessionState.status, session: sessionState.session, signIn: signInMock }),
 }));
-vi.mock("../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
+vi.mock("../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: localAuth.available }) }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ baseUrl: "http://127.0.0.1:8081" }) }));
 
 const artifact: SessionArtifact = {
@@ -45,11 +50,16 @@ function Harness() {
 	);
 }
 
+const SIGNED_IN = { user: { id: "u1", email: "me@example.com", displayName: "Me" }, storedAt: "t1", authProvider: "local" };
+
 describe("useArtifactShare", () => {
 	beforeEach(() => {
 		publishMock.mockReset();
 		signInMock.mockReset();
 		sessionState.status = "authenticated";
+		sessionState.session = SIGNED_IN;
+		localAuth.available = false;
+		useLocalSignInDialogStore.setState({ open: false });
 		useUiStore.setState({ globalToast: null, settingsModal: null });
 	});
 
@@ -79,6 +89,7 @@ describe("useArtifactShare", () => {
 
 	it("asks a signed-out user to sign in, then shares once they are signed in", async () => {
 		sessionState.status = "unauthenticated";
+		sessionState.session = null;
 		publishMock.mockResolvedValue({ id: "s1", url: "http://x.share.localhost/", name: "report.html", replaced: false });
 		const view = render(<Harness />);
 		await userEvent.click(screen.getByRole("button", { name: "share" }));
@@ -87,16 +98,42 @@ describe("useArtifactShare", () => {
 		expect(screen.getByTestId("state").textContent).toBe("signingIn");
 
 		sessionState.status = "authenticated";
+		sessionState.session = SIGNED_IN;
 		await act(async () => view.rerender(<Harness />));
 		expect(publishMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("sends the user to sign in again when the control plane refuses the session", async () => {
+	it("asks for sign-in once when the control plane refuses the session, without retrying in a loop", async () => {
 		const { ArtifactShareAuthError } = await import("../lib/artifact-share");
-		publishMock.mockRejectedValueOnce(new ArtifactShareAuthError());
+		publishMock.mockRejectedValue(new ArtifactShareAuthError());
+		const view = render(<Harness />);
+		await userEvent.click(screen.getByRole("button", { name: "share" }));
+		for (let index = 0; index < 3; index++) await act(async () => view.rerender(<Harness />));
+		expect(publishMock).toHaveBeenCalledTimes(1);
+		expect(signInMock).toHaveBeenCalledTimes(1);
+
+		// A new sign-in brings a different session, and the share continues.
+		publishMock.mockResolvedValue({ id: "s1", url: "http://x.share.localhost/", name: "report.html", replaced: false });
+		sessionState.session = { ...SIGNED_IN, storedAt: "t2" };
+		await act(async () => view.rerender(<Harness />));
+		expect(publishMock).toHaveBeenCalledTimes(2);
+		expect(useUiStore.getState().globalToast?.title).toBe("Share link copied");
+	});
+
+	it("cancels the share when the local sign-in dialog is closed without signing in", async () => {
+		sessionState.status = "unauthenticated";
+		sessionState.session = null;
+		localAuth.available = true;
 		render(<Harness />);
 		await userEvent.click(screen.getByRole("button", { name: "share" }));
-		expect(signInMock).toHaveBeenCalledTimes(1);
+		expect(useLocalSignInDialogStore.getState().open).toBe(true);
+		expect(signInMock).not.toHaveBeenCalled();
+
+		await act(async () => useLocalSignInDialogStore.getState().setOpen(false));
+		expect(screen.getByTestId("state").textContent).toBe("idle");
+		expect(screen.getByRole("alert").textContent).toBe("Sign in to AO Cloud to share.");
+		expect(useLocalSignInDialogStore.getState().open).toBe(false);
+		expect(publishMock).not.toHaveBeenCalled();
 	});
 
 	it("opens the upgrade dialog at the link limit, and Upgrade opens the billing settings", async () => {
@@ -123,6 +160,7 @@ describe("ArtifactShareButton", () => {
 	beforeEach(() => {
 		publishMock.mockReset();
 		sessionState.status = "authenticated";
+		sessionState.session = SIGNED_IN;
 		useUiStore.setState({ globalToast: null, settingsModal: null });
 	});
 
