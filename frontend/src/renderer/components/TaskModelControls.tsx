@@ -153,7 +153,12 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 				value={cursorChoice ? cursorChoice.variant.effort ?? "" : effort || fallbackEffort(options, selected?.defaultEffort) || ""}
 				defaultEffort={cursorChoice ? undefined : selected?.defaultEffort}
 				availability={cursorChoice ? "supported" : availability}
-				onChange={cursorChoice ? (next) => pickVariant({ effort: next }) : onEffortChange}
+				onChange={cursorChoice ? (next) => pickVariant({ effort: next }) : (next) => {
+					// An effort edit must stay attached to the model whose levels were offered.
+					props.onModelChange(selectedModel);
+					props.onModeChange("");
+					onEffortChange(next || selected?.defaultEffort || "");
+				}}
 				footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickVariant({ thinking })} /> : undefined}
 			/>
 		</div>

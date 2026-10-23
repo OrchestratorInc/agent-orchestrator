@@ -20,7 +20,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
-import { useProjectDefaultWorker } from "../hooks/useProjectDefaultWorker";
+import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
 	buildRankedAgentOptions,
@@ -241,7 +241,8 @@ function AutomationFormDialog({
 	const editing = Boolean(automation);
 	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaultWorker = useProjectDefaultWorker(open ? (automation?.projectId || projectId) : "");
+	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
+	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [harness, setHarness] = useState("");
@@ -317,6 +318,14 @@ function AutomationFormDialog({
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
+	// Match the daemon's base config plus overrides for a matching worker harness.
+	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
+	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
+	const inheritedMode = inheritedWorker?.mode || projectDefaults.agentConfig?.mode || "";
+	const inheritedEffort = inheritedWorker?.effort || projectDefaults.agentConfig?.effort || "";
+	const displayedModel = model || (!mode ? inheritedModel : "");
+	const displayedMode = mode || (!model ? inheritedMode : "");
+	const displayedEffort = effort || (!model && !mode ? inheritedEffort : "");
 	const previousHarness = useRef<{ automation?: Automation; harness: string } | null>(null);
 	useEffect(() => {
 		if (!open) { previousHarness.current = null; return; }
@@ -482,9 +491,9 @@ function AutomationFormDialog({
 										variant="task"
 										agentId={selectedHarness}
 										projectId={projectId}
-										model={model}
-										mode={mode}
-										effort={effort}
+										model={displayedModel}
+										mode={displayedMode}
+										effort={displayedEffort}
 										onModelChange={setModel}
 										onModeChange={setMode}
 										onEffortChange={setEffort}
