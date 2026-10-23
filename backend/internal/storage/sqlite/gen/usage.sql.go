@@ -550,11 +550,11 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
-    provider_usage_json,
+    provider_usage_json, service_tier,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
@@ -571,6 +571,7 @@ type InsertModelUsageEventParams struct {
 	UncachedInputTokens   sql.NullInt64
 	OutputTokens          sql.NullInt64
 	ProviderUsageJson     sql.NullString
+	ServiceTier           sql.NullString
 	InputCostNanos        sql.NullInt64
 	CachedInputCostNanos  sql.NullInt64
 	OutputCostNanos       sql.NullInt64
@@ -594,6 +595,7 @@ func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsag
 		arg.UncachedInputTokens,
 		arg.OutputTokens,
 		arg.ProviderUsageJson,
+		arg.ServiceTier,
 		arg.InputCostNanos,
 		arg.CachedInputCostNanos,
 		arg.OutputCostNanos,
@@ -1070,6 +1072,7 @@ SELECT
     event.uncached_input_tokens,
     event.output_tokens,
     event.provider_usage_json,
+    event.service_tier,
     event.pricing_version,
     event.source_event_key
 FROM model_usage_events event
@@ -1103,6 +1106,7 @@ type ListUsageCostCandidatesRow struct {
 	UncachedInputTokens  sql.NullInt64
 	OutputTokens         sql.NullInt64
 	ProviderUsageJson    sql.NullString
+	ServiceTier          sql.NullString
 	PricingVersion       string
 	SourceEventKey       string
 }
@@ -1128,6 +1132,7 @@ func (q *Queries) ListUsageCostCandidates(ctx context.Context, arg ListUsageCost
 			&i.UncachedInputTokens,
 			&i.OutputTokens,
 			&i.ProviderUsageJson,
+			&i.ServiceTier,
 			&i.PricingVersion,
 			&i.SourceEventKey,
 		); err != nil {
@@ -1329,19 +1334,21 @@ const promoteInferredUsageEventToObserved = `-- name: PromoteInferredUsageEventT
 UPDATE model_usage_events
 SET billing_provider_id = ?1,
     billing_provider_source = 'observed',
-    input_cost_nanos = ?2,
-    cached_input_cost_nanos = ?3,
-    output_cost_nanos = ?4,
-    estimated_cost_nanos = ?5,
-    pricing_version = ?6
-WHERE id = ?7
-  AND usage_source_id = ?8
-  AND billing_provider_id = ?9
+    service_tier = COALESCE(service_tier, ?2),
+    input_cost_nanos = ?3,
+    cached_input_cost_nanos = ?4,
+    output_cost_nanos = ?5,
+    estimated_cost_nanos = ?6,
+    pricing_version = ?7
+WHERE id = ?8
+  AND usage_source_id = ?9
+  AND billing_provider_id = ?10
   AND billing_provider_source = 'inferred'
 `
 
 type PromoteInferredUsageEventToObservedParams struct {
 	BillingProviderID         sql.NullString
+	ServiceTier               sql.NullString
 	InputCostNanos            sql.NullInt64
 	CachedInputCostNanos      sql.NullInt64
 	OutputCostNanos           sql.NullInt64
@@ -1355,10 +1362,12 @@ type PromoteInferredUsageEventToObservedParams struct {
 // A later observation supersedes an inferred billing provider and every cost
 // derived from that inference. ApplyUsageChunk rehomes replacement-generation
 // rows before this statement, so the source guard also prevents promotion on a
-// stale generation.
+// stale generation. The new cost is estimated at the replayed service tier, so
+// a row stored before tiers were recorded takes that tier with it.
 func (q *Queries) PromoteInferredUsageEventToObserved(ctx context.Context, arg PromoteInferredUsageEventToObservedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, promoteInferredUsageEventToObserved,
 		arg.BillingProviderID,
+		arg.ServiceTier,
 		arg.InputCostNanos,
 		arg.CachedInputCostNanos,
 		arg.OutputCostNanos,
@@ -1436,38 +1445,41 @@ SET billing_provider_id = ?1,
     -- The reparse is the only way a pre-capture event can ever gain its bounded
     -- provider object, and it is exactly what makes the event priceable.
     provider_usage_json = ?3,
-    input_cost_nanos = ?4,
-    cached_input_cost_nanos = ?5,
-    output_cost_nanos = ?6,
-    estimated_cost_nanos = ?7,
-    pricing_version = ?8
-WHERE model_usage_events.id = ?9
-  AND model_usage_events.binding_id = ?10
-  AND model_usage_events.usage_source_id = ?11
+    -- Same for the service tier, which Codex reports on another line. The
+    -- repair's cost is estimated at it; a stored tier is never replaced.
+    service_tier = COALESCE(service_tier, ?4),
+    input_cost_nanos = ?5,
+    cached_input_cost_nanos = ?6,
+    output_cost_nanos = ?7,
+    estimated_cost_nanos = ?8,
+    pricing_version = ?9
+WHERE model_usage_events.id = ?10
+  AND model_usage_events.binding_id = ?11
+  AND model_usage_events.usage_source_id = ?12
   -- Writable while the attribution is still open. An observation is final, so
   -- this can promote an inference exactly once and never revise an observation.
   AND (model_usage_events.billing_provider_id IS NULL
        OR model_usage_events.billing_provider_source = 'inferred')
-  AND model_usage_events.billing_provider_id IS ?12
-  AND model_usage_events.billing_provider_source IS ?13
-  AND model_usage_events.provider_id = ?14
-  AND model_usage_events.model_id = ?15
-  AND model_usage_events.usage_measurement_kind = ?16
-  AND model_usage_events.input_tokens IS ?17
-  AND model_usage_events.cached_input_tokens IS ?18
-  AND model_usage_events.uncached_input_tokens IS ?19
-  AND model_usage_events.output_tokens IS ?20
-  AND model_usage_events.provider_usage_json IS ?21
-  AND model_usage_events.source_event_key = ?22
-  AND model_usage_events.pricing_version = ?23
+  AND model_usage_events.billing_provider_id IS ?13
+  AND model_usage_events.billing_provider_source IS ?14
+  AND model_usage_events.provider_id = ?15
+  AND model_usage_events.model_id = ?16
+  AND model_usage_events.usage_measurement_kind = ?17
+  AND model_usage_events.input_tokens IS ?18
+  AND model_usage_events.cached_input_tokens IS ?19
+  AND model_usage_events.uncached_input_tokens IS ?20
+  AND model_usage_events.output_tokens IS ?21
+  AND model_usage_events.provider_usage_json IS ?22
+  AND model_usage_events.source_event_key = ?23
+  AND model_usage_events.pricing_version = ?24
   AND EXISTS (
       SELECT 1
       FROM usage_sources source
       WHERE source.id = model_usage_events.usage_source_id
-        AND source.file_identity = ?24
-        AND source.byte_offset = ?25
-        AND source.parser_state_json = ?26
-        AND source.updated_at = ?27
+        AND source.file_identity = ?25
+        AND source.byte_offset = ?26
+        AND source.parser_state_json = ?27
+        AND source.updated_at = ?28
         AND NOT (
             source.state = 'complete'
             AND source.last_error_code = 'artifact_replaced'
@@ -1480,6 +1492,7 @@ type UpdateLegacyUsageEventParams struct {
 	BillingProviderID             sql.NullString
 	BillingProviderSource         sql.NullString
 	ProviderUsageJson             sql.NullString
+	ServiceTier                   sql.NullString
 	InputCostNanos                sql.NullInt64
 	CachedInputCostNanos          sql.NullInt64
 	OutputCostNanos               sql.NullInt64
@@ -1511,6 +1524,7 @@ func (q *Queries) UpdateLegacyUsageEvent(ctx context.Context, arg UpdateLegacyUs
 		arg.BillingProviderID,
 		arg.BillingProviderSource,
 		arg.ProviderUsageJson,
+		arg.ServiceTier,
 		arg.InputCostNanos,
 		arg.CachedInputCostNanos,
 		arg.OutputCostNanos,
@@ -1593,8 +1607,9 @@ WHERE id = ?6
   AND uncached_input_tokens IS ?13
   AND output_tokens IS ?14
   AND provider_usage_json IS ?15
-  AND source_event_key = ?16
-  AND pricing_version = ?17
+  AND service_tier IS ?16
+  AND source_event_key = ?17
+  AND pricing_version = ?18
   AND estimated_cost_nanos IS NULL
 RETURNING binding_id
 `
@@ -1615,6 +1630,7 @@ type UpdateUsageCostCandidateParams struct {
 	ExpectedUncachedInputTokens  sql.NullInt64
 	ExpectedOutputTokens         sql.NullInt64
 	ExpectedProviderUsageJson    sql.NullString
+	ExpectedServiceTier          sql.NullString
 	ExpectedSourceEventKey       string
 	ExpectedPricingVersion       string
 }
@@ -1636,6 +1652,7 @@ func (q *Queries) UpdateUsageCostCandidate(ctx context.Context, arg UpdateUsageC
 		arg.ExpectedUncachedInputTokens,
 		arg.ExpectedOutputTokens,
 		arg.ExpectedProviderUsageJson,
+		arg.ExpectedServiceTier,
 		arg.ExpectedSourceEventKey,
 		arg.ExpectedPricingVersion,
 	)

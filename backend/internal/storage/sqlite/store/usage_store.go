@@ -434,6 +434,7 @@ func (s *Store) ApplyUsageChunk(
 				if promoteAttribution {
 					rows, err := q.PromoteInferredUsageEventToObserved(ctx, gen.PromoteInferredUsageEventToObservedParams{
 						BillingProviderID:         stringOrNull(ev.BillingProviderID),
+						ServiceTier:               stringOrNull(ev.ServiceTier),
 						InputCostNanos:            ptrInt64ToNull(ev.Costs.InputCostNanos),
 						CachedInputCostNanos:      ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
 						OutputCostNanos:           ptrInt64ToNull(ev.Costs.OutputCostNanos),
@@ -527,6 +528,7 @@ func (s *Store) ListUsageCostCandidates(
 				row.UncachedInputTokens, row.OutputTokens,
 			),
 			ProviderUsageJSON: row.ProviderUsageJson.String,
+			ServiceTier:       row.ServiceTier.String,
 			PricingVersion:    row.PricingVersion,
 			SourceEventKey:    row.SourceEventKey,
 		})
@@ -584,6 +586,7 @@ func (s *Store) ApplyUsageCostUpdates(
 				ExpectedUncachedInputTokens:  ptrInt64ToNull(candidate.Tokens.UncachedInputTokens),
 				ExpectedOutputTokens:         ptrInt64ToNull(candidate.Tokens.OutputTokens),
 				ExpectedProviderUsageJson:    stringOrNull(candidate.ProviderUsageJSON),
+				ExpectedServiceTier:          stringOrNull(candidate.ServiceTier),
 				ExpectedSourceEventKey:       candidate.SourceEventKey,
 				ExpectedPricingVersion:       candidate.PricingVersion,
 			})
@@ -703,6 +706,7 @@ func (s *Store) ApplyLegacyUsageRepairs(
 				BillingProviderID:             sql.NullString{String: billingProviderID, Valid: true},
 				BillingProviderSource:         stringOrNull(string(repair.BillingProviderSource)),
 				ProviderUsageJson:             stringOrNull(repair.ProviderUsageJSON),
+				ServiceTier:                   stringOrNull(repair.ServiceTier),
 				InputCostNanos:                ptrInt64ToNull(repair.Costs.InputCostNanos),
 				CachedInputCostNanos:          ptrInt64ToNull(repair.Costs.CachedInputCostNanos),
 				OutputCostNanos:               ptrInt64ToNull(repair.Costs.OutputCostNanos),
@@ -904,6 +908,7 @@ func usageEventInsertParams(source gen.GetUsageSourceWithBindingAndSessionRow, e
 		UncachedInputTokens:   ptrInt64ToNull(ev.Tokens.UncachedInputTokens),
 		OutputTokens:          ptrInt64ToNull(ev.Tokens.OutputTokens),
 		ProviderUsageJson:     stringOrNull(ev.ProviderUsageJSON),
+		ServiceTier:           stringOrNull(ev.ServiceTier),
 		InputCostNanos:        ptrInt64ToNull(ev.Costs.InputCostNanos),
 		CachedInputCostNanos:  ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
 		OutputCostNanos:       ptrInt64ToNull(ev.Costs.OutputCostNanos),

@@ -131,6 +131,10 @@ type codexParserStateV1 struct {
 	Provider       string           `json:"billing_provider,omitempty"`
 	LegacyProvider string           `json:"provider,omitempty"` // see claudeParserStateV1
 
+	// ServiceTier is the tier from the thread's latest settings. Codex reports
+	// it on thread_settings_applied, not on the token_count it prices.
+	ServiceTier string `json:"service_tier,omitempty"`
+
 	NativeSessionID     string   `json:"native_session_id,omitempty"`
 	DirectParentID      string   `json:"direct_parent_id,omitempty"`
 	PendingSpawnCallIDs []string `json:"pending_spawn_call_ids"`
@@ -279,7 +283,10 @@ type claudeNativeUsage struct {
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreation            *struct {
+	// Raw so a speed of an unexpected type cannot fail the whole usage object
+	// and drop the event as malformed.
+	Speed         json.RawMessage `json:"speed"`
+	CacheCreation *struct {
 		Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
 		Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 	} `json:"cache_creation"`
@@ -347,6 +354,7 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 			MeasurementKind:       domain.UsageMeasurementNativeReported,
 			Tokens:                tokens,
 			ProviderUsageJSON:     boundedProviderUsage(native.Message.Usage),
+			ServiceTier:           reportedServiceTier(jsonString(usage.Speed)),
 			CreatedAt:             parseUsageTimestamp(native.Timestamp),
 			SourceEventKey: stableSourceEventKey(
 				"claude",
@@ -600,11 +608,25 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 	// payload.info is the bounded object; payload.rate_limits is its sibling and
 	// is deliberately never read, so account-level quota state cannot be stored.
 	var payload struct {
-		Type string          `json:"type"`
-		Info json.RawMessage `json:"info"`
+		Type           string          `json:"type"`
+		Info           json.RawMessage `json:"info"`
+		ThreadSettings *struct {
+			ServiceTier string `json:"service_tier"`
+		} `json:"thread_settings"`
 	}
-	if err := json.Unmarshal(envelope.Payload, &payload); err != nil ||
-		payload.Type != "token_count" || !jsonValueReported(payload.Info) {
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return
+	}
+	// Codex 0.163 writes this line when a thread starts and whenever its
+	// settings change. Older CLIs wrote it only on a change, so their earlier
+	// turns carry no tier and price at standard rates. Codex omits service_tier
+	// when no tier was requested, which bills as standard, so an omission
+	// clears the tier too.
+	if payload.Type == "thread_settings_applied" && payload.ThreadSettings != nil {
+		state.ServiceTier = reportedServiceTier(payload.ThreadSettings.ServiceTier)
+		return
+	}
+	if payload.Type != "token_count" || !jsonValueReported(payload.Info) {
 		return
 	}
 	var info struct {
@@ -705,6 +727,7 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 		MeasurementKind:       domain.UsageMeasurementNativeReported,
 		Tokens:                tokens,
 		ProviderUsageJSON:     codexProviderUsage(payload.Info, derivedCacheWrite),
+		ServiceTier:           state.ServiceTier,
 		CreatedAt:             parseUsageTimestamp(envelope.Timestamp),
 		SourceEventKey: stableSourceEventKey(
 			"codex",
@@ -872,6 +895,26 @@ func codexVectorMatchesDelta(last codexTokenVector, input, cachedInput, cacheWri
 		last.CacheWriteInputTokens == cacheWriteInput && last.OutputTokens == output &&
 		last.ReasoningOutputTokens == reasoningOutput &&
 		(last.TotalTokens == 0 || total == 0 || last.TotalTokens == total)
+}
+
+// reportedServiceTier keeps a provider's tier word as reported, normalized for
+// lookup. Pricing maps it to a catalog row; a word it does not know prices as
+// unknown rather than standard. Anything longer than the column allows is not a
+// tier name and is dropped.
+func reportedServiceTier(raw string) string {
+	tier := strings.ToLower(strings.TrimSpace(raw))
+	if len(tier) > 64 {
+		return ""
+	}
+	return tier
+}
+
+func jsonString(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value
 }
 
 func parseUsageTimestamp(raw string) time.Time {

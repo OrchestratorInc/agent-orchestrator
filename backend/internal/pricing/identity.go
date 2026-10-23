@@ -64,3 +64,25 @@ func CanonicalModelID(providerID, raw string) string {
 	}
 	return modelID
 }
+
+// Service tiers the catalog prices apart from a model's standard rates. The
+// first three are LiteLLM's field suffixes (input_cost_per_token_priority);
+// fast is its provider_specific_entry multiple of every standard rate.
+const (
+	ServiceTierPriority  = "priority"
+	ServiceTierFlex      = "flex"
+	ServiceTierUltrafast = "ultrafast"
+	ServiceTierFast      = "fast"
+)
+
+// TierModelID names the catalog row that prices modelID at a service tier:
+// "gpt-6.1-sol#priority".
+//
+// A tier is its own row rather than more rate fields on the model's row because
+// installed daemons decode provider blobs with DisallowUnknownFields and fetch
+// the catalog from main: a new field would make every one of them reject each
+// later catalog, while an extra row is only a model they never look up. "#"
+// appears in no provider's model IDs; Vertex IDs already use "@".
+func TierModelID(modelID, tier string) string {
+	return modelID + "#" + tier
+}
