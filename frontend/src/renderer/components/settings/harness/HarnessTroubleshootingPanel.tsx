@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
+import type { components } from "../../../../api/schema";
 import type { AgentReadinessSnapshot } from "../../../hooks/useAgentReadinessQuery";
 import { toWorkspaceSession, workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
@@ -26,7 +27,9 @@ type TroubleshootingState = {
 	busy?: boolean;
 	error?: string;
 	draft?: string;
-	requestId?: string;
+	// Keep the exact request until the daemon acknowledges its session. A lost
+	// response must not turn a changed claim, helper or snapshot into another launch.
+	launchRequest?: components["schemas"]["SpawnSessionRequest"];
 	verificationFailed?: boolean;
 };
 // Retain the helper and evidence across harness/tab switches and Settings visits.
@@ -54,6 +57,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 		&& ["authorized", "not_applicable"].includes(agent.authentication.state)));
 	const helper = helpers.find((id) => id === helperChoice) ?? helpers.find((id) => id !== agentId) ?? helpers[0];
 	const busy = Boolean(state?.busy);
+	const pendingLaunch = state?.launchRequest;
 	const latest = state?.after ?? state?.before;
 	const run = async (operation: () => Promise<void>) => {
 		if (useHarnessTroubleshooting.getState().entries[agentId]?.busy) return;
@@ -70,15 +74,20 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 		update(agentId, { ...(current?.before ? { after: snapshot } : { before: snapshot }), verificationFailed: false });
 	});
 	const start = () => run(async () => {
-		if (!helper || !latest || state?.session) return;
-		const requestId = state?.requestId ?? crypto.randomUUID();
-		update(agentId, { requestId });
-		const { data, error } = await apiClient.POST("/api/v1/sessions", { body: {
-			clientRequestId: requestId, kind: "worker", harness: helper, mode: "tui", approvalMode: "accept-edits",
-			displayName: `Troubleshoot ${agentLabel(agentId)}`, prompt: troubleshootingPrompt(claim, latest),
-		} });
+		const current = useHarnessTroubleshooting.getState().entries[agentId];
+		if (current?.session && !current.stopped) return;
+		let request = current?.launchRequest;
+		if (!request) {
+			if (!helper || !latest) return;
+			request = {
+				clientRequestId: crypto.randomUUID(), kind: "worker", harness: helper, mode: "tui", approvalMode: "accept-edits",
+				displayName: `Troubleshoot ${agentLabel(agentId)}`, prompt: troubleshootingPrompt(claim, latest),
+			};
+		}
+		update(agentId, { launchRequest: request });
+		const { data, error } = await apiClient.POST("/api/v1/sessions", { body: request });
 		if (error || !data) throw new Error(apiErrorMessage(error, t("settings.harness.troubleshoot.failed")));
-		update(agentId, { session: data.session });
+		update(agentId, { session: data.session, stopped: data.session.isTerminated, launchRequest: undefined });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	});
 	const stop = () => run(async () => {
@@ -97,8 +106,8 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 		<p className="text-settings-muted">{t("settings.harness.troubleshoot.description")}</p>
 		<label className="block space-y-2">
 			<span>{t("settings.harness.troubleshoot.observation")}</span>
-			<select className="block w-full rounded border border-border bg-surface p-2" value={claim} disabled={busy || Boolean(session)} onChange={(event) => update(agentId, { claim: event.target.value as TroubleshootingClaim, draft: undefined, requestId: undefined })}>
-				{Object.keys(TROUBLESHOOTING_CLAIMS).map((key) => <option key={key} value={key}>{t(`settings.harness.troubleshoot.claim.${key}`)}</option>)}
+			<select className="block w-full rounded border border-border bg-surface p-2" value={claim} disabled={busy || Boolean(session && !state?.stopped) || Boolean(pendingLaunch)} onChange={(event) => update(agentId, { claim: event.target.value as TroubleshootingClaim, draft: undefined })}>
+				{(Object.keys(TROUBLESHOOTING_CLAIMS) as TroubleshootingClaim[]).map((key) => <option key={key} value={key}>{t(`settings.harness.troubleshoot.claim.${key}`)}</option>)}
 			</select>
 		</label>
 		<div className="flex flex-wrap gap-2">
@@ -110,15 +119,16 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 		{latest ? <>
 			<p role="status" className="text-settings-muted">{state?.verificationFailed ? t("settings.harness.troubleshoot.unresolved") : state?.after ? t(troubleshootingVerified(latest) ? "settings.harness.troubleshoot.verified" : "settings.harness.troubleshoot.unresolved") : t("settings.harness.troubleshoot.initial")}</p>
 			<details><summary className="cursor-pointer">{t("settings.harness.troubleshoot.reviewDiagnostics")}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border p-3 text-xs">{JSON.stringify(latest, null, 2)}</pre></details>
-			{!session ? <>
-				{helpers.length ? <label className="block space-y-2"><span>{t("settings.harness.troubleshoot.helper")}</span><select className="block w-full rounded border border-border bg-surface p-2" value={helper} disabled={busy} onChange={(event) => setHelperChoice(event.target.value as TroubleshootingHelper)}>{helpers.map((id) => <option key={id} value={id}>{agentLabel(id)}</option>)}</select></label> : <p className="text-settings-muted">{t("settings.harness.troubleshoot.noHelper")}</p>}
+			{!session || state?.stopped ? <>
+				{pendingLaunch ? <details><summary className="cursor-pointer">{t("settings.harness.troubleshoot.pendingLaunch")}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border p-3 text-xs">{pendingLaunch.prompt}</pre></details> : helpers.length ? <label className="block space-y-2"><span>{t("settings.harness.troubleshoot.helper")}</span><select className="block w-full rounded border border-border bg-surface p-2" value={helper} disabled={busy} onChange={(event) => setHelperChoice(event.target.value as TroubleshootingHelper)}>{helpers.map((id) => <option key={id} value={id}>{agentLabel(id)}</option>)}</select></label> : <p className="text-settings-muted">{t("settings.harness.troubleshoot.noHelper")}</p>}
 				<p className="text-xs text-settings-muted">{t("settings.harness.troubleshoot.disclosure")}</p>
-				<Button size="sm" disabled={busy || !helper || installationBusy || state?.verificationFailed} onClick={() => void start()}>{t("settings.harness.troubleshoot.start")}</Button>
-			</> : <>
+				<Button size="sm" disabled={busy || (!pendingLaunch && (!helper || installationBusy || state?.verificationFailed))} onClick={() => void start()}>{t(pendingLaunch ? "settings.harness.troubleshoot.retryLaunch" : "settings.harness.troubleshoot.start")}</Button>
+			</> : null}
+			{session ? <>
 				<div className="flex flex-wrap items-center gap-2"><span>{session.title}</span><Button size="sm" variant="outline" disabled={busy || state?.stopped} onClick={() => void stop()}>{t(state?.stopped ? "settings.harness.troubleshoot.stopped" : "settings.harness.troubleshoot.stop")}</Button></div>
 				<p className="text-xs text-settings-muted">{t("settings.harness.troubleshoot.sessionLifetime")}</p>
-				<div className="h-[min(600px,65vh)] min-h-80 overflow-hidden rounded border border-border bg-terminal" data-settings-inline-edit=""><TerminalPane session={session} terminalTarget={{ kind: "worker" }} theme={theme} daemonReady fontSize={12} onTerminalStateChange={(status) => { if (status === "exited") update(agentId, { stopped: true }); }} /></div>
-			</>}
+				<div className="h-[min(600px,65vh)] min-h-80 overflow-hidden rounded border border-border bg-terminal" data-settings-inline-edit=""><TerminalPane key={session.id} session={session} terminalTarget={{ kind: "worker" }} theme={theme} daemonReady fontSize={12} onTerminalStateChange={(status) => { if (status === "exited" && useHarnessTroubleshooting.getState().entries[agentId]?.session?.id === session.id) update(agentId, { stopped: true }); }} /></div>
+			</> : null}
 			<Button size="sm" variant="outline" disabled={busy} onClick={() => { if (state?.before) { setCopied(false); update(agentId, { draft: troubleshootingIssueDraft(claim, state.before, state.after, state.verificationFailed) }); } }}>{t(state?.draft === undefined ? "settings.harness.troubleshoot.draft" : "settings.harness.troubleshoot.regenerate")}</Button>
 		</> : null}
 		{state?.draft !== undefined ? <div className="space-y-2"><label className="block space-y-2"><span>{t("settings.harness.troubleshoot.reviewDraft")}</span><textarea className="block min-h-80 w-full rounded border border-border bg-surface p-3 font-mono text-xs" value={state.draft} onChange={(event) => { setCopied(false); update(agentId, { draft: event.target.value }); }} /></label><p className="text-xs text-settings-muted">{t("settings.harness.troubleshoot.draftHelp")}</p><Button size="sm" variant="outline" disabled={busy} onClick={() => void copy(state.draft ?? "")}>{t("settings.harness.troubleshoot.copyDraft")}</Button></div> : null}

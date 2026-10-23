@@ -1,19 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { components } from "../../../../api/schema";
 import { apiClient } from "../../../lib/api-client";
 import { aoBridge } from "../../../lib/bridge";
 import { agentReadiness } from "../../../test/agent-readiness-fixtures";
 import * as troubleshooting from "./harness-troubleshooting";
 import { HarnessTroubleshootingPanel, useHarnessTroubleshooting } from "./HarnessTroubleshootingPanel";
 
-vi.mock("../../TerminalPane", () => ({ TerminalPane: () => <div data-testid="helper-terminal" /> }));
+const terminalCallbacks = vi.hoisted(() => [] as Array<(state: "exited") => void>);
+vi.mock("../../TerminalPane", () => ({ TerminalPane: ({ session, onTerminalStateChange }: { session: { id: string }; onTerminalStateChange: (state: "exited") => void }) => {
+	terminalCallbacks.push(onTerminalStateChange);
+	return <div data-testid="helper-terminal" data-session-id={session.id}><button onClick={() => onTerminalStateChange("exited")}>End helper terminal</button></div>;
+} }));
 vi.mock("../../../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	toWorkspaceSession: (session: { id: string; displayName: string }) => ({ id: session.id, title: session.displayName }),
 }));
 
-beforeEach(() => { useHarnessTroubleshooting.setState({ entries: {} }); });
+beforeEach(() => { useHarnessTroubleshooting.setState({ entries: {} }); terminalCallbacks.length = 0; });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function setup(agents = [agentReadiness("claude-code"), agentReadiness("codex")]) {
@@ -30,9 +35,18 @@ function mockChecks() {
 	return vi.spyOn(troubleshooting, "collectTroubleshootingSnapshot").mockResolvedValue(snapshot);
 }
 
+function mockSessionPost() {
+	// openapi-fetch's generic method has no single argument tuple for mock.calls.
+	// Capture the request through a typed mock rather than inspecting the generic spy.
+	const post = vi.fn<(path: string, options?: { body?: components["schemas"]["SpawnSessionRequest"] }) => Promise<unknown>>()
+		.mockResolvedValue({ data: { session: { id: "helper-1", displayName: "Troubleshoot Codex" } } });
+	vi.spyOn(apiClient, "POST").mockImplementation(post as never);
+	return post;
+}
+
 it("launches a standalone helper with the reviewed evidence and embeds its terminal", async () => {
 	mockChecks();
-	const post = vi.spyOn(apiClient, "POST").mockResolvedValue({ data: { session: { id: "helper-1", displayName: "Troubleshoot Codex" } } } as never);
+	const post = mockSessionPost();
 	setup();
 	expect(post).not.toHaveBeenCalled();
 	await collect();
@@ -80,16 +94,60 @@ it("does not retain a success label after a failed recheck, even when another ac
 
 it("keeps the helper session when the panel is reopened and preserves launch retry identity", async () => {
 	mockChecks();
-	const post = vi.spyOn(apiClient, "POST").mockRejectedValueOnce(new Error("Connection lost")).mockResolvedValueOnce({ data: { session: { id: "helper-1", displayName: "Troubleshoot Codex" } } } as never);
+	const post = mockSessionPost().mockRejectedValueOnce(new Error("Connection lost"));
 	const view = setup();
 	await collect();
 	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
 	await screen.findByRole("alert");
-	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	fireEvent.click(screen.getByRole("button", { name: "Retry helper launch" }));
 	await screen.findByTestId("helper-terminal");
-	expect(post.mock.calls[0][1]?.body?.clientRequestId).toBe(post.mock.calls[1][1]?.body?.clientRequestId);
+	expect(post.mock.calls[0]).toEqual(post.mock.calls[1]);
 	view.unmount();
 	setup();
 	expect(screen.getByTestId("helper-terminal")).toBeInTheDocument();
 	expect(post).toHaveBeenCalledTimes(2);
+});
+
+it("retries the exact pending payload after rechecks and reopening, even if no helper is currently ready", async () => {
+	const checks = mockChecks();
+	const post = mockSessionPost().mockRejectedValueOnce(new Error("Response lost"));
+	const view = setup();
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByRole("alert");
+	expect(screen.getByRole("combobox", { name: "What are you experiencing?" })).toBeDisabled();
+	expect(screen.queryByRole("combobox", { name: "Helper agent" })).not.toBeInTheDocument();
+	const next = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { authentication: "unauthorized" }), "0.14.0", "linux");
+	checks.mockResolvedValueOnce(next);
+	fireEvent.click(screen.getByRole("button", { name: "Verify again" }));
+	await screen.findByText(/Verification is unresolved/);
+	view.unmount();
+	setup([]);
+	fireEvent.click(screen.getByRole("button", { name: "Retry helper launch" }));
+	await screen.findByTestId("helper-terminal");
+	expect(post.mock.calls[1]).toEqual(post.mock.calls[0]);
+	expect(post).toHaveBeenCalledTimes(2);
+});
+
+it.each(["stop", "exit"])("allows a replacement helper with a new request after %s", async (ending) => {
+	mockChecks();
+	const post = mockSessionPost();
+	setup();
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByTestId("helper-terminal");
+	const previousTerminal = terminalCallbacks.at(-1);
+	fireEvent.click(screen.getByRole("button", { name: ending === "stop" ? "Stop helper" : "End helper terminal" }));
+	await screen.findByRole("button", { name: "Helper stopped" });
+	fireEvent.change(screen.getByRole("combobox", { name: "What are you experiencing?" }), { target: { value: "installation" } });
+	post.mockResolvedValueOnce({ data: { session: { id: "helper-2", displayName: "Replacement helper" } } });
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await waitFor(() => expect(screen.getByTestId("helper-terminal")).toHaveAttribute("data-session-id", "helper-2"));
+	const launches = post.mock.calls.filter(([path]) => path === "/api/v1/sessions");
+	expect(launches).toHaveLength(2);
+	expect(launches[1][1]?.body?.clientRequestId).not.toBe(launches[0][1]?.body?.clientRequestId);
+	expect(launches[1][1]?.body?.prompt).toContain("I installed this harness");
+	previousTerminal?.("exited");
+	expect(screen.getByRole("button", { name: "Stop helper" })).toBeEnabled();
+	expect(screen.queryByRole("button", { name: "Troubleshoot with agent" })).not.toBeInTheDocument();
 });
