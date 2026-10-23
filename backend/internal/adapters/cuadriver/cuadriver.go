@@ -40,10 +40,8 @@ var binarySpec = binaryutil.BinarySpec{
 // startTimeout bounds the short-lived launcher commands StartDaemon runs.
 const startTimeout = 15 * time.Second
 
-// Driver is the ports.ComputerUseDriver backed by the installed CLI.
+// Driver is service/computeruse's Driver, backed by the installed CLI.
 type Driver struct{}
-
-var _ ports.ComputerUseDriver = Driver{}
 
 // New returns a Driver.
 func New() Driver { return Driver{} }

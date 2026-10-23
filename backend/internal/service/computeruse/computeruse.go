@@ -127,9 +127,24 @@ func toolNotOffered(tool string) error {
 	return apierr.Forbidden("COMPUTER_USE_TOOL_NOT_OFFERED", fmt.Sprintf("%q is not one of the computer-use tools AO offers: %s.", tool, strings.Join(agentToolNames, ", ")))
 }
 
+// Driver locates and runs the locally installed Cua Driver CLI. Callers build
+// every argument themselves; the adapter only finds the binary and executes
+// it.
+type Driver interface {
+	// Locate returns the cua-driver executable, or
+	// ports.ErrComputerUseDriverNotFound.
+	Locate(ctx context.Context) (string, error)
+	// Run executes binary with args and returns its captured output. A non-zero
+	// exit is returned as err alongside whatever the command printed.
+	Run(ctx context.Context, binary string, args ...string) (stdout, stderr []byte, err error)
+	// StartDaemon starts Cua Driver's background service the way its own docs
+	// prescribe for this platform and returns without waiting for it to exit.
+	StartDaemon(ctx context.Context, binary string) error
+}
+
 // Service runs Cua Driver for the settings page and the computer-use tools.
 type Service struct {
-	driver ports.ComputerUseDriver
+	driver Driver
 	images imageStore
 	goos   string
 
@@ -164,7 +179,7 @@ func (s *Service) computerUseEnabled(ctx context.Context) bool {
 }
 
 // New returns a Service that saves screenshots under dataDir/computer-use.
-func New(driver ports.ComputerUseDriver, dataDir string) *Service {
+func New(driver Driver, dataDir string) *Service {
 	background, stop := context.WithCancel(context.Background())
 	return &Service{
 		driver:      driver,
