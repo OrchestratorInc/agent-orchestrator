@@ -83,6 +83,26 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 	}
 }
 
+func TestDiscoveryExecutableRejectsUnverifiableExtensionlessRedirect(t *testing.T) {
+	for _, invocation := range []string{"@call bridge %*", "& bridge @args", ". 'bridge' @args", "exec bridge \"$@\""} {
+		t.Run(invocation, func(t *testing.T) {
+			root := t.TempDir()
+			// Windows resolves bridge.cmd using PATHEXT; POSIX resolves bridge.
+			bridge := "bridge"
+			if runtime.GOOS == "windows" {
+				bridge += ".cmd"
+				t.Setenv("PATHEXT", ".CMD;.EXE")
+			}
+			writeDiscoveryLauncher(t, root, bridge, "@call autohand %*\n")
+			t.Setenv("PATH", root)
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", invocation+"\n")
+			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify extensionless command") {
+				t.Fatalf("verification = %v, want unverifiable intermediate launcher rejected", err)
+			}
+		})
+	}
+}
+
 func TestDiscoveryExecutableInspectsNestedLaunchers(t *testing.T) {
 	for _, agent := range []string{"grok", "cursor"} {
 		t.Run(agent, func(t *testing.T) {
