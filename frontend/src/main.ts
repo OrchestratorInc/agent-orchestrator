@@ -3547,7 +3547,7 @@ app.whenReady().then(async () => {
 	if (trayController) {
 		const awakeTray = createAwakeTrayMonitor({
 			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
-			request: (url, init) => net.fetch(url, init),
+			request: (url, init) => fetch(url, init),
 			setState: (active) => trayController?.setAwakeState(active),
 		});
 		app.once("will-quit", () => awakeTray.dispose());
