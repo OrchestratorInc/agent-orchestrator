@@ -63,9 +63,11 @@ and CI state) once one exists, and the files in its artifact directory once it
 has written any. Terminated workers are hidden unless `--all`.
 
 `--json` includes per-PR detail (`prs`: url, number, state, ci, review,
-mergeability, source/target branch), each artifact file (`artifactFiles`:
-path, kind, size, updatedAt) with `artifactCount` and `artifactsUpdatedAt`,
-plus `activityState` and `isTerminated`.
+mergeability, source/target branch), the worker's artifact files
+(`artifactCount`, `artifactsUpdatedAt`, and `artifactFiles` with path, kind,
+size, and updatedAt for at most the 10 most recently changed, with
+`artifactFilesTruncated` set when there are more), plus `activityState` and
+`isTerminated`.
 
 Status vocabulary: `working`, `idle`, `needs_input`, `pr_open`, `draft`,
 `ci_failed`, `review_pending`, `changes_requested`, `commented`, `approved`,

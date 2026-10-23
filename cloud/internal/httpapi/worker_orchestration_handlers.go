@@ -142,7 +142,7 @@ func (s *Server) childItems(
 	for _, child := range children {
 		item := toSessionChildResponse(child, prFacts[child.ID], pullRequests[child.ID])
 		if artifactFiles != nil {
-			item.setArtifactFiles(artifactFiles[child.ID])
+			item.setChildArtifactFiles(artifactFiles[child.ID])
 		}
 		items = append(items, item)
 	}

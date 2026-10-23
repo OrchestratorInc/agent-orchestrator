@@ -1,6 +1,14 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestArtifactSummaryNamesUpToTwoFiles(t *testing.T) {
 	files := func(paths ...string) []artifactFile {
@@ -12,16 +20,57 @@ func TestArtifactSummaryNamesUpToTwoFiles(t *testing.T) {
 	}
 	cases := []struct {
 		files []artifactFile
+		count int
 		want  string
 	}{
-		{nil, "-"},
-		{files("report.html"), "report.html"},
-		{files("report.html", "notes.md"), "report.html, notes.md"},
-		{files("a.md", "b.md", "c.md", "d.md"), "a.md, b.md (+2)"},
+		{nil, 0, "-"},
+		{files("report.html"), 1, "report.html"},
+		{files("report.html", "notes.md"), 2, "report.html, notes.md"},
+		{files("a.md", "b.md", "c.md", "d.md"), 4, "a.md, b.md (+2)"},
+		// A listing names at most ten files; the count says how many there are.
+		{files("a.md", "b.md", "c.md"), 200, "a.md, b.md (+198)"},
+		// An older control plane sends no count.
+		{files("a.md", "b.md", "c.md"), 0, "a.md, b.md (+1)"},
 	}
 	for _, tc := range cases {
-		if got := artifactSummary(tc.files); got != tc.want {
-			t.Errorf("artifactSummary(%d files) = %q, want %q", len(tc.files), got, tc.want)
+		if got := artifactSummary(tc.files, tc.count); got != tc.want {
+			t.Errorf("artifactSummary(%d files, count %d) = %q, want %q", len(tc.files), tc.count, got, tc.want)
 		}
+	}
+}
+
+// A full page of workers, each listing the most files the control plane sends
+// with the longest path a bucket key allows, decodes within the client's
+// response limit.
+func TestListChildrenDecodesAFullPageOfArtifactFiles(t *testing.T) {
+	longest := strings.Repeat("p", 1024-len("orgs/00000000-0000-0000-0000-000000000000/sessions/00000000-0000-0000-0000-000000000000/")-len("/000.md")) + "/"
+	count := 200
+	page := struct {
+		Items []session `json:"items"`
+	}{}
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	for index := range 100 {
+		child := session{ID: fmt.Sprintf("child-%03d", index), Kind: "worker", Status: "working", ArtifactCount: &count, ArtifactsUpdatedAt: &now, ArtifactFilesTruncated: true}
+		for file := range 10 {
+			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: fmt.Sprintf("%s%03d.md", longest, file), Kind: "markdown", Size: 25 << 20, UpdatedAt: now})
+		}
+		page.Items = append(page.Items, child)
+	}
+	body, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > maxResponseBody {
+		t.Fatalf("test page is %d bytes, over the %d limit it checks", len(body), maxResponseBody)
+	}
+	c := reviewTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	})
+	items, err := listChildren(context.Background(), c, false)
+	if err != nil {
+		t.Fatalf("listChildren: %v", err)
+	}
+	if len(items) != 100 || *items[99].ArtifactCount != 200 || !items[99].ArtifactFilesTruncated || len(items[99].ArtifactFiles) != 10 {
+		t.Fatalf("decoded %d children, last = %+v", len(items), items[len(items)-1].ArtifactCount)
 	}
 }

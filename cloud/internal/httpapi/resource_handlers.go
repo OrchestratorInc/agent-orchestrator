@@ -224,6 +224,46 @@ type sessionPRFactsResponse struct {
 type sessionChildResponse struct {
 	sessionResponse
 	PRs []sessionPRFactsResponse `json:"prs"`
+	// ArtifactFiles names at most maxChildArtifactFiles of the child's
+	// committed artifact files, the most recently changed first, so a page of
+	// children fits the ao CLI's response limit; artifactCount has them all.
+	ArtifactFiles []childArtifactFileResponse `json:"artifactFiles,omitempty"`
+	// ArtifactFilesTruncated is set when the child has more files than listed.
+	ArtifactFilesTruncated bool `json:"artifactFilesTruncated,omitempty"`
+}
+
+// maxChildArtifactFiles bounds the artifact files listed per child. With the
+// worker children page of 100 and the longest storable path, a page stays near
+// 1 MiB, inside the ao CLI's 2 MiB response limit.
+const maxChildArtifactFiles = 10
+
+// childArtifactFileResponse is one artifact file in a worker children listing.
+type childArtifactFileResponse struct {
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// setChildArtifactFiles sets the child's artifact count and newest commit
+// time, and lists its most recently changed files up to maxChildArtifactFiles.
+func (r *sessionChildResponse) setChildArtifactFiles(files []domain.SessionArtifact) {
+	r.setArtifactFiles(files)
+	r.sessionResponse.ArtifactFiles = nil
+	newest := slices.Clone(files)
+	slices.SortStableFunc(newest, func(a, b domain.SessionArtifact) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+	if len(newest) > maxChildArtifactFiles {
+		newest = newest[:maxChildArtifactFiles]
+		r.ArtifactFilesTruncated = true
+	}
+	r.ArtifactFiles = make([]childArtifactFileResponse, 0, len(newest))
+	for _, file := range newest {
+		r.ArtifactFiles = append(r.ArtifactFiles, childArtifactFileResponse{
+			Path: file.Path, Kind: file.Kind, Size: file.Size, UpdatedAt: file.UpdatedAt.UTC(),
+		})
+	}
 }
 
 // setArtifactFiles sets the session's committed artifact files, their count,
