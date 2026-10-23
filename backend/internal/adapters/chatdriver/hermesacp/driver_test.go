@@ -3,7 +3,10 @@ package hermesacp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -14,6 +17,14 @@ import (
 )
 
 func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
+	// The launch env resolves the persona's HERMES_HOME; keep the test off the
+	// machine's real Hermes configuration.
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"),
+		[]byte("agent:\n  system_prompt: Native persona text\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name string
 		cfg  acpdriver.LaunchConfig
@@ -24,6 +35,14 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 		{
 			name: "system prompt rides in the env overlay",
 			cfg:  acpdriver.LaunchConfig{SystemPrompt: "  Follow AO rules.  "},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Native persona text\n\nFollow AO rules."},
+		},
+		{
+			name: "without a native persona the variable carries AO's instructions alone",
+			cfg: acpdriver.LaunchConfig{
+				SystemPrompt: "Follow AO rules.", Env: map[string]string{"HERMES_HOME": t.TempDir()},
+			},
 			want: []string{"acp"},
 			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Follow AO rules."},
 		},
@@ -69,8 +88,20 @@ func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 	}
 }
 
-func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
-	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
+// The chat launch path respects the same process-environment bound as the TUI
+// path: a persona plus instructions that do not fit fail the launch instead of
+// truncating silently.
+func TestConfigureRejectsPromptExceedingEnvBound(t *testing.T) {
+	t.Setenv("HERMES_HOME", t.TempDir())
+	_, _, err := configure(context.Background(), acpdriver.LaunchConfig{
+		SystemPrompt: strings.Repeat("a", 200*1024),
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment limit") {
+		t.Fatalf("configure error = %v, want the environment-limit refusal", err)
+	}
+}
+
+func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Fatalf("empty settings options = %#v, want nil", got)
 	}
 	if got := sessionOptions(ports.ChatTurnSettings{Model: "  "}); got != nil {

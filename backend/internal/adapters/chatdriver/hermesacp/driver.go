@@ -13,6 +13,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -50,12 +51,23 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 // switched through the ACP config options the session response advertises — and
 // no system-prompt flag, so standing instructions ride in
 // HERMES_EPHEMERAL_SYSTEM_PROMPT, which Hermes injects at API-call time without
-// persisting it into the transcript.
+// persisting it into the transcript. Hermes reads that variable first and only
+// falls back to its native persona configuration when it is empty, so the
+// value folds the native persona in ahead of AO's instructions exactly like
+// the TUI launch path does.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
 	env := map[string]string(nil)
 	if prompt := strings.TrimSpace(cfg.SystemPrompt); prompt != "" {
-		env = map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": prompt}
+		persona, err := hermes.NativeEphemeralOverlay(cfg.Env)
+		if err != nil {
+			return nil, nil, err
+		}
+		combined, err := hermes.ComposeEphemeralPrompt(persona, prompt)
+		if err != nil {
+			return nil, nil, err
+		}
+		env = map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": combined}
 	}
 	return args, env, nil
 }

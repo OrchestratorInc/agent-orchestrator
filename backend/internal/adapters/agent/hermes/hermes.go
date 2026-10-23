@@ -1114,19 +1114,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 		instructions = string(b)
 	}
-	combined := original + instructions
-	if original != "" && instructions != "" {
-		combined = original + "\n\n" + instructions
+	if _, err := ComposeEphemeralPrompt(original, instructions); err != nil {
+		return err
 	}
-	// Linux MAX_ARG_STRLEN counts NAME= and the trailing NUL for each entry;
-	// Windows caps a variable at 32,767 characters. The AO original-prompt
-	// entry carries a second copy of the native text.
-	maxEnvString := 128 * 1024
-	if runtime.GOOS == "windows" {
-		maxEnvString = 32767
-	}
-	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString ||
-		len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString {
+	// The AO original-prompt entry carries a second copy of the native text.
+	if len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString() {
 		return fmt.Errorf("hermes: standing instructions exceed process environment limit")
 	}
 	if instructions != "" {
@@ -1307,6 +1299,63 @@ func referencesEnv(value any) bool {
 		return slices.ContainsFunc(v, referencesEnv)
 	}
 	return false
+}
+
+// maxEnvString bounds one NAME=value environment entry: Linux MAX_ARG_STRLEN
+// counts NAME= and the trailing NUL, and Windows caps a variable at 32,767
+// characters.
+func maxEnvString() int {
+	if runtime.GOOS == "windows" {
+		return 32767
+	}
+	return 128 * 1024
+}
+
+// ComposeEphemeralPrompt folds AO's standing instructions into the native
+// persona text, separated the way the TUI path renders both, and rejects the
+// result when the HERMES_EPHEMERAL_SYSTEM_PROMPT entry would exceed the
+// process environment limit both launch paths share. Hermes reads that
+// variable first and only falls back to the native configuration when it is
+// empty, so composing it from AO's instructions alone would replace the
+// user's persona.
+func ComposeEphemeralPrompt(original, instructions string) (string, error) {
+	combined := original + instructions
+	if original != "" && instructions != "" {
+		combined = original + "\n\n" + instructions
+	}
+	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString() {
+		return "", fmt.Errorf("hermes: standing instructions exceed process environment limit")
+	}
+	return combined, nil
+}
+
+// NativeEphemeralOverlay reads the persona Hermes would apply natively from
+// <HERMES_HOME>/config.yaml, the same overlay the TUI path renders
+// (nativeOverlay). It returns "" when the native configuration carries no
+// persona.
+func NativeEphemeralOverlay(env map[string]string) (string, error) {
+	home, err := ResolveHome(env)
+	if err != nil {
+		return "", err
+	}
+	b, readErr := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return "", readErr
+	}
+	var config map[string]any
+	if len(b) > 0 {
+		if err := unmarshalYAML11(b, &config); err != nil {
+			return "", fmt.Errorf("hermes: invalid native configuration: %w", err)
+		}
+	}
+	overlay, envRef, untyped := nativeOverlay(config)
+	if envRef {
+		return "", fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
+	}
+	if untyped {
+		return "", fmt.Errorf("hermes: native instruction configuration has a non-text value (YAML 1.1 reads yes, on, ~ or numbers as non-strings); quote it in config.yaml")
+	}
+	return overlay, nil
 }
 
 // nativeOverlay rebuilds the overlay Hermes renders (personality.py): the
