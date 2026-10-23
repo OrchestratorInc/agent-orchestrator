@@ -1087,7 +1087,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
-	it("keeps a mid-turn steer in order among the work instead of hoisting it with the prompt", () => {
+	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {
 		const turnId = "turn-with-steer";
 		const at = "2026-08-11T10:01:00Z";
 		const snapshot: ConversationSnapshot = {
@@ -1127,15 +1127,15 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Read the transcript in document order: only the prompt sits above Working, and
-		// the steer stays after the work it interrupted and before the reply to it.
+		// Read the transcript in document order: the work before the steer settles into
+		// its own Worked row, and the steer opens a fresh Working row for the reply.
 		const text = screen.getByRole("log").textContent ?? "";
 		const positions = [
 			"Run the unit tests",
-			"Working for",
+			"Worked for",
 			"Starting with the test suite.",
-			"Ran command",
 			"Only the unit ones, please",
+			"Working for",
 			"Switching to the unit tests.",
 		].map((fragment) => text.indexOf(fragment));
 		expect(positions.every((position) => position >= 0)).toBe(true);

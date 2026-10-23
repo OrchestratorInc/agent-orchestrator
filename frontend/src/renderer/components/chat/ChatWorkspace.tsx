@@ -5095,7 +5095,64 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups;
+	return groups.flatMap(splitAtSteers);
+}
+
+/**
+ * A steer is the user speaking, so it opens a new visual turn even though the
+ * provider keeps running the same one: everything before it settles into its own
+ * "Worked for" row, and the steer starts a fresh Working row and reply. Only the
+ * last segment carries the live state, outcome, diff and plan of the real turn.
+ */
+function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
+	const starts = group.items.flatMap((item, index) =>
+		index > 0 && item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId ? [index] : [],
+	);
+	if (starts.length === 0) return [group];
+	const bounds = [0, ...starts, group.items.length];
+	const segmentStarts = bounds.slice(0, -1).map((from, index) =>
+		index === 0 ? Date.parse(group.liveStartedAt ?? "") : Date.parse(group.items[from]!.createdAt),
+	);
+	const lastIndex = starts.length;
+	return starts.concat(group.items.length).map((_end, index) => {
+		const items = group.items.slice(bounds[index], bounds[index + 1]);
+		const first = items[0]!;
+		const key = index === 0 ? group.key : `${group.key}:steer:${first.id}`;
+		const startedAt = segmentStarts[index]!;
+		if (index === lastIndex) {
+			const priorMs = Number.isFinite(startedAt) ? startedAt - segmentStarts[0]! : 0;
+			return {
+				...group,
+				key,
+				anchor: first.sequence,
+				items,
+				liveStartedAt: Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : group.liveStartedAt,
+				outcome: group.outcome
+					? {
+						...group.outcome,
+						durationMs:
+							group.outcome.durationMs === undefined || !Number.isFinite(priorMs)
+								? group.outcome.durationMs
+								: Math.max(1_000, group.outcome.durationMs - priorMs),
+					}
+					: undefined,
+			};
+		}
+		const endedAt = segmentStarts[index + 1]!;
+		return {
+			key,
+			turnId: group.turnId,
+			anchor: first.sequence,
+			items,
+			outcome: {
+				state: "completed" as const,
+				durationMs:
+					Number.isFinite(startedAt) && Number.isFinite(endedAt)
+						? Math.max(1_000, endedAt - startedAt)
+						: undefined,
+			},
+		};
+	});
 }
 
 function isHumanRun(item: ConversationItem | undefined): boolean {
