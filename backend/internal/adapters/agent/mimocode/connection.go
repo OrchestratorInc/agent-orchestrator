@@ -18,6 +18,14 @@ var verifyConnection = authprobe.VerifyConnection
 // selection. Unknown defaults, plugins and unsupported wire protocols remain
 // configured: verifying an arbitrary stored provider would be misleading.
 func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAuthStatus {
+	step := domain.NewAgentAuthDiagnostic("provider_validation", "provider_inconclusive")
+	defer func() {
+		// AuthStatus records the timeout/cancellation diagnostic if this whole
+		// verification budget expires. Otherwise every exit carries its outcome.
+		if ctx.Err() == nil {
+			ports.RecordAuthDiagnostic(ctx, step)
+		}
+	}()
 	var cfg struct {
 		Model    string            `json:"model"`
 		Plugin   []json.RawMessage `json:"plugin"`
@@ -33,7 +41,11 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 		} `json:"provider"`
 	}
 	raw, err := runAuthProbe(ctx, binary, "debug", "config")
-	if err != nil || json.Unmarshal(raw, &cfg) != nil || len(cfg.Plugin) > 0 {
+	if err != nil || json.Unmarshal(raw, &cfg) != nil {
+		return ports.AgentAuthStatusConfigured
+	}
+	if len(cfg.Plugin) > 0 {
+		step = domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
 		return ports.AgentAuthStatusConfigured
 	}
 	paths, err := runAuthProbe(ctx, binary, "debug", "paths")
@@ -82,7 +94,7 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 	}
 	provider, modelID, ok := strings.Cut(model, "/")
 	if !ok || !available[model] {
-		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("model_selection", "model_selection_unresolved"))
+		step = domain.NewAgentAuthDiagnostic("model_selection", "model_selection_unresolved")
 		return ports.AgentAuthStatusConfigured
 	}
 	var baseURL, envKey string
@@ -98,14 +110,14 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 			baseURL = "https://open.bigmodel.cn/api/coding/paas/v4"
 		}
 	default:
-		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported"))
+		step = domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
 		return ports.AgentAuthStatusConfigured
 	}
 	options := cfg.Provider[provider]
 	// Custom model definitions can change the model id, URL or SDK. Do not
 	// approximate their effective route or custom authentication headers.
 	if len(options.Models) > 0 || len(options.Options.Headers) > 0 || len(options.Env) > 0 || (options.NPM != "" && options.NPM != "@ai-sdk/openai-compatible") {
-		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported"))
+		step = domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
 		return ports.AgentAuthStatusConfigured
 	}
 	if options.Options.BaseURL != "" {
@@ -146,6 +158,5 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 	identity.Provider = provider
 	ports.RecordAuthEvidence(ctx, identity)
 	status, step := verifyConnection(ctx, authprobe.Connection{Provider: provider, BaseURL: baseURL, Model: modelID, APIKey: key}, nil)
-	ports.RecordAuthDiagnostic(ctx, step)
 	return status
 }

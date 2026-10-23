@@ -656,6 +656,7 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
+		expect(within(page).getByText("Connected")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(within(page).getByText("Connected · token renews on next run")).toBeInTheDocument();
 		expect(within(page).queryByText("Credentials not verified")).toBeNull();
@@ -1619,6 +1620,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
 		await userEvent.click(within(row).getByRole("tab", { name: "Health" }));
+		expect(within(row).getByText("Connection not checked")).toBeInTheDocument();
 		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 

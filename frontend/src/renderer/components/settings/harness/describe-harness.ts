@@ -114,8 +114,11 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
 	const unverifiedProvider = readinessAgent?.authentication.diagnostics?.some((step) => step.method === "provider_validation"
-		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code));
-	const authSummary = authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : "settings.harness.installed")
+		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
+		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
+	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
+		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : "settings.harness.installed")
 		: authStatus === "authorized" ? t("settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
@@ -146,7 +149,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	return {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
-		authPlan, authState, authStatus, authSummary, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
+		authPlan, authState, authStatus, authSummary, renewsOnRun, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
 		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
 	};
 }

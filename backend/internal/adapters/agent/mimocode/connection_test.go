@@ -3,6 +3,7 @@ package mimocode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -79,13 +80,29 @@ func TestAuthStatusVerifiesSelectedMiMoConnection(t *testing.T) {
 }
 
 func TestMiMoDoesNotVerifyAmbiguousOrUnsupportedConfig(t *testing.T) {
-	for _, cfg := range []string{`{"model":"other/model"}`, `{"plugin":["external-plugin"]}`, `{broken`, `{}`} {
-		t.Run(cfg, func(t *testing.T) {
+	for _, tc := range []struct{ name, cfg, failedCommand, wantCode string }{
+		{"unresolved model", `{"model":"other/model"}`, "", "model_selection_unresolved"},
+		{"plugin", `{"plugin":["external-plugin"]}`, "", "provider_unsupported"},
+		{"malformed config", `{broken`, "", "provider_inconclusive"},
+		{"no model or state", `{}`, "", "provider_inconclusive"},
+		{"config command failure", `{}`, "debug config", "provider_inconclusive"},
+		{"paths command failure", `{"model":"zai/model"}`, "debug paths", "provider_inconclusive"},
+		{"models command failure", `{"model":"zai/model"}`, "models", "provider_inconclusive"},
+		{"selected key missing", `{"model":"zai/model"}`, "", "provider_inconclusive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ZHIPU_API_KEY", "")
 			oldRun, oldVerify := runAuthProbe, verifyConnection
 			t.Cleanup(func() { runAuthProbe, verifyConnection = oldRun, oldVerify })
 			runAuthProbe = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if strings.Join(args, " ") == tc.failedCommand {
+					return nil, errors.New("command failed")
+				}
 				if strings.Join(args, " ") == "debug config" {
-					return []byte(cfg), nil
+					return []byte(tc.cfg), nil
+				}
+				if strings.Join(args, " ") == "models" {
+					return []byte("zai/model"), nil
 				}
 				return []byte(""), nil
 			}
@@ -93,8 +110,12 @@ func TestMiMoDoesNotVerifyAmbiguousOrUnsupportedConfig(t *testing.T) {
 				t.Fatal("must not verify a guessed route")
 				return "", domain.AgentAuthDiagnostic{}
 			}
-			if got := verifySelectedConnection(t.Context(), "mimo"); got != ports.AgentAuthStatusConfigured {
+			ctx, evidence := ports.WithAuthEvidence(t.Context())
+			if got := verifySelectedConnection(ctx, "mimo"); got != ports.AgentAuthStatusConfigured {
 				t.Fatalf("status=%s", got)
+			}
+			if steps := evidence.Diagnostics(); len(steps) != 1 || steps[0].Code != tc.wantCode {
+				t.Fatalf("diagnostics=%+v, want %s", steps, tc.wantCode)
 			}
 		})
 	}
