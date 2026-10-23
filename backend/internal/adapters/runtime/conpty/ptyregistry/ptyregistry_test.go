@@ -458,3 +458,71 @@ func TestSetRunFilePathEmptyClearsOverride(t *testing.T) {
 		t.Fatalf("expected default HOME-based registry at %s: %v", regPath, err)
 	}
 }
+
+// Supervision is tri-state. Entries written before the field existed omit it
+// and must read back as unknown rather than as a known direct child; known
+// true and known false must both survive reads and registry rewrites.
+func TestSupervisedFlagPreservesUnknownTrueAndFalse(t *testing.T) {
+	path := setupHome(t)
+	withFakePidAlive(t, func(int) bool { return true })
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `[{"sessionId":"old","ptyHostPid":11,"pipePath":"127.0.0.1:1","launchId":"l1","registeredAt":"2026-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	yes, no := true, false
+	for _, e := range []Entry{
+		{SessionID: "supervised", PtyHostPID: 12, PipePath: "127.0.0.1:2", LaunchID: "l2", Supervised: &yes, RegisteredAt: nowRFC3339()},
+		{SessionID: "direct", PtyHostPID: 13, PipePath: "127.0.0.1:3", LaunchID: "l3", Supervised: &no, RegisteredAt: nowRFC3339()},
+	} {
+		// Each Register rewrites every entry, including the legacy one.
+		if err := Register(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]string{}
+	for _, e := range got {
+		switch {
+		case e.Supervised == nil:
+			modes[e.SessionID] = "unknown"
+		case *e.Supervised:
+			modes[e.SessionID] = "supervised"
+		default:
+			modes[e.SessionID] = "direct"
+		}
+	}
+	if len(modes) != 3 || modes["old"] != "unknown" || modes["supervised"] != "supervised" || modes["direct"] != "direct" {
+		t.Fatalf("supervision after rewrites = %v", modes)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range stored {
+		value, present := e["supervised"]
+		switch e["sessionId"] {
+		case "old":
+			if present {
+				t.Fatalf("rewrite invented supervision for a legacy entry: %v", e)
+			}
+		case "supervised":
+			if value != true {
+				t.Fatalf("supervised entry stored %v", e)
+			}
+		case "direct":
+			if !present || value != false {
+				t.Fatalf("known direct child must store explicit false: %v", e)
+			}
+		}
+	}
+}

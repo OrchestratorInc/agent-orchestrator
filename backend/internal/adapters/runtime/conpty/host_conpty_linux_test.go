@@ -25,6 +25,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "pty-host" {
 		os.Exit(RunHost(os.Args[2:], os.Stdout))
 	}
+	if len(os.Args) > 2 && os.Args[1] == "agent-process" && os.Args[2] == "supervise" {
+		os.Exit(runTestSupervisor(os.Args[3:]))
+	}
 	os.Exit(m.Run())
 }
 
