@@ -38,6 +38,7 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		},
 		Configure:        configure,
 		SessionMode:      sessionMode,
+		SessionOptions:   sessionOptions,
 		PermissionPolicy: permissionPolicy,
 		VersionProbe:     probe,
 	}, log)
@@ -89,6 +90,20 @@ const (
 	hermesModeAcceptEdits = "accept_edits"
 	hermesModeDontAsk     = "dont_ask"
 )
+
+// sessionOptions selects the composer's model like every sibling native ACP
+// binding. Hermes advertises provider-prefixed ids (auto:anthropic/claude-…,
+// openrouter:anthropic/claude-…) while its configuration names the bare model,
+// so the shared legacy model resolve matches the requested value against each
+// advertised id's provider-prefixed suffix (acp/config_options.go
+// resolveProviderPrefixedChoice); the launch carries no model flag because
+// models are session-owned.
+func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
+	if model := strings.TrimSpace(settings.Model); model != "" {
+		return []acpdriver.SessionOption{{ID: "model", Value: model}}
+	}
+	return nil
+}
 
 // permissionPolicy resolves permission requests that have an exact AO policy
 // mapping before the generic client parks them for a human. Only bypass

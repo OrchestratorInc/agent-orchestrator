@@ -69,6 +69,19 @@ func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 	}
 }
 
+func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
+	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
+		t.Fatalf("empty settings options = %#v, want nil", got)
+	}
+	if got := sessionOptions(ports.ChatTurnSettings{Model: "  "}); got != nil {
+		t.Fatalf("blank model options = %#v, want nil", got)
+	}
+	want := []acpdriver.SessionOption{{ID: "model", Value: "anthropic/claude-opus-4.6"}}
+	if got := sessionOptions(ports.ChatTurnSettings{Model: "  anthropic/claude-opus-4.6  "}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
 func allowOption(id string, kind acpsdk.PermissionOptionKind) acpsdk.PermissionOption {
 	optionID := acpsdk.PermissionOptionId(id)
 	return acpsdk.PermissionOption{OptionId: optionID, Name: id, Kind: kind}
