@@ -4,6 +4,7 @@ import * as Device from "expo-device";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
+import { cachedInstallId } from "../installId";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -76,8 +77,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		host: MOBILE_POSTHOG_HOST,
 		enableSessionReplay: false,
 		captureAppLifecycleEvents: false,
-		// Anonymous ingestion rate until a paired desktop's identity is adopted
-		// (adoptDesktopIdentity); only then does identify() create a profile.
+		// Keep the phone's own anonymous SDK identity across desktop pairings.
 		personProfiles: "identified_only",
 	});
 
@@ -96,6 +96,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	loadRateState();
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
+		phoneInstallId: cachedInstallId,
 		allow: allowEvent,
 		// Nothing is captured until loadMobileOptOut() has read the saved preference.
 		awaitPreference: true,

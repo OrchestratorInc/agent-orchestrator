@@ -51,8 +51,9 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
 - The Orchestrator.inc version on every daemon event
-- A random `install_id` on every desktop and daemon event, a
-  `paired_install_id` on a phone's events while its desktop identity is known,
+- A random `install_id` on every desktop and daemon event, the phone's own
+  stored `install_id` when available, and a `paired_install_id` on phone events
+  while its desktop identity is known,
   and one-way hashes of project or session identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
   opening a notification, or using a core action
@@ -162,7 +163,8 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   a personal account. Desktop and daemon events include it as `install_id`, even
   when the PostHog `distinct_id` changes at sign-in, sign-out, or reset. It
   persists across those transitions and process restarts. A paired phone uses
-  its own identity and includes the desktop identifier as `paired_install_id`
+  its own `distinct_id` and installation identifier, and includes the desktop
+  identifier as `paired_install_id`
   only after its authenticated identity request succeeds. Pairing changes clear
   the old value until the new desktop responds. These properties allow events
   from the same installation to be associated across accounts and with the
@@ -184,8 +186,9 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   GitHub username is first resolved (one update that sets the username and
   clears build details older versions stored on the profile) and when you sign
   in to AO Cloud (your email, AO Cloud user ID, and GitHub username). After an
-  AO Cloud sign-in, desktop, daemon, and a paired phone's events are linked to
-  that profile. Project-add events still carry the GitHub owner segment
+  AO Cloud sign-in, desktop and daemon events are linked to that profile. A
+  paired phone retains its own identity and reports the Cloud ID as an event
+  property. Project-add events still carry the GitHub owner segment
   described above, so this is not an anonymity guarantee.
 
 Separately from remote telemetry, the daemon can keep a local copy of
@@ -199,8 +202,9 @@ When you sign in to AO Cloud, the desktop app calls PostHog `identify` with your
 AO Cloud user ID as the identity and sets three person properties:
 `email`, `ao_cloud_user_id`, and `github_login`. The initial anonymous
 `distinct_id` is merged into that identity on first sign-in. Later signed-in
-daemon events use the AO Cloud user ID directly, and a paired phone identifies
-only that ID. Account fields on events are the user ID and, once resolved, the
+daemon events use the AO Cloud user ID directly. A paired phone keeps its own
+identity and carries the Cloud user ID only as an event property. Account fields
+on events are the user ID and, once resolved, the
 GitHub username (as `ao_cloud_user_id` and `github_actor`). The installation
 properties described above are also event fields. The email is a person
 property only. It comes from the AO Cloud
