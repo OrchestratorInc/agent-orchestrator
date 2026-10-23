@@ -42,6 +42,14 @@ describe("KeyboardShortcutsDialog", () => {
 		expect(screen.getByText("Jump to session 1–9")).toBeInTheDocument();
 	});
 
+	it("lists both Windows/Linux new-session chords so either is discoverable", () => {
+		render(<KeyboardShortcutsDialog open onOpenChange={vi.fn()} isMac={false} />);
+
+		const row = screen.getByText("New session").closest("li");
+		expect(within(row as HTMLElement).getByLabelText("Alt+N")).toBeInTheDocument();
+		expect(within(row as HTMLElement).getByLabelText("Ctrl+Shift+N")).toBeInTheDocument();
+	});
+
 	it("uses macOS symbols in Apple's modifier order and spells them out for screen readers", () => {
 		render(<KeyboardShortcutsDialog open onOpenChange={vi.fn()} isMac />);
 
