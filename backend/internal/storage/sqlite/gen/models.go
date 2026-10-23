@@ -453,6 +453,7 @@ type ModelUsageEvent struct {
 	EstimatedCostNanos    sql.NullInt64
 	PricingVersion        string
 	BillingProviderSource sql.NullString
+	ServiceTier           sql.NullString
 }
 
 type Notification struct {

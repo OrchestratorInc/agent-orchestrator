@@ -348,16 +348,23 @@ type cacheWriteSplit struct {
 	oneH  *int64
 }
 
-// Estimate prices one normalized usage event against this immutable snapshot.
+// Estimate prices one normalized usage event against this immutable snapshot,
+// at the rates of the service tier that served it.
 func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	providerID := CanonicalProviderID(event.BillingProviderID)
 	modelID := CanonicalModelID(providerID, event.ModelID)
+	tier, knownTier := catalogServiceTier(event.ProviderID, event.ServiceTier)
+	if tier != "" {
+		modelID = TierModelID(modelID, tier)
+	}
 	var rates exactRates
 	version := ""
 	if s != nil {
 		if provider, ok := s.providers[providerID]; ok {
 			version = provider.version
-			rates = provider.models[modelID]
+			if knownTier {
+				rates = provider.models[modelID]
+			}
 		}
 	}
 	for _, value := range []*int64{
@@ -388,6 +395,39 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 		estimate.TotalNanos = &total
 	}
 	return estimate, nil
+}
+
+// catalogServiceTier maps the tier word a provider reported for one event to
+// the catalog row that prices it. "" is the model's standard row, which is also
+// what an unreported tier means. known is false for a word AO has no rule for:
+// it prices as unknown, because billing a premium tier at standard rates would
+// record a wrong number as fact.
+func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tier string, known bool) {
+	if reported == "" {
+		return "", true
+	}
+	switch providerID {
+	case domain.UsageProviderOpenAI:
+		switch reported {
+		case "default", "standard":
+			return "", true
+		// Codex's own config spells priority processing "fast".
+		case "priority", "fast":
+			return ServiceTierPriority, true
+		case "flex":
+			return ServiceTierFlex, true
+		case "ultrafast":
+			return ServiceTierUltrafast, true
+		}
+	case domain.UsageProviderAnthropic:
+		switch reported {
+		case "standard":
+			return "", true
+		case "fast":
+			return ServiceTierFast, true
+		}
+	}
+	return "", false
 }
 
 // estimateInput charges every non-cache-read input token.
