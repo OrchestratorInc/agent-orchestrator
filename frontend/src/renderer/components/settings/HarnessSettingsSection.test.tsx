@@ -1836,36 +1836,39 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
 	}, 15_000);
 
-	it("completes MiMo Code login when the key is configured locally", async () => {
-		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unauthorized" })] };
-		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+	it.each([
+		["mimo-code", "MiMo Code", "auth-mimo"],
+		["freebuff", "Freebuff", "auth-freebuff"],
+	])("completes %s login when credentials are configured locally", async (agentId, label, handleId) => {
+		const initial = { agents: [agentReadiness(agentId, label, { authentication: "unauthorized" })] };
+		const configured = { agents: [agentReadiness(agentId, label, { authentication: "configured" })] };
 		let probed = false;
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
-			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId, action: "login", launchMode: "terminal", available: true }] } } as never;
 			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 			return { data: undefined } as never;
 		});
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/{agent}/auth") return { data: {
-				agentId: "mimo-code", action: "login", terminal: { handleId: "auth-mimo", projectId: null, sessionId: null, workingDir: "/tmp", title: "MiMo Code login", createdAt: "2026-09-29T00:00:00Z" },
+				agentId, action: "login", terminal: { handleId, projectId: null, sessionId: null, workingDir: "/tmp", title: `${label} login`, createdAt: "2026-09-29T00:00:00Z" },
 			} } as never;
 			if (path === "/api/v1/agents/{agent}/probe") {
 				probed = true;
-				return { data: { agent: { id: "mimo-code", authStatus: "configured" }, installed: true } } as never;
+				return { data: { agent: { id: agentId, authStatus: "configured" }, installed: true } } as never;
 			}
 			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? configured : initial } as never;
 			return { data: undefined } as never;
 		});
 		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		renderSection();
-		const row = await findAgentRow("mimo-code");
+		const row = await findAgentRow(agentId);
 		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
 		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
 
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
-			params: { path: { handleId: "auth-mimo" } },
+			params: { path: { handleId } },
 		}));
 		expect(await within(row).findByText("Connected")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();

@@ -2,3 +2,6 @@
 backend/internal/httpd/apispec/openapi.yaml text eol=lf
 frontend/src/api/schema.ts text eol=lf
 frontend/src/renderer/routeTree.gen.ts text eol=lf
+
+# Preserve native terminal row boundaries in the captured fixture.
+backend/internal/adapters/agent/freebuff/testdata/pending-text-attachment.ansi.txt text eol=lf

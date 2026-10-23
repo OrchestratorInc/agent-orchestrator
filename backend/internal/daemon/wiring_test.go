@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/freebuff"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
@@ -242,6 +243,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
 		{domain.HarnessMemcode, "memcode"},
+		{domain.HarnessFreebuff, "freebuff"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -743,7 +745,8 @@ func TestWiring_SessionMessengerRejectsTerminatedSession(t *testing.T) {
 }
 
 type captureMessenger struct {
-	msgs []capturedMessage
+	msgs   []capturedMessage
+	target ports.AgentMessenger
 }
 
 type capturedMessage struct {
@@ -751,8 +754,11 @@ type capturedMessage struct {
 	msg string
 }
 
-func (c *captureMessenger) Send(_ context.Context, id domain.SessionID, msg string) error {
+func (c *captureMessenger) Send(ctx context.Context, id domain.SessionID, msg string) error {
 	c.msgs = append(c.msgs, capturedMessage{id: id, msg: msg})
+	if c.target != nil {
+		return c.target.Send(ctx, id, msg)
+	}
 	return nil
 }
 
@@ -815,6 +821,71 @@ func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 	}
 	if messenger.msgs[0].id != rec.ID {
 		t.Fatalf("nudge sent to %q, want %q", messenger.msgs[0].id, rec.ID)
+	}
+}
+
+func TestWiring_FreebuffLifecycleNudgeUsesOneNativePaste(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}, AutoInjectCI: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	agents := cachedBinaryAgents{domain.HarnessFreebuff: freebuff.New()}
+	raw := &captureMessenger{}
+	routed := newModeAwareMessenger()
+	semantic := &captureMessenger{target: routed}
+	stack := startLifecycle(ctx, t.TempDir(), store, tmux.New(tmux.Options{}), semantic, nil, nil, agents, log)
+	t.Cleanup(stack.Stop)
+	t.Cleanup(cancel)
+	mgr := sessionmanager.New(sessionmanager.Deps{
+		Store: store, Messenger: raw, Agents: agents, Logger: log,
+		NewLaunchID: func() string { return "lifecycle-nudge" },
+	})
+	routed.Bind(sessionLifecycleMessenger{mgr})
+	stack.LCM.SetSessionInputLease(mgr)
+
+	const tail = "START_6553\nA harmless failing check with 中文 and 🚀.\nEND_6553"
+	obs := ports.SCMObservation{
+		Fetched: true,
+		PR:      ports.SCMPRObservation{URL: "https://github.com/o/r/pull/1", Number: 1, HeadSHA: "c1"},
+		CI: ports.SCMCIObservation{
+			Summary: string(domain.CIFailing), HeadSHA: "c1",
+			FailedChecks: []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckFailed), LogTail: tail}},
+		},
+	}
+	if err := store.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: obs.PR.URL, SessionID: rec.ID, Number: 1, HeadSHA: "c1", UpdatedAt: time.Now(),
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := stack.LCM.ApplySCMObservation(ctx, rec.ID, obs); err != nil {
+		t.Fatalf("ApplySCMObservation: %v", err)
+	}
+	if len(semantic.msgs) != 1 || len(raw.msgs) != 1 {
+		t.Fatalf("semantic/raw deliveries = %d/%d, want one each", len(semantic.msgs), len(raw.msgs))
+	}
+	if semantic.msgs[0].id != rec.ID || raw.msgs[0].id != rec.ID {
+		t.Fatal("lifecycle nudge reached another session")
+	}
+	if !strings.Contains(semantic.msgs[0].msg, tail) || strings.ContainsRune(semantic.msgs[0].msg, '\x1b') {
+		t.Fatal("outer lifecycle guard changed the multiline semantic nudge")
+	}
+	want := "\x1b[200~" + domain.WrapSessionDelivery("session-send:lifecycle-nudge", semantic.msgs[0].msg) + "\x1b[201~"
+	if raw.msgs[0].msg != want || strings.Count(raw.msgs[0].msg, "\x1b") != 2 {
+		t.Fatal("lifecycle nudge did not retain its complete semantic body inside exactly one native paste")
 	}
 }
 

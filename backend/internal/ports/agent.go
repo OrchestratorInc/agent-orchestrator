@@ -518,12 +518,41 @@ type AgentAfterStartPromptBuilder interface {
 	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
+// AgentTerminalMessageEncoder encodes semantic messages for native terminal
+// input. AO calls it once at the guarded write boundary for nonempty TUI
+// messages, retaining the unencoded body for metadata and acceptance checks.
+// The encoder must reject unsafe input without returning its contents in errors.
+type AgentTerminalMessageEncoder interface {
+	EncodeTerminalMessage(message string) (string, error)
+}
+
 // AgentAfterStartCommand selects native TUI state before AO delivers the first
 // task. Confirmation must come from the current terminal output, so an ignored
 // command cannot silently launch a task with the wrong model.
 type AgentAfterStartCommand interface {
 	AfterStartCommand(ctx context.Context, cfg LaunchConfig) (string, error)
 	AfterStartCommandApplied(cfg LaunchConfig, output string) bool
+}
+
+// AfterStartSubmitState reports whether a first turn typed after startup has
+// been durably accepted by the native agent or remains in its current input.
+type AfterStartSubmitState string
+
+const (
+	// AfterStartSubmitted requires native acceptance evidence for this turn.
+	AfterStartSubmitted AfterStartSubmitState = "submitted"
+	// AfterStartDraftPending proves the typed turn remains in the current
+	// composer, where a bounded Enter-only retry can submit that draft.
+	AfterStartDraftPending AfterStartSubmitState = "draft"
+	// AfterStartSubmitUnknown proves neither. AO never retries Enter here.
+	AfterStartSubmitUnknown AfterStartSubmitState = "unknown"
+)
+
+// AgentAfterStartSubmitConfirmer confirms native acceptance of an after-start
+// turn. A readiness-only screen cannot establish that the first turn arrived.
+type AgentAfterStartSubmitConfirmer interface {
+	PrimesAfterStartSubmit() bool
+	AfterStartSubmitState(context.Context, LaunchConfig, string, string) (AfterStartSubmitState, error)
 }
 
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
@@ -788,6 +817,8 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
+	// Env is the effective native launch environment, including project overrides.
+	Env             map[string]string
 	Config          AgentConfig
 	DataDir         string
 	Kind            domain.SessionKind

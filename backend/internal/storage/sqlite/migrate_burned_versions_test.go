@@ -217,6 +217,7 @@ var shippedMigrations = map[int64]string{
 	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
 	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
 	20261020131539535: "20261020131539535_provider_switching.sql",
+	20261020181743263: "20261020181743263_allow_freebuff_harness.sql",
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
