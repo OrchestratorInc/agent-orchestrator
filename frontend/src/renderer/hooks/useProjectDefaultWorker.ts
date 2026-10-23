@@ -22,7 +22,8 @@ export function useProjectWorkerDefaults(projectId: string) {
 		},
 	});
 	return {
-		loaded: query.data !== undefined,
+		// A failed lookup is settled too; unrelated automation edits must remain usable.
+		loaded: query.status !== "pending",
 		harness: query.data?.config?.worker?.agent || query.data?.agent || "",
 		agentConfig: query.data?.config?.agentConfig,
 		worker: query.data?.config?.worker,

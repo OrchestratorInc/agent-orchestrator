@@ -60,4 +60,15 @@ describe("useProjectDefaultWorker", () => {
 		expect(result.current.worker?.agentConfig).toEqual({ model: "capable", effort: "low", mode: "" });
 	});
 
+	it.each(["Unknown project", "Daemon unavailable"])("settles when project defaults return %s", async (message) => {
+		get.mockResolvedValue({ error: { error: { message } } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(() => useProjectWorkerDefaults("missing"), { wrapper: wrapper(client) });
+		expect(result.current.loaded).toBe(false);
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		expect(result.current.harness).toBe("");
+		expect(result.current.agentConfig).toBeUndefined();
+		expect(result.current.worker).toBeUndefined();
+	});
+
 });
