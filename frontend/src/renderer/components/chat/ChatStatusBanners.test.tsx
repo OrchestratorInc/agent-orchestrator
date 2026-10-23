@@ -174,7 +174,6 @@ describe("ReauthBanner", () => {
 			accountsMock.session = { claude: "team" };
 			accountsMock.accounts = [team];
 			accountsMock.actions.signInAgain.mockResolvedValue({ operationId: "op1", provider: "claude" });
-			// The sign-in is still open when the test unmounts, which cancels it.
 			accountsMock.actions.cancelLogin.mockResolvedValue(undefined);
 			render(<ReauthBanner sessionId="s1" hostId="host-a" createMux={() => ({}) as never} account={failed} harness="claude-code" />);
 			expect(accountsMock.hostOf).toHaveBeenCalledWith("session", "host-a");
@@ -184,6 +183,9 @@ describe("ReauthBanner", () => {
 			await userEvent.click(screen.getByRole("button", { name: "Sign in again" }));
 			// The sign-in terminal runs on the host too, so it attaches through the host's mux.
 			expect(screen.getByTestId("login-dialog")).toHaveAttribute("data-remote-terminal", "true");
+			// Close it here: an open sign-in is cancelled on unmount, after the mocks are reset.
+			await userEvent.click(screen.getByRole("button", { name: "close sign-in" }));
+			expect(accountsMock.actions.cancelLogin).toHaveBeenCalledWith("op1");
 		});
 
 		it("offers another account to a chat on the computer's own login too", () => {
