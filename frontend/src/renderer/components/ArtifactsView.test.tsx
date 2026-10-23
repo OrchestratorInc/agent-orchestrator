@@ -119,6 +119,7 @@ describe("ArtifactsView", () => {
 		});
 		vi.stubGlobal("ResizeObserver", class {
 			observe() {}
+			unobserve() {}
 			disconnect() {}
 		});
 		mocks.workspaces = withArtifacts;
