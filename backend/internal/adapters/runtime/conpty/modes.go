@@ -96,6 +96,14 @@ func newModeTracker() *modeTracker {
 	return &modeTracker{}
 }
 
+// BracketedPaste reports whether the program has turned on bracketed paste
+// (?2004), so pasted text can be marked as one paste.
+func (m *modeTracker) BracketedPaste() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.st.bracketedPaste
+}
+
 // Write feeds raw PTY output through the tracker. It never blocks and never
 // fails; the return values exist so it satisfies io.Writer.
 func (m *modeTracker) Write(p []byte) (int, error) {

@@ -516,7 +516,10 @@ func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.R
 	return sess != nil && strings.TrimSpace(sess.launchID) != "", nil
 }
 
-// SendMessage chunks message and writes it to the pty-host followed by Enter.
+// SendMessage writes message to the pty-host followed by Enter. Hosts that
+// support it receive the text as one paste; typing a long prompt as keystroke
+// frames lets a slow reader see it as several pastes that can be dropped or
+// reordered (#6931). Older hosts keep the keystroke path.
 func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error {
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)
 	if err != nil {
@@ -524,6 +527,11 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	}
 	if sess == nil {
 		return fmt.Errorf("conpty: session %q not found", handle.ID)
+	}
+	if message != "" {
+		if version, err := r.resolveHostProtocol(ctx, sess); err == nil && version >= conPTYPasteInputProtocolVersion {
+			return clientSendPaste(sess.addr, message)
+		}
 	}
 	return clientSendMessage(sess.addr, message)
 }

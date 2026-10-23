@@ -948,6 +948,19 @@ func TestHookConversationFactsCorrelatesAcceptedReportDelivery(t *testing.T) {
 	}
 }
 
+// Issue #6931: a report pasted behind the user's unsent draft still arrived
+// whole, so the hook must correlate it instead of letting AO type it again.
+func TestHookConversationFactsCorrelatesReportBehindDraft(t *testing.T) {
+	prompt := "is that a reasonable amount of work for " +
+		domain.WrapReportDelivery("report-batch:abc123", "Reports since your previous turn:")
+	payload := []byte(`{"prompt":` + mustJSONString(t, prompt) + `,"prompt_id":"native-turn"}`)
+	got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+	if got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination ||
+		got.CoordinationID != "report-batch:abc123" {
+		t.Fatalf("conversation facts = %+v", got)
+	}
+}
+
 func TestHooks_SubagentStopCannotReportMainConversationCheckpoint(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")

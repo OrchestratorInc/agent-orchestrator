@@ -49,15 +49,14 @@ WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
 -- name: ClaimPendingReportsByBatch :many
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = sqlc.arg(claim_token),
-    claimed_at = sqlc.arg(claimed_at), delivery_attempts = delivery_attempts + 1,
-    last_error = ''
+    claimed_at = sqlc.arg(claimed_at), delivery_attempts = delivery_attempts + 1
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
   AND delivery_batch_id = sqlc.arg(delivery_batch_id)
 RETURNING *;
 
 -- name: AcknowledgeReportBatch :many
 UPDATE reports
-SET delivery_state = 'acknowledged', acknowledged_at = sqlc.arg(acknowledged_at)
+SET delivery_state = 'acknowledged', acknowledged_at = sqlc.arg(acknowledged_at), last_error = ''
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
 RETURNING *;

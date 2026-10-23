@@ -51,7 +51,7 @@ func (q *Queries) AcknowledgeReport(ctx context.Context, arg AcknowledgeReportPa
 
 const acknowledgeReportBatch = `-- name: AcknowledgeReportBatch :many
 UPDATE reports
-SET delivery_state = 'acknowledged', acknowledged_at = ?1
+SET delivery_state = 'acknowledged', acknowledged_at = ?1, last_error = ''
 WHERE project_id = ?2 AND delivery_state = 'claimed'
   AND claim_token = ?3
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
@@ -124,8 +124,7 @@ func (q *Queries) AssignPendingReportsToBatch(ctx context.Context, arg AssignPen
 const claimPendingReportsByBatch = `-- name: ClaimPendingReportsByBatch :many
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = ?1,
-    claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
-    last_error = ''
+    claimed_at = ?2, delivery_attempts = delivery_attempts + 1
 WHERE project_id = ?3 AND delivery_state = 'pending'
   AND delivery_batch_id = ?4
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id

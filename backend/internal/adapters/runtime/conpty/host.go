@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -516,6 +517,19 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			}
 		}
 
+	case MsgPasteInput:
+		if _, alive := h.cfg.PTY.ExitCode(); !alive {
+			for i, part := range pasteWrites(string(payload), h.modes.BracketedPaste()) {
+				if i > 0 {
+					time.Sleep(ptyInputChunkDelay)
+				}
+				if n, err := h.cfg.PTY.Write([]byte(part)); err != nil {
+					fmt.Fprintf(os.Stderr, "pty-host [%s]: paste: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(part), err)
+					break
+				}
+			}
+		}
+
 	case MsgResize:
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			var rp ResizePayload
@@ -580,4 +594,28 @@ func statusFrame(alive bool, pid int, exitCode *int) []byte {
 	b, _ := json.Marshal(sp)
 	frame, _ := EncodeMessage(MsgStatusRes, b) // b is small JSON, never overflows uint32
 	return frame
+}
+
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
+)
+
+// pasteWrites splits prompt text into the writes the host makes, with the
+// same 512-rune pacing clients used for keystrokes. When the program has
+// turned on bracketed paste, the first and last writes carry the paste
+// markers, so the program receives one paste however its reads are split.
+// The markers are removed from the text itself so it cannot end the paste
+// early.
+func pasteWrites(text string, bracketed bool) []string {
+	runes := []rune(strings.NewReplacer(pasteStart, "", pasteEnd, "").Replace(text))
+	var writes []string
+	for i := 0; i < len(runes); i += ptyInputChunkRunes {
+		writes = append(writes, string(runes[i:min(i+ptyInputChunkRunes, len(runes))]))
+	}
+	if bracketed && len(writes) > 0 {
+		writes[0] = pasteStart + writes[0]
+		writes[len(writes)-1] += pasteEnd
+	}
+	return writes
 }

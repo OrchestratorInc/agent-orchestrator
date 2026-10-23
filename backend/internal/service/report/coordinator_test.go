@@ -211,6 +211,7 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 			}
 			s.reports[i].DeliveryBatchID = batchID
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
+			s.reports[i].DeliveryAttempts++
 			claimed = append(claimed, s.reports[i])
 		}
 	}
