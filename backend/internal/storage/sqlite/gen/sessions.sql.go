@@ -79,6 +79,16 @@ func (q *Queries) ClaimChatControllerGeneration(ctx context.Context, arg ClaimCh
 	return result.RowsAffected()
 }
 
+const clearSessionBranchNaming = `-- name: ClearSessionBranchNaming :exec
+UPDATE sessions SET branch_naming = FALSE WHERE branch_naming
+`
+
+// No branch naming survives a daemon restart.
+func (q *Queries) ClearSessionBranchNaming(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearSessionBranchNaming)
+	return err
+}
+
 const commitClientRequestSession = `-- name: CommitClientRequestSession :execrows
 UPDATE sessions SET client_request_committed = 1 WHERE id = ? AND client_request_id <> ''
 `
@@ -213,7 +223,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -284,6 +294,8 @@ type GetSessionRow struct {
 	ProvisionError                   string
 	ProvisionSteps                   string
 	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -366,6 +378,8 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.ProvisionError,
 		&i.ProvisionSteps,
 		&i.BranchState,
+		&i.BranchNaming,
+		&i.TemporaryBranch,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
@@ -399,7 +413,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -470,6 +484,8 @@ type GetSessionByAutomationRunIDRow struct {
 	ProvisionError                   string
 	ProvisionSteps                   string
 	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -552,6 +568,8 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.ProvisionError,
 		&i.ProvisionSteps,
 		&i.BranchState,
+		&i.BranchNaming,
+		&i.TemporaryBranch,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
@@ -748,7 +766,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -819,6 +837,8 @@ type ListAllSessionsRow struct {
 	ProvisionError                   string
 	ProvisionSteps                   string
 	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -907,6 +927,8 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.ProvisionError,
 			&i.ProvisionSteps,
 			&i.BranchState,
+			&i.BranchNaming,
+			&i.TemporaryBranch,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
@@ -983,7 +1005,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
@@ -1054,6 +1076,8 @@ type ListSessionsByProjectRow struct {
 	ProvisionError                   string
 	ProvisionSteps                   string
 	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
@@ -1142,6 +1166,8 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.ProvisionError,
 			&i.ProvisionSteps,
 			&i.BranchState,
+			&i.BranchNaming,
+			&i.TemporaryBranch,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
@@ -1697,6 +1723,22 @@ func (q *Queries) SetSessionAutoReview(ctx context.Context, arg SetSessionAutoRe
 	return result.RowsAffected()
 }
 
+const setSessionBranchNaming = `-- name: SetSessionBranchNaming :exec
+UPDATE sessions SET branch_naming = ?1
+WHERE id = ?2 AND branch_naming <> ?1
+`
+
+type SetSessionBranchNamingParams struct {
+	BranchNaming bool
+	ID           domain.SessionID
+}
+
+// Narrow: whether a task's generated branch name is still on the way.
+func (q *Queries) SetSessionBranchNaming(ctx context.Context, arg SetSessionBranchNamingParams) error {
+	_, err := q.db.ExecContext(ctx, setSessionBranchNaming, arg.BranchNaming, arg.ID)
+	return err
+}
+
 const setSessionBranchState = `-- name: SetSessionBranchState :execrows
 UPDATE sessions SET
     branch_state = ?1
@@ -1930,25 +1972,30 @@ func (q *Queries) SetSessionRuntimeReleased(ctx context.Context, arg SetSessionR
 const setSessionTaskBranch = `-- name: SetSessionTaskBranch :execrows
 UPDATE sessions SET
     branch = ?1,
-    updated_at = ?2
-WHERE id = ?3 AND branch = ?4 AND is_terminated = 0
+    temporary_branch = CASE WHEN ?1 <> ?2
+        THEN ?2 ELSE temporary_branch END,
+    branch_naming = FALSE,
+    updated_at = ?3
+WHERE id = ?4 AND branch = ?2
 `
 
 type SetSessionTaskBranchParams struct {
 	Branch         string
+	ExpectedBranch interface{}
 	UpdatedAt      time.Time
 	ID             domain.SessionID
-	ExpectedBranch string
 }
 
 // Background task naming renames only the branch; the checkout never moves.
-// It applies only while the row still carries the temporary branch it renamed.
+// It applies only while the row still carries the temporary branch it renamed,
+// keeps that branch once replaced so no later write restores it, and ends
+// branch naming.
 func (q *Queries) SetSessionTaskBranch(ctx context.Context, arg SetSessionTaskBranchParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionTaskBranch,
 		arg.Branch,
+		arg.ExpectedBranch,
 		arg.UpdatedAt,
 		arg.ID,
-		arg.ExpectedBranch,
 	)
 	if err != nil {
 		return 0, err
@@ -2076,9 +2123,9 @@ func (q *Queries) UpdateBrowserCapabilityVerifier(ctx context.Context, arg Updat
 
 const updateSession = `-- name: UpdateSession :exec
 UPDATE sessions SET
-    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?, display_name = ?,
+    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
     activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = ?, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
     runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
     latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
     conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
@@ -2099,11 +2146,11 @@ type UpdateSessionParams struct {
 	ReviewerHarness                  domain.ReviewerHarness
 	ReviewerAgentConfig              string
 	AutoReviewEnabled                bool
-	DisplayName                      string
 	ActivityState                    domain.ActivityState
 	ActivityLastAt                   time.Time
 	FirstSignalAt                    sql.NullTime
 	IsTerminated                     bool
+	TemporaryBranch                  string
 	Branch                           string
 	WorkspacePath                    string
 	WorkspaceRepoPath                string
@@ -2144,6 +2191,8 @@ type UpdateSessionParams struct {
 	ID                               domain.SessionID
 }
 
+// The title has narrow writers only, and a renamed task's temporary branch is
+// never written back, so a write from an older read cannot undo either.
 func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) error {
 	_, err := q.db.ExecContext(ctx, updateSession,
 		arg.IssueID,
@@ -2152,11 +2201,11 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.ReviewerHarness,
 		arg.ReviewerAgentConfig,
 		arg.AutoReviewEnabled,
-		arg.DisplayName,
 		arg.ActivityState,
 		arg.ActivityLastAt,
 		arg.FirstSignalAt,
 		arg.IsTerminated,
+		arg.TemporaryBranch,
 		arg.Branch,
 		arg.WorkspacePath,
 		arg.WorkspaceRepoPath,

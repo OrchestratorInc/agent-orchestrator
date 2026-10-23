@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendSpawnAttachments, readSpawnAttachments } from "./spawn-attachments";
+import { appendSpawnAttachments, photoPickerAttachment, readSpawnAttachments, sniffImageMimeType, spawnAttachmentPreview } from "./spawn-attachments";
 
 describe("appendSpawnAttachments", () => {
 	it("keeps accepted files and reports files that exceed the per-file limit", () => {
@@ -67,5 +67,54 @@ describe("readSpawnAttachments", () => {
 		]);
 		expect(emptyRead.attachments).toEqual([]);
 		expect(emptyRead.error).toBe("missing.mov is empty.");
+	});
+});
+
+describe("spawnAttachmentPreview", () => {
+	it("keeps the picked file for images and previews only those", async () => {
+		const readData = vi.fn(async () => "YQ==");
+		const result = await readSpawnAttachments([], [
+			{ name: "photo.jpg", mimeType: "image/jpeg", bytes: 3, previewUri: "file:///photo.jpg", readData },
+			{ name: "notes.pdf", mimeType: "application/pdf", bytes: 3, previewUri: "file:///notes.pdf", readData },
+			{ name: "plain.png", mimeType: "image/png", bytes: 3, readData },
+		]);
+
+		expect(result.attachments.map(spawnAttachmentPreview)).toEqual(["file:///photo.jpg", undefined, undefined]);
+	});
+});
+
+// The first bytes of each format, base64-encoded.
+const JPEG = "/9j/4AAQSkZJRgAB";
+const PNG = "iVBORw0KGgoAAAANSUhEUg==";
+const GIF = "R0lGODlhAQABAIAA";
+const WEBP = "UklGRiQAAABXRUJQVlA4IA==";
+const HEIC = "AAAAGGZ0eXBoZWljAAAAAA==";
+
+describe("sniffImageMimeType", () => {
+	it("names the format from the bytes", () => {
+		expect([JPEG, PNG, GIF, WEBP, HEIC].map(sniffImageMimeType)).toEqual(["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"]);
+		expect(sniffImageMimeType("aGVsbG8gd29ybGQ=")).toBeUndefined();
+	});
+});
+
+describe("photoPickerAttachment", () => {
+	it("labels an Android WebP pick exported as JPEG by its bytes and exported size", async () => {
+		// Android's picker compresses non-PNG images to JPEG at quality < 1 but
+		// reports the source's type and size.
+		const asset = { uri: "file:///cache/ImagePicker/a.webp", fileName: "sunset.webp", mimeType: "image/webp", fileSize: 900_000 };
+		const picked = photoPickerAttachment(asset, 0, { size: 1234, base64: async () => JPEG });
+		expect(picked.bytes).toBe(1234);
+
+		const result = await readSpawnAttachments([], [picked]);
+		expect(result.error).toBeUndefined();
+		expect(result.attachments.map(({ mimeType, bytes }) => ({ mimeType, bytes }))).toEqual([{ mimeType: "image/jpeg", bytes: 1234 }]);
+	});
+
+	it("keeps a PNG a PNG, and keeps the declared type when the bytes are unrecognised", async () => {
+		const png = photoPickerAttachment({ uri: "file:///a.png", mimeType: "image/png" }, 0, { size: 10, base64: async () => PNG });
+		const odd = photoPickerAttachment({ uri: "file:///b.jxl", mimeType: "image/jxl" }, 1, { size: 10, base64: async () => "aGVsbG8gd29ybGQ=" });
+		const result = await readSpawnAttachments([], [png, odd]);
+		expect(result.attachments.map((item) => item.mimeType)).toEqual(["image/png", "image/jxl"]);
+		expect(odd.name).toBe("photo-2.jxl");
 	});
 });
