@@ -82,9 +82,7 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 		} finally {
-			await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "ENOENT") throw error;
-			});
+			await unlink(temporary).catch(() => {});
 		}
 	}
 	throw new Error("telemetry install id creation did not settle");
