@@ -318,6 +318,7 @@ function AutomationFormDialog({
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
+	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
 	// Match the daemon's base config plus overrides for a matching worker harness.
 	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
 	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
@@ -328,7 +329,7 @@ function AutomationFormDialog({
 	const displayedEffort = effort || (!model && !mode ? inheritedEffort : "");
 	const previousHarness = useRef<{ automation?: Automation; harness: string } | null>(null);
 	useEffect(() => {
-		if (!open) { previousHarness.current = null; return; }
+		if (!open || awaitingInheritedHarness) { previousHarness.current = null; return; }
 		if (!previousHarness.current || previousHarness.current.automation !== automation) {
 			// Opening an edit hydrates its saved harness in the preceding effect.
 			previousHarness.current = { automation, harness: automation?.harness || selectedHarness };
@@ -338,7 +339,7 @@ function AutomationFormDialog({
 			setModel(""); setMode(""); setEffort(""); setModelValid(true);
 			previousHarness.current.harness = selectedHarness;
 		}
-	}, [open, automation, selectedHarness]);
+	}, [open, automation, selectedHarness, awaitingInheritedHarness]);
 
 	function clearValidationError(field: AutomationField) {
 		setValidationErrors((current) => {
@@ -351,7 +352,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		if (!modelValid) return;
+		if (!modelValid || awaitingInheritedHarness) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -397,7 +398,8 @@ function AutomationFormDialog({
 				displayName: name,
 				prompt,
 				...tuning,
-				...(harnessChanged && selectedHarness ? { harness: selectedHarness } : {}),
+				// A new pin resets omitted backend fields, so persist the complete tuple.
+				...(harnessChanged && selectedHarness ? { harness: selectedHarness, model, mode, effort } : {}),
 				...(scheduleChanged ? { rrule: nextRRule } : {}),
 			});
 		} catch (error) {
@@ -484,7 +486,7 @@ function AutomationFormDialog({
 								}}
 							/>
 							{open ? (
-								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy}>
+								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
@@ -655,7 +657,7 @@ function AutomationFormDialog({
 						<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy || !modelValid}>
+						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>

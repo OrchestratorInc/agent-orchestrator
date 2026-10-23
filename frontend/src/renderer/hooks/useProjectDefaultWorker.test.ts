@@ -53,7 +53,9 @@ describe("useProjectDefaultWorker", () => {
 		} } } });
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const { result } = renderHook(() => useProjectWorkerDefaults("demo"), { wrapper: wrapper(client) });
+		expect(result.current.loaded).toBe(false);
 		await waitFor(() => expect(result.current.harness).toBe("codex"));
+		expect(result.current.loaded).toBe(true);
 		expect(result.current.agentConfig).toEqual({ model: "base-model", effort: "medium" });
 		expect(result.current.worker?.agentConfig).toEqual({ model: "capable", effort: "low", mode: "" });
 	});
