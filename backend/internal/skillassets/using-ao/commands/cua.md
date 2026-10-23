@@ -97,8 +97,12 @@ Tips:
   `max_depth` bound very large trees.
 - Screenshots are saved under AO's data directory, grouped by session, and old
   ones are pruned automatically.
-- Cua Driver's browser tools are turned off because they conflict with
-  `ao browser`. Use `ao browser` for web pages in the AO Browser panel.
+- For web pages, prefer `ao browser`, which drives the AO Browser panel.
+  Drive the user's own browser with these tools only when they ask for it or
+  the task needs its signed-in session, and expect that browser to have to
+  stay in front (see "Background windows do not always render" above). Cua
+  Driver's own browser tools are turned off because they conflict with
+  `ao browser`.
 
 ## Safety
 
