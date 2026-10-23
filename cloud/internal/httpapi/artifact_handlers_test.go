@@ -1086,3 +1086,72 @@ func TestWorkerChildrenListingFitsTheCLIResponseLimit(t *testing.T) {
 		t.Fatal("the most recently changed file is not listed first")
 	}
 }
+
+// writeJSON escapes &, < and > to six bytes each, so a page of paths made of
+// them is the largest encoding the listing can produce.
+func TestWorkerChildrenListingFitsTheCLIResponseLimitWithEscapedPaths(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	const prefix = "orgs/00000000-0000-0000-0000-000000000000/sessions/00000000-0000-0000-0000-000000000000/"
+	escapedPath := func(file int) string {
+		segment := strings.Repeat("&", 255)
+		name := fmt.Sprintf("/%03d.md", file)
+		head := segment + "/" + segment + "/" + segment + "/"
+		return head + strings.Repeat("&", 1024-len(prefix)-len(head)-len(name)) + name
+	}
+	if path := escapedPath(0); len(prefix+path) != 1024 {
+		t.Fatalf("test path key is %d bytes, want the 1024 maximum", len(prefix+path))
+	} else if cleaned, err := domain.CleanArtifactPath(path); err != nil || cleaned != path {
+		t.Fatalf("the escaped test path is not a valid artifact path: %v", err)
+	} else if _, err := artifactstore.Key("00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000000", path); err != nil {
+		t.Fatalf("the escaped test path does not fit a key: %v", err)
+	}
+	rows := newMemoryArtifactRows()
+	children := make([]domain.Session, 0, 100)
+	for index := range 100 {
+		id := fmt.Sprintf("c1c1c1c1-0000-4000-8000-%012d", index)
+		children = append(children, domain.Session{ID: id, OrgID: testOrgID, Kind: "worker", UpdatedAt: now, CreatedAt: now})
+		rows.sessions[id] = testOrgID
+		rows.rows[id] = map[string]domain.SessionArtifact{}
+		for file := range maxChildArtifactFiles {
+			path := escapedPath(file)
+			rows.rows[id][path] = domain.SessionArtifact{Path: path, Name: path, Kind: "markdown", Size: 1, SHA256: strings.Repeat("a", 64), UpdatedAt: now.Add(time.Duration(file) * time.Second)}
+		}
+	}
+	store := &stubStore{
+		listChildren: func(context.Context, string, string, bool, *domain.Cursor, int) ([]domain.Session, bool, error) {
+			return children, false, nil
+		},
+	}
+	server := testServer(store)
+	server.artifacts, _ = artifactstore.New(context.Background(), s3fake.New(t).Config())
+	server.artifactRows = rows
+	server.artifactAccessKey = []byte("key")
+
+	w := httptest.NewRecorder()
+	server.listWorkerChildren(w, workerRequest(t, http.MethodGet, "/worker/children?limit=100", "", "worker:orchestrate"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if size := w.Body.Len(); size > cliMaxResponseBody {
+		t.Fatalf("a full page of children with escaped artifact paths is %d bytes, over the CLI's %d", size, cliMaxResponseBody)
+	}
+	var response struct {
+		Items []struct {
+			ArtifactCount          *int `json:"artifactCount"`
+			ArtifactFilesTruncated bool `json:"artifactFilesTruncated"`
+			ArtifactFiles          []struct {
+				Path string `json:"path"`
+			} `json:"artifactFiles"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	first := response.Items[0]
+	if len(first.ArtifactFiles) == 0 || len(first.ArtifactFiles) >= maxChildArtifactFiles || !first.ArtifactFilesTruncated || *first.ArtifactCount != maxChildArtifactFiles {
+		t.Fatalf("child = %d files listed, truncated %t, count %d; want fewer than %d, truncated, the full count", len(first.ArtifactFiles), first.ArtifactFilesTruncated, *first.ArtifactCount, maxChildArtifactFiles)
+	}
+	if first.ArtifactFiles[0].Path != escapedPath(maxChildArtifactFiles-1) {
+		t.Fatal("the most recently changed file is not listed first")
+	}
+}

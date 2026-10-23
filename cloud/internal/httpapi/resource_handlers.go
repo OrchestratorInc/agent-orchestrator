@@ -232,10 +232,16 @@ type sessionChildResponse struct {
 	ArtifactFilesTruncated bool `json:"artifactFilesTruncated,omitempty"`
 }
 
-// maxChildArtifactFiles bounds the artifact files listed per child. With the
-// worker children page of 100 and the longest storable path, a page stays near
-// 1 MiB, inside the ao CLI's 2 MiB response limit.
-const maxChildArtifactFiles = 10
+// maxChildArtifactFiles and maxChildArtifactFileBytes bound the artifact
+// files listed per child: by count, and by their JSON encoding, which escapes
+// characters such as & to six bytes. With the worker children page of 100, the
+// listed files of a page stay within about 1.6 MiB however their paths are
+// written, inside the ao CLI's 2 MiB response limit. The longest path encodes
+// to well under the byte budget, so a child with files always lists one.
+const (
+	maxChildArtifactFiles     = 10
+	maxChildArtifactFileBytes = 16 << 10
+)
 
 // childArtifactFileResponse is one artifact file in a worker children listing.
 type childArtifactFileResponse struct {
@@ -254,15 +260,21 @@ func (r *sessionChildResponse) setChildArtifactFiles(files []domain.SessionArtif
 	slices.SortStableFunc(newest, func(a, b domain.SessionArtifact) int {
 		return b.UpdatedAt.Compare(a.UpdatedAt)
 	})
-	if len(newest) > maxChildArtifactFiles {
-		newest = newest[:maxChildArtifactFiles]
-		r.ArtifactFilesTruncated = true
-	}
-	r.ArtifactFiles = make([]childArtifactFileResponse, 0, len(newest))
+	r.ArtifactFiles = make([]childArtifactFileResponse, 0, min(len(newest), maxChildArtifactFiles))
+	encoded := 0
 	for _, file := range newest {
-		r.ArtifactFiles = append(r.ArtifactFiles, childArtifactFileResponse{
-			Path: file.Path, Kind: file.Kind, Size: file.Size, UpdatedAt: file.UpdatedAt.UTC(),
-		})
+		entry := childArtifactFileResponse{Path: file.Path, Kind: file.Kind, Size: file.Size, UpdatedAt: file.UpdatedAt.UTC()}
+		// json.Marshal escapes as writeJSON's encoder does; +1 for the comma.
+		size := 1
+		if raw, err := json.Marshal(entry); err == nil {
+			size += len(raw)
+		}
+		if len(r.ArtifactFiles) == maxChildArtifactFiles || (len(r.ArtifactFiles) > 0 && encoded+size > maxChildArtifactFileBytes) {
+			r.ArtifactFilesTruncated = true
+			break
+		}
+		r.ArtifactFiles = append(r.ArtifactFiles, entry)
+		encoded += size
 	}
 }
 
