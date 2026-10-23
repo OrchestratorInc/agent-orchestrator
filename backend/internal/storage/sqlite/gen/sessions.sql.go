@@ -1254,7 +1254,6 @@ func (q *Queries) ListTurnFailureCandidates(ctx context.Context, harness domain.
 const listVersionRefreshChatCandidates = `-- name: ListVersionRefreshChatCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
-    AND kind <> 'orchestrator'
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
     AND activity_last_at <= ?1
@@ -1264,6 +1263,7 @@ WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
 `
 
 // Idle Chat sessions whose current launch still runs a replaced release.
+// Orchestrators are included: a move restarts them right away.
 func (q *Queries) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
 	rows, err := q.db.QueryContext(ctx, listVersionRefreshChatCandidates, idleBefore)
 	if err != nil {

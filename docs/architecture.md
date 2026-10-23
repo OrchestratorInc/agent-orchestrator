@@ -1062,6 +1062,25 @@ commands; no provider or lifecycle policy is implemented in React Native.
 
 For implementation details and security model, consult `docs/adr/0001-lan-listener-for-mobile.md` and the glossary in `CONTEXT.md`.
 
+### Browser-to-daemon boundary
+
+Workspace previews and unrelated loopback web servers are untrusted browser
+clients. API requests and terminal mux upgrades accept only the exact configured
+renderer origins (`app://renderer` in packaged builds; the explicit Vite origin
+in development). Rejected requests stop before handlers or terminal attachment;
+CORS response headers alone do not prevent side effects. Native clients without
+Origin or browser fetch metadata remain unauthenticated on the primary listener.
+The authenticated LAN listener records successful bearer authentication internally
+so paired React Native clients can retain their existing mux Origin. Preview-only
+cookies do not grant terminal or API authority.
+
+A preview virtual host serves only its own confined content. Legacy API preview
+file responses are sandboxed without `allow-same-origin`, including HTML-rendered
+Markdown and SVG documents. Normal isolated previews retain their own scripts and
+assets. The desktop remote proxy checks browser origins before stripping them or
+injecting credentials; only its separately routed preview origins remove the
+host-added legacy sandbox, preserving any application-supplied CSP policies.
+
 ### Request flow
 
 ```mermaid

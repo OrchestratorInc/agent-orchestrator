@@ -1,3 +1,4 @@
+import { mediaCrossOrigin } from "../lib/file-media";
 import { useCallback, useEffect, useId, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
@@ -99,6 +100,7 @@ export function ReadOnlyFileView({
 			return (
 				<div className="grid place-items-center p-3">
 					<img
+						crossOrigin={mediaCrossOrigin(imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl))}
 						alt={detail.path}
 						className="max-h-[70vh] max-w-full object-contain"
 						src={imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
