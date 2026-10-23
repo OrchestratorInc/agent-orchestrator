@@ -25,7 +25,12 @@ import (
 
 const (
 	// ProtocolVersion identifies the daemon-to-Electron browser bridge contract.
-	ProtocolVersion = 2
+	// v3 adds broker-issued ping frames answered by pong; v2 peers (desktop
+	// builds older than the heartbeat) are still accepted and simply not probed.
+	ProtocolVersion = 3
+	// minSupportedProtocolVersion is the oldest hello the broker accepts, so a
+	// freshly built daemon keeps working against a not-yet-upgraded desktop app.
+	minSupportedProtocolVersion = 2
 	// RuntimeTokenStdinEnv tells an app-spawned daemon to read its token once
 	// from the inherited private stdin pipe instead of an environment variable.
 	RuntimeTokenStdinEnv = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
@@ -64,6 +69,21 @@ var ErrUnavailable = errors.New("browser runtime is unavailable")
 // connections. It wraps ErrUnavailable so existing callers retain the
 // unavailable classification while newer callers can offer a retry action.
 var ErrReconnecting = errors.New("browser runtime is reconnecting")
+
+// ErrUnresponsive is the disconnect cause recorded when the runtime stops
+// answering liveness pings.
+var ErrUnresponsive = errors.New("browser runtime is unresponsive")
+
+// livenessConfig tunes the broker heartbeat. A runtime whose desktop process
+// wedged (busy event loop, system sleep, wedged network stack) keeps its
+// socket open but stops answering pings, so the stall check — not the socket
+// state — is what actually detects a dead bridge.
+type livenessConfig struct {
+	interval   time.Duration
+	stallLimit time.Duration
+}
+
+var defaultLiveness = livenessConfig{interval: 5 * time.Second, stallLimit: 15 * time.Second}
 
 // Status describes whether Electron is connected to the browser command broker.
 type Status struct {
@@ -129,6 +149,9 @@ type Broker struct {
 	writeGate         chan struct{}
 	connectionChanged chan struct{}
 	token             string
+	pongAt            time.Time
+
+	liveness livenessConfig
 }
 
 // New creates an empty browser command broker.
@@ -142,7 +165,7 @@ func New(log *slog.Logger, token ...string) *Broker {
 	if len(token) > 0 {
 		runtimeToken = token[0]
 	}
-	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken}
+	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken, liveness: defaultLiveness}
 }
 
 // NewToken returns a per-daemon-launch secret used to authenticate the desktop
@@ -256,11 +279,14 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	// Answer every hello explicitly, so the runtime knows whether it was accepted
 	// instead of guessing from how long the socket stays open (#6466). Older
 	// runtimes ignore both frames.
-	if rejection := helloRejection(scanner.Bytes(), b.token); rejection != nil {
+	helloFrame := scanner.Bytes()
+	if rejection := helloRejection(helloFrame, b.token); rejection != nil {
 		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: rejection})
 		_ = conn.Close()
 		return
 	}
+	var hello wireMessage
+	_ = json.Unmarshal(helloFrame, &hello)
 	_ = conn.SetReadDeadline(time.Time{})
 	// Nothing else can write to conn until it is published below, so hello-ok is
 	// always the first frame the runtime reads.
@@ -275,12 +301,20 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	b.connectedAt = time.Now().UTC()
 	b.signalConnectionChangedLocked()
 	pending := b.takePendingLocked()
+	// A v3 runtime is probed; v2 peers keep their connection but are never pinged.
+	if hello.Version >= ProtocolVersion {
+		b.pongAt = time.Now()
+	}
 	b.mu.Unlock()
 	if old != nil && old != conn {
 		_ = old.Close()
 	}
 	failPending(pending, ErrUnavailable)
 	b.log.Info("browser runtime connected")
+
+	if hello.Version >= ProtocolVersion {
+		go b.runLiveness(ctx, conn)
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -292,12 +326,53 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
 			continue
 		}
+		if msg.Type == "pong" {
+			b.mu.Lock()
+			if b.conn == conn {
+				b.pongAt = time.Now()
+			}
+			b.mu.Unlock()
+			continue
+		}
 		if msg.Type != "result" || msg.RequestID == "" {
 			continue
 		}
 		b.resolve(msg)
 	}
 	b.disconnect(conn, scanner.Err())
+}
+
+// runLiveness probes a protocol v3 runtime until the connection goes away. An
+// unanswered ping does not immediately fail the peer — the stall check is what
+// declares it unresponsive — because a healthy runtime answers pings from its
+// socket read loop regardless of how busy its command pipeline is.
+func (b *Broker) runLiveness(ctx context.Context, conn net.Conn) {
+	ticker := time.NewTicker(b.liveness.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		b.mu.Lock()
+		replaced := b.conn != conn
+		stalled := time.Since(b.pongAt) > b.liveness.stallLimit
+		b.mu.Unlock()
+		if replaced {
+			return
+		}
+		if stalled {
+			b.disconnect(conn, ErrUnresponsive)
+			return
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, time.Second)
+		err := b.write(pingCtx, conn, wireMessage{Type: "ping"})
+		cancel()
+		if err != nil {
+			b.log.Debug("browser runtime ping failed", "err", err)
+		}
+	}
 }
 
 func (b *Broker) write(ctx context.Context, conn net.Conn, msg wireMessage) error {
@@ -370,10 +445,10 @@ func helloRejection(frame []byte, token string) *CommandError {
 	switch {
 	case json.Unmarshal(frame, &hello) != nil || hello.Type != "hello":
 		return &CommandError{Code: "BROWSER_RUNTIME_BAD_HELLO", Message: "first frame was not a hello"}
-	case hello.Version != ProtocolVersion:
+	case hello.Version < minSupportedProtocolVersion || hello.Version > ProtocolVersion:
 		return &CommandError{
 			Code:    "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
-			Message: fmt.Sprintf("daemon speaks browser runtime protocol %d, runtime sent %d", ProtocolVersion, hello.Version),
+			Message: fmt.Sprintf("daemon speaks browser runtime protocol %d-%d, runtime sent %d", minSupportedProtocolVersion, ProtocolVersion, hello.Version),
 		}
 	case !validRuntimeToken(token, hello.Token):
 		return &CommandError{

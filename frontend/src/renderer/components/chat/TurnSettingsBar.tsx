@@ -421,7 +421,7 @@ export function TurnSettingsBar({
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
 			<div className="flex h-7 min-w-0 flex-1 items-center justify-between gap-2">
-				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
+				<div className="flex h-7 min-w-0 flex-1 items-center gap-0.5">
 					{unified && agentSwitch && harness ? (
 						<>
 							{beforePicker}
