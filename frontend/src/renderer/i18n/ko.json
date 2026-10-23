@@ -2838,6 +2838,7 @@
 	"settings.project.workersRequestReviewToggle": "Workers request AO review",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
 	"artifacts.title": "Artifacts",
+	"artifacts.openInSession": "세션에서 열기",
 	"artifacts.recent": "최근 항목",
 	"artifacts.pinned": "고정됨",
 	"artifacts.pin": "아티팩트 고정",
