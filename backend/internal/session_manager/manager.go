@@ -5880,7 +5880,12 @@ func systemPromptFileRequired(harness domain.AgentHarness) bool {
 		domain.HarnessOpenCode,
 		domain.HarnessCopilot,
 		domain.HarnessVibe,
-		domain.HarnessOpenHands:
+		domain.HarnessOpenHands,
+		// Autohand reads the prompt file from its session-start hook (#6752).
+		// Without it it silently falls back to a launch-only channel that
+		// `autohand resume` does not accept, so treat a missing file as fatal
+		// like the other hook-delivered harnesses.
+		domain.HarnessAutohand:
 		return true
 	default:
 		return false

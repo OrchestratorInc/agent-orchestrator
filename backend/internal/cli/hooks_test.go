@@ -637,6 +637,7 @@ func TestHooks_PayloadLaunchIDFallbackWhenEnvUnset(t *testing.T) {
 }
 
 func TestHooks_StopReportsIdle(t *testing.T) {
+
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1894,6 +1895,76 @@ func TestHooks_AgySessionStartInjectsSystemPromptContext(t *testing.T) {
 	}
 	if capture.hits != 0 {
 		t.Errorf("Agy session-start should only inject context, got %d daemon calls", capture.hits)
+	}
+}
+
+// Autohand installs `ao hooks autohand session-start` but had no delivery
+// channel, so a resumed session started with no AO role prompt (#6752).
+//
+// Autohand's native HookResponse is a flat JSON.parse of the hook's stdout, so
+// additionalContext must be top level. Emitting the nested hookSpecificOutput
+// shape that Claude-Code-style harnesses use would be silently ignored.
+func TestHooks_AutohandSessionStartInjectsTopLevelSystemPromptContext(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-8")
+	cfg := setConfigEnv(t)
+	promptDir := filepath.Join(cfg.dataDir, "prompts", "ao-8")
+	if err := os.MkdirAll(promptDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "system.md"), []byte("follow AO standing instructions\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"source":"startup"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "autohand", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		AdditionalContext  string `json:"additionalContext"`
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode Autohand hook output: %v\n%s", err, out)
+	}
+	if got.AdditionalContext != "follow AO standing instructions" {
+		t.Fatalf("top-level additionalContext = %q, want the standing instructions\n%s", got.AdditionalContext, out)
+	}
+	if got.HookSpecificOutput.AdditionalContext != "" {
+		t.Fatalf("hookSpecificOutput must be absent for Autohand, got %q\n%s", got.HookSpecificOutput.AdditionalContext, out)
+	}
+	if got := capturedState(t, capture); got != "active" {
+		t.Errorf("state = %q, want active", got)
+	}
+}
+
+// A session-start hook with no system.md on disk must stay silent rather than
+// emitting an empty context block.
+func TestHooks_AutohandSessionStartWithoutSystemPromptFileStaysSilent(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-9")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"source":"startup"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "autohand", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "additionalContext") {
+		t.Fatalf("expected no additionalContext without system.md, got %s", out)
+	}
+	if got := capturedState(t, capture); got != "active" {
+		t.Errorf("state = %q, want active", got)
 	}
 }
 

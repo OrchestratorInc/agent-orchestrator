@@ -5,7 +5,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+// Autohand delivers standing instructions from its session-start hook, which
+// reads this file. A silent write failure would drop the role prompt instead of
+// degrading to a fallback its CLI honors (#6752).
+func TestSystemPromptFileRequiredCoversHookDeliveredHarnesses(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{
+		domain.HarnessAutohand,
+	} {
+		if !systemPromptFileRequired(harness) {
+			t.Errorf("systemPromptFileRequired(%q) = false, want true", harness)
+		}
+	}
+}
 
 func TestBuildTaskPrompt_IssueContextStaysInTaskPrompt(t *testing.T) {
 	got := buildTaskPrompt(taskPromptConfig{

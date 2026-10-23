@@ -921,9 +921,11 @@ func validLaunchID(value string) string {
 	return value
 }
 
-// openHandsContextHookOutput is OpenHands' hook result shape: it reads
-// additionalContext from the top level and ignores hookSpecificOutput.
-type openHandsContextHookOutput struct {
+// topLevelContextHookOutput is the hook result shape for harnesses that read
+// additionalContext from the top level and ignore hookSpecificOutput: OpenHands
+// (which also ignores SessionStart hook output entirely) and Autohand, whose
+// HookResponse is a flat JSON.parse of stdout.
+type topLevelContextHookOutput struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
@@ -940,7 +942,15 @@ func shouldEmitSessionStartContext(agent, event string) bool {
 		return false
 	}
 	switch agent {
-	case "agy", "command-code", "devin":
+	case "agy", "command-code", "devin",
+		// Autohand installs `ao hooks autohand session-start` already
+		// (autohand/hooks.go), but nothing served it, so the callback ran and
+		// emitted nothing. Its only other channel, `--sys-prompt`, is a launch
+		// flag that `autohand resume` does not accept, so a restored session
+		// ran with no AO role prompt at all. Autohand fires session-start for
+		// startup, resume and clear, so serving it re-arms standing
+		// instructions on the path the issue reports (#6752).
+		string(domain.HarnessAutohand):
 		return true
 	default:
 		return false
@@ -963,8 +973,8 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 		return
 	}
 	var out any
-	if agent == string(domain.HarnessOpenHands) {
-		out = openHandsContextHookOutput{AdditionalContext: prompt}
+	if agent == string(domain.HarnessOpenHands) || agent == string(domain.HarnessAutohand) {
+		out = topLevelContextHookOutput{AdditionalContext: prompt}
 	} else {
 		var start sessionStartHookOutput
 		start.HookSpecificOutput.HookEventName = "SessionStart"
