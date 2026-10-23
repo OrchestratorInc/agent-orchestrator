@@ -90,7 +90,7 @@ function catalogWithInstalled(...installed: string[]) {
 }
 
 const catalog = catalogWithInstalled("claude-code");
-// Login workflows require a confirmed logged-out observation, not "unknown".
+// This fixture exercises the explicit signed-out workflow.
 catalog.agents[0].authentication.state = "unauthorized";
 catalog.agents[0].effectiveReadiness = "not_ready";
 
@@ -767,6 +767,49 @@ describe("HarnessSettingsSection", () => {
 		expect(within(await findAgentRow("cursor")).queryByRole("button", { name: "Log out" })).toBeNull();
 	});
 
+
+ it.each([
+  ["login", "Login"], ["setup", "Set up"],
+ ])("offers and opens native %s for unknown auth without claiming a signed-in state", async (action, label) => {
+  const readiness = readyCatalog();
+  readiness.agents.find(agent => agent.id === "cursor")!.authentication.state = "unknown";
+  mockInstalledOperations("npm", readiness);
+  const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+  vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+   ? { data: { plans: [{ agentId: "cursor", action, launchMode: "terminal", available: true }] } } as never
+   : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+  const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+  vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth"
+   ? { data: { agentId: "cursor", action, terminal: { handleId: "auth-cursor", title: "Native provider chooser", workingDir: "/tmp", createdAt: "2026-10-23T19:00:00Z" } } } as never
+   : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+  renderSection();
+  const page = await findAgentRow("cursor");
+  expect(within(page).getByText("Unknown")).toBeInTheDocument();
+  expect(within(page).queryByText("Connected")).toBeNull();
+  await userEvent.click(await within(page).findByRole("button", { name: label, exact: true }));
+  expect(await within(page).findByText("Native provider chooser")).toBeInTheDocument();
+  expect(within(page).getByTestId("harness-auth-terminal")).toBeInTheDocument();
+  expect(readiness.agents.find(agent => agent.id === "cursor")!.authentication.state).toBe("unknown");
+  expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "cursor" } } });
+ });
+
+ it.each([
+  ["login", false], ["instructions", true],
+ ])("keeps unavailable or instruction-only %s from opening a native action for unknown auth", async (action, available) => {
+  const readiness = readyCatalog();
+  readiness.agents.find(agent => agent.id === "cursor")!.authentication.state = "unknown";
+  mockInstalledOperations("npm", readiness);
+  const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+  vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+   ? { data: { plans: [{ agentId: "cursor", action, launchMode: "terminal", available }] } } as never
+   : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+  renderSection();
+  const page = await findAgentRow("cursor");
+  await within(page).findByRole("tab", { name: "Account" });
+  expect(within(page).queryByRole("button", { name: /^(Login|Set up|Log in again)$/ })).toBeNull();
+  expect(within(page).queryByText("Connected")).toBeNull();
+ });
+
 	it("offers to log in again for a signed-in harness", async () => {
 		mockInstalledOperations("npm");
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
@@ -929,14 +972,15 @@ describe("HarnessSettingsSection", () => {
 		view.unmount();
 	});
 
-	it.each(["unknown", "configured"])("does not force Login before an update for %s auth", async (authentication) => {
+	it.each(["unknown", "configured"])("keeps updates usable alongside optional authentication actions for %s auth", async (authentication) => {
 		const readiness = readyCatalog();
 		readiness.agents[1].authentication.state = authentication;
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		if (authentication === "unknown") expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
+		else expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 		// A configured credential reads as connected; an unknown one claims nothing.
 		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
