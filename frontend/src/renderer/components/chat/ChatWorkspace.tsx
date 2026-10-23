@@ -4318,11 +4318,16 @@ const TurnGroup = memo(function TurnGroup({
 			),
 		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
 	);
-	const copyableMessageId = group.live || group.outcome
-		? [...group.items]
-				.reverse()
-				.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id
-		: undefined;
+	const lastAssistantId = [...group.items]
+		.reverse()
+		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
+	// A running turn offers copy only while its newest item is the reply itself, so the
+	// action does not flash under prose the agent is about to follow with more work.
+	const copyableMessageId = group.outcome
+		? lastAssistantId
+		: group.live && group.items.at(-1)?.id === lastAssistantId
+			? lastAssistantId
+			: undefined;
 	let finalAssistantRunIndex = -1;
 	if (group.outcome) {
 		for (let index = runs.length - 1; index >= 0; index -= 1) {
