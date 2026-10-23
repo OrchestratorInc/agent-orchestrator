@@ -142,7 +142,7 @@ type conversation struct {
 	// onAuthRejected corrects cached auth state when the provider rejects the
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
-	promptResponseFailure func(acpsdk.PromptResponse) error
+	promptResponseFailure func(acpsdk.PromptResponse, string) error
 	// sessionPromptResponseFailure is promptResponseFailure given the session.
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
@@ -156,6 +156,10 @@ type conversation struct {
 	// so a rejected or discarded turn leaves it armed for the next one.
 	preamble      []acpsdk.ContentBlock
 	preambleSpent bool
+	// servedModel reports the model that answered a completed turn; nil when the
+	// binding cannot tell. lastServedModel suppresses repeating the same report.
+	servedModel     func(ctx context.Context, sessionID, selectedModel string) (string, string)
+	lastServedModel string
 
 	contextTokens     int64
 	contextWindow     int64
@@ -751,6 +755,41 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 	c.finishPrompt(turn.id, resp, err)
 }
 
+// reportServedModel tells the client which model actually answered when the
+// binding can see it and it differs from the selection, such as an alias that
+// the installed CLI resolves to an older concrete model. Each distinct
+// (selection, served) pair is reported once rather than on every turn.
+func (c *conversation) reportServedModel(turnID string) {
+	if c.servedModel == nil {
+		return
+	}
+	selected := c.configOptionCurrent("model")
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if selected == "" || sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	served, reason := c.servedModel(ctx, sessionID, selected)
+	if served == "" || served == selected {
+		return
+	}
+	key := selected + "\x00" + served
+	c.mu.Lock()
+	if c.lastServedModel == key {
+		c.mu.Unlock()
+		return
+	}
+	c.lastServedModel = key
+	c.mu.Unlock()
+	c.emit(ports.ChatEvent{
+		Kind: ports.ChatEventModelRerouted, ProviderTurnID: turnID,
+		Reroute: &ports.ChatModelReroute{FromModel: selected, ToModel: served, Reason: reason},
+	})
+}
+
 func (c *conversation) finishPrompt(
 	turnID string,
 	resp acpsdk.PromptResponse,
@@ -799,7 +838,7 @@ func (c *conversation) finishPrompt(
 	} else {
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
-			if failure := c.promptResponseFailure(resp); failure != nil {
+			if failure := c.promptResponseFailure(resp, c.configOptionCurrent("model")); failure != nil {
 				state = domain.TurnStateFailed
 				turnErr = failure
 			}
@@ -840,6 +879,7 @@ func (c *conversation) finishPrompt(
 		// of the earlier rejection. The projector ignores this when no durable
 		// reauthentication demand exists.
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}})
+		c.reportServedModel(turnID)
 	}
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
