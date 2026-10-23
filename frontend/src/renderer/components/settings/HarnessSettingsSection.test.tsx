@@ -768,47 +768,85 @@ describe("HarnessSettingsSection", () => {
 	});
 
 
- it.each([
-  ["login", "Login"], ["setup", "Set up"],
- ])("offers and opens native %s for unknown auth without claiming a signed-in state", async (action, label) => {
-  const readiness = readyCatalog();
-  readiness.agents.find(agent => agent.id === "cursor")!.authentication.state = "unknown";
-  mockInstalledOperations("npm", readiness);
-  const get = vi.mocked(apiClient.GET).getMockImplementation()!;
-  vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
-   ? { data: { plans: [{ agentId: "cursor", action, launchMode: "terminal", available: true }] } } as never
-   : (get as (path: string, options: unknown) => Promise<never>)(path, options));
-  const post = vi.mocked(apiClient.POST).getMockImplementation()!;
-  vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth"
-   ? { data: { agentId: "cursor", action, terminal: { handleId: "auth-cursor", title: "Native provider chooser", workingDir: "/tmp", createdAt: "2026-10-23T19:00:00Z" } } } as never
-   : (post as (path: string, options: unknown) => Promise<never>)(path, options));
-  renderSection();
-  const page = await findAgentRow("cursor");
-  expect(within(page).getByText("Unknown")).toBeInTheDocument();
-  expect(within(page).queryByText("Connected")).toBeNull();
-  await userEvent.click(await within(page).findByRole("button", { name: label, exact: true }));
-  expect(await within(page).findByText("Native provider chooser")).toBeInTheDocument();
-  expect(within(page).getByTestId("harness-auth-terminal")).toBeInTheDocument();
-  expect(readiness.agents.find(agent => agent.id === "cursor")!.authentication.state).toBe("unknown");
-  expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "cursor" } } });
- });
+	it.each([
+		["login", "Login"], ["setup", "Set up"],
+	])("offers and opens native %s for unknown auth without claiming a signed-in state", async (action, label) => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "cursor")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "cursor", action, launchMode: "terminal", available: true },
+			] } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "cursor", action,
+				terminal: {
+					handleId: "auth-cursor", title: "Native provider chooser", workingDir: "/tmp",
+					createdAt: "2026-10-23T19:00:00Z",
+				},
+			} } as never;
+			return (post as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const page = await findAgentRow("cursor");
+		expect(within(page).getByText("Unknown")).toBeInTheDocument();
+		expect(within(page).queryByText("Connected")).toBeNull();
+		await userEvent.click(await within(page).findByRole("button", { name: label, exact: true }));
+		expect(await within(page).findByText("Native provider chooser")).toBeInTheDocument();
+		expect(within(page).getByTestId("harness-auth-terminal")).toBeInTheDocument();
+		expect(readiness.agents.find((agent) => agent.id === "cursor")!.authentication.state).toBe("unknown");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", {
+			params: { path: { agent: "cursor" } },
+		});
+	});
 
- it.each([
-  ["login", false], ["instructions", true],
- ])("keeps unavailable or instruction-only %s from opening a native action for unknown auth", async (action, available) => {
-  const readiness = readyCatalog();
-  readiness.agents.find(agent => agent.id === "cursor")!.authentication.state = "unknown";
-  mockInstalledOperations("npm", readiness);
-  const get = vi.mocked(apiClient.GET).getMockImplementation()!;
-  vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
-   ? { data: { plans: [{ agentId: "cursor", action, launchMode: "terminal", available }] } } as never
-   : (get as (path: string, options: unknown) => Promise<never>)(path, options));
-  renderSection();
-  const page = await findAgentRow("cursor");
-  await within(page).findByRole("tab", { name: "Account" });
-  expect(within(page).queryByRole("button", { name: /^(Login|Set up|Log in again)$/ })).toBeNull();
-  expect(within(page).queryByText("Connected")).toBeNull();
- });
+	it.each([
+		["login", false], ["instructions", true],
+	])("keeps unavailable or instruction-only %s from opening a native action for unknown auth", async (action, available) => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "cursor")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "cursor", action, launchMode: "terminal", available },
+			] } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const page = await findAgentRow("cursor");
+		await within(page).findByRole("tab", { name: "Account" });
+		expect(within(page).queryByRole("button", { name: /^(Login|Set up|Log in again)$/ })).toBeNull();
+		expect(within(page).queryByText("Connected")).toBeNull();
+	});
+
+	it.each([
+		["login", "configured", "Credentials not verified"],
+		["setup", "configured", "Credentials not verified"],
+		["login", "authorized", "Connected"],
+		["setup", "authorized", "Configured"],
+	])("shows %s %s as %s without upgrading auth evidence", async (action, authStatus, label) => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "cursor")!.authentication.state = authStatus;
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "cursor", action, launchMode: "terminal", available: true },
+			] } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const page = await findAgentRow("cursor");
+		expect(await within(page).findByText(label)).toBeInTheDocument();
+		if (authStatus === "configured") expect(within(page).queryByText("Connected")).toBeNull();
+		expect(readiness.agents.find((agent) => agent.id === "cursor")!.authentication.state).toBe(authStatus);
+	});
 
 	it("offers to log in again for a signed-in harness", async () => {
 		mockInstalledOperations("npm");
@@ -981,9 +1019,9 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		if (authentication === "unknown") expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
 		else expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		// A configured credential reads as connected; an unknown one claims nothing.
-		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
-		else expect(within(row).queryByText("Connected")).toBeNull();
+		// Credential presence remains unverified; unknown claims no connection.
+		if (authentication === "configured") expect(within(row).getByText("Credentials not verified")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
 	});
 
 	it.each(["future_status", ""])("keeps an observed version without claiming an update for status %s", async (status) => {
@@ -1441,7 +1479,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code as connected and offers to log in again", async () => {
+	it("shows configured MiMo Code as unverified and offers to log in again", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
@@ -1452,8 +1490,8 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = await findAgentRow("mimo-code");
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
-		expect(within(row).queryByText("Configured")).toBeNull();
+		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 	});
@@ -1648,7 +1686,7 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("unreal-agent");
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
 	});
 
@@ -1911,8 +1949,8 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
-		expect(within(row).queryByText("Configured")).toBeNull();
+		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
