@@ -4,7 +4,7 @@ import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1134,12 +1134,13 @@ function PRSummaryCard({
 		<PullRequestRows
 			branchWork={branchWork}
 			current={current}
+			mergeDetails={pr.state === "open" ? <PullRequestMergeDetails canOpenReviews={canOpenReviews} onOpenReviews={onOpenReviews} pr={pr} statuses={presentation.statusRows ?? []} /> : undefined}
 			stateKey={`${hostId ?? ""}:${sessionId}:${pr.url || pr.number}`}
 			mergeAction={
 				canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="h-control-sm shrink-0 gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-[color-mix(in_oklch,var(--success),var(--foreground)_10%)]"
+						className="h-8 shrink-0 gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-[color-mix(in_oklch,var(--success),var(--foreground)_10%)]"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="none"
@@ -1199,8 +1200,10 @@ function PullRequestRows({
 	pr,
 	reviewers,
 	stateKey,
+	mergeDetails,
 }: {
 	branchWork?: ReactNode;
+	mergeDetails?: ReactNode;
 	reviewers: ReturnType<typeof latestReviewers>;
 	/** Identifies this PR in this session, for remembering its expansion. */
 	stateKey: string;
@@ -1262,8 +1265,7 @@ function PullRequestRows({
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
 						{pr.openedBy ? <PRSummaryMeta className="py-1" externalLink={ProductExternalLink} openedViaLabel={openedViaLabel} pr={{ ...pr, sourceBranch: "", targetBranch: "", changedFiles: 0, additions: 0, deletions: 0 }} /> : null}
-						<PullRequestDetails mergeAction={mergeAction} mergeError={mergeError} pr={pr} range={range} readiness={readiness} readinessTwin={readinessTwin} reviewers={reviewers} showStatus={showStatus} statuses={statuses} />
-						{branchWork}
+						<PullRequestDetails branchWork={branchWork} mergeAction={mergeAction} mergeError={mergeError} pr={pr} range={range} readiness={readiness} readinessTwin={readinessTwin} reviewers={reviewers} showStatus={showStatus} statuses={statuses} mergeDetails={mergeDetails} />
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -1280,6 +1282,7 @@ const prStateIcon: Record<InspectorPullRequest["state"], { icon: LucideIcon; cla
 };
 
 function PullRequestDetails({
+	branchWork,
 	mergeAction,
 	mergeError,
 	pr,
@@ -1289,7 +1292,10 @@ function PullRequestDetails({
 	reviewers,
 	showStatus,
 	statuses,
+	mergeDetails,
 }: {
+	branchWork?: ReactNode;
+	mergeDetails?: ReactNode;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	pr: InspectorPullRequest;
@@ -1302,36 +1308,11 @@ function PullRequestDetails({
 }) {
 	const { t } = useTranslation();
 	const { approvedBy, changesRequestedBy } = reviewers;
-	return (
+	const [detailsOpen, setDetailsOpen] = useState(false);
+	const detailsId = useId();
+	const reduceMotion = useReducedMotion();
+	const reviewerRows = (
 		<>
-			{range ? <InfoRow icon={GitBranch} label={range} title={range} /> : null}
-			{showStatus
-				? statuses
-						.filter((status) => status !== readinessTwin)
-						.map((status) => (
-							<InfoRow
-								href={status.href}
-								icon={prToneIcon[status.tone]}
-								iconClassName={cn(prToneText[status.tone], status.breathe && "animate-status-pulse")}
-								key={status.key}
-								// One short phrase per row; the rest is a tooltip. "Review status" is
-								// only a heading, so the review row shows its outcome instead.
-								label={status.key === "review" && status.detail ? status.detail : status.label}
-								title={status.detail}
-								trailing={status.key === "review" ? pr.reviewDetailsAction : undefined}
-							/>
-						))
-				: null}
-			{showStatus && readiness ? (
-				<InfoRow
-					href={mergeAction ? undefined : readinessTwin?.href}
-					icon={prToneIcon[readiness.tone]}
-					iconClassName={prToneText[readiness.tone]}
-					label={readiness.label}
-					title={readiness.detail}
-					trailing={mergeAction}
-				/>
-			) : null}
 			{approvedBy.length > 0 ? (
 				<InfoRow
 					icon={CircleCheck}
@@ -1348,12 +1329,110 @@ function PullRequestDetails({
 					title={changesRequestedBy.join(", ")}
 				/>
 			) : null}
+		</>
+	);
+	return (
+		<>
+			{range ? <InfoRow icon={GitBranch} label={range} title={range} /> : null}
+			{branchWork}
+			{showStatus && !mergeDetails
+				? statuses
+						.filter((status) => status !== readinessTwin)
+						.map((status) => (
+							<InfoRow
+								href={status.href}
+								icon={prToneIcon[status.tone]}
+								iconClassName={cn(prToneText[status.tone], status.breathe && "animate-status-pulse")}
+								key={status.key}
+								// One short phrase per row; the rest is a tooltip. "Review status" is
+								// only a heading, so the review row shows its outcome instead.
+								label={status.key === "review" && status.detail ? status.detail : status.label}
+								title={status.detail}
+								trailing={status.key === "review" ? pr.reviewDetailsAction : undefined}
+							/>
+						))
+				: null}
+			<AnimatePresence initial={false}>
+				{showStatus && mergeDetails && detailsOpen ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1, y: 0, transitionEnd: { overflow: "visible" } }}
+						aria-label={t("pr.card.statusOverview")}
+						className="min-w-0 origin-bottom"
+						exit={{ height: 0, opacity: 0, y: 8, overflow: "hidden" }}
+						id={detailsId}
+						initial={{ height: 0, opacity: 0, y: 8, overflow: "hidden" }}
+						role="region"
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+					>
+						{mergeDetails}
+						{reviewerRows}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{showStatus && readiness ? (
+				<div className="mt-2 flex min-w-0 flex-col">
+					<InfoRow
+						action={mergeAction ? <div className="flex shrink-0 pl-1.5">{mergeAction}</div> : undefined}
+						ariaControls={mergeDetails && detailsOpen ? detailsId : undefined}
+						expanded={mergeDetails ? detailsOpen : undefined}
+						expandDirection="up"
+						href={mergeDetails || mergeAction ? undefined : readinessTwin?.href}
+						icon={prToneIcon[readiness.tone]}
+						iconClassName={prToneText[readiness.tone]}
+						label={readiness.label}
+						onClick={mergeDetails ? () => setDetailsOpen((open) => !open) : undefined}
+						title={readiness.detail}
+					/>
+				</div>
+			) : null}
+			{!mergeDetails ? reviewerRows : null}
 			{mergeError ? (
 				<p className="mt-1 text-xs leading-normal text-error" role="status">
 					{mergeError}
 				</p>
 			) : null}
 		</>
+	);
+}
+
+function PullRequestMergeDetails({ canOpenReviews, onOpenReviews, pr, statuses }: {
+	canOpenReviews: boolean;
+	onOpenReviews: () => void;
+	pr: SessionPRSummary;
+	statuses: InspectorPullRequest["card"]["primary"][];
+}) {
+	const { t } = useTranslation();
+	const conflict = pr.mergeability.state === "conflicting";
+	const conflictsKnown = conflict || pr.mergeability.state === "mergeable" || pr.mergeability.state === "unstable";
+	const conflictStatus: InspectorPullRequest["card"]["primary"] = {
+		key: "merge",
+		links: [],
+		label: t(conflict ? "pr.card.mergeConflict" : conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown"),
+		tone: conflict ? "error" : conflictsKnown ? "success" : "passive",
+	};
+	const cells = [conflictStatus, ...statuses.filter((status) => status.key === "ci" || status.key === "review")];
+	return (
+		<div aria-label={t("pr.card.statusOverview")} className="flex min-w-0 flex-col" role="group">
+			{cells.map((status) => {
+				const Icon = prToneIcon[status.tone];
+				const label = status.key === "review"
+					? pr.review.decision === "review_required" ? t("pr.card.reviewRequired") : status.detail || status.label
+					: status.key === "ci" && pr.ci.state === "unknown" && status.breathe ? t("pr.card.checksUnknown") : status.label;
+				const opensReview = status.key === "review" && canOpenReviews && pr.review.decision !== "none";
+				return (
+					<InfoRow
+						ariaLabel={opensReview ? t("pr.review.viewDetails") : undefined}
+						href={status.href}
+						icon={Icon}
+						iconClassName={cn(prToneText[status.tone], status.breathe && "animate-status-pulse")}
+						key={status.key}
+						label={label}
+						onClick={opensReview ? onOpenReviews : undefined}
+						title={status.detail}
+					/>
+				);
+			})}
+		</div>
 	);
 }
 

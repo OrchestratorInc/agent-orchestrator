@@ -21,6 +21,7 @@ export function InfoRow({
 	ariaControls,
 	ariaLabel,
 	expanded,
+	expandDirection = "down",
 	href,
 	icon: Icon,
 	iconClassName,
@@ -37,6 +38,7 @@ export function InfoRow({
 	ariaControls?: string;
 	ariaLabel?: string;
 	expanded?: boolean;
+	expandDirection?: "up" | "down";
 	href?: string;
 	icon: LucideIcon;
 	/** Overrides the icon's muted colour, e.g. for a status tone. */
@@ -66,7 +68,7 @@ export function InfoRow({
 					className={cn(
 						"size-icon-sm shrink-0 text-passive",
 						expanded !== undefined && "transition-transform motion-reduce:transition-none",
-						expanded && "rotate-90",
+						expanded && (expandDirection === "up" ? "-rotate-90" : "rotate-90"),
 					)}
 				/>
 			) : null}

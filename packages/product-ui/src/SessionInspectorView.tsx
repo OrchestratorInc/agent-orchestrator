@@ -307,7 +307,8 @@ export function SessionInspectorSummaryView({
 			{reviews}
 			{completion}
 			{scripts}
-			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
+			{/* Activity is temporarily hidden during the sidebar redesign. */}
+			{false && <InspectorSection title={activityTitle}>{activity}</InspectorSection>}
 			{usage}
 		</div>
 	);

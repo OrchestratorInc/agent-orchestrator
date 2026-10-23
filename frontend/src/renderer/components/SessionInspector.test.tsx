@@ -717,11 +717,12 @@ describe("SessionInspector PR section", () => {
     expect(cards).toEqual(["PR #41", "PR #42", "PR #40"]);
   });
 
-  it("uses the singular heading and shows enriched facts for a single PR", () => {
+  it("keeps merge details folded behind the readiness row while Merge stays available", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
+        client.setQueryDefaults(sessionScmSummaryQueryKey("sess-1"), { staleTime: Infinity });
         seedPRSummaries(client, [
           prSummary(7, "open", {
             review: {
@@ -740,9 +741,18 @@ describe("SessionInspector PR section", () => {
     expect(
       prSection("Pull request").getByText("Mergeable"),
     ).toBeInTheDocument();
-    expect(prSection("Pull request").getByText("PR approved")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("PR approved")).not.toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("Checks passing")).not.toBeInTheDocument();
+    const readiness = prSection("Pull request").getByRole("button", { name: "Mergeable" });
+    expect(readiness).toHaveAttribute("aria-expanded", "false");
+    expect(prSection("Pull request").getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
+    await userEvent.click(readiness);
+    expect(readiness).toHaveAttribute("aria-expanded", "true");
+    const details = prSection("Pull request").getByRole("region", { name: "Pull request status" });
+    expect(details.compareDocumentPosition(readiness) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Pull request status" })).getByText("PR approved")).toBeInTheDocument();
     expect(
-      prSection("Pull request").getByText("Checks passing"),
+      within(screen.getByRole("region", { name: "Pull request status" })).getByText("Checks passing"),
     ).toBeInTheDocument();
     expect(
       prSection("Pull request").getByRole("link", { name: "Open PR #7" }),
@@ -900,17 +910,20 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
   });
 
-  it("offers Merge when the provider requires no review", () => {
+  it("offers Merge without opening the review and check details", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(7, "open", { review: "none" })])} />,
       undefined,
       (client) => {
+        client.setQueryDefaults(sessionScmSummaryQueryKey("sess-1"), { staleTime: Infinity });
         seedPRSummaries(client, [prSummary(7, "open")]);
       },
     );
 
     expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
-    expect(prSection("Pull request").getByText("No review required")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("No review required")).not.toBeInTheDocument();
+    await userEvent.click(prSection("Pull request").getByRole("button", { name: "Mergeable" }));
+    expect(within(screen.getByRole("region", { name: "Pull request status" })).getByText("No review required")).toBeInTheDocument();
     expect(prSection("Pull request").queryByText("Review pending")).not.toBeInTheDocument();
   });
 
@@ -1104,7 +1117,7 @@ describe("SessionInspector PR section", () => {
     expect(toggle).toBeChecked();
   });
 
-  it("shows failing checks without an injection notice", () => {
+  it("reveals failing checks from the blocked merge row", async () => {
     const failingPR = prSummary(7, "open", {
       ci: {
         autoInjectCI: false,
@@ -1128,6 +1141,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
+        client.setQueryDefaults(sessionScmSummaryQueryKey("sess-1"), { staleTime: Infinity });
         seedPRSummaries(client, [failingPR]);
       },
     );
@@ -1135,7 +1149,9 @@ describe("SessionInspector PR section", () => {
     const card = prSection("Pull request")
       .getByText("PR #7")
       .closest("article") as HTMLElement;
-    expect(within(card).getByText("Checks failing")).toBeInTheDocument();
+    expect(within(card).queryByText("Checks failing")).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Not mergeable yet" }));
+    expect(within(screen.getByRole("region", { name: "Pull request status" })).getByText("Checks failing")).toBeInTheDocument();
     expect(within(card).queryByText("CI failures not injected")).not.toBeInTheDocument();
   });
 
