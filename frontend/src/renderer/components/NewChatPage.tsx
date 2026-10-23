@@ -75,8 +75,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		enabled: Boolean(preparedId),
 		retry: false,
 		staleTime: 30_000,
-		// The worktree is still being created when the id arrives; ask again until it exists.
-		refetchInterval: (query) => (query.state.data ? 30_000 : 1_500),
+		// The worktree is still being created when the id arrives; ask again until it
+		// exists, backing off so a stalled preparation is not polled every 1.5s.
+		refetchInterval: (query) => (query.state.data ? 30_000 : Math.min(1_500 * 2 ** query.state.errorUpdateCount, 15_000)),
 		queryFn: async () => {
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: preparedId as string } },
