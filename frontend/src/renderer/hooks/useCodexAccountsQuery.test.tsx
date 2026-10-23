@@ -3,13 +3,23 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
+const { getMock, postMock, baseUrlListeners } = vi.hoisted(() => ({
+	getMock: vi.fn(),
+	postMock: vi.fn(),
+	baseUrlListeners: [] as Array<() => void>,
+}));
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: () => "request failed",
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
+	getApiBaseUrl: () => "http://127.0.0.1:1",
+	subscribeApiBaseUrl: (listener: () => void) => {
+		baseUrlListeners.push(listener);
+		return () => { baseUrlListeners.splice(baseUrlListeners.indexOf(listener), 1); };
+	},
 }));
 
+import { codexAccountsPollPaused } from "./codex-accounts-pause";
 import { codexAccountsQueryKey, noteCodexAccountsAvailable, useCodexAccountsQuery, useEnsureCodexAccounts, type CodexAccountsResponse } from "./useCodexAccountsQuery";
 import { writeCodexAccounts } from "./codex-accounts-state";
 
@@ -104,6 +114,9 @@ describe("Codex account query", () => {
 			await Promise.resolve();
 		});
 		expect(postMock).toHaveBeenCalledTimes(1);
+		expect(codexAccountsPollPaused()).toBe(true);
+		act(() => { baseUrlListeners.forEach((listener) => listener()); });
+		expect(codexAccountsPollPaused()).toBe(false);
 	});
 
 	it("does not let a delayed ensure replace a newer account SSE snapshot", async () => {

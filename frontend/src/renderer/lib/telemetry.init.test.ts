@@ -153,7 +153,8 @@ describe("initTelemetry recovery", () => {
 			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
 			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
 			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
-			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toMatchObject({ report: "daily", failure_count: 2 });
+			expect(posthogStub.capture.mock.calls.at(-1)?.[0]).toBe("ao.renderer.update_failures_daily");
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toMatchObject({ day: "2026-10-20", failure_count: 2 });
 			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
 		} finally {
 			vi.useRealTimers();

@@ -338,8 +338,15 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 }
 
 // codexAccountStreamRetry is how long an open account stream waits before
-// asking again after account management was unavailable. Tests shorten it.
+// asking again after account management was unavailable.
 var codexAccountStreamRetry = 30 * time.Second
+
+// SetCodexAccountStreamRetryForTest sets the retry interval and returns a restore function.
+func SetCodexAccountStreamRetryForTest(d time.Duration) func() {
+	previous := codexAccountStreamRetry
+	codexAccountStreamRetry = d
+	return func() { codexAccountStreamRetry = previous }
+}
 
 func codexAccountManagementUnavailable(err error) bool {
 	var api *apierr.Error

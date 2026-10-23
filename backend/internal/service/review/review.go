@@ -609,7 +609,6 @@ func (s *Service) triggerWithOptions(
 		return result, nil
 	}
 	triggeredPayload["created_runs"] = len(result.CreatedRuns)
-	triggeredPayload["reused"] = false
 	s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 	return result, nil
 }

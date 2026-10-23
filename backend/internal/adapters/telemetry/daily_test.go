@@ -45,31 +45,31 @@ func TestDailySummaryOneEventPerInstallDay(t *testing.T) {
 
 	next := day.Add(24 * time.Hour)
 	restarted.Emit(context.Background(), usageEvent(next, "ao preview"))
-	if len(rec.events) != 1 {
-		t.Fatalf("events = %d, want one daily summary", len(rec.events))
+	if len(rec.events) < 1 {
+		t.Fatal("want one event per command path")
 	}
-	got := rec.events[0]
-	if got.Payload["count"] != 4 {
-		t.Fatalf("count = %#v, want 4", got.Payload["count"])
+	if len(rec.events) != 2 {
+		t.Fatalf("events = %d, want one per command path", len(rec.events))
 	}
-	if got.Payload["command_counts"] != "ao session=3,ao send=1" {
-		t.Fatalf("command_counts = %#v", got.Payload["command_counts"])
+	byPath := map[string]ports.TelemetryEvent{}
+	for _, ev := range rec.events {
+		byPath[ev.Payload["command_path"].(string)] = ev
 	}
-	if _, ok := got.Payload["error"]; ok {
-		t.Fatalf("summary carried raw error payload: %#v", got.Payload)
+	if byPath["ao session"].Payload["count"] != 3 || byPath["ao send"].Payload["count"] != 1 {
+		t.Fatalf("counts = %#v", rec.events)
 	}
-	if got.Payload["day"] != "2026-10-20" {
-		t.Fatalf("day = %#v", got.Payload["day"])
+	if byPath["ao session"].Payload["error_kind"] != "usage" {
+		t.Fatalf("error_kind = %#v", byPath["ao session"].Payload["error_kind"])
 	}
-	if got.Payload["error_counts"] != "usage=4" {
-		t.Fatalf("error_counts = %#v", got.Payload["error_counts"])
+	if _, ok := byPath["ao session"].Payload["error"]; ok {
+		t.Fatal("summary carried a raw error")
 	}
-	if !got.OccurredAt.Equal(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("occurred = %s, want end of summarized day", got.OccurredAt)
+	if !byPath["ao session"].OccurredAt.Equal(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("occurred = %s", byPath["ao session"].OccurredAt)
 	}
 
 	restarted.Emit(context.Background(), usageEvent(next.Add(time.Hour), "ao preview"))
-	if len(rec.events) != 1 {
+	if len(rec.events) != 2 {
 		t.Fatalf("second same-day event after flush emitted again: %d", len(rec.events))
 	}
 }

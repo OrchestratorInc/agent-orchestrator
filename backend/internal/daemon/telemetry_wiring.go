@@ -58,15 +58,12 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// job for every event name that isn't aggregated.
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Keep the full local error stream. Remote HTTP 5xx keeps the first
-	// occurrence of each error per install per UTC day, then one in one
-	// hundred. CLI usage errors are one durable daily summary per install.
-	sampled := telemetryadapter.NewSamplingSink(aggregated, map[string]float64{
-		"ao.http.5xx": 0.01,
-	})
-	daily := telemetryadapter.NewDailySummarySink(sampled, filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
-	// Opt-out is enforced ahead of sampling and aggregation: events folded
-	// into a rollup while opted out could flush after an opt back in.
+	// Keep the full local error stream. Remote HTTP 5xx is not sampled: the
+	// minute rollup and the rate limit already bound it. CLI usage is one
+	// event per command path and error kind per completed UTC day.
+	daily := telemetryadapter.NewDailySummarySink(aggregated, filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
+	// Opt-out is enforced ahead of aggregation: events folded into a rollup
+	// while opted out could flush after an opt back in.
 	gated := telemetryadapter.NewOptOutSink(daily, remote.Identity().ExportSuppressed)
 	// The kill switch sits outermost on the remote chain so a silenced stream
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no

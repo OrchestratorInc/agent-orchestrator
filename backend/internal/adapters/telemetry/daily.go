@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +14,8 @@ import (
 )
 
 const (
-	cliUsageEventName     = "ao.cli.usage_errors"
-	dailyCommandCountCap  = 20
-	dailyCommandCountSize = 1024
+	cliUsageEventName    = "ao.cli.usage_errors"
+	dailyCommandCountCap = 20
 )
 
 // DailySummarySink turns ao.cli.usage_errors into one remote event per UTC day.
@@ -78,8 +76,7 @@ func (s *DailySummarySink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 	s.mu.Lock()
 	s.rollLocked(ctx, ev.OccurredAt)
-	s.state.Counts[commandPath(ev)]++
-	s.state.Kinds[errorKind(ev)]++
+	s.state.Counts[commandPath(ev)+"\x00"+errorKind(ev)]++
 	s.persistLocked()
 	s.mu.Unlock()
 }
@@ -103,60 +100,84 @@ func (s *DailySummarySink) Close(ctx context.Context) error {
 
 func (s *DailySummarySink) flushCompleted(ctx context.Context, now time.Time) {
 	s.mu.Lock()
-	ev, ok := s.takeCompletedLocked(now)
+	events := s.takeCompletedLocked(now)
 	s.mu.Unlock()
-	if !ok || s.next == nil {
+	if s.next == nil {
 		return
 	}
-	s.next.Emit(ctx, ev)
+	for _, ev := range events {
+		s.next.Emit(ctx, ev)
+	}
 }
 
 func (s *DailySummarySink) rollLocked(ctx context.Context, now time.Time) {
-	ev, ok := s.takeCompletedLocked(now)
-	if !ok {
+	events := s.takeCompletedLocked(now)
+	if len(events) == 0 {
 		s.ensureDayLocked(now)
 		return
 	}
 	s.mu.Unlock()
-	s.next.Emit(ctx, ev)
+	for _, ev := range events {
+		s.next.Emit(ctx, ev)
+	}
 	s.mu.Lock()
 	s.ensureDayLocked(now)
 	s.persistLocked()
 }
 
-func (s *DailySummarySink) takeCompletedLocked(now time.Time) (ports.TelemetryEvent, bool) {
+func (s *DailySummarySink) takeCompletedLocked(now time.Time) []ports.TelemetryEvent {
 	day := utcDay(now)
 	if s.state.Day == "" || s.state.Day >= day || s.state.Sent || len(s.state.Counts) == 0 {
-		return ports.TelemetryEvent{}, false
+		return nil
 	}
-	total := 0
-	for _, count := range s.state.Counts {
-		if count > 0 {
-			total += count
+	type pair struct {
+		path, kind string
+		count      int
+	}
+	pairs := make([]pair, 0, len(s.state.Counts))
+	for key, count := range s.state.Counts {
+		if count <= 0 {
+			continue
 		}
+		path, kind, _ := strings.Cut(key, "\x00")
+		pairs = append(pairs, pair{path, kind, count})
 	}
-	if total == 0 {
-		return ports.TelemetryEvent{}, false
+	if len(pairs) == 0 {
+		return nil
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].count == pairs[j].count && pairs[i].path == pairs[j].path {
+			return pairs[i].kind < pairs[j].kind
+		}
+		if pairs[i].count == pairs[j].count {
+			return pairs[i].path < pairs[j].path
+		}
+		return pairs[i].count > pairs[j].count
+	})
+	if len(pairs) > dailyCommandCountCap {
+		pairs = pairs[:dailyCommandCountCap]
 	}
 	summarized := s.state.Day
-	ev := ports.TelemetryEvent{
-		Name:       cliUsageEventName,
-		Source:     "cli",
-		OccurredAt: endOfUTCDay(summarized),
-		Level:      ports.TelemetryLevelWarn,
-		Payload: map[string]any{
-			"component":      "cli",
-			"operation":      "command_parse",
-			"error_kind":     "usage",
-			"day":            summarized,
-			"count":          total,
-			"command_counts": formatCommandCounts(s.state.Counts),
-			"error_counts":   formatCommandCounts(s.state.Kinds),
-		},
+	events := make([]ports.TelemetryEvent, 0, len(pairs))
+	for _, pair := range pairs {
+		events = append(events, ports.TelemetryEvent{
+			Name:       cliUsageEventName,
+			Source:     "cli",
+			OccurredAt: endOfUTCDay(summarized),
+			Level:      ports.TelemetryLevelWarn,
+			Payload: map[string]any{
+				"component":    "cli",
+				"operation":    "command_parse",
+				"command_path": pair.path,
+				"error_kind":   pair.kind,
+				"day":          summarized,
+				"count":        pair.count,
+			},
+		})
 	}
 	s.state.Sent = true
 	s.persistLocked()
-	return ev, true
+	return events
 }
 
 func (s *DailySummarySink) ensureDayLocked(now time.Time) {
@@ -222,35 +243,4 @@ func commandPath(ev ports.TelemetryEvent) string {
 		path = path[:160]
 	}
 	return path
-}
-
-func formatCommandCounts(counts map[string]int) string {
-	type pair struct {
-		path  string
-		count int
-	}
-	pairs := make([]pair, 0, len(counts))
-	for path, count := range counts {
-		if count > 0 && path != "" {
-			pairs = append(pairs, pair{path, count})
-		}
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].count == pairs[j].count {
-			return pairs[i].path < pairs[j].path
-		}
-		return pairs[i].count > pairs[j].count
-	})
-	if len(pairs) > dailyCommandCountCap {
-		pairs = pairs[:dailyCommandCountCap]
-	}
-	parts := make([]string, 0, len(pairs))
-	for _, pair := range pairs {
-		parts = append(parts, pair.path+"="+strconv.Itoa(pair.count))
-	}
-	joined := strings.Join(parts, ",")
-	if len(joined) > dailyCommandCountSize {
-		joined = joined[:dailyCommandCountSize]
-	}
-	return joined
 }

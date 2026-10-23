@@ -113,12 +113,10 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		// one event per minute; without these, a rollup's whole reason for
 		// existing - the true occurrence count of a burst - is silently
 		// stripped before it ever reaches PostHog.
-		"count":          {},
-		"command_counts": {},
-		"error_counts":   {},
-		"day":            {},
-		"window_start":   {},
-		"window_end":     {},
+		"count":        {},
+		"day":          {},
+		"window_start": {},
+		"window_end":   {},
 	},
 	"ao.daemon.panic": {
 		"component":         {},
@@ -169,8 +167,8 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"created_runs": {},
 		"harness":      {},
 		"rerun":        {},
-		"reused":       {},
-		"trigger":      {},
+
+		"trigger": {},
 	},
 	"ao.review.trigger_failed": {
 		"error_kind": {},

@@ -43,7 +43,6 @@ let fallbackRouteViewSurfaces = new Set<string>();
 // allowance with a hard daily ceiling per name.
 const EVENTS_PER_NAME_PER_MINUTE = 5;
 const EVENTS_PER_NAME_PER_DAY = 200;
-const API_ERROR_SAMPLE_RATE = 0.01;
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 const minuteWindows = new Map<string, { start: number; count: number }>();
@@ -69,41 +68,6 @@ function reserveWindow(
 export function reserveCapture(name: string, now = Date.now()): boolean {
 	if (!reserveWindow(minuteWindows, name, now, MINUTE_MS, EVENTS_PER_NAME_PER_MINUTE)) return false;
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
-}
-
-const ERROR_SAMPLE_STORAGE_KEY = "ao.telemetry.errorSample.v1";
-
-// First occurrence of an error per UTC day is always reported. Every 100th
-// occurrence after that is reported. Same error is name + operation + code.
-export function shouldReportRepeatingError(
-	storage: DailyActiveStorage,
-	name: string,
-	properties: TelemetryProperties,
-	now = Date.now(),
-): { report: boolean; sampleRate: number } {
-	const operation = typeof properties.operation === "string" ? properties.operation : "";
-	const code = properties.error_code ?? properties.code ?? properties.status ?? "";
-	const key = `${name}|${operation}|${String(code)}|${utcDay(now)}`;
-	let counts: Record<string, number> = {};
-	try {
-		const parsed = JSON.parse(storage.getItem(ERROR_SAMPLE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-		for (const [item, value] of Object.entries(parsed)) {
-			if (typeof value === "number" && Number.isFinite(value)) counts[item] = value;
-		}
-	} catch {
-		counts = {};
-	}
-	const next = (counts[key] ?? 0) + 1;
-	counts[key] = next;
-	try {
-		storage.setItem(ERROR_SAMPLE_STORAGE_KEY, JSON.stringify(counts));
-	} catch {
-		// A storage failure still reports the occurrence.
-		return { report: true, sampleRate: 1 };
-	}
-	if (next === 1) return { report: true, sampleRate: 1 };
-	if ((next - 1) % 100 === 0) return { report: true, sampleRate: API_ERROR_SAMPLE_RATE };
-	return { report: false, sampleRate: API_ERROR_SAMPLE_RATE };
 }
 
 type UpdateFailureState = {
@@ -551,12 +515,6 @@ export function reserveRouteViewCapture(
 	}
 }
 
-const memorySampleState = new Map<string, string>();
-const memorySampleStorage = (): DailyActiveStorage => ({
-	getItem: (key) => memorySampleState.get(key) ?? null,
-	setItem: (key, value) => { memorySampleState.set(key, value); },
-});
-
 export function telemetryStorage(): DailyActiveStorage | undefined {
 	try {
 		return window.localStorage;
@@ -982,6 +940,12 @@ export async function sanitizeRendererProperties(
 			if (properties?.field === "status" || properties?.field === "activity") safe.field = properties.field;
 			if (properties?.reason === "missing" || properties?.reason === "unrecognized") safe.reason = properties.reason;
 			break;
+		case "ao.renderer.update_failures_daily":
+			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
+			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
+				safe.failure_count = properties.failure_count;
+			}
+			break;
 		case "ao.renderer.update_failed":
 		case "ao.renderer.update_downloaded":
 		case "ao.renderer.update_unsupported":
@@ -1262,13 +1226,6 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	// rate-limit slot on its way to being discarded, matching the daemon, where
 	// the denylist sits outermost.
 	if (isDeniedEvent(event)) return false;
-	const storageForSample = telemetryStorage();
-	let apiErrorSampleRate: number | undefined;
-	if (event === "ao.renderer.api_error" || event === "ao.v2.renderer.api_error") {
-		const decision = shouldReportRepeatingError(storageForSample ?? memorySampleStorage(), event, properties ?? {}, Date.now());
-		if (!decision.report) return false;
-		apiErrorSampleRate = decision.sampleRate;
-	}
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
 	if (event === "ao.renderer.route_viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
@@ -1286,14 +1243,13 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 			if (!decision.emit) return false;
 			releaseUpdateFailureClaim = decision.rollback;
 			if (decision.daily) {
-				posthog.capture(postHogEventName(event), withTelemetryContext(await sanitizeRendererProperties(event, decision.daily)));
+				posthog.capture("ao.renderer.update_failures_daily", withTelemetryContext(await sanitizeRendererProperties("ao.renderer.update_failures_daily", decision.daily)));
 			}
 			if (!decision.streak) return true;
 		}
 	}
 	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
 	const safeProperties = withTelemetryContext(sanitizedProperties);
-	if (apiErrorSampleRate !== undefined) safeProperties.sample_rate = apiErrorSampleRate;
 	let captured = false;
 	try {
 		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));

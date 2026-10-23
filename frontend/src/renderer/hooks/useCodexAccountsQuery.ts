@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
 import { codexAccountsPollPaused, noteCodexAccountsAvailable, noteCodexAccountsUnavailable } from "./codex-accounts-pause";
 import { codexAccountsQueryKey, mergeCodexAccounts, writeCodexAccounts } from "./codex-accounts-state";
 
@@ -151,9 +151,12 @@ export function useEnsureCodexAccounts(): void {
 				if (codexAccountManagementUnavailable(error)) noteCodexAccountsUnavailable();
 			});
 		};
+		const stopBaseUrl = subscribeApiBaseUrl(() => {
+			if (getApiBaseUrl()) noteCodexAccountsAvailable();
+		});
 		const onFocus = () => ensure();
 		const onVisibility = () => { if (document.visibilityState === "visible") ensure(); };
 		window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onVisibility);
-		return () => { active = false; window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
+		return () => { active = false; stopBaseUrl(); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
 	}, [queryClient]);
 }

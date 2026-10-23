@@ -328,6 +328,46 @@ func TestCodexAccountEventStreamStaysOpenWhileManagementIsUnavailable(t *testing
 	cancel()
 }
 
+func TestCodexAccountEventStreamContinuesAfterManagementReturns(t *testing.T) {
+	restore := controllers.SetCodexAccountStreamRetryForTest(15 * time.Millisecond)
+	defer restore()
+	events := make(chan agentsvc.CodexAccounts, 1)
+	events <- agentsvc.CodexAccounts{AccountRevision: 1}
+	fake := &fakeCodexAccounts{
+		subscribeErr: apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable"),
+		events:       events,
+	}
+	srv := newCodexAccountServer(t, fake)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/agents/codex/accounts/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	buf := make([]byte, 2048)
+	body := ""
+	for !strings.Contains(body, "event: codex_account") && ctx.Err() == nil {
+		n, readErr := resp.Body.Read(buf)
+		body += string(buf[:n])
+		if readErr != nil && n == 0 {
+			t.Fatal(readErr)
+		}
+	}
+	if !strings.Contains(body, "codex-account-management-unavailable") || !strings.Contains(body, "event: codex_account") {
+		t.Fatalf("body = %q, want the quiet comment and then a live account event", body)
+	}
+	if fake.subscribeAttempts < 2 {
+		t.Fatalf("subscribe attempts = %d, want a retry after the interval", fake.subscribeAttempts)
+	}
+}
+
 func TestCodexAccountReauthenticationAndLogoutRoutesTargetAnExistingAccount(t *testing.T) {
 	accountID := "72d4db6e-da2c-414c-a6a9-fdbd09a006b6"
 	fake := &fakeCodexAccounts{result: codexAccountsFixture(), loginStart: agentsvc.CodexAccountLoginTerminalStart{

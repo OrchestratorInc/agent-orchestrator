@@ -181,25 +181,30 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
-- Remote HTTP 5xx and renderer API errors send the first occurrence of each
-  error per install per UTC day, then one in one hundred. The same error is
-  the event name plus operation plus error code or status. Real HTTP 500
-  responses also go to the existing gated Sentry capture once. The local
-  diagnostic stream keeps every occurrence. CLI usage errors are one durable
-  daily summary per install, with command-path counts and error-kind counts
-  and no raw arguments. The summary is stamped at the end of that UTC day.
-- Expected Codex account-management unavailability and an already-closed shell
-  terminal are not renderer API analytics events. API error handling still
-  runs for every failure.
-- An updater failure streak emits one event until a successful download of
-  that target, or a successful check for a check-phase streak, clears it.
-  Retries in the streak do not emit again. Each install also emits one daily
-  count, with the UTC day and failure count, after that day ends. A rejected
-  capture leaves the streak unsent. A restart keeps the open streak.
-- `ao.review.triggered` counts a newly created or restarted run. Reused sweeps
-  are not events, and `trigger_failed` is no longer a subset of `triggered`.
-  The series breaks on the merge of this change. Issue #4665 previously
-  counted every attempt.
+- Remote HTTP 5xx events are not sampled. The minute rollup and the daily
+  rate limit bound them, and real HTTP 500 responses also go to the existing
+  gated Sentry capture once. The local diagnostic stream keeps every
+  occurrence. CLI usage errors are one event per command path and error kind
+  per install per completed UTC day, with `command_path`, `error_kind`, and
+  `count`. At most 20 of those events are sent per day. No raw arguments are
+  included. Each event is stamped at the end of that UTC day.
+- Renderer API errors are not sampled. A daemon-unavailable report is skipped
+  while the daemon is still starting. HTTP 409 responses from workspace diff,
+  config-option, skill, and model probes are not analytics events. Codex
+  account management being unwired, and an already-closed shell terminal, are
+  not analytics events. An expired GitHub token still reports. A Codex login
+  terminal failure and an incomplete Codex account setup use their own error
+  codes and still report.
+- An updater failure streak emits one `ao.renderer.update_failed` until a
+  successful download of that target, or a successful check for a check-phase
+  streak, clears it. Retries in the streak do not emit again. Each install
+  also emits one `ao.renderer.update_failures_daily` event, with the UTC day
+  and failure count, after that day ends. A rejected capture leaves the streak
+  unsent. A restart keeps the open streak.
+- `ao.review.triggered` counts a newly created or restarted run and does not
+  include a `reused` property. Reused sweeps are not events, and
+  `trigger_failed` is no longer a subset of `triggered`. The series breaks on
+  the merge of this change. Issue #4665 previously counted every attempt.
 - Session recording is disabled in the desktop and mobile apps. Orchestrator.inc does not
   automatically record screens, clicks, or touches.
 - Person profiles are off for anonymous events. A profile is created when a

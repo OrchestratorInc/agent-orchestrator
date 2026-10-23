@@ -17,7 +17,7 @@ import {
 	sanitizeReplayRequestName,
 	sanitizeRendererExceptionProperties,
 	sanitizeRendererProperties,
-	shouldReportRepeatingError,
+
 	startDailyActiveHeartbeat,
 	withTelemetryContext,
 	releaseChannelFrom,
@@ -39,19 +39,6 @@ describe("telemetry sanitizers", () => {
 	it("keeps the v2 aliases for api errors and the session summary", () => {
 		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");
-	});
-
-	it("reports the first error each UTC day and then one in one hundred", () => {
-		const storage = memoryStorage();
-		const props = { operation: "GET /api/v1/projects", status: 500, error_code: "PROJECTS_LIST_FAILED" };
-		const now = Date.parse("2026-10-22T12:00:00.000Z");
-		let sent = 0;
-		for (let i = 0; i < 2000; i++) {
-			if (shouldReportRepeatingError(storage, "ao.renderer.api_error", props, now).report) sent += 1;
-		}
-		expect(sent).toBe(20);
-		expect(shouldReportRepeatingError(storage, "ao.renderer.api_error", { ...props, error_code: "OTHER" }, now).report).toBe(true);
-		expect(shouldReportRepeatingError(storage, "ao.renderer.api_error", props, now + 86_400_000).sampleRate).toBe(1);
 	});
 
 	it("keeps one updater streak until download and reports the previous UTC day once", () => {

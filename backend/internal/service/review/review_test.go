@@ -746,8 +746,8 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			if got[0].Payload["trigger"] != c.want {
 				t.Fatalf("trigger = %#v, want %q", got[0].Payload["trigger"], c.want)
 			}
-			if got[0].Payload["reused"] != false {
-				t.Fatalf("reused = %#v, want false", got[0].Payload["reused"])
+			if _, ok := got[0].Payload["reused"]; ok {
+				t.Fatalf("reused is still present: %#v", got[0].Payload["reused"])
 			}
 		})
 	}
@@ -850,7 +850,7 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
 	}
-	if got[0].Payload["reused"] != false || got[0].Payload["created_runs"] != 0 {
+	if _, ok := got[0].Payload["reused"]; ok || got[0].Payload["created_runs"] != 0 {
 		t.Fatalf("payload = %#v, want reused=false created_runs=0 for a restart", got[0].Payload)
 	}
 }

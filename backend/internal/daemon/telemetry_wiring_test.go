@@ -128,8 +128,8 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 		if props["component"] != "cli" || props["operation"] != "command_parse" {
 			t.Fatalf("summary lost sample dims: %#v", props)
 		}
-		if props["command_counts"] != "ao session=3" {
-			t.Fatalf("command_counts = %#v", props["command_counts"])
+		if props["command_path"] != "ao session" || props["error_kind"] != "usage" {
+			t.Fatalf("command properties = %#v", props)
 		}
 		if props["error"] != nil {
 			t.Fatalf("raw error reached PostHog: %#v", props["error"])
