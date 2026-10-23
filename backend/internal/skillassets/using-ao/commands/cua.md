@@ -14,7 +14,8 @@ started while it is on get these tools from AO's `ao` tool server:
 
 Each tool's description and input schema come from the installed Cua Driver.
 Read them before the first call; do not guess argument names. Window reads and
-actions return text plus the window's screenshot as an image:
+actions return text plus the window's screenshot as an image. This example is
+from macOS, whose accessibility roles start with `AX`:
 
 ```text
 ✅ Performed AXPress on [5] AXButton "".
@@ -26,12 +27,21 @@ since s0000002e: 0 added, 1 changed, 0 removed. Use element_tokens s0000002f:N .
 Invalidated snapshots s0000002e: their element_tokens are stale.
 ```
 
+The tree's roles and actions come from the platform's accessibility API, so
+they differ by platform; the workflow does not. On macOS a row reads
+`- [12] AXButton (7) [id=Seven actions=[press]]`. On Windows (UI Automation) it
+reads `- [4] Button "Close Tab" [id=CloseButton actions=[invoke]]` or
+`- [0] Document "Text editor" [actions=[set_value,text,scroll]]`. Match the
+role and label you see, not `AX` names.
+
 ## Workflow
 
 1. `list_windows` and pick the `pid` and `window_id` of the app.
 2. `get_window_state` with that `pid` and `window_id` returns the window's
    accessibility tree, a `snapshot_id`, and a screenshot. Each actionable row
-   starts with a number, such as `- [12] AXButton (7) [id=Seven actions=[press]]`.
+   starts with a number in brackets, such as `[12]` in
+   `- [12] AXButton (7) [id=Seven actions=[press]]` (macOS) or `[4]` in
+   `- [4] Button "Close Tab" [id=CloseButton actions=[invoke]]` (Windows).
    Look at the screenshot when the tree is not enough.
 3. Act by element with an `element_token`: the snapshot's `snapshot_id`, a
    colon, and the row number. Row `[12]` of snapshot `s00000019` is
