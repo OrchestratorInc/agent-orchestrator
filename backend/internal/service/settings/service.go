@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -102,6 +103,17 @@ type Service struct {
 	chatHibernation atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
+	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
+	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
+}
+
+// errCuaDriverMissing refuses turning computer use on without Cua Driver.
+var errCuaDriverMissing = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Install Cua Driver in Settings > Computer use agents before letting agents use this computer.", nil)
+
+// SetCuaDriverInstalled supplies the check SetComputerUse runs before turning
+// computer use on.
+func (s *Service) SetCuaDriverInstalled(installed func(context.Context) (bool, error)) {
+	s.cuaInstalled.Store(&installed)
 }
 
 // New builds the service.
@@ -171,7 +183,17 @@ func (s *Service) ComputerUseEnabled(ctx context.Context) bool {
 }
 
 // SetComputerUse changes whether new chat sessions get the computer-use tools.
+// Turning it on needs Cua Driver installed; turning it off always works.
 func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, error) {
+	if installed := s.cuaInstalled.Load(); enabled && installed != nil {
+		ok, err := (*installed)(ctx)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if !ok {
+			return Snapshot{}, errCuaDriverMissing
+		}
+	}
 	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
 	}

@@ -860,3 +860,23 @@ func TestAgentToolsSummarizeStepOnlyArguments(t *testing.T) {
 		t.Fatalf("description = %q, want hotkey's args without session", tools[0].Description)
 	}
 }
+
+func TestInstalledLocatesTheDriverOnly(t *testing.T) {
+	for name, tc := range map[string]struct {
+		driver *fakeDriver
+		want   bool
+	}{
+		"installed": {&fakeDriver{}, true},
+		"missing":   {&fakeDriver{missing: true}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := newTestService(t, tc.driver, "darwin").Installed(context.Background())
+			if err != nil || got != tc.want {
+				t.Fatalf("Installed() = %v, %v; want %v", got, err, tc.want)
+			}
+			if len(tc.driver.calls) != 0 {
+				t.Fatalf("Installed ran the driver: %v", tc.driver.calls)
+			}
+		})
+	}
+}

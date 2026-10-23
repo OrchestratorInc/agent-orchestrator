@@ -177,6 +177,15 @@ func New(driver ports.ComputerUseDriver, dataDir string) *Service {
 	}
 }
 
+// Installed reports whether Cua Driver is installed, without probing it.
+func (s *Service) Installed(ctx context.Context) (bool, error) {
+	_, err := s.driver.Locate(ctx)
+	if errors.Is(err, ports.ErrComputerUseDriverNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // Close cancels a pending permission request and waits for it to stop.
 func (s *Service) Close(ctx context.Context) error {
 	s.stop()

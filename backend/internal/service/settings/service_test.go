@@ -8,6 +8,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 type hibernationSettingsStore struct{ err error }
@@ -177,5 +178,39 @@ func TestComputerUseToggle(t *testing.T) {
 	store.err = errors.New("database is locked")
 	if svc.ComputerUseEnabled(ctx) {
 		t.Fatal("an unreadable store must count as off")
+	}
+}
+
+// Turning computer use on needs Cua Driver installed, whatever client asks;
+// turning it off always works.
+func TestComputerUseNeedsCuaDriverToTurnOn(t *testing.T) {
+	ctx := context.Background()
+	store := &computerUseStore{}
+	svc := New(store, nil, Offering{}, nil)
+	installed, checkErr := false, error(nil)
+	svc.SetCuaDriverInstalled(func(context.Context) (bool, error) { return installed, checkErr })
+
+	_, err := svc.SetComputerUse(ctx, true)
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_NOT_INSTALLED" || apiErr.Kind != apierr.KindConflict {
+		t.Fatalf("enable without Cua Driver: err = %v, want COMPUTER_USE_NOT_INSTALLED", err)
+	}
+	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("computer use turned on without Cua Driver")
+	}
+
+	checkErr = errors.New("permission denied")
+	if _, err := svc.SetComputerUse(ctx, true); !errors.Is(err, checkErr) {
+		t.Fatalf("enable with a failed check: err = %v, want the check's error", err)
+	}
+
+	installed, checkErr = true, nil
+	if snapshot, err := svc.SetComputerUse(ctx, true); err != nil || !snapshot.ComputerUse {
+		t.Fatalf("enable with Cua Driver: snapshot=%+v err=%v", snapshot, err)
+	}
+
+	installed = false
+	if snapshot, err := svc.SetComputerUse(ctx, false); err != nil || snapshot.ComputerUse {
+		t.Fatalf("disable after Cua Driver was removed: snapshot=%+v err=%v", snapshot, err)
 	}
 }

@@ -692,8 +692,10 @@ func Run(buildVersion string) error {
 	cuaDriver := cuadriver.New()
 	systemInstall.SetSystemTargetResolver(systeminstall.TargetCuaDriver, cuaDriver.Locate)
 	computerUse := computeruse.New(cuaDriver, cfg.DataDir)
-	// Computer-use calls run only while "Let agents use this computer" is on.
+	// Computer-use calls run only while "Let agents use this computer" is on,
+	// and it turns on only with Cua Driver installed.
 	computerUse.SetEnabled(settingsSvc.ComputerUseEnabled)
+	settingsSvc.SetCuaDriverInstalled(computerUse.Installed)
 	systemInstall.SetTelemetry(telemetrySink)
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
