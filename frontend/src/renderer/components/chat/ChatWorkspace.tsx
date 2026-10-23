@@ -1739,7 +1739,8 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId}
+							hostId={activeRemoteHostId} createMux={activeRemoteHostId ? remoteCreateMux : undefined} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">

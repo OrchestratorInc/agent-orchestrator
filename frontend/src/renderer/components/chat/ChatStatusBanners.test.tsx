@@ -12,6 +12,8 @@ type MockAccount = { id: string; provider: "claude" | "codex"; device: boolean; 
 const accountsMock = vi.hoisted(() => ({
 	session: {} as Record<string, string>,
 	accounts: [] as MockAccount[],
+	/** Which daemon each account hook was asked to read: (hook, hostId). */
+	hostOf: vi.fn(),
 	actions: {
 		signInAgain: vi.fn(),
 		verifyLogin: vi.fn(),
@@ -22,14 +24,23 @@ const accountsMock = vi.hoisted(() => ({
 }));
 vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
-	useSessionAgentAccounts: (sessionId: string | undefined) => ({ data: sessionId ? accountsMock.session : undefined }),
-	useAgentAccounts: (enabled = true) => ({ data: enabled ? accountsMock.accounts : undefined }),
-	useAgentAccountActions: () => accountsMock.actions,
+	useSessionAgentAccounts: (sessionId: string | undefined, hostId?: string) => {
+		accountsMock.hostOf("session", hostId);
+		return { data: sessionId ? accountsMock.session : undefined };
+	},
+	useAgentAccounts: (enabled = true, hostId?: string) => {
+		accountsMock.hostOf("accounts", hostId);
+		return { data: enabled ? accountsMock.accounts : undefined };
+	},
+	useAgentAccountActions: (hostId?: string) => {
+		accountsMock.hostOf("actions", hostId);
+		return accountsMock.actions;
+	},
 }));
 // The real dialog hosts a terminal; these tests only need its check and close.
 vi.mock("../settings/AgentAccountsSection", () => ({
-	AgentAccountLoginDialog: ({ login, onCheck, onClose }: { login: unknown; onCheck: (login: unknown) => void; onClose: (login: unknown) => void }) => (
-		<div data-testid="login-dialog">
+	AgentAccountLoginDialog: ({ login, createMux, onCheck, onClose }: { login: unknown; createMux?: unknown; onCheck: (login: unknown) => void; onClose: (login: unknown) => void }) => (
+		<div data-testid="login-dialog" data-remote-terminal={createMux ? "true" : "false"}>
 			<button type="button" onClick={() => onCheck(login)}>check sign-in</button>
 			<button type="button" onClick={() => onClose(login)}>close sign-in</button>
 		</div>
@@ -39,6 +50,7 @@ vi.mock("../settings/AgentAccountsSection", () => ({
 afterEach(() => {
 	accountsMock.session = {};
 	accountsMock.accounts = [];
+	accountsMock.hostOf.mockReset();
 	for (const fn of Object.values(accountsMock.actions)) fn.mockReset();
 });
 
@@ -156,6 +168,20 @@ describe("ReauthBanner", () => {
 			await userEvent.click(screen.getByRole("button", { name: "Continue on me@example.com" }));
 			expect(accountsMock.actions.switchSession).toHaveBeenCalledWith("s1", "device-claude");
 			expect(screen.getByRole("status")).toHaveTextContent("Moving this chat to me@example.com.");
+		});
+
+		it("keeps a remote session's accounts and sign-in on its host", async () => {
+			accountsMock.session = { claude: "team" };
+			accountsMock.accounts = [team];
+			accountsMock.actions.signInAgain.mockResolvedValue({ operationId: "op1", provider: "claude" });
+			render(<ReauthBanner sessionId="s1" hostId="host-a" createMux={() => ({}) as never} account={failed} harness="claude-code" />);
+			expect(accountsMock.hostOf).toHaveBeenCalledWith("session", "host-a");
+			expect(accountsMock.hostOf).toHaveBeenCalledWith("accounts", "host-a");
+			expect(accountsMock.hostOf).toHaveBeenCalledWith("actions", "host-a");
+			expect(accountsMock.hostOf).not.toHaveBeenCalledWith(expect.anything(), undefined);
+			await userEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+			// The sign-in terminal runs on the host too, so it attaches through the host's mux.
+			expect(screen.getByTestId("login-dialog")).toHaveAttribute("data-remote-terminal", "true");
 		});
 
 		it("offers another account to a chat on the computer's own login too", () => {

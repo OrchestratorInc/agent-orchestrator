@@ -28,6 +28,7 @@ import {
 import { useSettings } from "../../hooks/useSettings";
 import { AgentAccountLoginDialog } from "../settings/AgentAccountsSection";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
+import type { TerminalMux } from "../../lib/terminal-mux";
 import { cn, truncateMiddle } from "../../lib/utils";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
@@ -38,17 +39,24 @@ import type { ConversationAccount, ConversationThreadState, McpServer } from "..
  *
  * A session on a saved account offers to sign that account in again here, in its
  * own folder, and any session offers to continue on another signed-in account.
- * Both leave the failed turn for the user to retry.
+ * Both leave the failed turn for the user to retry. A remote session's accounts
+ * and sign-in live on its host, so every read and action goes there.
  */
 export const ReauthBanner = memo(function ReauthBanner({
 	account,
 	harness,
 	sessionId,
+	hostId,
+	createMux,
 	reasonInTimeline = false,
 }: {
 	account: ConversationAccount;
 	harness: string;
 	sessionId: string;
+	/** The remote host that runs the session; omitted for this computer's. */
+	hostId?: string;
+	/** That host's terminal connection, for the sign-in terminal. */
+	createMux?: () => TerminalMux;
 	reasonInTimeline?: boolean;
 }) {
 	const [dismissedFailure, setDismissedFailure] = useState<string>();
@@ -56,23 +64,25 @@ export const ReauthBanner = memo(function ReauthBanner({
 	const required = account.authenticationState === "required" ||
 		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
 	if (!required || dismissedFailure === failure) return null;
-	return <ReauthNotice account={account} harness={harness} sessionId={sessionId} reasonInTimeline={reasonInTimeline}
-		onDismiss={() => setDismissedFailure(failure)} />;
+	return <ReauthNotice account={account} harness={harness} sessionId={sessionId} hostId={hostId} createMux={createMux}
+		reasonInTimeline={reasonInTimeline} onDismiss={() => setDismissedFailure(failure)} />;
 });
 
 /** The shown notice. Its account reads run only while a failure is shown. */
-function ReauthNotice({ account, harness, sessionId, reasonInTimeline, onDismiss }: {
+function ReauthNotice({ account, harness, sessionId, hostId, createMux, reasonInTimeline, onDismiss }: {
 	account: ConversationAccount;
 	harness: string;
 	sessionId: string;
+	hostId?: string;
+	createMux?: () => TerminalMux;
 	reasonInTimeline: boolean;
 	onDismiss: () => void;
 }) {
 	const { t } = useTranslation();
 	const provider = agentAccountProviderFor(harness);
-	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
-	const accounts = useAgentAccounts(provider !== null);
-	const actions = useAgentAccountActions();
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined, hostId);
+	const accounts = useAgentAccounts(provider !== null, hostId);
+	const actions = useAgentAccountActions(hostId);
 	const actionsRef = useRef(actions);
 	actionsRef.current = actions;
 	const [login, setLogin] = useState<AgentAccountLogin>();
@@ -209,7 +219,7 @@ function ReauthNotice({ account, harness, sessionId, reasonInTimeline, onDismiss
 				<X aria-hidden="true" className="size-3.5" />
 			</Button>
 			{login ? (
-				<AgentAccountLoginDialog login={login} note={loginNote} pending={busy === "verify"}
+				<AgentAccountLoginDialog login={login} note={loginNote} pending={busy === "verify"} createMux={createMux}
 					onCheck={(current) => void checkLogin(current)} onClose={closeLogin} />
 			) : null}
 		</div>
