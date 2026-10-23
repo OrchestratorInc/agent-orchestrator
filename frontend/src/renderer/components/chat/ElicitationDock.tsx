@@ -543,7 +543,7 @@ function FormField({
 							<label
 								key={option.value}
 								className={cn(
-									"group flex min-w-0 cursor-pointer items-start gap-3 rounded-lg px-2 py-2 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40",
+									"group relative flex min-w-0 cursor-pointer items-start gap-3 rounded-lg px-2 py-2 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40",
 									checked ? "bg-logo-accent/[0.1]" : "hover:bg-interactive-hover",
 								)}
 							>
@@ -555,7 +555,9 @@ function FormField({
 									onChange={() =>
 										onChange(multi ? toggleValue(Array.isArray(value) ? value : [], option.value) : option.value)
 									}
-									className="sr-only"
+									// Invisible but laid over the whole row, so a pointer on the row
+									// lands on the real radio rather than on its label.
+									className="absolute inset-0 m-0 size-full cursor-pointer opacity-0"
 								/>
 								{/* The number doubles as the keyboard shortcut and the selection mark. */}
 								<span

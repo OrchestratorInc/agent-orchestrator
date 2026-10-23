@@ -58,9 +58,11 @@ test("question replies remain readable after another question and a reload @T0",
 	const dock = page.getByTestId("elicitation-composer-dock");
 	await expect(dock.getByText(prompt)).toBeVisible();
 	await dock.getByRole("radio", { name: /fix\/login/ }).check();
+	// A choice and an Other answer are alternatives: typing replaces the pick.
 	await dock.getByRole("textbox", { name: "Other" }).fill(feedback);
+	await expect(dock.getByRole("radio", { name: /fix\/login/ })).not.toBeChecked();
 	await dock.getByRole("button", { name: "Continue" }).click();
-	await expect.poll(() => resolution).toEqual({ action: "accept", content: { question_0: "safe", question_0_custom: feedback } });
+	await expect.poll(() => resolution).toEqual({ action: "accept", content: { question_0_custom: feedback } });
 	const history = page.getByRole("region", { name: "Agent question history" });
 	await expect(history.getByText(prompt)).toBeVisible();
 	await expect(history.getByText(feedback)).toBeVisible();
