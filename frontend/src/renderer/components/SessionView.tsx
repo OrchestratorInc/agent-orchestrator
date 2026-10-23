@@ -103,6 +103,7 @@ import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type Sessio
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
+import { openComposerModelPicker } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useSideChatsAvailable } from "../lib/side-chats";
 import {
@@ -1833,18 +1834,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		hasInspector,
 	);
-	useSessionShortcut(
-		"model-picker",
-		() => {
-			const picker = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
-			if (!picker) return;
-			// Radix menu triggers open on pointerdown or Enter, never on a synthetic click.
-			picker.dataset.shortcutOpened = "";
-			picker.focus();
-			picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-		},
-		hasInspector,
-	);
+	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
 	const handleInspectorCloseAnimationComplete = useCallback(() => {

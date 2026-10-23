@@ -9,6 +9,8 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { openComposerModelPicker } from "../lib/composer-shortcuts";
+import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import type { ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
@@ -42,6 +44,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// The page this render shows. A send is bound to the page it started on.
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
+	// The session's own composer shortcuts, before the session exists.
+	useSessionShortcut("model-picker", openComposerModelPicker);
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
