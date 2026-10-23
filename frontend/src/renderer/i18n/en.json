@@ -2463,6 +2463,8 @@
 	"orchestratorReplacement.close": "Close",
 	"orchestratorReplacement.openCurrent": "Open current orchestrator",
 	"orchestratorReplacement.retry": "Retry",
+	"orchestratorReplacement.morePending_one": "{{count}} more project also failed to replace its orchestrator.",
+	"orchestratorReplacement.morePending_other": "{{count}} more projects also failed to replace their orchestrator.",
 	"settings.project.enableIssueIntake": "Enable issue intake",
 	"settings.project.repository": "Repository",
 	"settings.project.repoNotDetected": "Could not detect a GitHub repo from this project's git origin.",

@@ -2185,6 +2185,8 @@
 	"orchestratorReplacement.close": "关闭",
 	"orchestratorReplacement.openCurrent": "打开当前编排器",
 	"orchestratorReplacement.retry": "重试",
+	"orchestratorReplacement.morePending_one": "另有 {{count}} 个项目的编排器替换也失败了。",
+	"orchestratorReplacement.morePending_other": "另有 {{count}} 个项目的编排器替换也失败了。",
 	"settings.project.enableIssueIntake": "启用议题接入",
 	"settings.project.repository": "仓库",
 	"settings.project.repoNotDetected": "无法从此项目的 Git 源检测到 GitHub 仓库。",

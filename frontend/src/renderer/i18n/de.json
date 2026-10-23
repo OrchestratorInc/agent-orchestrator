@@ -2130,6 +2130,8 @@
 	"orchestratorReplacement.close": "Schließen",
 	"orchestratorReplacement.openCurrent": "Aktuellen Orchestrator öffnen",
 	"orchestratorReplacement.retry": "Erneut versuchen",
+	"orchestratorReplacement.morePending_one": "Auch bei {{count}} weiterem Projekt ist die Orchestrator-Ersetzung fehlgeschlagen.",
+	"orchestratorReplacement.morePending_other": "Auch bei {{count}} weiteren Projekten ist die Orchestrator-Ersetzung fehlgeschlagen.",
 	"settings.project.enableIssueIntake": "Issue-Intake aktivieren",
 	"settings.project.repository": "Repository",
 	"settings.project.repoNotDetected": "Aus dem Git-Origin dieses Projekts konnte kein GitHub-Repo erkannt werden.",
