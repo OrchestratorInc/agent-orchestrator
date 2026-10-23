@@ -199,8 +199,8 @@ func run(logger *slog.Logger) error {
 		// A standalone project (no repository) on a workspace with a
 		// configured working directory works in that folder as the template
 		// left it, for example ~/work holding the repositories the template
-		// cloned itself.
-		if dir, err := worker.ExpandWorkingDirectory(workingDirectory, os.Getenv("HOME"), ""); err != nil {
+		// cloned itself (a ~/work/{repo} template starts in ~/work).
+		if dir, err := worker.StandaloneWorkingDirectory(workingDirectory, os.Getenv("HOME")); err != nil {
 			logger.Warn("working directory: a standalone session cannot use the configured directory; using the default",
 				"working_directory", workingDirectory, "error", err)
 		} else {

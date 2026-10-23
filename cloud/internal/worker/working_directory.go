@@ -124,6 +124,24 @@ func ExpandWorkingDirectory(template, home, repositoryURL string) (string, error
 	return resolved, nil
 }
 
+// StandaloneWorkingDirectory resolves a working directory template for a
+// session with no repository. A {repo} template names one checkout among
+// several, so such a session starts in the folder that holds them:
+// ~/work/{repo} becomes ~/work. A template with no {repo} resolves as
+// ExpandWorkingDirectory does, and one whose {repo} sits directly under home
+// or the root has no such folder and is an error.
+func StandaloneWorkingDirectory(template, home string) (string, error) {
+	template = strings.TrimSpace(template)
+	if index := strings.Index(template, "{repo}"); index >= 0 {
+		parent := template[:max(strings.LastIndex(template[:index], "/"), 0)]
+		if parent == "" || parent == "~" || parent == "$HOME" {
+			return "", fmt.Errorf("working directory %q has no folder above {repo} for a session with no repository", template)
+		}
+		template = parent
+	}
+	return ExpandWorkingDirectory(template, home, "")
+}
+
 // ResolveWorkingDirectory decides how a session uses the connection's
 // configured working directory:
 //   - a git checkout whose origin is the session repository is adopted
