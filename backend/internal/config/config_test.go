@@ -636,14 +636,21 @@ func TestLoadVersionRefreshSettings(t *testing.T) {
 func TestLoadPhaseThreeToggles(t *testing.T) {
 	t.Setenv("AO_TUI_VERSION_REFRESH", "")
 	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "")
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
 	cfg, err := Load()
-	if err != nil || !cfg.TUIVersionRefresh || !cfg.WindowsUpdateWhenIdle {
-		t.Fatalf("defaults: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	if err != nil || !cfg.TUIVersionRefresh || !cfg.UpdateWhenIdle {
+		t.Fatalf("defaults: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
 	}
 	t.Setenv("AO_TUI_VERSION_REFRESH", "off")
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "off")
+	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.UpdateWhenIdle {
+		t.Fatalf("off: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
+	}
+	// The older Windows-only name still turns it off.
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
 	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "off")
-	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.WindowsUpdateWhenIdle {
-		t.Fatalf("off: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	if cfg, err = Load(); err != nil || cfg.UpdateWhenIdle {
+		t.Fatalf("legacy off: idle=%t err=%v", cfg.UpdateWhenIdle, err)
 	}
 }
 

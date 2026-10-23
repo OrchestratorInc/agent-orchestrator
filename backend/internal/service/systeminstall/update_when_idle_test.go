@@ -69,7 +69,7 @@ func (l mutableSessionLister) ListAllSessions(context.Context) ([]domain.Session
 func windowsIdleService(t *testing.T, failUpdate bool) (*Service, *idleCoordinatorStub, *[]ports.InstallCommand) {
 	t.Helper()
 	s := newTestService("windows", "npm")
-	s.windowsUpdateWhenIdle = true
+	s.updateWhenIdle = true
 	sessions := []domain.SessionRecord{{ID: "auggie-1", Harness: domain.AgentHarness(TargetAuggie), Activity: domain.Activity{State: domain.ActivityIdle}}}
 	coordinator := &idleCoordinatorStub{sessions: &sessions}
 	s.sessions = mutableSessionLister{mu: &coordinator.mu, sessions: &sessions}
@@ -259,4 +259,24 @@ func TestIdleUpdateReportsSessionsItCouldNotResume(t *testing.T) {
 		}
 	}
 	t.Fatalf("no resume failure was reported: %+v", events.events)
+}
+
+func TestUpdatesThatCannotRunBesideSessionsWaitForIdleOnEveryPlatform(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		s := newTestService(goos, "npm")
+		s.updateWhenIdle = true
+		s.SetIdleUpdateCoordinator(&idleCoordinatorStub{})
+		for _, level := range []UpdateWhileRunning{UpdateWhileRunningWarn, UpdateWhileRunningBlocked} {
+			if got := s.effectiveUpdateLevel(level); got != UpdateWhileRunningIdle {
+				t.Errorf("%s %s = %s, want idle", goos, level, got)
+			}
+		}
+		if got := s.effectiveUpdateLevel(UpdateWhileRunningSafe); got != UpdateWhileRunningSafe {
+			t.Errorf("%s safe = %s", goos, got)
+		}
+		s.updateWhenIdle = false
+		if got := s.effectiveUpdateLevel(UpdateWhileRunningWarn); got != UpdateWhileRunningBlocked {
+			t.Errorf("%s warn without update-when-idle = %s, want blocked", goos, got)
+		}
+	}
 }

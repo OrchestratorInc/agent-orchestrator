@@ -371,11 +371,11 @@ type Deps struct {
 	// Releases records which managed release each session launch runs, so a
 	// release is deleted only once no live session runs it.
 	Releases ManagedReleaseStore
-	// WindowsUpdateWhenIdle lets a Windows update wait for idle sessions, stop
-	// them, update and resume them, instead of refusing while they run
-	// (AO_WINDOWS_UPDATE_WHEN_IDLE).
-	WindowsUpdateWhenIdle bool
-	PrivateNPMPrefixes    map[Target]string
+	// UpdateWhenIdle lets an update that cannot run beside sessions wait for
+	// them to be idle, stop them, update and resume them, instead of refusing
+	// while they run (AO_UPDATE_WHEN_IDLE).
+	UpdateWhenIdle     bool
+	PrivateNPMPrefixes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -423,8 +423,8 @@ type Service struct {
 	releases ManagedReleaseStore
 	// invalidateBinary makes a harness adapter resolve its executable again.
 	invalidateBinary func(Target)
-	// windowsUpdateWhenIdle turns Windows' blocked level into update-when-idle.
-	windowsUpdateWhenIdle bool
+	// updateWhenIdle turns a blocked or warn level into update-when-idle.
+	updateWhenIdle bool
 	// changing marks harnesses whose installation is being changed, so a
 	// launch waits for the change instead of failing.
 	changing map[Target]bool
@@ -508,7 +508,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		reviewers:                  deps.Reviewers,
 		updateChecksDisabled:       deps.DisableUpdateChecks,
 		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
-		windowsUpdateWhenIdle:      deps.WindowsUpdateWhenIdle,
+		updateWhenIdle:             deps.UpdateWhenIdle,
 		managedRoot:                deps.ManagedRoot,
 		releases:                   deps.Releases,
 		goos:                       runtime.GOOS,

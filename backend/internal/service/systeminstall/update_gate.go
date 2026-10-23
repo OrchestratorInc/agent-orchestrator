@@ -70,7 +70,7 @@ func liveSession(session domain.SessionRecord) bool {
 // release in its own directory, and Homebrew formulas with cleanup deferred,
 // leave the running release in place (safe). Casks, other self-updaters and
 // package managers that rewrite a shared tree replace it (warn): the update
-// is blocked while any live process depends on those files. Managed package
+// waits until those sessions are idle and restarts them around the install. Managed package
 // installs are promoted to safe only after selecting the side-by-side plan.
 // Windows cannot replace a running executable at all, so its updates
 // wait for idle sessions and restart them around the install.
@@ -117,15 +117,19 @@ var versionedVendorInstalls = map[Target]bool{
 	TargetGrok:       true,
 }
 
-// effectiveUpdateLevel applies AO_UPDATE_WHILE_RUNNING, blocks installers
-// that cannot retain live releases, and applies AO_WINDOWS_UPDATE_WHEN_IDLE
-// on Windows, which waits instead of refusing.
+// effectiveUpdateLevel applies AO_UPDATE_WHILE_RUNNING and AO_UPDATE_WHEN_IDLE.
+// An installer that cannot retain live releases waits for idle sessions,
+// stops them, updates and resumes them; already idle sessions are stopped
+// right away. Without update-when-idle it is refused while sessions run.
 func (s *Service) effectiveUpdateLevel(level UpdateWhileRunning) UpdateWhileRunning {
-	if s.updateWhileRunningDisabled || level == "" || level == UpdateWhileRunningWarn {
+	if s.updateWhileRunningDisabled || level == "" {
 		return UpdateWhileRunningBlocked
 	}
-	if level == UpdateWhileRunningBlocked && s.goos == "windows" && s.windowsUpdateWhenIdle && s.idleCoordinatorReady() {
-		return UpdateWhileRunningIdle
+	if level == UpdateWhileRunningWarn || level == UpdateWhileRunningBlocked {
+		if s.updateWhenIdle && s.idleCoordinatorReady() {
+			return UpdateWhileRunningIdle
+		}
+		return UpdateWhileRunningBlocked
 	}
 	return level
 }

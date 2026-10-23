@@ -178,11 +178,11 @@ type Config struct {
 	// TUIVersionRefresh also restarts idle terminal sessions on a newly
 	// installed release (AO_TUI_VERSION_REFRESH=off disables it).
 	TUIVersionRefresh bool
-	// WindowsUpdateWhenIdle lets a Windows harness update wait until the
-	// harness's sessions are idle, then stop them, update and resume them,
-	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE=off
-	// disables it).
-	WindowsUpdateWhenIdle bool
+	// UpdateWhenIdle lets a harness update that cannot run beside its sessions
+	// wait until they are idle, then stop them, update and resume them,
+	// instead of refusing while they run (AO_UPDATE_WHEN_IDLE=off disables it;
+	// the older AO_WINDOWS_UPDATE_WHEN_IDLE is still read).
+	UpdateWhenIdle bool
 	// ManagedHarnessInstalls installs npm, Bun, uv and pipx harness updates
 	// side by side under the AO data dir and switches to them atomically, so
 	// no update touches files a running session uses
@@ -280,7 +280,7 @@ func Load() (Config, error) {
 		VersionRefresh:         true,
 		VersionRefreshIdle:     DefaultVersionRefreshIdle,
 		TUIVersionRefresh:      true,
-		WindowsUpdateWhenIdle:  true,
+		UpdateWhenIdle:         true,
 		ManagedHarnessInstalls: true,
 	}
 
@@ -371,12 +371,14 @@ func Load() (Config, error) {
 		}
 		cfg.TUIVersionRefresh = v
 	}
-	if raw, present := os.LookupEnv("AO_WINDOWS_UPDATE_WHEN_IDLE"); present && strings.TrimSpace(raw) != "" {
-		v, err := parseToggleEnv("AO_WINDOWS_UPDATE_WHEN_IDLE", raw)
-		if err != nil {
-			return Config{}, err
+	for _, name := range []string{"AO_WINDOWS_UPDATE_WHEN_IDLE", "AO_UPDATE_WHEN_IDLE"} {
+		if raw, present := os.LookupEnv(name); present && strings.TrimSpace(raw) != "" {
+			v, err := parseToggleEnv(name, raw)
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.UpdateWhenIdle = v
 		}
-		cfg.WindowsUpdateWhenIdle = v
 	}
 	if raw, present := os.LookupEnv("AO_MANAGED_HARNESS_INSTALLS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_MANAGED_HARNESS_INSTALLS", raw)
