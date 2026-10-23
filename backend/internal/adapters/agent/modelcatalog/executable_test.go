@@ -83,8 +83,13 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 	}
 }
 
-func TestDiscoveryExecutableRejectsUnverifiableExtensionlessRedirect(t *testing.T) {
-	for _, invocation := range []string{"@call bridge %*", "& bridge @args", ". 'bridge' @args", "exec bridge \"$@\""} {
+func TestDiscoveryExecutableRejectsUnverifiableRedirect(t *testing.T) {
+	for _, invocation := range []string{
+		"@call bridge %*", "& bridge @args", ". 'bridge' @args", "exec bridge \"$@\"",
+		"@call bridge.bat %*", "@call bridge.cmd %*", "& bridge.ps1 @args", "exec bridge.sh \"$@\"",
+		"@bridge.bat %*", "@bridge.cmd %*", "& './bridge.ps1' @args",
+		"@call \"%~dp0missing.bat\" %*",
+	} {
 		t.Run(invocation, func(t *testing.T) {
 			root := t.TempDir()
 			// Windows resolves bridge.cmd using PATHEXT; POSIX resolves bridge.
@@ -94,9 +99,12 @@ func TestDiscoveryExecutableRejectsUnverifiableExtensionlessRedirect(t *testing.
 				t.Setenv("PATHEXT", ".CMD;.EXE")
 			}
 			writeDiscoveryLauncher(t, root, bridge, "@call autohand %*\n")
+			for _, name := range []string{"bridge.bat", "bridge.cmd", "bridge.ps1", "bridge.sh"} {
+				writeDiscoveryLauncher(t, root, name, "@call autohand %*\n")
+			}
 			t.Setenv("PATH", root)
 			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", invocation+"\n")
-			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify extensionless command") {
+			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify launcher command") {
 				t.Fatalf("verification = %v, want unverifiable intermediate launcher rejected", err)
 			}
 		})
@@ -104,6 +112,15 @@ func TestDiscoveryExecutableRejectsUnverifiableExtensionlessRedirect(t *testing.
 }
 
 func TestDiscoveryExecutableInspectsNestedLaunchers(t *testing.T) {
+	t.Run("inspectable same-agent intermediate", func(t *testing.T) {
+		root := t.TempDir()
+		launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0bridge.bat\" %*\n")
+		writeDiscoveryLauncher(t, root, "bridge.bat", "@\"%~dp0grok.exe\" %*\n")
+		writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+		if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+			t.Fatalf("inspectable same-agent launcher rejected: %v", err)
+		}
+	})
 	for _, agent := range []string{"grok", "cursor"} {
 		t.Run(agent, func(t *testing.T) {
 			root := t.TempDir()

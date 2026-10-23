@@ -184,16 +184,13 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 			continue
 		}
 		references := discoveryLauncherReference.FindAllString(line, -1)
+		var invokedTarget string
+		var explicitInvocation bool
 		// Shells can resolve extensionless targets through PATH/PATHEXT.
 		if command := discoveryLauncherCommand.FindStringSubmatch(line); len(command) > 2 {
-			target := strings.Trim(command[2], `"'`)
-			// A named wrapper is not evidence for an unidentified command it
-			// delegates to. Refuse rather than assume our PATH/PATHEXT lookup
-			// matches the shell's eventual working directory and environment.
-			if command[1] != "" && filepath.Ext(target) == "" && discoveryExecutableOwner(target) == "" {
-				return false, fmt.Errorf("cannot verify extensionless command %q; use an explicit agent-owned launcher path", target)
-			}
-			references = append(references, target)
+			invokedTarget = strings.Trim(command[2], `"'`)
+			explicitInvocation = command[1] != ""
+			references = append(references, invokedTarget)
 		}
 		for _, reference := range references {
 			reference = strings.Trim(reference, `"'`)
@@ -203,10 +200,22 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 			}
 			verified = verified || targetOwner == agentID
 			target := discoveryLauncherTarget(canonical, reference)
+			ext := strings.ToLower(filepath.Ext(reference))
+			script := ext == ".cmd" || ext == ".bat" || ext == ".ps1" || ext == ".sh"
+			// Wrapper ownership cannot vouch for an unidentified script or
+			// extensionless delegate. Do not guess the shell's PATH/PATHEXT
+			// or working directory: require a path we can actually inspect.
+			requireInspection := targetOwner == "" && (script || (explicitInvocation && reference == invokedTarget && ext == ""))
 			if target == "" {
+				if requireInspection {
+					return false, fmt.Errorf("cannot verify launcher command %q; use an explicit agent-owned launcher path", reference)
+				}
 				continue
 			}
 			if _, statErr := os.Stat(target); statErr != nil {
+				if requireInspection {
+					return false, fmt.Errorf("cannot verify launcher command %q: %w", reference, statErr)
+				}
 				continue
 			}
 			targetVerified, inspectErr := inspectDiscoveryExecutable(ctx, agentID, target, seen)
