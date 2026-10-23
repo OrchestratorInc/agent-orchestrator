@@ -3510,5 +3510,6 @@
 	"shareLink.invalid": "That isn't a share link.",
 	"shareLink.signInFirst": "Sign in to AO Cloud to open shared sessions.",
 	"command.openSharedLink": "Open a shared session",
-	"chat.shared.terminalRefused": "Someone else is writing to the agent. Request a turn in Chat to type."
+	"chat.shared.terminalRefused": "Someone else is writing to the agent. Request a turn in Chat to type.",
+	"chat.shared.draftOf": "{{name}}'s draft"
 }

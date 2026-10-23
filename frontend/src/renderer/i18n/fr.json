@@ -3594,5 +3594,6 @@
 	"shareLink.invalid": "Ce n'est pas un lien de partage.",
 	"shareLink.signInFirst": "Connectez-vous à AO Cloud pour ouvrir les sessions partagées.",
 	"command.openSharedLink": "Ouvrir une session partagée",
-	"chat.shared.terminalRefused": "Quelqu'un d'autre écrit à l'agent. Demandez la main dans le chat pour taper."
+	"chat.shared.terminalRefused": "Quelqu'un d'autre écrit à l'agent. Demandez la main dans le chat pour taper.",
+	"chat.shared.draftOf": "Brouillon de {{name}}"
 }

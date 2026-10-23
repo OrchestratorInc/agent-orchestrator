@@ -3529,5 +3529,6 @@
 	"shareLink.invalid": "共有リンクではありません。",
 	"shareLink.signInFirst": "共有セッションを開くには AO Cloud にサインインしてください。",
 	"command.openSharedLink": "共有セッションを開く",
-	"chat.shared.terminalRefused": "ほかの人がエージェントに書き込み中です。入力するにはチャットで順番を待ってください。"
+	"chat.shared.terminalRefused": "ほかの人がエージェントに書き込み中です。入力するにはチャットで順番を待ってください。",
+	"chat.shared.draftOf": "{{name}} の下書き"
 }

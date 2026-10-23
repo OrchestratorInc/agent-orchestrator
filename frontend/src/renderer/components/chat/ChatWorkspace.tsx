@@ -469,8 +469,8 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
-	/** Every edit of the chat box's draft text. */
-	onComposerInput?: (text: string) => void;
+	/** Every edit of the chat box's draft text or move of its caret. */
+	onComposerInput?: (text: string, caret?: number) => void;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */

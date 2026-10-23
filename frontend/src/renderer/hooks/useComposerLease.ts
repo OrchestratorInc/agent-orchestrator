@@ -3,6 +3,8 @@ import type { CloudCpClient, CloudCpComposerAnswer, CloudCpComposerParticipant, 
 
 /** How often a holder renews while the composer is in use. */
 export const COMPOSER_RENEW_MS = 3_000;
+/** How long a holder's keystrokes are gathered before their draft is shared. */
+export const COMPOSER_DRAFT_PUBLISH_MS = 120;
 
 export interface ComposerLeaseState {
 	/** Someone else can write in this session right now, so the lease applies. */
@@ -19,8 +21,13 @@ export interface ComposerLeaseState {
 	/** The grant to present with a send or steer, when holding. */
 	epoch?: number;
 	error?: string;
-	/** Report a draft edit: takes the lease on the first keystroke, renews while typing, releases when cleared. */
-	noteDraft: (text: string) => void;
+	/** What the holder is typing, when someone else holds the lease and has typed. */
+	remoteDraft?: { holder: CloudCpComposerParticipant; text: string; cursor: number };
+	/**
+	 * Report a draft edit or caret move: takes the lease on the first keystroke,
+	 * shares the draft live while holding it, releases when cleared.
+	 */
+	noteDraft: (text: string, caret?: number) => void;
 	requestTurn: () => void;
 	leaveLine: () => void;
 	takeOver: () => void;
@@ -28,7 +35,7 @@ export interface ComposerLeaseState {
 	sent: () => void;
 }
 
-type ComposerClient = Pick<CloudCpClient, "acquireComposer" | "renewComposer" | "releaseComposer" | "requestComposerTurn" | "leaveComposerQueue" | "takeOverComposer">;
+type ComposerClient = Pick<CloudCpClient, "acquireComposer" | "renewComposer" | "releaseComposer" | "requestComposerTurn" | "leaveComposerQueue" | "takeOverComposer" | "publishComposerDraft">;
 
 /**
  * Drives a shared cloud session's composer lease from its live state. In a
@@ -48,8 +55,13 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 	const [grant, setGrant] = useState<number>();
 	const [error, setError] = useState<string>();
 	const draftRef = useRef("");
+	const caretRef = useRef<number | undefined>(undefined);
 	const typedRef = useRef(false);
 	const pendingRef = useRef(false);
+	const publishTimerRef = useRef<number | undefined>(undefined);
+	const publishingRef = useRef(false);
+	const publishAgainRef = useRef(false);
+	const epochRef = useRef<number | undefined>(undefined);
 
 	const composer = live?.composer;
 	const liveHolder = composer?.holder ?? undefined;
@@ -61,6 +73,7 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 	const position = composer ? composer.waitlist.findIndex((waiter) => waiter.userId === userId) + 1 : 0;
 	const aheadInLine = Boolean(composer?.waitlist.length) && position !== 1;
 	const locked = shared && !holding && (Boolean(liveHolder) || aheadInLine);
+	epochRef.current = shared && holding ? epoch : undefined;
 
 	// The live state is the authority: a grant it no longer shows (taken over,
 	// lapsed) is gone, and one it shows passed to this person (from the line)
@@ -92,16 +105,62 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 		void run(() => client.acquireComposer(orgId, sessionId), true);
 	}, [client, orgId, run, sessionId]);
 
-	const noteDraft = useCallback((text: string) => {
+	// Share the newest draft with everyone else; a draft typed while the last
+	// one was on its way goes next, so the others always end on the latest.
+	const publishDraft = useCallback(async () => {
+		const grantEpoch = epochRef.current;
+		if (!orgId || grantEpoch === undefined || draftRef.current.trim() === "") return;
+		if (publishingRef.current) {
+			publishAgainRef.current = true;
+			return;
+		}
+		publishingRef.current = true;
+		try {
+			const text = draftRef.current;
+			const cursor = Math.min(Math.max(caretRef.current ?? text.length, 0), text.length);
+			const answer = await client.publishComposerDraft(orgId, sessionId, grantEpoch, text, cursor);
+			typedRef.current = false;
+			if (!answer.granted) setGrant(undefined);
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			publishingRef.current = false;
+			if (publishAgainRef.current) {
+				publishAgainRef.current = false;
+				void publishDraft();
+			}
+		}
+	}, [client, orgId, sessionId]);
+	const scheduleDraft = useCallback(() => {
+		if (publishTimerRef.current !== undefined) window.clearTimeout(publishTimerRef.current);
+		publishTimerRef.current = window.setTimeout(() => {
+			publishTimerRef.current = undefined;
+			void publishDraft();
+		}, COMPOSER_DRAFT_PUBLISH_MS);
+	}, [publishDraft]);
+	useEffect(() => () => {
+		if (publishTimerRef.current !== undefined) window.clearTimeout(publishTimerRef.current);
+	}, []);
+
+	const noteDraft = useCallback((text: string, caret?: number) => {
+		const edited = text !== draftRef.current;
 		draftRef.current = text;
+		caretRef.current = caret;
 		if (!shared) return;
 		if (text.trim() === "") {
 			if (holding && epoch !== undefined && orgId) void run(() => client.releaseComposer(orgId, sessionId, epoch));
 			return;
 		}
-		typedRef.current = true;
-		if (!holding && !locked) acquire();
-	}, [acquire, client, epoch, holding, locked, orgId, run, sessionId, shared]);
+		if (edited) typedRef.current = true;
+		if (holding) scheduleDraft();
+		else if (!locked && edited) acquire();
+	}, [acquire, client, epoch, holding, locked, orgId, run, scheduleDraft, sessionId, shared]);
+
+	// A grant just arrived (taken on the first keystroke, or handed over from
+	// the line) for a draft already written: share it.
+	useEffect(() => {
+		if (shared && holding && epoch !== undefined && draftRef.current.trim() !== "") scheduleDraft();
+	}, [epoch, holding, scheduleDraft, shared]);
 
 	// Someone joined while this person had a draft: take the lease for it.
 	useEffect(() => {
@@ -125,6 +184,9 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 		holding,
 		locked,
 		holder: liveHolder && !holdingLive ? liveHolder : undefined,
+		remoteDraft: liveHolder && !holdingLive && composer?.draft?.text
+			? { holder: liveHolder, text: composer.draft.text, cursor: composer.draft.cursor }
+			: undefined,
 		position: position > 0 ? position : undefined,
 		canTakeOver: Boolean(live?.canTakeOver),
 		epoch: holding ? epoch : undefined,
