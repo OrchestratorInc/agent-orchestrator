@@ -3,10 +3,9 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  * Shared rendered view for Markdown files, including artifact thumbnails,
  * expanded previews, and the sidebar's file viewer.
  *
- * Also shown alongside a Markdown file's diff. Styled with
- * `github-markdown-css` (`.markdown-body`)
- * rather than AO's own design system — a deliberate, scoped exception for this
- * document surface, so the same file reads consistently everywhere.
+ * Also shown alongside a Markdown file's diff. The Markdown structure uses
+ * github-markdown-css with AO theme tokens and EB Garamond headings shared
+ * across every file surface.
  *
  * Two choices carried over from `ChatMarkdown.tsx`, for the same reasons:
  *
@@ -20,12 +19,8 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  *     (`script-src 'self'`, no `wasm-unsafe-eval`) blocks Shiki's default WASM
  *     engine.
  *
- * No explicit light/dark plumbing is needed for `github-markdown-css`: its
- * combined stylesheet follows `prefers-color-scheme`, and `main.ts` already
- * drives Electron's `nativeTheme.themeSource` from AO's own theme preference,
- * so this renderer's `prefers-color-scheme` already tracks AO's theme, not the
- * raw OS setting. (In `npm run dev:web` there is no `nativeTheme`, so it follows
- * the OS directly.)
+ * Document colors follow AO's active CSS tokens, including custom themes,
+ * rather than the operating system's preferred color scheme.
  */
 
 import Markdown, { type Components } from "react-markdown";
@@ -46,6 +41,7 @@ import { HighlightedCode } from "../chat/HighlightedCode";
 import { MermaidBlock } from "../chat/MermaidBlock";
 import "../chat/code-theme.css";
 import "github-markdown-css/github-markdown.css";
+import "./markdown-file.css";
 import { MarkdownFileContext } from "./markdown-file-context";
 import { MarkdownImage } from "./MarkdownImage";
 import { MarkdownExternalLink } from "./MarkdownExternalLink";
@@ -179,7 +175,7 @@ export function MarkdownFileView({
 	);
 	return (
 		<MarkdownFileContext.Provider value={contextValue}>
-			<div className={thumbnail ? "h-full" : undefined} inert={thumbnail || undefined}>
+			<div className={cn("ao-markdown-surface min-h-full", thumbnail && "h-full")} inert={thumbnail || undefined}>
 				{truncated && !thumbnail ? (
 					<div className="shrink-0 border-b border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">
 						{t("files.contentTruncated")}
@@ -188,7 +184,7 @@ export function MarkdownFileView({
 				{/* github-markdown-css hangs each heading's `.anchor` link icon 20px
 				    into the left gutter (`margin-left: -20px`), so the inline padding
 				    must be wider than that or the scroll container clips the icon. */}
-				<div className={cn("markdown-body px-6 py-4", thumbnail && "min-h-full")} ref={bodyRef}>
+				<div className={cn("markdown-body ao-markdown", thumbnail && "min-h-full")} ref={bodyRef}>
 					<Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
 						{thumbnail ? body.slice(0, 4000) : body}
 					</Markdown>
