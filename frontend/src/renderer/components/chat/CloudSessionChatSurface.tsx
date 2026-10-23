@@ -557,8 +557,11 @@ function isWorkerUnavailable(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
 }
 
+// The control plane reports a worker that did not answer in time as
+// TRANSPORT_TIMEOUT (the queued request expired) or WORKER_TIMEOUT (its own
+// wait for the answer ran out): both are a slow worker, not a failure.
 function isTransportTimeout(error: unknown): boolean {
-	return error instanceof CloudCpError && error.code === "TRANSPORT_TIMEOUT";
+	return error instanceof CloudCpError && (error.code === "TRANSPORT_TIMEOUT" || error.code === "WORKER_TIMEOUT");
 }
 
 export function CloudSessionChatSurface({
