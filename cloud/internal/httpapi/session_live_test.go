@@ -222,6 +222,9 @@ func TestLiveEventStreamTracksViewers(t *testing.T) {
 	frames, cancel := openLiveStream(t, httpServer, "?live=1")
 
 	first := decodeLiveFrame(t, nextFrame(t, frames, 2*time.Second))
+	if first.You != "user-1" {
+		t.Fatalf("first frame names the stream's user %q, want user-1", first.You)
+	}
 	if len(first.Viewers) != 1 || first.Viewers[0] != (sessionViewerResponse{UserID: "user-1", Name: "Alice", Role: "member"}) {
 		t.Fatalf("first frame viewers = %+v", first.Viewers)
 	}

@@ -729,8 +729,11 @@ export function CloudSessionChatSurface({
 	// A shared session's live state: who else has it open and who holds its
 	// composer, the lock on talking to the agent.
 	const live = useCloudSessionLive(cloud?.orgId, session.id, Boolean(cloud && ready && session.isTerminated !== true));
-	const myRole = live?.viewers.find((viewer) => viewer.userId === userId)?.role;
-	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId, live, canWrite: myRole !== "viewer" });
+	// Who this person is, as the server sees them on the live stream; the
+	// remembered account only until the stream says.
+	const me = live?.you || userId;
+	const myRole = live?.viewers.find((viewer) => viewer.userId === me)?.role;
+	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId: me, live, canWrite: myRole !== "viewer" });
 	const leaseRef = useRef(lease);
 	leaseRef.current = lease;
 	const send = useMutation({
@@ -766,14 +769,14 @@ export function CloudSessionChatSurface({
 	const startFailed = Boolean(workspaceFailure);
 	const startStopped = startFailed && !rerunning;
 	const snapshot = useMemo(() => {
-		const projected = toSnapshot(session, eventsQuery.data ?? [], userId);
+		const projected = toSnapshot(session, eventsQuery.data ?? [], me);
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
 		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, session, settings, shownApprovalMode, startFailed, startStopped, userId]);
+	}, [eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
@@ -906,7 +909,7 @@ export function CloudSessionChatSurface({
 								: undefined
 			}
 			headerActions={headerActions}
-			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={userId} /> : undefined}
+			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
 			composerLockedPlaceholder={myRole === "viewer"
 				? appI18n.t("chat.shared.viewOnly")
 				: lease.locked

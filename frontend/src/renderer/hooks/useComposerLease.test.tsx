@@ -8,7 +8,7 @@ const ALICE = { userId: "user-alice", name: "Alice" };
 const BOB = { userId: "user-bob", name: "Bob" };
 
 function live(viewers: CloudCpSessionViewer[], composer: Partial<CloudCpComposerLease> = {}, canTakeOver = false): CloudCpSessionLive {
-	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver };
+	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver, you: ME };
 }
 
 const me = { userId: ME, name: "Me", role: "member" as const };
