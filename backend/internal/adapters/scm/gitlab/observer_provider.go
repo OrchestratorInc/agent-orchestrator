@@ -1012,6 +1012,15 @@ func isFailingCheckStatus(s domain.PRCheckStatus) bool {
 func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMergeabilityObservation {
 	ms := effectiveMergeStatus(mr)
 	var blockers []string
+	// cleared reports whether this status positively rules conflicts out.
+	// detailed_merge_status is GitLab's single "why this MR cannot merge right
+	// now" enum whose only conflict value is `conflict`: every other computed
+	// status means GitLab ran the merge check and found no conflict. The
+	// not-yet-computed set (checking/preparing/unchecked/approvals_syncing/"")
+	// and any unknown future status are not proof, so they stay false.
+	// need_rebase stays false as a documented boundary: a behind-base head may
+	// still be conflict-free, but the status alone does not prove it.
+	cleared := gitlabMergeStatusRulesOutConflicts(ms)
 
 	switch ms {
 	// Mergeable (current + legacy aliases). GitLab reports these when the
@@ -1030,56 +1039,68 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 			blockers = append(blockers, "draft")
 			mergeable = false
 		}
+		// `mergeable`/`can_be_merged` means GitLab computed the MR merges
+		// cleanly, so conflicts are positively ruled out. ConflictsCleared carries
+		// that across even when a CI/review/draft blocker forces MergeBlocked, so
+		// lifecycle can re-arm the merge-conflict nudge dedup (#6104).
 		if mergeable {
 			return ports.SCMMergeabilityObservation{
-				State:     string(domain.MergeMergeable),
-				Mergeable: true,
+				State:            string(domain.MergeMergeable),
+				Mergeable:        true,
+				ConflictsCleared: cleared,
 			}
 		}
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: blockers,
+			State:            string(domain.MergeBlocked),
+			Blockers:         blockers,
+			ConflictsCleared: cleared,
 		}
 
 	// Conflicting (current + legacy aliases).
 	case "conflict", "cannot_be_merged", "cannot_be_merged_recheck":
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeConflicting),
-			Conflict: true,
-			Blockers: []string{"conflicts"},
+			State:            string(domain.MergeConflicting),
+			Conflict:         true,
+			Blockers:         []string{"conflicts"},
+			ConflictsCleared: cleared,
 		}
 
 	// Unknown — mergeability is being computed or the diff is being prepared.
 	case "checking", "preparing", "unchecked", "approvals_syncing", "":
 		return ports.SCMMergeabilityObservation{
-			State: string(domain.MergeUnknown),
+			State:            string(domain.MergeUnknown),
+			ConflictsCleared: cleared,
 		}
 
 	// Need rebase — head is behind base; a fast-forward merge is not possible.
 	case "need_rebase":
 		return ports.SCMMergeabilityObservation{
-			State:      string(domain.MergeBlocked),
-			BehindBase: true,
-			Blockers:   []string{"behind_base"},
+			State:            string(domain.MergeBlocked),
+			BehindBase:       true,
+			Blockers:         []string{"behind_base"},
+			ConflictsCleared: cleared,
 		}
 
 	// CI blockers (current + legacy).
 	case "ci_must_pass", "ci_still_running":
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"ci_failing"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"ci_failing"},
+			ConflictsCleared: cleared,
 		}
 
 	case "discussions_not_resolved":
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"discussions_unresolved"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"discussions_unresolved"},
+			ConflictsCleared: cleared,
 		}
 
 	case "draft_status":
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"draft"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"draft"},
+			ConflictsCleared: cleared,
 		}
 
 	// Review blockers.
@@ -1089,16 +1110,18 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 		// not_approved so downstream status logic can distinguish "someone
 		// asked for changes" from "nobody has approved yet".
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"changes_requested"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"changes_requested"},
+			ConflictsCleared: cleared,
 		}
 
 	case "not_approved":
 		// Approvals are required and have not been granted. The approvals
 		// endpoint is authoritative for this case.
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"review_required"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"review_required"},
+			ConflictsCleared: cleared,
 		}
 
 	// Provider-blocked / non-mergeable states without a more specific cause.
@@ -1107,15 +1130,41 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 		"security_policy_pipeline_check", "security_policy_violations",
 		"locked_paths", "locked_lfs_files", "title_regex":
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"blocked_by_provider"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"blocked_by_provider"},
+			ConflictsCleared: cleared,
 		}
 
 	default:
 		return ports.SCMMergeabilityObservation{
-			State:    string(domain.MergeBlocked),
-			Blockers: []string{"blocked_by_provider"},
+			State:            string(domain.MergeBlocked),
+			Blockers:         []string{"blocked_by_provider"},
+			ConflictsCleared: cleared,
 		}
+	}
+}
+
+// gitlabMergeStatusRulesOutConflicts reports whether a GitLab effective merge
+// status positively establishes that the MR has no merge conflicts, so the
+// observation can carry ConflictsCleared even when State reads blocked.
+func gitlabMergeStatusRulesOutConflicts(ms string) bool {
+	switch ms {
+	// Computed non-conflict statuses: GitLab ran the merge check and found no
+	// conflict, even though the MR is blocked for an unrelated reason.
+	case "mergeable", "can_be_merged",
+		"ci_must_pass", "ci_still_running",
+		"discussions_not_resolved", "draft_status",
+		"requested_changes", "not_approved",
+		"not_open", "merge_request_blocked", "merge_time", "commits_status",
+		"jira_association_missing", "status_checks_must_pass",
+		"security_policy_pipeline_check", "security_policy_violations",
+		"locked_paths", "locked_lfs_files", "title_regex":
+		return true
+	default:
+		// conflict/cannot_be_merged*, the not-yet-computed set, need_rebase
+		// (documented boundary above), and unknown future statuses are not
+		// proof that conflicts are gone.
+		return false
 	}
 }
 
