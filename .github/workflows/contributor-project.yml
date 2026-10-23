@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '17 * * * *'
   issues:
-    types: [opened, reopened]
+    types: [opened, reopened, closed]
   pull_request:
     paths:
       - ".github/scripts/contributor-project/**"
@@ -29,6 +29,10 @@ jobs:
         run: python3 -m unittest discover -s tests -v
 
   sync:
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
     concurrency:
       group: ao-contributor-project
       cancel-in-progress: false
@@ -55,10 +59,54 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.repository.default_branch || 'main' }}
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Run Project sync tests
         run: python3 -m unittest discover -s tests -v
+
+      - name: Get UTC owner cache date
+        id: date
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore daily owners
+        id: owners
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: .github/scripts/contributor-project/research/owners
+          key: contributor-owners-v2-${{ steps.date.outputs.day }}
+          restore-keys: contributor-owners-v2-
+
+      - name: Rebuild owners once per UTC day
+        id: owner-build
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.owners.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ownership_extract.py
+          python3 scripts/build_owners.py
+
+      - name: Warn when owner build fails
+        if: always() && steps.owner-build.outcome == 'failure'
+        run: echo '::warning::Owner build failed; using restored owners if available.'
+
+      - name: Save today's successful owner build
+        if: always() && steps.owner-build.outcome == 'success' && steps.owners.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .github/scripts/contributor-project/research/owners
+          key: contributor-owners-v2-${{ steps.date.outputs.day }}
+
+      - name: Read open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p research
+          gh api --paginate --slurp 'repos/OrchestratorInc/agent-orchestrator/issues?state=open&sort=created&direction=asc&per_page=100' > research/open-issues.json
 
       - name: Create a Project-scoped installation token
         id: project-token
@@ -67,13 +115,17 @@ jobs:
           client-id: ${{ vars.AO_CONTRIBUTOR_APP_CLIENT_ID }}
           private-key: ${{ secrets.AO_CONTRIBUTOR_APP_PRIVATE_KEY }}
           owner: OrchestratorInc
+          repositories: agent-orchestrator
+          permission-organization-projects: write
+          permission-issues: read
 
-      - name: Add open issues and fill blank suggestions
+      - name: Sync issues and bot suggestions
         env:
           GH_TOKEN: ${{ steps.project-token.outputs.token }}
         run: |
           python3 scripts/sync_project.py \
             --mapping-file data/issue-areas.json \
-            --owners-file data/area-owners.json \
+            --owners-file research/owners/area-owners.json \
+            --issues-file research/open-issues.json \
             --project-url "$PROJECT_URL" \
             --apply

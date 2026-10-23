@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build proposed core contributors and area owners from public PR/blame evidence."""
+"""Build proposed core contributors and owners from PRs, reviews and static blame."""
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -9,12 +9,12 @@ from math import log1p
 from pathlib import Path
 import re
 
-from ownership_extract import skip_reason
+from ownership_extract import save, skip_reason
+from blame_snapshot import validate as validate_blame
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOW_DAYS = HALF_LIFE_DAYS = 90
 # Per-area maxima among core contributors normalize each metric to 0..1.
-# PR counts and recency-weighted authored churn get 85%; old blame gets only 5%.
 SCORE_WEIGHTS = {"merged_prs_90d": 60, "weighted_churn": 25, "reviews_90d": 10, "blame_lines": 5}
 ACTIVITY_RULE = "merged_prs_90d >= 1 or reviews_90d >= 2 (churn-proportional PR equivalents)"
 
@@ -23,13 +23,12 @@ def timestamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def build(raw, rules, taxonomy, generated_at=None, threshold=10, core_override=None):
+def build(raw, rules, taxonomy, blame, generated_at=None, threshold=10, core_override=None):
+    validate_blame(blame, taxonomy)
     meta = raw["meta"]
     as_of = timestamp(meta["generated_at"])
     cutoff = as_of - timedelta(days=WINDOW_DAYS)
     area_ids = {area["id"] for area in taxonomy["areas"]}
-    if meta.get("pr_cap_hit"):
-        raise ValueError("ownership history is capped; refresh it before building owners")
     if not rules or any(rule["area"] not in area_ids for rule in rules):
         raise ValueError("path rules must reference the taxonomy")
     bots = {login.lower() for login in meta.get("excluded_bot_logins", [])}
@@ -47,7 +46,7 @@ def build(raw, rules, taxonomy, generated_at=None, threshold=10, core_override=N
         raise ValueError(f"path has no area: {path}")
 
     def empty():
-        return {"merged_prs_all_time": 0.0, "merged_prs_90d": 0.0, "weighted_churn": 0.0,
+        return {"merged_prs_90d": 0.0, "weighted_churn": 0.0,
                 "reviews_90d": 0.0, "blame_lines": 0, "last_merged_at": None}
 
     evidence = {area_id: defaultdict(empty) for area_id in area_ids}
@@ -79,7 +78,6 @@ def build(raw, rules, taxonomy, generated_at=None, threshold=10, core_override=N
             share = lines / total if total else 1 / len(churn)
             if author:
                 item = evidence[area_id][author]
-                item["merged_prs_all_time"] += share
                 item["merged_prs_90d"] += share * recent
                 item["weighted_churn"] += log1p(total) * share * decay
                 if item["last_merged_at"] is None or timestamp(item["last_merged_at"]) < merged:
@@ -87,47 +85,44 @@ def build(raw, rules, taxonomy, generated_at=None, threshold=10, core_override=N
             if recent:
                 for login in reviewers:
                     evidence[area_id][login]["reviews_90d"] += share
-    for path, people in raw["blame"].items():
-        if skip_reason(path):
-            continue
-        area_id = area_for(path)
+    for area_id, people in blame["areas"].items():
         for login, lines in people.items():
             login = human(login)
             if login:
                 evidence[area_id][login]["blame_lines"] += lines
-
     core_logins = {login for login, count in recent_counts.items() if count >= threshold}
-    if core_override is None:
-        if not 8 <= len(core_logins) <= 30:
-            raise ValueError(f"threshold {threshold} selects {len(core_logins)} people; choose --threshold for 8..30")
-    else:
-        if core_override.get("repo") != taxonomy["repo"]:
-            raise ValueError("edited core list must name the same repository")
-        selected = [human(person["login"]) for person in core_override["contributors"]]
-        if None in selected or len(set(selected)) != len(selected):
-            raise ValueError("edited core list must contain unique human logins")
-        core_logins = set(selected)
+    overrides = core_override or {"include": [], "exclude": []}
+    selected = {}
+    for key in ("include", "exclude"):
+        logins = overrides.get(key)
+        if not isinstance(logins, list):
+            raise ValueError("core overrides need include and exclude arrays")
+        selected[key] = {human(login) for login in logins}
+        if None in selected[key] or len(selected[key]) != len(logins):
+            raise ValueError("core overrides must contain unique human logins")
+    core_logins = (core_logins | selected["include"]) - selected["exclude"]
     shared = {"generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
               "evidence_as_of": meta["generated_at"], "window_start": cutoff.isoformat(),
-              "origin_main_sha": meta["origin_main_sha"], "repo": taxonomy["repo"]}
-    core = {**shared, "status": "proposed", "note": "Proposed from public history. Edit this list before accepting core membership.",
-            "selection": "edited core list" if core_override is not None else "merged PR threshold",
-            "threshold_merged_prs_90d": threshold if core_override is None else None, "contributors": []}
+              "repo": taxonomy["repo"]}
+    core = {**shared, "status": "proposed", "note": "Proposed from public history with core overrides.",
+            "selection": "merged PR threshold with overrides",
+            "threshold_merged_prs_90d": threshold, "contributors": []}
     for login in sorted(core_logins, key=lambda name: (-recent_counts[name], name.lower())):
         top = sorted((area_id for area_id in area_ids if area_id not in {"shared-infra", "needs-area"} and evidence[area_id][login]["merged_prs_90d"] > 0),
                      key=lambda area_id: (-evidence[area_id][login]["merged_prs_90d"], area_id))[:3]
         core["contributors"].append({"login": login, "merged_prs_90d": recent_counts[login], "top_areas": top})
 
     owners = {**shared, "status": "proposed", "half_life_days": HALF_LIFE_DAYS,
+              "blame_generated_at": blame["generated_at"], "blame_origin_main_sha": blame.get("origin_main_sha"),
               "score_weights": SCORE_WEIGHTS, "normalization": "per-area metric maximum among proposed core contributors",
               "activity_rule": ACTIVITY_RULE,
               "notes": ["PR and review credit is proportional to area churn; zero-churn PRs split equally across touched areas.",
-                        "PR files use the blame path exclusions for lockfiles, generated, vendored, build and snapshot files.",
+                        "PR files exclude lockfiles, generated, vendored, build and snapshot paths.",
                         "Weighted churn is log1p(total eligible PR churn), split by area share, with merge-age decay.",
                         "Fallback shared-infra and needs-area buckets never suggest owners.",
                         "Reviews count unique non-author reviewers on PRs merged in the window; review timestamps are unavailable.",
-                        "Top core areas use merged PR equivalents in the window. All-time covers the captured PR history.",
-                        "Blame is the extracted human line count at origin_main_sha, with extraction exclusions."], "areas": {}}
+                        "Top core areas use merged PR equivalents in the 90-day window.",
+                        "Blame uses the committed area line-count snapshot, not live Git history."], "areas": {}}
     for area in taxonomy["areas"]:
         if area["id"] in {"shared-infra", "needs-area"}:
             owners["areas"][area["id"]] = {"label": area["label"], "owners": [], "unowned": True}
@@ -151,15 +146,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-file", type=Path, default=ROOT / "research/ownership-raw.json")
     parser.add_argument("--threshold", type=int, default=10)
-    parser.add_argument("--core-file", type=Path, help="use edited core membership instead of proposing it again")
+    parser.add_argument("--overrides-file", type=Path, default=ROOT / "data/core-overrides.json")
+    parser.add_argument("--blame-file", type=Path, default=ROOT / "data/blame-lines.json")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "research/owners")
     args = parser.parse_args()
     if args.threshold < 1:
         parser.error("--threshold must be positive")
     core, owners = build(json.loads(args.raw_file.read_text()), json.loads((ROOT / "data/path-areas.json").read_text()),
-                         json.loads((ROOT / "data/issue-areas.json").read_text()), threshold=args.threshold,
-                         core_override=json.loads(args.core_file.read_text()) if args.core_file else None)
+                         json.loads((ROOT / "data/issue-areas.json").read_text()),
+                         json.loads(args.blame_file.read_text()), threshold=args.threshold,
+                         core_override=json.loads(args.overrides_file.read_text()))
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     for name, data in [("core-contributors", core), ("area-owners", owners)]:
-        (ROOT / f"data/{name}.json").write_text(json.dumps(data, indent=2) + "\n")
+        save(args.output_dir / f"{name}.json", data)
     print(f"Core: {len(core['contributors'])} humans; {core['selection']}; threshold: {core['threshold_merged_prs_90d']}")
     print(f"Areas: {len(owners['areas'])}; unowned: {sum(area['unowned'] for area in owners['areas'].values())}")
 

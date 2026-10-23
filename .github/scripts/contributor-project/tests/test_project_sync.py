@@ -1,6 +1,9 @@
 import importlib.util
 import io
 import json
+from datetime import datetime, timedelta, timezone
+import subprocess
+import textwrap
 import sys
 import tempfile
 import unittest
@@ -20,6 +23,7 @@ REPO = "OrchestratorInc/agent-orchestrator"
 ROUTING_FIELD_ID = "PVTF_routing"
 EVIDENCE_FIELD_ID = "PVTF_evidence"
 OWNER_FIELD_ID = "PVTF_owner"
+RECORD_FIELD_ID = "PVTF_record"
 
 
 def mapping():
@@ -37,11 +41,12 @@ def mapping():
     }
 
 
-def issue(number, node_id=None):
+def issue(number, node_id=None, labels=()):
     return sync_project.Issue(
         number=number,
         node_id=node_id or f"I_issue_{number}",
         html_url=f"https://github.com/OrchestratorInc/agent-orchestrator/issues/{number}",
+        labels=labels,
     )
 
 
@@ -59,14 +64,14 @@ def response(payload, status=200, headers=""):
 
 
 def owners():
-    return {"repo": REPO, "areas": {
+    return {"repo": REPO, "generated_at": "2026-10-23T00:00:00Z", "areas": {
         "desktop-ui": {"owners": [{"login": "alice"}, {"login": "bob"}], "unowned": False},
         "comma-area": {"owners": [], "unowned": True},
         "needs-area": {"owners": [], "unowned": True},
     }}
 
 
-def project(items=None, include_evidence=True, include_owner=False):
+def project(items=None, include_evidence=True, include_owner=False, include_record=True):
     fields = [
         {
             "id": ROUTING_FIELD_ID,
@@ -81,6 +86,8 @@ def project(items=None, include_evidence=True, include_owner=False):
     ]
     if include_evidence:
         fields.append({"id": EVIDENCE_FIELD_ID, "name": "Area evidence", "dataType": "TEXT"})
+    if include_record:
+        fields.append({"id": RECORD_FIELD_ID, "name": "Sync record", "dataType": "TEXT"})
     if include_owner:
         fields.append({"id": OWNER_FIELD_ID, "name": "Suggested owner", "dataType": "TEXT"})
     return sync_project.normalize_project_snapshot(
@@ -93,9 +100,10 @@ def project(items=None, include_evidence=True, include_owner=False):
     )
 
 
-def project_item(item_id, number, area="", evidence="", archived=False, repo=REPO, private_title=None, owner=""):
+def project_item(item_id, number, area="", evidence="", archived=False, repo=REPO, private_title=None, owner="", record=None, state="OPEN", kind="Issue"):
     content = {
-        "__typename": "Issue",
+        "__typename": kind,
+        "state": state,
         "id": f"I_issue_{number}",
         "number": number,
         "url": f"https://github.com/{repo}/issues/{number}",
@@ -108,6 +116,8 @@ def project_item(item_id, number, area="", evidence="", archived=False, repo=REP
         values.append({"field": {"id": ROUTING_FIELD_ID, "name": "Suggested area"}, "optionId": "OPT_UI", "name": area})
     if evidence:
         values.append({"field": {"id": EVIDENCE_FIELD_ID, "name": "Area evidence"}, "text": evidence})
+    if record is not None:
+        values.append({"field": {"id": RECORD_FIELD_ID, "name": "Sync record"}, "text": json.dumps(record)})
     if owner:
         values.append({"field": {"id": OWNER_FIELD_ID, "name": "Suggested owner"}, "text": owner})
     return {
@@ -142,9 +152,11 @@ class ProjectSyncTests(unittest.TestCase):
         plan = sync_project.build_plan(mapping(), [issue(1), issue(2)], snapshot)
         responses = [
             {"addProjectV2ItemById": {"item": {"id": "PVTI_new"}}},
-            {"node": {"isArchived": False, "fieldValueByName": None}},
+            {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_new"}}},
-            {"node": {"isArchived": False, "fieldValueByName": None}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_new"}}},
+            {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_existing"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_existing"}}},
         ]
         with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
@@ -156,7 +168,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_lagging_item_list_does_not_overwrite_human_value(self):
         plan = sync_project.build_plan(mapping(), [issue(1)], project())
-        human = {"node": {"isArchived": False, "fieldValueByName": {
+        human = {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": {
             "name": "Shared infrastructure", "optionId": "OPT_SHARED",
             "field": {"id": ROUTING_FIELD_ID, "name": "Suggested area", "dataType": "SINGLE_SELECT"}}}}
         responses = [{"addProjectV2ItemById": {"item": {"id": "PVTI_already_there"}}}, human]
@@ -288,7 +300,7 @@ class ProjectSyncTests(unittest.TestCase):
             ):
                 exit_code = sync_project.main(["--project-url", "https://github.com/orgs/OrchestratorInc/projects/7", "--apply"])
             self.assertEqual(exit_code, 0)
-            self.assertEqual(json.loads(out.getvalue())["applied"], {"fields_updated": 0, "fields_created": 0, "items_added": 1, "fields_filled": 0, "fields_skipped_after_recheck": 0})
+            self.assertEqual(json.loads(out.getvalue())["applied"], {"fields_updated": 0, "fields_created": 0, "items_added": 1, "fields_filled": 0, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0})
             self.assertIn("rate limited; 1 operations applied, remaining resume on the next run", err.getvalue())
             self.assertEqual(run.call_count, 3)
             sleep.assert_called_once_with(60)
@@ -300,12 +312,12 @@ class ProjectSyncTests(unittest.TestCase):
         responses = [{"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}}, sync_project.RateLimitError("rate limited")]
         with (
             patch.object(sync_project, "_create_field", return_value=created),
-            patch.object(sync_project, "_can_fill_field", return_value=True),
+            patch.object(sync_project, "_can_fill_field", return_value={}),
             patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql,
             patch.object(sync_project.sys, "stderr", io.StringIO()) as err,
         ):
             summary = sync_project.apply_plan(plan)
-        self.assertEqual(summary, {"fields_updated": 0, "fields_created": 1, "items_added": 0, "fields_filled": 1, "fields_skipped_after_recheck": 0})
+        self.assertEqual(summary, {"fields_updated": 0, "fields_created": 1, "items_added": 0, "fields_filled": 1, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0})
         self.assertEqual(graphql.call_count, 2)
         self.assertIn("rate limited; 2 operations applied", err.getvalue())
 
@@ -413,12 +425,14 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertTrue(run.call_args.args[0][-1].endswith("&page=2"))
         sleep.assert_called_once_with(1)
 
-    def test_invalid_owners_stop_before_any_network_calls(self):
-        args = sync_project.make_parser().parse_args(["--owners-file", "/missing/contributor-owners.json"])
-        with patch.object(sync_project, "fetch_open_issues") as issues, patch.object(sync_project, "fetch_project") as snapshot, self.assertRaisesRegex(sync_project.SyncError, "cannot read owners"):
-            sync_project.run(args)
-        issues.assert_not_called()
-        snapshot.assert_not_called()
+    def test_missing_or_invalid_owners_still_add_issues(self):
+        for failure in ("missing", "invalid"):
+            args = sync_project.make_parser().parse_args(["--owners-file", "/missing/owners.json",
+                "--project-url", "https://github.com/users/Rishet11/projects/1"])
+            with self.subTest(failure=failure), patch.object(sync_project, "load_owners", side_effect=sync_project.SyncError(failure)), patch.object(sync_project, "fetch_open_issues", return_value=[issue(1)]), patch.object(sync_project, "fetch_project", return_value=project()), patch.object(sync_project.sys, "stderr", io.StringIO()):
+                result = sync_project.run(args)
+            self.assertEqual(result["counts"]["items_to_add"], 1)
+            self.assertEqual([op["field"] for op in result["operations"] if op.get("field")], ["Suggested area"])
 
     def test_non_graphql_fixture_shapes_are_rejected(self):
         raw = project_item("PVTI_1", 1)
@@ -459,8 +473,8 @@ class ProjectSyncTests(unittest.TestCase):
         snapshot = project([project_item("PVTI_1", 1, area="Desktop UI", evidence="Reviewed UI report.")], include_owner=True)
         plan = sync_project.build_plan(mapping(), [issue(1)], snapshot, owners=owners())
         for node in [
-            {"isArchived": False, "fieldValueByName": {"field": {"id": OWNER_FIELD_ID, "name": "Suggested owner", "dataType": "TEXT"}, "text": "@human"}},
-            {"isArchived": True, "fieldValueByName": None},
+            {"isArchived": False, "syncRecord": None, "fieldValueByName": {"field": {"id": OWNER_FIELD_ID, "name": "Suggested owner", "dataType": "TEXT"}, "text": "@human"}},
+            {"isArchived": True, "syncRecord": None, "fieldValueByName": None},
         ]:
             with self.subTest(node=node), patch.object(sync_project, "_graphql_payload", return_value={"node": node}) as graphql:
                 result = sync_project.apply_plan(plan)
@@ -473,7 +487,8 @@ class ProjectSyncTests(unittest.TestCase):
         plan = sync_project.build_plan(mapping(), [issue(1)], snapshot, owners=owners())
         responses = [
             {"createProjectV2Field": {"projectV2Field": {"id": OWNER_FIELD_ID, "name": "Suggested owner", "dataType": "TEXT"}}},
-            {"node": {"isArchived": False, "fieldValueByName": None}},
+            {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
         ]
         with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
@@ -481,9 +496,9 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(result["fields_created"], 1)
         self.assertEqual(result["fields_filled"], 1)
         writes = [call for call in graphql.call_args_list if "input" in call.args[1]]
-        self.assertEqual([call.args[0] for call in writes], [sync_project.CREATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION])
-        self.assertEqual(writes[-1].args[1]["input"]["fieldId"], OWNER_FIELD_ID)
-        self.assertEqual(writes[-1].args[1]["input"]["value"], {"text": "@alice, @bob"})
+        self.assertEqual([call.args[0] for call in writes], [sync_project.CREATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION])
+        self.assertEqual(writes[-2].args[1]["input"]["fieldId"], OWNER_FIELD_ID)
+        self.assertEqual(writes[-2].args[1]["input"]["value"], {"text": "@alice, @bob"})
 
     def test_owner_rerun_has_no_fills(self):
         snapshot = project([project_item("PVTI_1", 1, area="Desktop UI", evidence="Reviewed UI report.", owner="@alice, @bob")], include_owner=True)
@@ -587,7 +602,7 @@ class ProjectSyncTests(unittest.TestCase):
         snapshot = project(include_evidence=False)
         snapshot.fields = []
         plan = sync_project.build_plan(mapping(), [issue(2)], snapshot, owners=owners())
-        self.assertEqual([spec.name for spec in plan.field_creates], ["Suggested area", "Suggested owner"])
+        self.assertEqual([spec.name for spec in plan.field_creates], ["Suggested area", "Suggested owner", "Sync record"])
         self.assertEqual(plan.field_creates[0].options, ("Desktop UI", "Area, with comma", "Needs area review"))
         self.assertEqual([op.field_name for op in plan.operations if op.kind == "fill"], ["Suggested area"])
 
@@ -627,7 +642,7 @@ class ProjectSyncTests(unittest.TestCase):
     def test_apply_preserves_values_entered_after_the_plan(self):
         plan = sync_project.build_plan(mapping(), [issue(1)], project([project_item("PVTI_1", 1)]))
         responses = [
-            {"node": {"isArchived": False, "fieldValueByName": {"field": {"id": ROUTING_FIELD_ID, "name": "Suggested area", "dataType": "SINGLE_SELECT"}, "name": "Human choice", "optionId": "OPT_HUMAN"}}},
+            {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": {"field": {"id": ROUTING_FIELD_ID, "name": "Suggested area", "dataType": "SINGLE_SELECT"}, "name": "Human choice", "optionId": "OPT_HUMAN"}}},
         ]
         with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
             applied = sync_project.apply_plan(plan)
@@ -637,7 +652,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_apply_skips_item_archived_after_the_plan(self):
         plan = sync_project.build_plan(mapping(), [issue(1)], project([project_item("PVTI_1", 1)]))
-        with patch.object(sync_project, "_graphql_payload", return_value={"node": {"isArchived": True, "fieldValueByName": None}}):
+        with patch.object(sync_project, "_graphql_payload", return_value={"node": {"isArchived": True, "syncRecord": None, "fieldValueByName": None}}):
             applied = sync_project.apply_plan(plan)
         self.assertEqual(applied["fields_filled"], 0)
         self.assertEqual(applied["fields_skipped_after_recheck"], 1)
@@ -645,14 +660,15 @@ class ProjectSyncTests(unittest.TestCase):
     def test_apply_fills_only_blank_fields(self):
         plan = sync_project.build_plan(mapping(), [issue(1)], project([project_item("PVTI_1", 1)]))
         responses = [
-            {"node": {"isArchived": False, "fieldValueByName": None}},
+            {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
         ]
         with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
             applied = sync_project.apply_plan(plan)
         self.assertEqual(applied["fields_filled"], 1)
         writes = [call.args[1]["input"] for call in graphql.call_args_list if "input" in call.args[1]]
-        self.assertEqual([write["fieldId"] for write in writes], [ROUTING_FIELD_ID])
+        self.assertEqual([write["fieldId"] for write in writes], [ROUTING_FIELD_ID, RECORD_FIELD_ID])
 
     def test_incomplete_field_value_page_stops_before_any_mutation(self):
         fields = project().fields
@@ -665,6 +681,357 @@ class ProjectSyncTests(unittest.TestCase):
         ref = sync_project.parse_project_url("https://github.com/orgs/OrchestratorInc/projects/7")
         with patch.object(sync_project, "_graphql_payload", side_effect=responses), self.assertRaisesRegex(sync_project.SyncError, "incomplete paginated field-values page"):
             sync_project.fetch_project(ref)
+
+    def test_classifier_path_similarity_and_fallback(self):
+        mapped = mapping()
+        mapped["areas"][0]["description"] = "Sidebar navigation panel layout"
+        mapped["areas"][1]["description"] = "Database migrations SQLite schema"
+        mapped["issues"]["1"]["routing_reason"] = "Sidebar navigation panel layout"
+        classifier = sync_project.Classifier(mapped, rules=[
+            {"glob": "frontend/sidebar*", "area": "desktop-ui"},
+            {"glob": "*", "area": "needs-area"}])
+        for title, body, expected in [
+            ("", "frontend/sidebar.tsx", "desktop-ui"),
+            ("", "./frontend/sidebar.tsx.", "desktop-ui"),
+            ("SQLite database schema migrations", "", "comma-area"),
+            ("unrecognized frobnicator", "", "needs-area"),
+        ]:
+            with self.subTest(title=title, body=body):
+                self.assertEqual(classifier.classify(sync_project.Issue(99, "I99", "", title, body)), expected)
+        with patch.object(classifier, "scores", return_value=("desktop-ui", 0.25, 0.07)):
+            self.assertEqual(classifier.classify(sync_project.Issue(99, "", "", body="frontend/sidebar.tsx")), "desktop-ui")
+            self.assertEqual(classifier.classify(sync_project.Issue(99, "", "", title="sidebar")), "needs-area")
+        with patch.object(classifier, "scores", return_value=("desktop-ui", 0.99, 0.01)):
+            self.assertEqual(classifier.classify(sync_project.Issue(99, "", "", body="frontend/sidebar.tsx")), "needs-area")
+
+    def test_path_only_report_counts_unique_nonshared_matches(self):
+        mapped = mapping()
+        mapped["issues"] = {str(n): {"area": "desktop-ui"} for n in range(1, 6)}
+        issues = [sync_project.Issue(n, "", "", body=body) for n, body in enumerate([
+            "frontend/sidebar.tsx README.md", "backend/db.go", "frontend/sidebar.tsx backend/db.go", "unknown"], 1)]
+        rules = [{"glob": "frontend/*", "area": "desktop-ui"}, {"glob": "backend/*", "area": "comma-area"},
+                 {"glob": "*", "area": "shared-infra"}]
+        result = sync_project.classifier_report(mapped, issues, rules)["path_only"]
+        self.assertEqual(result, {"reviewed": 5, "with_text": 4, "assigned": 2, "correct": 1, "precision": 0.5, "coverage": 0.4})
+
+    def test_reviewed_routes_win_over_labels_and_classifier(self):
+        classifier = unittest.mock.Mock()
+        classifier.classify.return_value = "comma-area"
+        plan = sync_project.build_plan(mapping(), [issue(1, labels=("area:comma-area",))], project(), classifier=classifier)
+        self.assertEqual([op.value for op in plan.operations if op.kind == "fill"], ["Desktop UI"])
+        classifier.classify.assert_not_called()
+
+    def test_open_issue_labels_are_kept_without_extra_requests(self):
+        raw = {"number": 99, "node_id": "I99", "html_url": f"https://github.com/{REPO}/issues/99",
+               "labels": [{"name": "bug"}, {"name": "ArEa:CoMmA-ArEa"}]}
+        with patch.object(sync_project, "_api_request", return_value=[raw]) as api:
+            issues = sync_project.fetch_open_issues(REPO)
+        self.assertEqual(issues[0].labels, ("bug", "ArEa:CoMmA-ArEa"))
+        self.assertEqual(api.call_count, 1)
+        classifier = unittest.mock.Mock()
+        classifier.classify.return_value = "desktop-ui"
+        plan = sync_project.build_plan(mapping(), issues, project(), classifier=classifier)
+        self.assertEqual([op.value for op in plan.operations if op.kind == "fill"], ["Area, with comma"])
+        classifier.classify.assert_not_called()
+
+    def test_single_valid_area_label_wins_over_classifier(self):
+        for labels in [("area:comma-area",), ("area:unknown", "AREA:COMMA-AREA")]:
+            with self.subTest(labels=labels):
+                classifier = unittest.mock.Mock()
+                classifier.classify.return_value = "desktop-ui"
+                plan = sync_project.build_plan(mapping(), [issue(99, labels=labels)], project(), classifier=classifier)
+                self.assertEqual([op.value for op in plan.operations if op.kind == "fill"], ["Area, with comma"])
+                classifier.classify.assert_not_called()
+
+    def test_unknown_reserved_and_multiple_area_labels_fall_through(self):
+        mapped = mapping()
+        mapped["areas"].append({"id": "shared-infra", "label": "Shared infrastructure"})
+        for labels in [("area:unknown",), ("area:needs-area",), ("area:shared-infra",),
+                       ("area:desktop-ui", "AREA:COMMA-AREA"), ("area:comma-area", "AREA:COMMA-AREA")]:
+            with self.subTest(labels=labels):
+                classifier = unittest.mock.Mock()
+                classifier.classify.return_value = "desktop-ui"
+                labeled = issue(99, labels=labels)
+                plan = sync_project.build_plan(mapped, [labeled], project(), classifier=classifier)
+                self.assertEqual([op.value for op in plan.operations if op.kind == "fill"], ["Desktop UI"])
+                classifier.classify.assert_called_once_with(labeled)
+
+    def test_later_area_label_refreshes_only_recorded_bot_value(self):
+        classifier = unittest.mock.Mock()
+        classifier.classify.return_value = "comma-area"
+        before = sync_project.build_plan(mapping(), [issue(99)], project(), classifier=classifier)
+        old_area = next(op.value for op in before.operations if op.kind == "fill")
+        recorded = {"Suggested area": old_area}
+        snapshot = project([
+            project_item("bot", 99, area=old_area, record=recorded),
+            project_item("human", 99, area="Human choice", record=recorded),
+            project_item("unrecorded", 99, area=old_area),
+        ])
+        classifier.classify.reset_mock()
+        labeled = issue(99, labels=("area:desktop-ui",))
+        after = sync_project.build_plan(mapping(), [labeled], snapshot, classifier=classifier)
+        self.assertEqual([(op.item_id, op.field_name, op.value) for op in after.operations],
+                         [("bot", "Suggested area", "Desktop UI")])
+        classifier.classify.assert_not_called()
+
+    def test_classifier_leave_one_out_does_not_match_its_own_reason(self):
+        mapped = mapping()
+        mapped["issues"]["1"]["routing_reason"] = "uniqueword"
+        report = sync_project.classifier_report(mapped, [], [])
+        self.assertEqual((report["evaluated"], report["assigned"]), (1, 0))
+
+    def test_bot_values_refresh_but_human_values_and_unrecorded_values_stay(self):
+        recorded = {"Suggested area": "Needs area review", "Suggested owner": "@old"}
+        snapshot = project([
+            project_item("bot", 1, area="Needs area review", owner="@old", record=recorded),
+            project_item("human", 1, area="Human choice", owner="@human", record=recorded),
+            project_item("unrecorded", 1, area="Needs area review", owner="@old"),
+        ], include_owner=True)
+        plan = sync_project.build_plan(mapping(), [issue(1)], snapshot, owners=owners())
+        self.assertEqual([(op.item_id, op.field_name, op.value) for op in plan.operations], [
+            ("bot", "Suggested area", "Desktop UI"), ("bot", "Suggested owner", "@alice, @bob")])
+
+    def test_refresh_rechecks_record_and_field_when_item_list_lags(self):
+        plan = sync_project.build_plan(mapping(), [issue(1)], project())
+        for current, record, expected in [
+            ("Needs area review", {"Suggested area": "Needs area review"}, 1),
+            ("Human choice", {"Suggested area": "Needs area review"}, 0),
+            ("Needs area review", {"Suggested area": "Different previous write"}, 0),
+            ("Needs area review", {}, 0),
+        ]:
+            node = {"isArchived": False, "fieldValueByName": {
+                "field": {"id": ROUTING_FIELD_ID, "dataType": "SINGLE_SELECT"}, "name": current, "optionId": "OPT_NEEDS"},
+                "syncRecord": {"field": {"id": RECORD_FIELD_ID, "dataType": "TEXT"}, "text": json.dumps(record)}}
+            confirmation = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "existing"}}}
+            responses = [{"addProjectV2ItemById": {"item": {"id": "existing"}}}, {"node": node}]
+            if expected:
+                responses += [confirmation, confirmation]
+            with self.subTest(current=current, record=record), patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
+                summary = sync_project.apply_plan(plan)
+            self.assertEqual(summary["fields_filled"], expected)
+            if expected:
+                written = json.loads(graphql.call_args.args[1]["input"]["value"]["text"])
+                self.assertEqual(written, {"Suggested area": "Desktop UI"})
+
+    def test_record_write_preserves_the_other_field(self):
+        plan = sync_project.build_plan(mapping(), [issue(1)], project([project_item("item", 1)]))
+        stored = {"field": {"id": RECORD_FIELD_ID, "dataType": "TEXT"}, "text": json.dumps({"Suggested owner": "@human"})}
+        confirm = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}}
+        with patch.object(sync_project, "_graphql_payload", side_effect=[
+            {"node": {"isArchived": False, "fieldValueByName": None, "syncRecord": stored}}, confirm, confirm]) as graphql:
+            sync_project.apply_plan(plan)
+        self.assertEqual(json.loads(graphql.call_args.args[1]["input"]["value"]["text"]),
+                         {"Suggested area": "Desktop UI", "Suggested owner": "@human"})
+
+    def test_record_first_interruption_cannot_resume_nonblank_refreshes(self):
+        intended = {"Suggested area": "Desktop UI", "Suggested owner": "@alice, @bob"}
+        for name, old in [("Suggested area", "Needs area review"), ("Suggested owner", "@old")]:
+            for current in (old, ""):
+                with self.subTest(field=name, current=current):
+                    values = {**intended, name: current}
+                    snapshot = project([project_item("item", 1, area=values["Suggested area"],
+                        owner=values["Suggested owner"], record=intended)], include_owner=True)
+                    plan = sync_project.build_plan(mapping(), [issue(1)], snapshot, owners=owners())
+                    self.assertEqual([op.field_name for op in plan.operations], [name] if not current else [])
+                    field = next(f for f in snapshot.fields if f.name == name)
+                    record_field = next(f for f in snapshot.fields if f.name == "Sync record")
+                    value = None if not current else {"field": {"id": field.id, "dataType": field.data_type},
+                        **({"name": current, "optionId": "OPT_NEEDS"} if field.data_type == "SINGLE_SELECT" else {"text": current})}
+                    node = {"isArchived": False, "fieldValueByName": value,
+                        "syncRecord": {"field": {"id": RECORD_FIELD_ID, "dataType": "TEXT"}, "text": json.dumps(intended)}}
+                    with patch.object(sync_project, "_graphql_payload", return_value={"node": node}):
+                        self.assertEqual(sync_project._can_fill_field("item", field, record_field),
+                                         intended if not current else None)
+
+    def test_missing_recheck_record_or_changed_record_field_stops_writes(self):
+        plan = sync_project.build_plan(mapping(), [issue(1)], project([project_item("item", 1)]))
+        for node in ({"isArchived": False, "fieldValueByName": None},
+                     {"isArchived": False, "fieldValueByName": None, "syncRecord": {"field": {"id": "wrong"}, "text": "{}"}}):
+            with self.subTest(node=node), patch.object(sync_project, "_graphql_payload", return_value={"node": node}) as graphql, self.assertRaises(sync_project.SyncError):
+                sync_project.apply_plan(plan)
+            self.assertEqual(graphql.call_count, 1)
+
+    def test_unowned_area_clears_only_recorded_bot_owner(self):
+        mapped = mapping()
+        mapped["issues"]["1"]["area"] = "comma-area"
+        item = project_item("item", 1, area="Area, with comma", owner="@old", record={"Suggested owner": "@old"})
+        plan = sync_project.build_plan(mapped, [issue(1)], project([item], include_owner=True), owners=owners())
+        self.assertEqual([(op.field_name, op.value) for op in plan.operations], [("Suggested owner", "")])
+        with patch.object(sync_project, "_can_fill_field", return_value={"Suggested owner": "@old"}), patch.object(sync_project, "_graphql_payload", side_effect=[
+            {"clearProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}}]) as graphql:
+            sync_project.apply_plan(plan)
+        self.assertEqual(graphql.call_args_list[0].args[0], sync_project.CLEAR_FIELD_MUTATION)
+        self.assertEqual(json.loads(graphql.call_args.args[1]["input"]["value"]["text"]), {"Suggested owner": ""})
+
+    def test_closed_issue_archive_uses_content_state_and_preserves_other_content(self):
+        items = [project_item("closed", 1, state="CLOSED"), project_item("unknown", 2, state=None),
+                 project_item("archived", 3, state="CLOSED", archived=True),
+                 project_item("other", 4, state="CLOSED", repo="other/repo"),
+                 project_item("pr", 5, state="CLOSED", kind="PullRequest")]
+        plan = sync_project.build_plan(mapping(), [], project(items))
+        self.assertEqual([(op.kind, op.item_id) for op in plan.operations], [("archive", "closed")])
+        node = self.archive_node("closed", 1, state="CLOSED", record={"Suggested owner": "@alice"})
+        confirm = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "closed"}}}
+        with patch.object(sync_project, "_graphql_payload", side_effect=[
+                {"node": node}, confirm, {"archiveProjectV2Item": {"item": {"id": "closed"}}}]) as graphql:
+            result = sync_project.apply_plan(plan)
+        self.assertEqual(result["items_archived"], 1)
+        self.assertEqual(graphql.call_args.args[0], sync_project.ARCHIVE_MUTATION)
+        record_write = graphql.call_args_list[1].args[1]["input"]
+        self.assertEqual(json.loads(record_write["value"]["text"]),
+                         {"Suggested owner": "@alice", "bot_archived": "true"})
+        self.assertIn("number state repository", sync_project.PROJECT_ITEMS_QUERY)
+        self.assertIn("archivedStates: [ARCHIVED, NOT_ARCHIVED]", sync_project.PROJECT_ITEMS_QUERY)
+
+    def archive_node(self, item_id, number, state="OPEN", archived=False, record=None, repo=REPO):
+        stored = None if record is None else {"field": {"id": RECORD_FIELD_ID, "dataType": "TEXT"},
+                                             "text": json.dumps(record)}
+        return {"isArchived": archived, "syncRecord": stored,
+                "content": {"__typename": "Issue", "number": number, "state": state,
+                            "repository": {"nameWithOwner": repo}}}
+
+    def test_hourly_run_unarchives_only_open_bot_archives(self):
+        items = [project_item("bot", 1, area="Desktop UI", archived=True, record={"bot_archived": "true"}),
+                 project_item("human", 2, archived=True),
+                 project_item("closed", 3, archived=True, state="CLOSED", record={"bot_archived": "true"}),
+                 project_item("unknown", 4, archived=True, state=None, record={"bot_archived": "true"})]
+        plan = sync_project.build_plan(mapping(), [issue(1), issue(2)], project(items))
+        self.assertEqual([(op.kind, op.item_id) for op in plan.operations], [("unarchive", "bot")])
+        node = self.archive_node("bot", 1, archived=True,
+                                 record={"bot_archived": "true", "Suggested area": "Desktop UI"})
+        with patch.object(sync_project, "_graphql_payload", side_effect=[
+                {"node": node}, {"unarchiveProjectV2Item": {"item": {"id": "bot"}}},
+                {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "bot"}}}]) as graphql:
+            result = sync_project.apply_plan(plan)
+        self.assertEqual(result["items_unarchived"], 1)
+        self.assertEqual(graphql.call_args_list[1].args[0], sync_project.UNARCHIVE_MUTATION)
+        self.assertEqual(json.loads(graphql.call_args.args[1]["input"]["value"]["text"]),
+                         {"Suggested area": "Desktop UI"})
+        after = project([project_item("bot", 1, area="Desktop UI", record={"Suggested area": "Desktop UI"})])
+        self.assertEqual(sync_project.build_plan(mapping(), [issue(1)], after).operations, [])
+
+    def test_interrupted_archive_and_unarchive_recover_on_next_run(self):
+        record = {"bot_archived": "true", "Suggested area": "Desktop UI"}
+        for archived in (False, True):
+            with self.subTest(archived=archived):
+                snapshot = project([project_item("bot", 1, area="Desktop UI", archived=archived, record=record)])
+                plan = sync_project.build_plan(mapping(), [issue(1)], snapshot)
+                self.assertEqual([(op.kind, op.item_id) for op in plan.operations], [("unarchive", "bot")])
+                node = self.archive_node("bot", 1, archived=archived, record=record)
+                responses = [{"node": node}]
+                if archived:
+                    responses.append({"unarchiveProjectV2Item": {"item": {"id": "bot"}}})
+                responses.append({"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "bot"}}})
+                with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
+                    result = sync_project.apply_plan(plan)
+                self.assertEqual(result["items_unarchived"], int(archived))
+                self.assertEqual(json.loads(graphql.call_args.args[1]["input"]["value"]["text"]),
+                                 {"Suggested area": "Desktop UI"})
+
+    def test_archive_rechecks_preserve_late_human_archives_and_issue_changes(self):
+        for kind, node in [
+            ("archive", self.archive_node("bot", 1, state="CLOSED", archived=True)),
+            ("archive", self.archive_node("bot", 1, state="OPEN")),
+            ("unarchive", self.archive_node("bot", 1, archived=True)),
+            ("unarchive", self.archive_node("bot", 1, state="CLOSED", archived=True, record={"bot_archived": "true"})),
+            ("unarchive", self.archive_node("bot", 1, archived=True, repo="other/repo", record={"bot_archived": "true"})),
+        ]:
+            snapshot = project([project_item("bot", 1, area="Desktop UI", archived=kind == "unarchive",
+                state="CLOSED" if kind == "archive" else "OPEN", record={"bot_archived": "true"})])
+            plan = sync_project.build_plan(mapping(), [], snapshot)
+            with self.subTest(kind=kind, node=node), patch.object(sync_project, "_graphql_payload", return_value={"node": node}) as graphql:
+                result = sync_project.apply_plan(plan)
+            self.assertEqual((result["items_archived"], result["items_unarchived"]), (0, 0))
+            self.assertEqual(graphql.call_count, 1)
+
+    def test_archive_does_not_run_when_record_write_fails(self):
+        plan = sync_project.build_plan(mapping(), [], project([project_item("bot", 1, state="CLOSED")]))
+        node = self.archive_node("bot", 1, state="CLOSED")
+        with patch.object(sync_project, "_graphql_payload", side_effect=[{"node": node},
+                sync_project.SyncError("record failed")]) as graphql, self.assertRaisesRegex(sync_project.SyncError, "record failed"):
+            sync_project.apply_plan(plan)
+        self.assertEqual(graphql.call_count, 2)
+        self.assertNotEqual(graphql.call_args.args[0], sync_project.ARCHIVE_MUTATION)
+
+    def test_record_field_is_created_and_must_be_text(self):
+        snapshot = project(include_record=False)
+        plan = sync_project.build_plan(mapping(), [], snapshot)
+        self.assertEqual(plan.field_creates, [sync_project.FieldCreate("Sync record", "TEXT")])
+        snapshot.fields.append(sync_project.FieldInfo(RECORD_FIELD_ID, "Sync record", "SINGLE_SELECT", {}))
+        with self.assertRaisesRegex(sync_project.SyncError, "Sync record.*TEXT"):
+            sync_project.build_plan(mapping(), [], snapshot)
+
+    def test_open_issue_pages_are_sorted_and_duplicates_deduped(self):
+        rows = [{"number": n, "node_id": f"I{n}", "html_url": f"https://github.com/{REPO}/issues/{n}"} for n in range(1, 101)]
+        with patch.object(sync_project, "_api_request", side_effect=[rows, rows[-1:]]) as api:
+            result = sync_project.fetch_open_issues(REPO)
+        self.assertEqual(len(result), 100)
+        self.assertTrue(all("sort=created&direction=asc" in call.args[0][0] for call in api.call_args_list))
+
+    def test_failed_owner_build_preserves_cached_owners_or_leaves_blank(self):
+        workflow = (ROOT.parents[1] / "workflows/contributor-project.yml").read_text()
+        step = workflow.split("      - name: Rebuild owners once per UTC day\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("continue-on-error: true", step)
+        self.assertIn("if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.owners.outputs.cache-hit != 'true'", step)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", step)
+        warning_step = workflow.split("      - name: Warn when owner build fails\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("if: always() && steps.owner-build.outcome == 'failure'", warning_step)
+        warning = subprocess.run(["bash", "-e", "-c", warning_step.split("        run: ", 1)[1]],
+                                 capture_output=True, text=True, check=True)
+        self.assertIn("::warning::Owner build failed", warning.stdout)
+        save_step = workflow.split("      - name: Save today's successful owner build\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("steps.owner-build.outcome == 'success'", save_step)
+        self.assertNotIn("steps.owner-build.conclusion", save_step)
+        command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        for cached in (True, False):
+            with self.subTest(cached=cached), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "scripts").mkdir()
+                (root / "scripts/ownership_extract.py").write_text("raise SystemExit(1)\n")
+                (root / "scripts/build_owners.py").write_text("raise AssertionError('must not build after failed extraction')\n")
+                output = root / "research/owners/area-owners.json"
+                if cached:
+                    output.parent.mkdir(parents=True)
+                    output.write_text(json.dumps(owners()))
+                result = subprocess.run(["bash", "-e", "-c", command], cwd=root, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                args = sync_project.make_parser().parse_args(["--owners-file", str(output),
+                    "--project-url", "https://github.com/users/Rishet11/projects/1"])
+                with patch.object(sync_project, "load_mapping", return_value=mapping()), patch.object(sync_project, "fetch_open_issues", return_value=[issue(1)]), patch.object(sync_project, "fetch_project", return_value=project()), patch.object(sync_project.sys, "stderr", io.StringIO()):
+                    result = sync_project.run(args)
+                self.assertEqual(result["counts"]["items_to_add"], 1)
+                self.assertEqual(any(op.get("field") == "Suggested owner" for op in result["operations"]), cached)
+
+    def test_owner_age_warning_uses_generated_at_with_seven_day_boundary(self):
+        now = datetime(2026, 10, 24, tzinfo=timezone.utc)
+        for age, expected in [(timedelta(days=6), False), (timedelta(days=7), False),
+                              (timedelta(days=7, seconds=1), True)]:
+            for generated in [(now - age).isoformat(), (now - age).isoformat().replace("+00:00", "Z")]:
+                data = {**owners(), "generated_at": generated}
+                with self.subTest(generated=generated), patch.object(sync_project.sys, "stderr", io.StringIO()) as stderr:
+                    sync_project.warn_stale_owners(data, now)
+                    self.assertEqual("::warning::" in stderr.getvalue(), expected)
+                    if expected:
+                        self.assertIn("older than 7 days", stderr.getvalue())
+
+    def test_missing_or_invalid_owner_timestamp_warns_without_stopping_sync(self):
+        for value in [None, "invalid", "2026-10-20", 123]:
+            with self.subTest(value=value), patch.object(sync_project.sys, "stderr", io.StringIO()) as stderr:
+                sync_project.warn_stale_owners({**owners(), "generated_at": value})
+                self.assertIn("::warning::", stderr.getvalue())
+
+    def test_run_warns_when_restored_owners_are_stale(self):
+        args = sync_project.make_parser().parse_args(["--project-url", "https://github.com/orgs/OrchestratorInc/projects/7"])
+        stale = {**owners(), "generated_at": "2020-01-01T00:00:00Z"}
+        with patch.object(sync_project, "load_mapping", return_value=mapping()), \
+             patch.object(sync_project, "load_owners", return_value=stale), \
+             patch.object(sync_project, "fetch_open_issues", return_value=[issue(1)]), \
+             patch.object(sync_project, "fetch_project", return_value=project(include_owner=True)), \
+             patch.object(sync_project.sys, "stderr", io.StringIO()) as stderr:
+            result = sync_project.run(args)
+        self.assertIn("::warning::Owners in use are older than 7 days", stderr.getvalue())
+        self.assertTrue(any(op.get("field") == "Suggested owner" for op in result["operations"]))
 
 
 if __name__ == "__main__":

@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+import fnmatch
+from math import log, sqrt
 import json
 import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +22,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ROUTING_FIELD = "Suggested area"
 OWNER_FIELD = "Suggested owner"
+RECORD_FIELD = "Sync record"
+BOT_ARCHIVED = "bot_archived"
+SIMILARITY_MIN = 0.3
+SIMILARITY_MARGIN = 0.1
+PATH_SIMILARITY_MIN = 0.2
+PATH_SIMILARITY_MARGIN = 0.05
 PROJECT_URL_RE = re.compile(
     r"^https://github\.com/(?P<owner_kind>orgs|users)/(?P<owner>[^/]+)/projects/(?P<number>[1-9][0-9]*)/?$"
 )
@@ -60,6 +69,7 @@ class ItemInfo:
     issue_number: int | None
     repository: str | None
     values: dict[str, dict[str, Any]]
+    state: str | None = None
 
 
 @dataclass
@@ -75,6 +85,9 @@ class Issue:
     number: int
     node_id: str
     html_url: str
+    title: str = ""
+    body: str = ""
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +198,18 @@ def load_owners(path: Path, mapping: dict[str, Any]) -> dict[str, Any]:
     return owners
 
 
+def warn_stale_owners(owners: dict[str, Any], now: datetime | None = None) -> None:
+    try:
+        generated = datetime.fromisoformat(owners["generated_at"].replace("Z", "+00:00"))
+        if generated.utcoffset() is None:
+            raise ValueError("missing timezone")
+    except (KeyError, AttributeError, TypeError, ValueError):
+        print("::warning::Owners in use have no valid generated_at; their age is unknown.", file=sys.stderr)
+        return
+    if (now or datetime.now(timezone.utc)) - generated > timedelta(days=7):
+        print(f"::warning::Owners in use are older than 7 days, generated_at={generated.isoformat()}.", file=sys.stderr)
+
+
 def normalize_open_issues(raw_pages: Any, repo: str) -> list[Issue]:
     """Keep only open issues, excluding REST's pull-request-shaped entries."""
     if isinstance(raw_pages, list) and (not raw_pages or all(isinstance(entry, dict) for entry in raw_pages)):
@@ -213,9 +238,12 @@ def normalize_open_issues(raw_pages: Any, repo: str) -> list[Issue]:
         if number <= 0 or not _nonempty(node_id) or html_url != f"https://github.com/{repo}/issues/{number}":
             raise SyncError(f"invalid open issue metadata for #{number}")
         if number in seen:
-            raise SyncError(f"duplicate open issue #{number} in paginated response")
+            continue
         seen.add(number)
-        issues.append(Issue(number=number, node_id=node_id, html_url=html_url))
+        issues.append(Issue(number=number, node_id=node_id, html_url=html_url,
+                            title=raw.get("title") or "", body=raw.get("body") or "",
+                            labels=tuple(label.get("name", "") if isinstance(label, dict) else label
+                                         for label in raw.get("labels", []))))
     return issues
 
 
@@ -261,7 +289,7 @@ def _normalize_item(raw: Any) -> ItemInfo:
             values[normalized[0]] = normalized[1]
     return ItemInfo(
         id=raw["id"], archived=raw["isArchived"], content_type=content.get("__typename"),
-        issue_number=content.get("number"), repository=repository.get("nameWithOwner"), values=values,
+        issue_number=content.get("number"), repository=repository.get("nameWithOwner"), values=values, state=content.get("state"),
     )
 
 
@@ -308,19 +336,115 @@ def _field_map(snapshot: ProjectSnapshot, areas: list[dict[str, str]], include_o
         if missing:
             updates[ROUTING_FIELD] = missing
 
-    owner = fields.get(OWNER_FIELD)
-    if owner is not None and owner.data_type != "TEXT":
-        raise SyncError(f"managed field {OWNER_FIELD!r} must be TEXT, found {owner.data_type}")
-    if owner is None and include_owners:
-        creates.append(FieldCreate(OWNER_FIELD, "TEXT"))
+    for name in (OWNER_FIELD, RECORD_FIELD):
+        field = fields.get(name)
+        if field is not None and field.data_type != "TEXT":
+            raise SyncError(f"managed field {name!r} must be TEXT, found {field.data_type}")
+        if field is None and (name == RECORD_FIELD or include_owners):
+            creates.append(FieldCreate(name, "TEXT"))
     return fields, creates, updates
 
 
-def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSnapshot, owners: dict[str, Any] | None = None) -> SyncPlan:
+def _record(text: str | None) -> dict[str, str]:
+    try:
+        value = json.loads(text or "{}")
+    except (ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) and all(isinstance(v, str) for v in value.values()) else {}
+
+
+def _managed(item: ItemInfo, field: FieldInfo, record: dict[str, str]) -> bool:
+    value = item.values.get(field.id, {})
+    current = value.get("name" if field.data_type == "SINGLE_SELECT" else "text")
+    return not _has_nonempty_value(item, field) or (field.name in record and current == record[field.name])
+
+
+class Classifier:
+    """First-match paths, then nearest reviewed text with a score and margin gate."""
+    def __init__(self, mapping, issues=(), rules=(), exclude=None):
+        self.rules = rules
+        self.path_roots = {r["glob"].split("/")[0] + "/" for r in rules if "/" in r["glob"]}
+        titles = {str(i.number): i.title for i in issues}
+        descriptions = {a["id"]: a.get("description", "") for a in mapping["areas"]}
+        corpus = [(a, text) for a, text in descriptions.items()]
+        corpus += [(r["area"], titles.get(n, "") + " " + r.get("routing_reason", "") + " " + descriptions[r["area"]])
+                   for n, r in mapping.get("issues", {}).items() if n != exclude and (titles.get(n) or r.get("routing_reason"))]
+        tokens = [(a, Counter(re.findall(r"[a-z][a-z0-9]+", text.lower()))) for a, text in corpus]
+        frequency = Counter(t for _, counts in tokens for t in counts)
+        self.idf = {t: log((1 + len(tokens)) / (1 + count)) + 1 for t, count in frequency.items()}
+        self.documents = [(a, self.vector(counts)) for a, counts in tokens]
+
+    def vector(self, counts):
+        weighted = {t: (1 + log(c)) * self.idf[t] for t, c in counts.items() if t in self.idf}
+        length = sqrt(sum(v * v for v in weighted.values())) or 1
+        return {t: v / length for t, v in weighted.items()}
+
+    def scores(self, text):
+        query = self.vector(Counter(re.findall(r"[a-z][a-z0-9]+", text.lower())))
+        scores = {}
+        for area, vector in self.documents:
+            scores[area] = max(scores.get(area, 0), sum(v * vector.get(t, 0) for t, v in query.items()))
+        ranked = sorted(scores, key=lambda a: (-scores[a], a))
+        best = ranked[0]
+        return best, scores[best], scores[best] - (scores[ranked[1]] if len(ranked) > 1 else 0)
+
+    def path_areas(self, text):
+        areas = set()
+        for path in re.findall(r"(?<![\w/])(?:\./)?(?:\.?[\w-]+/)+[\w.*-]+|[\w.-]+\.[a-zA-Z][a-zA-Z0-9]+", text):
+            path = path.removeprefix("./").rstrip(".")
+            if "/" in path and not any(path.startswith(root) for root in self.path_roots):
+                continue
+            area = next((r["area"] for r in self.rules if fnmatch.fnmatchcase(path, r["glob"])), None)
+            if area and area not in {"shared-infra", "needs-area"}:
+                areas.add(area)
+        return areas
+
+    def classify(self, issue):
+        text = issue.title + " " + issue.body
+        areas = self.path_areas(text)
+        area, score, margin = self.scores(text)
+        if areas == {area} and score >= PATH_SIMILARITY_MIN and margin >= PATH_SIMILARITY_MARGIN:
+            return area
+        return area if score >= SIMILARITY_MIN and margin >= SIMILARITY_MARGIN else "needs-area"
+
+
+def classifier_report(mapping, issues, rules):
+    live = {str(i.number): i for i in issues}
+    correct = assigned = evaluated = path_assigned = path_correct = 0
+    paths = Classifier(mapping, issues, rules)
+    for number, route in mapping["issues"].items():
+        issue = live.get(number) or Issue(int(number), "", "", body=route.get("routing_reason", ""))
+        if not (issue.title or issue.body):
+            continue
+        predicted = Classifier(mapping, issues, rules, exclude=number).classify(issue)
+        evaluated += 1
+        assigned += predicted != "needs-area"
+        correct += predicted != "needs-area" and predicted == route["area"]
+        path_areas = paths.path_areas(issue.title + " " + issue.body)
+        if len(path_areas) == 1:
+            path_assigned += 1
+            path_correct += path_areas == {route["area"]}
+    return {"evaluated": evaluated, "assigned": assigned, "correct": correct,
+            "precision": correct / assigned if assigned else 0, "coverage": assigned / evaluated if evaluated else 0,
+            "similarity_min": SIMILARITY_MIN, "margin_min": SIMILARITY_MARGIN,
+            "path_similarity_min": PATH_SIMILARITY_MIN, "path_margin_min": PATH_SIMILARITY_MARGIN,
+            "path_only": {"reviewed": len(mapping["issues"]), "with_text": evaluated,
+                          "assigned": path_assigned, "correct": path_correct,
+                          "precision": path_correct / path_assigned if path_assigned else 0,
+                          "coverage": path_assigned / len(mapping["issues"]) if mapping["issues"] else 0}}
+
+
+def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSnapshot, owners: dict[str, Any] | None = None,
+               classifier: Classifier | None = None) -> SyncPlan:
     """Build an idempotent plan without making any GitHub mutation."""
     fields, field_creates, field_updates = _field_map(snapshot, mapping["areas"], owners is not None)
     routing = fields.get(ROUTING_FIELD)
     owner = fields.get(OWNER_FIELD)
+    classifier = classifier or Classifier(mapping, issues)
+    label_areas = {f"area:{area['id']}".casefold(): area["id"] for area in mapping["areas"]
+                   if area["id"] not in {"needs-area", "shared-infra"}}
+    record_field = fields.get(RECORD_FIELD)
+    operations: list[Operation] = []
     source_items: dict[int, list[ItemInfo]] = {}
     archived_source_numbers: set[int] = set()
     archived_source_count = 0
@@ -329,19 +453,31 @@ def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSn
         if item.repository != mapping["repo"] or item.content_type != "Issue" or item.issue_number is None:
             preserved_count += 1
             continue
-        if item.archived:
+        content = Issue(item.issue_number, "", f"https://github.com/{mapping['repo']}/issues/{item.issue_number}")
+        if item.state == "CLOSED":
+            if not item.archived:
+                operations.append(Operation("archive", content, item_id=item.id))
+            continue
+        record = _record(item.values.get(record_field.id, {}).get("text")) if record_field else {}
+        if item.state == "OPEN" and record.get(BOT_ARCHIVED) == "true":
+            operations.append(Operation("unarchive", content, item_id=item.id))
+        elif item.archived:
             archived_source_count += 1
             if item.issue_number is not None:
                 archived_source_numbers.add(item.issue_number)
             continue
         source_items.setdefault(item.issue_number, []).append(item)
 
-    operations: list[Operation] = []
-
     def add_fills(issue: Issue, item_id: str | None, item_values: ItemInfo | None) -> None:
-        area_id = mapping.get("issues", {}).get(str(issue.number), {}).get("area", "needs-area")
+        labeled_areas = [label_areas[label.casefold()] for label in issue.labels
+                         if isinstance(label, str) and label.casefold() in label_areas]
+        area_id = mapping.get("issues", {}).get(str(issue.number), {}).get("area")
+        if not area_id:
+            area_id = labeled_areas[0] if len(labeled_areas) == 1 else classifier.classify(issue)
+        record = _record(item_values.values.get(record_field.id, {}).get("text")) if item_values and record_field else {}
         area_label = next(area["label"] for area in mapping["areas"] if area["id"] == area_id)
-        if routing is None or item_values is None or not _has_nonempty_value(item_values, routing):
+        if routing is None or item_values is None or (_managed(item_values, routing, record) and
+                item_values.values.get(routing.id, {}).get("name") != area_label):
             operations.append(
                 Operation(
                     kind="fill",
@@ -352,10 +488,11 @@ def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSn
                     item_id=item_id,
                 )
             )
-        if owners is not None and area_id not in {"shared-infra", "needs-area"}:
-            area_owners = owners["areas"][area_id]["owners"]
+        if owners is not None:
+            area_owners = owners["areas"][area_id]["owners"] if area_id not in {"shared-infra", "needs-area"} else []
             owner_text = ", ".join("@" + person["login"] for person in area_owners)
-            if owner_text and (owner is None or item_values is None or not _has_nonempty_value(item_values, owner)):
+            if (owner_text or (record.get(OWNER_FIELD) and item_values)) and (owner is None or item_values is None or (_managed(item_values, owner, record) and
+                    item_values.values.get(owner.id, {}).get("text", "") != owner_text)):
                 operations.append(Operation(kind="fill", issue=issue, field_name=OWNER_FIELD,
                                             field_id=owner.id if owner else None, value=owner_text, item_id=item_id))
 
@@ -484,7 +621,7 @@ def _rest_pages(endpoint: str) -> list[list[dict[str, Any]]]:
 
 
 def fetch_open_issues(repo: str) -> list[Issue]:
-    raw_pages = _rest_pages(f"repos/{repo}/issues?state=open&per_page=100")
+    raw_pages = _rest_pages(f"repos/{repo}/issues?state=open&sort=created&direction=asc&per_page=100")
     return normalize_open_issues(raw_pages, repo)
 
 
@@ -510,13 +647,13 @@ PROJECT_ITEMS_QUERY = """
 query($projectId: ID!, $after: String) {
   node(id: $projectId) {
     ... on ProjectV2 {
-      items(first: 100, after: $after) {
+      items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
         nodes {
           id
           isArchived
           content {
             __typename
-            ... on Issue { number repository { nameWithOwner } }
+            ... on Issue { number state repository { nameWithOwner } }
             ... on PullRequest { number repository { nameWithOwner } }
             ... on DraftIssue { id }
           }
@@ -571,6 +708,12 @@ query($itemId: ID!, $fieldName: String!) {
   node(id: $itemId) {
     ... on ProjectV2Item {
       isArchived
+      syncRecord: fieldValueByName(name: "Sync record") {
+        ... on ProjectV2ItemFieldTextValue {
+          field { ... on ProjectV2FieldCommon { id name dataType } }
+          text
+        }
+      }
       fieldValueByName(name: $fieldName) {
         ... on ProjectV2ItemFieldSingleSelectValue {
           field { ... on ProjectV2FieldCommon { id name dataType } }
@@ -588,23 +731,27 @@ query($itemId: ID!, $fieldName: String!) {
 """
 
 
-def _can_fill_field(item_id: str, field: FieldInfo) -> bool:
+def _can_fill_field(item_id: str, field: FieldInfo, record_field: FieldInfo) -> dict[str, str] | None:
     data = _graphql_payload(FIELD_VALUE_QUERY, {"itemId": item_id, "fieldName": field.name})
     node = data.get("node")
-    if not isinstance(node, dict) or not isinstance(node.get("isArchived"), bool) or "fieldValueByName" not in node:
+    if not isinstance(node, dict) or not isinstance(node.get("isArchived"), bool) or "fieldValueByName" not in node or "syncRecord" not in node:
         raise SyncError("GitHub did not return the current item field and archive state")
     if node["isArchived"]:
-        return False
+        return None
+    stored = node["syncRecord"]
+    if stored is not None and (not isinstance(stored, dict) or stored.get("field", {}).get("id") != record_field.id or stored.get("field", {}).get("dataType") != "TEXT"):
+        raise SyncError("Sync record field changed while the sync was running")
+    record = _record(stored.get("text") if stored else None)
     value = node["fieldValueByName"]
     if value is None:
-        return True
+        return record
     if not isinstance(value, dict) or not isinstance(value.get("field"), dict):
         raise SyncError("GitHub returned an incomplete current field value")
     current_field = value["field"]
     if current_field.get("id") != field.id or current_field.get("dataType") != field.data_type:
         raise SyncError(f"managed field {field.name!r} changed while the sync was running")
     item = _normalize_item({"id": item_id, "isArchived": False, "fieldValues": {"nodes": [value]}})
-    return not _has_nonempty_value(item, field)
+    return record if _managed(item, field, record) else None
 
 
 def fetch_project(ref: ProjectRef) -> ProjectSnapshot:
@@ -718,6 +865,32 @@ mutation($input: AddProjectV2ItemByIdInput!) {
 }
 """
 
+ARCHIVE_MUTATION = """
+mutation($input: ArchiveProjectV2ItemInput!) {
+  archiveProjectV2Item(input: $input) { item { id } }
+}
+"""
+UNARCHIVE_MUTATION = ARCHIVE_MUTATION.replace("Archive", "Unarchive").replace("archiveProject", "unarchiveProject")
+
+ARCHIVE_STATE_QUERY = """
+query($itemId: ID!) {
+  node(id: $itemId) {
+    ... on ProjectV2Item {
+      isArchived
+      content { __typename ... on Issue { number state repository { nameWithOwner } } }
+      syncRecord: fieldValueByName(name: "Sync record") {
+        ... on ProjectV2ItemFieldTextValue { field { ... on ProjectV2FieldCommon { id dataType } } text }
+      }
+    }
+  }
+}
+"""
+
+CLEAR_FIELD_MUTATION = """
+mutation($input: ClearProjectV2ItemFieldValueInput!) {
+  clearProjectV2ItemFieldValue(input: $input) { projectV2Item { id } }
+}
+"""
 UPDATE_FIELD_MUTATION = """
 mutation($input: UpdateProjectV2ItemFieldValueInput!) {
   updateProjectV2ItemFieldValue(input: $input) { projectV2Item { id } }
@@ -775,10 +948,52 @@ def _create_field(project_id: str, spec: FieldCreate) -> FieldInfo:
     return created
 
 
+def _write_record(project_id: str, item_id: str, field: FieldInfo, record: dict[str, str]) -> None:
+    data = _graphql_payload(UPDATE_FIELD_MUTATION, {"input": {"projectId": project_id, "itemId": item_id,
+                            "fieldId": field.id, "value": {"text": json.dumps(record, sort_keys=True)}}})
+    if data.get("updateProjectV2ItemFieldValue", {}).get("projectV2Item", {}).get("id") != item_id:
+        raise SyncError("GitHub did not confirm the Sync record update")
+
+
+def _sync_archive(plan: SyncPlan, operation: Operation, record_field: FieldInfo) -> bool:
+    node = _graphql_payload(ARCHIVE_STATE_QUERY, {"itemId": operation.item_id}).get("node")
+    if not isinstance(node, dict) or not isinstance(node.get("isArchived"), bool) or "syncRecord" not in node:
+        raise SyncError("GitHub did not return the current archive state and Sync record")
+    content = node.get("content") or {}
+    if (content.get("__typename"), content.get("number"), (content.get("repository") or {}).get("nameWithOwner")) != (
+            "Issue", operation.issue.number, plan.repo):
+        return False
+    stored = node["syncRecord"]
+    if stored is not None and (not isinstance(stored, dict) or stored.get("field", {}).get("id") != record_field.id or stored.get("field", {}).get("dataType") != "TEXT"):
+        raise SyncError("Sync record field changed while the sync was running")
+    record = _record(stored.get("text") if stored else None)
+    archive = operation.kind == "archive"
+    if content.get("state") != ("CLOSED" if archive else "OPEN"):
+        return False
+    if archive:
+        if node["isArchived"]:
+            return False  # A human archived it after planning.
+        record[BOT_ARCHIVED] = "true"
+        # Record intent first so an interrupted archive remains recoverable.
+        _write_record(plan.project_id, operation.item_id, record_field, record)
+    elif record.get(BOT_ARCHIVED) != "true":
+        return False
+    changed = node["isArchived"] != archive
+    if changed:
+        data = _graphql_payload(ARCHIVE_MUTATION if archive else UNARCHIVE_MUTATION,
+                                {"input": {"projectId": plan.project_id, "itemId": operation.item_id}})
+        if data.get(operation.kind + "ProjectV2Item", {}).get("item", {}).get("id") != operation.item_id:
+            raise SyncError(f"GitHub did not confirm {operation.kind}")
+    if not archive:
+        record.pop(BOT_ARCHIVED)
+        _write_record(plan.project_id, operation.item_id, record_field, record)
+    return changed
+
+
 def apply_plan(plan: SyncPlan) -> dict[str, int]:
     """Apply only operations already validated and present in ``plan``."""
     summary = {"fields_updated": 0, "fields_created": 0, "items_added": 0,
-               "fields_filled": 0, "fields_skipped_after_recheck": 0}
+               "fields_filled": 0, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0}
     try:
         fields = dict(plan.fields)
         for name, labels in plan.field_updates.items():
@@ -810,7 +1025,10 @@ def apply_plan(plan: SyncPlan) -> dict[str, int]:
             summary["items_added"] += 1
 
         for operation in plan.operations:
-            if operation.kind != "fill" or not operation.value:
+            if operation.kind in {"archive", "unarchive"}:
+                if _sync_archive(plan, operation, fields[RECORD_FIELD]):
+                    summary["items_archived" if operation.kind == "archive" else "items_unarchived"] += 1
+            if operation.kind != "fill":
                 continue
             field = fields.get(operation.field_name or "")
             if field is None:
@@ -820,7 +1038,8 @@ def apply_plan(plan: SyncPlan) -> dict[str, int]:
                 raise SyncError(f"cannot fill issue #{operation.issue.number} without a project item id")
             # Recheck added items too: addProjectV2ItemById returns the existing item when the
             # Project item list lagged, so a "new" item may already hold a human value.
-            if not _can_fill_field(item_id, field):
+            record = _can_fill_field(item_id, field, fields[RECORD_FIELD])
+            if record is None:
                 summary["fields_skipped_after_recheck"] += 1
                 continue
             if field.data_type == "SINGLE_SELECT":
@@ -832,24 +1051,20 @@ def apply_plan(plan: SyncPlan) -> dict[str, int]:
                 value = {"text": operation.value}
             else:
                 raise SyncError(f"cannot update managed field {field.name!r} of type {field.data_type}")
-            data = _graphql_payload(
-                UPDATE_FIELD_MUTATION,
-                {
-                    "input": {
-                        "projectId": plan.project_id,
-                        "itemId": item_id,
-                        "fieldId": field.id,
-                        "value": value,
-                    }
-                },
-            )
-            payload = data.get("updateProjectV2ItemFieldValue")
+            input_data = {"projectId": plan.project_id, "itemId": item_id, "fieldId": field.id}
+            if operation.value:
+                input_data["value"] = value
+            mutation = UPDATE_FIELD_MUTATION if operation.value else CLEAR_FIELD_MUTATION
+            data = _graphql_payload(mutation, {"input": input_data})
+            payload = data.get("updateProjectV2ItemFieldValue" if operation.value else "clearProjectV2ItemFieldValue")
             updated_item = payload.get("projectV2Item") if isinstance(payload, dict) else None
-            if not isinstance(updated_item, dict) or not updated_item.get("id"):
+            if not isinstance(updated_item, dict) or updated_item.get("id") != item_id:
                 raise SyncError(f"GitHub did not confirm the field update for issue #{operation.issue.number}")
             summary["fields_filled"] += 1
+            record[field.name] = operation.value
+            _write_record(plan.project_id, item_id, fields[RECORD_FIELD], record)
     except RateLimitError:
-        applied_count = sum(summary[key] for key in ("fields_updated", "fields_created", "items_added", "fields_filled"))
+        applied_count = sum(summary[key] for key in ("fields_updated", "fields_created", "items_added", "fields_filled", "items_archived", "items_unarchived"))
         print(f"rate limited; {applied_count} operations applied, remaining resume on the next run", file=sys.stderr)
     return summary
 
@@ -882,6 +1097,8 @@ def plan_to_json(plan: SyncPlan, mode: str, applied: dict[str, int] | None = Non
             "unrelated_or_private_items_preserved": plan.preserved_item_count,
             "items_to_add": sum(operation.kind == "add" for operation in plan.operations),
             "fields_to_fill": sum(operation.kind == "fill" for operation in plan.operations),
+            "items_to_archive": sum(operation.kind == "archive" for operation in plan.operations),
+            "items_to_unarchive": sum(operation.kind == "unarchive" for operation in plan.operations),
             "fields_to_create": len(plan.field_creates),
             "fields_to_update": len(plan.field_updates),
         },
@@ -906,12 +1123,19 @@ def _load_json_file(path: Path, label: str) -> Any:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     mapping = load_mapping(Path(args.mapping_file))
-    owners = load_owners(Path(args.owners_file), mapping)
-    project_ref = parse_project_url(args.project_url) if args.project_url else None
-    if args.project_file:
-        if args.apply:
-            raise SyncError("--apply cannot be used with --project-file; provide a live Project instead")
+    if args.project_file and args.apply:
+        raise SyncError("--apply cannot be used with --project-file; provide a live Project instead")
     issues = load_issues_file(Path(args.issues_file), mapping["repo"]) if args.issues_file else fetch_open_issues(mapping["repo"])
+    rules = _load_json_file(Path(args.paths_file), "paths")
+    if args.evaluate_classifier:
+        return classifier_report(mapping, issues, rules)
+    try:
+        owners = load_owners(Path(args.owners_file), mapping)
+        warn_stale_owners(owners)
+    except SyncError as exc:
+        print(f"::warning::owners unavailable; continuing without owner updates: {exc}", file=sys.stderr)
+        owners = None
+    project_ref = parse_project_url(args.project_url) if args.project_url else None
 
     if args.project_file:
         project_raw = _load_json_file(Path(args.project_file), "project")
@@ -921,7 +1145,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise SyncError("--project-url is required for a live Project")
         snapshot = fetch_project(project_ref)
 
-    plan = build_plan(mapping, issues, snapshot, owners=owners)
+    plan = build_plan(mapping, issues, snapshot, owners=owners, classifier=Classifier(mapping, issues, rules))
     applied = apply_plan(plan) if args.apply else None
     return plan_to_json(plan, "apply" if args.apply else "dry-run", applied)
 
@@ -930,9 +1154,11 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plan or apply open-issue routing updates to a GitHub Project")
     parser.add_argument("--project-url", help="GitHub Project URL under /orgs/OWNER/projects/N or /users/OWNER/projects/N")
     parser.add_argument("--mapping-file", default=str(ROOT / "data" / "issue-areas.json"))
-    parser.add_argument("--owners-file", default=str(ROOT / "data" / "area-owners.json"))
+    parser.add_argument("--owners-file", default=str(ROOT / "research" / "owners" / "area-owners.json"))
+    parser.add_argument("--paths-file", default=str(ROOT / "data" / "path-areas.json"))
     parser.add_argument("--issues-file", help="offline open-issues JSON fixture")
     parser.add_argument("--project-file", help="offline Project snapshot JSON fixture (dry-run only)")
+    parser.add_argument("--evaluate-classifier", action="store_true", help="report leave-one-out precision and coverage without reading a Project")
     parser.add_argument("--apply", action="store_true", help="apply the validated plan; default is dry-run")
     return parser
 
