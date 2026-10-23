@@ -45,6 +45,7 @@ type versionStore interface {
 	ListSessionArtifactVersions(ctx context.Context, id domain.SessionID, path string) ([]domain.SessionArtifactVersion, error)
 	CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error)
 	DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error
+	DeleteSessionArtifactPathVersions(ctx context.Context, id domain.SessionID, path string) ([]string, error)
 }
 
 // writer says who a captured version is attributed to.

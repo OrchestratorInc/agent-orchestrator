@@ -2730,7 +2730,22 @@ func (s *Store) AppendAssistantDelta(
 		return nil
 
 	case errors.Is(err, sql.ErrNoRows):
-		turnID := s.turnIDFor(ctx, conversationID, providerTurnID)
+		var turnID sql.NullString
+		streaming := int64(1)
+		if providerTurnID != "" {
+			turn, turnErr := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+				ConversationID: conversationID,
+				ProviderTurnID: providerTurnID,
+			})
+			if turnErr == nil {
+				turnID = sql.NullString{String: turn.ID, Valid: true}
+				if turn.State.Terminal() {
+					streaming = 0
+				}
+			} else if !errors.Is(turnErr, sql.ErrNoRows) {
+				return fmt.Errorf("lookup turn %s for assistant delta: %w", providerTurnID, turnErr)
+			}
+		}
 		return s.inTx(ctx, "insert assistant message", func(q *gen.Queries) error {
 			sequence, seqErr := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 				UpdatedAt: now,
@@ -2747,7 +2762,7 @@ func (s *Store) AppendAssistantDelta(
 				Role:           domain.MessageRoleAssistant,
 				Origin:         domain.MessageOriginProvider,
 				Text:           delta,
-				Streaming:      1,
+				Streaming:      streaming,
 				ProviderItemID: providerItemID,
 				CreatedAt:      now,
 				UpdatedAt:      now,
@@ -2760,7 +2775,8 @@ func (s *Store) AppendAssistantDelta(
 }
 
 // SettleAssistantMessage replaces streamed text with the provider's settled text
-// and stops the streaming marker.
+// and stops the streaming marker. An empty settle means the provider settled
+// nothing, so it keeps the streamed text.
 func (s *Store) SettleAssistantMessage(
 	ctx context.Context,
 	conversationID, providerItemID, providerTurnID, text, messageID string,
@@ -2769,7 +2785,7 @@ func (s *Store) SettleAssistantMessage(
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
-	_, err := q.SelectConversationMessageByProviderItem(ctx,
+	existing, err := q.SelectConversationMessageByProviderItem(ctx,
 		gen.SelectConversationMessageByProviderItemParams{
 			ConversationID: conversationID,
 			ProviderItemID: providerItemID,
@@ -2802,6 +2818,9 @@ func (s *Store) SettleAssistantMessage(
 	}
 	if err != nil {
 		return fmt.Errorf("lookup message %s: %w", providerItemID, err)
+	}
+	if text == "" {
+		text = existing.Text
 	}
 
 	if err := q.SettleConversationMessage(ctx, gen.SettleConversationMessageParams{

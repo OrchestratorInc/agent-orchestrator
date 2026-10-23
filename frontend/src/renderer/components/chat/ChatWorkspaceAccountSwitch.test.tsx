@@ -70,7 +70,11 @@ describe("ChatWorkspace account switch", () => {
 		// The stop settled the answer the switch interrupted.
 		const snapshot: ConversationSnapshot = {
 			...switched,
-			items: switched.items.map((item) => (item.kind === "message" && item.id === "m-5" ? { ...item, streaming: false } : item)),
+			// Without the fixture's steer, the answer is the turn's last reply rather
+			// than the end of an earlier, already-settled segment.
+			items: switched.items
+				.filter((item) => item.id !== "a-steer-1")
+				.map((item) => (item.kind === "message" && item.id === "m-5" ? { ...item, streaming: false } : item)),
 		};
 		render(
 			<QueryClientProvider client={queryClient}>

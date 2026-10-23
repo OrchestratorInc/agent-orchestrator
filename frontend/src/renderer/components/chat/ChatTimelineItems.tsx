@@ -1130,7 +1130,12 @@ export function AssistantMessage({
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
+	// Copy is ready the moment the text has fully arrived: it copies the stored markdown,
+	// so it need not wait for the typewriter to catch up or for the turn to settle.
+	// Rollback acts on the turn, so it waits for both.
+	const copyReady = showCopy && !message.streaming;
+	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
+	const showActions = copyReady || rollbackReady;
 	return (
 		<div
 			className="group/message relative"
@@ -1147,8 +1152,8 @@ export function AssistantMessage({
 				<TurnActions
 					className="mt-1"
 					durationMs={durationMs}
-					copyText={showCopy ? message.text : undefined}
-					onRollback={onRollback}
+					copyText={copyReady ? message.text : undefined}
+					onRollback={rollbackReady ? onRollback : undefined}
 					rollbackDisabled={rollbackDisabled}
 					timestamp={message.createdAt}
 				/>
@@ -2816,7 +2821,7 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
+				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 					{body ? (
 						<p>
 							<ProseWithInlineImages
@@ -2846,7 +2851,7 @@ export function SteerMessage({
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered into the running turn
+				Steered
 			</span>
 		</div>
 	);

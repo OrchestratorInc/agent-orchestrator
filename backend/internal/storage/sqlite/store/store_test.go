@@ -357,7 +357,7 @@ func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
 			if err != nil || !ok || published.ProvisionState != tc.state || published.ProvisionError != tc.cause {
 				t.Fatalf("published provision state: session=%+v ok=%v err=%v", published, ok, err)
 			}
-			stale.DisplayName = "lifecycle update"
+			stale.Metadata.Model = "lifecycle update"
 			if err := s.UpdateSession(ctx, stale); err != nil {
 				t.Fatal(err)
 			}
@@ -365,8 +365,8 @@ func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("get updated session: %v, %v", ok, err)
 			}
-			if got.DisplayName != stale.DisplayName || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
-				t.Fatalf("stale lifecycle update overwrote provisioning facts: name=%q state=%q error=%q", got.DisplayName, got.ProvisionState, got.ProvisionError)
+			if got.Metadata.Model != stale.Metadata.Model || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
+				t.Fatalf("stale lifecycle update overwrote provisioning facts: model=%q state=%q error=%q", got.Metadata.Model, got.ProvisionState, got.ProvisionError)
 			}
 		})
 	}
@@ -707,7 +707,7 @@ func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T)
 	expected := created.ControllerOwner()
 
 	concurrent := created
-	concurrent.DisplayName = "newer display name"
+	concurrent.Metadata.Model = "newer model"
 	concurrent.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: created.UpdatedAt.Add(2 * time.Second)}
 	concurrent.UpdatedAt = created.UpdatedAt.Add(2 * time.Second)
 	if err := s.UpdateSession(ctx, concurrent); err != nil {
@@ -724,7 +724,7 @@ func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T)
 		t.Fatalf("GetSession: ok=%v err=%v", ok, err)
 	}
 	if updated.Metadata.BrowserCapabilityVerifier != "verifier-2" ||
-		updated.DisplayName != concurrent.DisplayName || updated.Activity != concurrent.Activity ||
+		updated.Metadata.Model != concurrent.Metadata.Model || updated.Activity != concurrent.Activity ||
 		!updated.UpdatedAt.Equal(concurrent.UpdatedAt) {
 		t.Fatalf("narrow verifier update changed unrelated facts: got=%+v", updated)
 	}
@@ -2528,7 +2528,7 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/data/artifacts/x", domain.SessionOutputArtifact); err != nil || !applied {
 		t.Fatalf("narrow write: %v, %v", applied, err)
 	}
-	stale.DisplayName = "stale full-row write"
+	stale.Metadata.Model = "stale full-row write"
 	if err := s.UpdateSession(ctx, stale); err != nil {
 		t.Fatal(err)
 	}
@@ -2536,8 +2536,8 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get session: %v, %v", ok, err)
 	}
-	if got.DisplayName != stale.DisplayName {
-		t.Fatalf("display name = %q, want the full-row write applied", got.DisplayName)
+	if got.Metadata.Model != stale.Metadata.Model {
+		t.Fatalf("model = %q, want the full-row write applied", got.Metadata.Model)
 	}
 	if got.OutputType != domain.SessionOutputArtifact || got.Metadata.ArtifactDir != "/data/artifacts/x" {
 		t.Fatalf("stale UpdateSession clobbered output columns: type=%q dir=%q", got.OutputType, got.Metadata.ArtifactDir)

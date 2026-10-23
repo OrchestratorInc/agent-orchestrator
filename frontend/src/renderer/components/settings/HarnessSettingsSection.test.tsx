@@ -575,15 +575,17 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("menuitem", { name: "empty · 0" })).toBeNull();
 	});
 
-	it("asks for login before loading models", async () => {
+	it("asks for login before refreshing models", async () => {
 		const readiness = readyCatalog();
 		readiness.agents[1].authentication.state = "unauthorized";
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		// No saved list here, so readiness explains the empty panel. The saved list
+		// may be read without readiness; refreshing it waits for login.
 		expect(within(page).getByText("Log in to Codex to load its models.")).toBeInTheDocument();
-		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/models")).toBe(false);
+		expect((vi.mocked(apiClient.POST).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/models/refresh")).toBe(false);
 		await userEvent.click(within(page).getByRole("button", { name: "Account" }));
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
 	});
