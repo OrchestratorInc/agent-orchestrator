@@ -4,12 +4,13 @@ import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
 import { isDelimitedTextPath } from "../lib/delimited-text";
 import { isMermaidPath, isSvgPath } from "../lib/image-files";
+import { isMarkdownPreviewPath } from "../lib/markdown-frontmatter";
 
 // Mirrors FileContentPane's own canRender* extension checks: a markdown, SVG,
 // CSV/TSV or Mermaid artifact opens already rendered, the same way GitHub
 // opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) || isDelimitedTextPath(path) || isMermaidPath(path) ? "rendered" : "file";
+	return isMarkdownPreviewPath(path) || isSvgPath(path) || isDelimitedTextPath(path) || isMermaidPath(path) ? "rendered" : "file";
 }
 
 /**
