@@ -61,8 +61,7 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 		}
 	}
 	model := cfg.Model
-	if !available[model] {
-		model = ""
+	if model == "" {
 		var state struct {
 			Recent []struct {
 				ProviderID string `json:"providerID"`
@@ -82,7 +81,7 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 		}
 	}
 	provider, modelID, ok := strings.Cut(model, "/")
-	if !ok {
+	if !ok || !available[model] {
 		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("model_selection", "model_selection_unresolved"))
 		return ports.AgentAuthStatusConfigured
 	}

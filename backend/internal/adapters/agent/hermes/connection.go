@@ -72,6 +72,9 @@ func selectedConnection(home string) (authprobe.Connection, domain.AgentAccountI
 		}
 	}
 	route.Provider, route.Model, route.BaseURL = "zai", text("default"), text("base_url")
+	if route.Model == "" {
+		route.Model = text("model")
+	}
 	// Hermes may auto-detect a different Z.AI billing/region endpoint when
 	// none is explicitly selected. Do not substitute the general API route.
 	if route.BaseURL == "" {

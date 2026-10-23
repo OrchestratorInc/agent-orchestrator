@@ -67,3 +67,29 @@ func TestHermesLeavesAmbiguousRoutesUnverified(t *testing.T) {
 		})
 	}
 }
+
+func TestHermesResolvesModelAliasAndDefaultPrecedence(t *testing.T) {
+	for _, tc := range []struct{ name, fields, want string }{
+		{"default", "  default: glm-5.2\n", "glm-5.2"},
+		{"model alias", "  model: glm-5.3\n", "glm-5.3"},
+		{"default wins", "  default: glm-5.2\n  model: glm-5.3\n", "glm-5.2"},
+		{"empty default uses alias", "  default: ''\n  model: glm-5.3\n", "glm-5.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HERMES_MANAGED_DIR", filepath.Join(home, "missing"))
+			for name, content := range map[string]string{
+				"config.yaml": "model:\n  provider: zai\n" + tc.fields + "  base_url: https://api.z.ai/api/coding/paas/v4\n",
+				".env":        "GLM_API_KEY=test-key\n",
+			} {
+				if err := os.WriteFile(filepath.Join(home, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			route, _, ok := selectedConnection(home)
+			if !ok || route.Model != tc.want {
+				t.Fatalf("resolved=%v model=%q, want %q", ok, route.Model, tc.want)
+			}
+		})
+	}
+}
