@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -287,5 +288,78 @@ func TestResolveBinaryForMajorUsesDistinctManagedLaunchers(t *testing.T) {
 		if err != nil || got != filepath.Join(dir, name) {
 			t.Fatalf("major %d=%q,%v", major, got, err)
 		}
+	}
+}
+
+func TestReplacedOpenCode1MessageOnlyForDefaultLocations(t *testing.T) {
+	dataHome := filepath.Join(t.TempDir(), "share")
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	v2Home := filepath.Join(dataHome, "opencode-v2-home")
+	for _, tc := range []struct {
+		name     string
+		err      IncompatibleVersionError
+		replaced bool
+	}{
+		{"v2 at the installer default", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "opencode v2.1.2", Path: "/Users/me/.opencode/bin/opencode"}, true},
+		{"v2 linked by Homebrew", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: "/opt/homebrew/bin/opencode"}, true},
+		{"v2 in AO's npm prefix", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(v2Home, "npm", "bin", "opencode")}, false},
+		{"v2 in AO's installer home", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(v2Home, "installer", ".opencode", "bin", "opencode")}, false},
+		{"v2 through the unlinked formula", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: "/opt/homebrew/opt/opencode-v2/bin/opencode"}, false},
+		{"v1 found for the OpenCode 2 harness", IncompatibleVersionError{ExpectedMajor: 2, FoundMajor: 1, FoundVersion: "1.19.3", Path: "/Users/me/.opencode/bin/opencode"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tc.err.Path, "/opt/homebrew/opt/") {
+				t.Skip("Homebrew opt links do not exist on Windows")
+			}
+			got := tc.err.ReplacedOpenCode1Message()
+			if tc.replaced != (got != "") {
+				t.Fatalf("ReplacedOpenCode1Message() = %q, want replaced=%v", got, tc.replaced)
+			}
+			if tc.replaced && (!strings.Contains(got, tc.err.Path) || !strings.Contains(got, "reinstall OpenCode 1")) {
+				t.Fatalf("message %q must name %s and the repair steps", got, tc.err.Path)
+			}
+		})
+	}
+}
+
+func TestReplacedOpenCode1MessageForHomebrewLinkedV2(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew links are POSIX symlinks")
+	}
+	prefix := t.TempDir()
+	keg := filepath.Join(prefix, "Cellar", "opencode-v2", "2.1.2", "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(keg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keg, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(prefix, "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(keg, link); err != nil {
+		t.Fatal(err)
+	}
+	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: link}
+	if got := err.ReplacedOpenCode1Message(); !strings.Contains(got, "brew unlink opencode-v2") || !strings.Contains(got, link) {
+		t.Fatalf("message = %q, want the Homebrew unlink repair for %s", got, link)
+	}
+}
+
+func TestV2HomebrewCandidatesIncludeCustomPrefix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew does not run on Windows")
+	}
+	prefix := filepath.Join(t.TempDir(), "brew")
+	t.Setenv("HOMEBREW_PREFIX", prefix)
+	want := filepath.ToSlash(filepath.Join(prefix, "opt", "opencode-v2", "bin", "opencode"))
+	candidates := v2HomebrewCandidates()
+	if !slices.Contains(candidates, want) {
+		t.Fatalf("candidates = %v, want %s", candidates, want)
+	}
+	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.FromSlash(want)}
+	if got := err.ReplacedOpenCode1Message(); got != "" {
+		t.Fatalf("OpenCode 2 at a custom prefix's opt link = %q, want no replacement message", got)
 	}
 }
