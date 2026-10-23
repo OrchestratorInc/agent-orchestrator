@@ -52,8 +52,10 @@ const (
 	requestTimeout       = 30 * time.Second
 	// bootstrapRequestTimeout is longer: a retried bootstrap is answered with
 	// the same epoch, so waiting out a slow control plane beats giving up and
-	// running the whole handler again against it.
-	bootstrapRequestTimeout = 90 * time.Second
+	// running the whole handler again against it. It stays under the load
+	// balancer's 60 s idle timeout, past which the request is cut anyway (and
+	// the control plane's 30 s statement timeout ends a blocked query sooner).
+	bootstrapRequestTimeout = 55 * time.Second
 	maxResponseBody         = 1 << 20
 )
 
