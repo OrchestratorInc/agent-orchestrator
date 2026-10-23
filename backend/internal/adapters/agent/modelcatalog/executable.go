@@ -109,7 +109,7 @@ var discoveryLauncherReference = regexp.MustCompile(`(?i)"[^"\r\n]+\.(?:exe|com|
 
 // Invocation prefixes are shell syntax, not the executable. Preserve quoted
 // targets so extensionless commands and paths containing spaces are checked too.
-var discoveryLauncherCommand = regexp.MustCompile(`(?i)^(?:(?:exec|call)\s+|&\s*|\.\s+)?("[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>|&;]+)`)
+var discoveryLauncherCommand = regexp.MustCompile(`(?i)^((?:exec|call)\s+|&\s*|\.\s+)?("[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>|&;]+)`)
 
 func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen map[string]bool) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -185,8 +185,15 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 		}
 		references := discoveryLauncherReference.FindAllString(line, -1)
 		// Shells can resolve extensionless targets through PATH/PATHEXT.
-		if command := discoveryLauncherCommand.FindStringSubmatch(line); len(command) > 1 {
-			references = append(references, strings.Trim(command[1], `"'`))
+		if command := discoveryLauncherCommand.FindStringSubmatch(line); len(command) > 2 {
+			target := strings.Trim(command[2], `"'`)
+			// A named wrapper is not evidence for an unidentified command it
+			// delegates to. Refuse rather than assume our PATH/PATHEXT lookup
+			// matches the shell's eventual working directory and environment.
+			if command[1] != "" && filepath.Ext(target) == "" && discoveryExecutableOwner(target) == "" {
+				return false, fmt.Errorf("cannot verify extensionless command %q; use an explicit agent-owned launcher path", target)
+			}
+			references = append(references, target)
 		}
 		for _, reference := range references {
 			reference = strings.Trim(reference, `"'`)
