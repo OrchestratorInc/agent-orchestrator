@@ -173,7 +173,6 @@ describe("startRemoteProxy", () => {
 		expect(legacy.headers.get("content-security-policy")).toBe(`${appPolicy}, ${sandbox}`);
 	});
 
-
 	it("serves authenticated artifact files and sibling assets without replacing an app preview", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "artifact", headers: { "set-cookie": "secret=1" } }));
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" });
@@ -1752,7 +1751,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		expect(await proxy.agentBrowserUrl("ao-1")).toBe("");
 	});
 });
-
 
 describe("remote mobile control browser boundary", () => {
 	it("rejects hostile mobile control and password requests before injecting credentials", async () => {
