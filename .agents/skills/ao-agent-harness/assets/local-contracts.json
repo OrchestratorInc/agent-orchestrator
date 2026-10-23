@@ -3,32 +3,85 @@
   "agents": {
     "codex": {
       "binary": "codex",
-      "versionArgs": ["--version"],
+      "versionArgs": [
+        "--version"
+      ],
       "integration": {
-        "args": ["login", "status"],
+        "args": [
+          "login",
+          "status"
+        ],
         "expect": "Logged in"
       },
       "models": {
-        "args": ["debug", "models"],
+        "args": [
+          "debug",
+          "models"
+        ],
         "format": "json"
       },
-      "surfaces": ["tui", "chat"],
-      "adapters": { "tui": "codex", "chat": "codexappserver" },
+      "surfaces": [
+        "tui",
+        "chat"
+      ],
+      "adapters": {
+        "tui": "codex",
+        "chat": "codexappserver"
+      },
       "restoredReady": {
-        "patterns": ["›[ \\t\\u00a0]*(?:Ask Codex to do anything|Explain this codebase|Summarize recent commits|Implement \\{feature\\}|Find and fix a bug in @filename|Write tests for @filename|Improve documentation in @filename|Run /review on my current changes|Use /skills to list available skills)[ \\t]*\\n(?:[ \\t]*\\n)?[^\\n]*·[^\\n]*(?:\\n[^\\n]*){0,2}\\s*$"]
+        "patterns": [
+          "›[ \\t\\u00a0]*(?:Ask Codex to do anything|Explain this codebase|Summarize recent commits|Implement \\{feature\\}|Find and fix a bug in @filename|Write tests for @filename|Improve documentation in @filename|Run /review on my current changes|Use /skills to list available skills)[ \\t]*\\n(?:[ \\t]*\\n)?[^\\n]*·[^\\n]*(?:\\n[^\\n]*){0,2}\\s*$"
+        ]
       }
     },
     "claude-code": {
       "binary": "claude",
-      "versionArgs": ["--version"],
+      "versionArgs": [
+        "--version"
+      ],
       "integration": {
-        "args": ["auth", "status"],
+        "args": [
+          "auth",
+          "status"
+        ],
         "expect": "\"loggedIn\": true"
       },
-      "surfaces": ["tui", "chat"],
-      "adapters": { "tui": "claudecode", "chat": "claudeacp" },
+      "surfaces": [
+        "tui",
+        "chat"
+      ],
+      "adapters": {
+        "tui": "claudecode",
+        "chat": "claudeacp"
+      },
       "restoredReady": {
-        "patterns": ["❯[ \\t\\u00a0]*\\n[ \\t]*─{10,}[ \\t]*(?:\\n(?![^\\n]*esc to interrupt)[^\\n]*){0,3}\\s*$"]
+        "patterns": [
+          "❯[ \\t\\u00a0]*\\n[ \\t]*─{10,}[ \\t]*(?:\\n(?![^\\n]*esc to interrupt)[^\\n]*){0,3}\\s*$"
+        ]
+      }
+    },
+    "stakpak": {
+      "binary": "stakpak",
+      "versionArgs": [
+        "--version"
+      ],
+      "integration": {
+        "args": [
+          "auth",
+          "status"
+        ],
+        "expect": "(api_key)"
+      },
+      "surfaces": [
+        "tui"
+      ],
+      "adapters": {
+        "tui": "stakpak"
+      },
+      "restoredReady": {
+        "patterns": [
+          "│→ [^\\n]*\\n└─{10,}┘[^\\n]*\\n[^\\n]*\\$ shell \\| / commands[^\\n]*\\s*$"
+        ]
       }
     }
   }

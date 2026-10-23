@@ -53,6 +53,69 @@ where that harness is wired in every file. Rerun it after each merge from main.
 6. **Connected state:** once logged in, the Harness page shows Connected.
 7. Branding (logo, licence), docs, `ao doctor` probe, reviewer if supported.
 
+### Code to write
+
+Paths are under `backend/internal/`. Use these adapters as reference:
+`adapters/agent/codex/`, `claudecode/` and `opencode/`, plus their Chat
+drivers.
+
+**TUI adapter.** Embed `agentbase.Base` for defaults and implement
+`ports.Agent` (`ports/agent.go`):
+
+| Method | What it returns |
+| --- | --- |
+| `GetConfigSpec` | Settings AO shows for the agent (usually `agentbase.ModelConfigSpec` for a model override) |
+| `GetLaunchCommand` | The argv: binary, model flag, permission flags, system-prompt flag or config, and the prompt (guard a prompt starting with `-`) |
+| `GetPromptDeliveryStrategy` | Prompt in the launch command (the default) or sent after start |
+| `GetAgentHooks` | Installs `ao hooks <id> <event>` callbacks in the CLI's own hook config, keeping the user's hooks |
+| `GetRestoreCommand` | argv that resumes the stored session ID; `ok=false` means start fresh |
+| `SessionInfo` | Native session ID, title or summary, read from the CLI's files |
+
+Optional interfaces from the same file, implemented when they apply:
+- `AgentAuthChecker`: a real login check; return `configured` when the
+  credentials exist but are unverified.
+- `AgentTerminalVersionRefresher`: restart on a new CLI version.
+- `AgentModelDiscoverer`: list the CLI's models.
+- `StartupInputReadinessSignaler` / `EmptyComposerDetector`: for CLIs that
+  show dialogs before their input box.
+- `TerminalActivityDetector`: only when the CLI has no hooks.
+
+**Hooks to status.** Each hook event becomes a status through a deriver
+registered in `adapters/agent/activitydispatch/dispatch.go`. Use the shared
+`activitystate.StandardDeriveActivityState` when the CLI's events map by
+name:
+
+| Hook event | Status |
+| --- | --- |
+| `session-start`, `user-prompt-submit`, tool use | working |
+| `stop` | idle |
+| `permission-request` | waiting for input |
+
+Write your own `DeriveActivityState` (as Codex does) only when the payload
+matters.
+
+**Register the TUI adapter** in `adapters/agent/registry/registry.go`, and add
+it to the domain harness list (`domain/harness.go`), the SQLite harness
+constraint and the API enums. `harness_touchpoints.mjs` lists every one.
+
+**Chat, ACP-native CLIs.** When the CLI speaks ACP (`<cli> acp`), the driver is
+small: call `nativeacp.New(plugin, nativeacp.Config{...})`, as
+`chatdriver/opencodeacp/driver.go` does in about 100 lines. Fill in:
+- `Harness`;
+- `Configure`: the ACP argv plus env, and the system prompt as a session
+  parameter or config;
+- `SessionOptions`: the model and effort, as ACP config options;
+- `PermissionPolicy`;
+- `ValidateTurnSettings`;
+- `DecodeProviderConversationID`, for resume.
+
+**Chat, SDK or app-server CLIs.** These need a full driver like
+`chatdriver/codexappserver/`.
+
+**Register the Chat driver** in `chatdriver/registry/registry.go` with
+`add(driver, plugin)`, paired with the TUI adapter. The Chat UI is shared, so a
+harness normally needs no frontend changes.
+
 ### Avoid (from earlier PRs)
 
 **Auth and install**
