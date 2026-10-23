@@ -625,6 +625,90 @@ func TestProvisioningRetryStillReservesBoundaryForPriorProviderHistory(t *testin
 	}
 }
 
+// A replacement orchestrator inherits the project conversation, whose branch
+// still names its predecessor's provider thread. Its first controller is a fresh
+// provider thread, so it needs its own boundary. Without one only the session
+// learned the new handle, and the next resume was refused because the branch and
+// session handles disagree.
+func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	provisioningOrchestrator(t, st, id)
+	previous, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed earlier orchestrator: %v", err)
+	}
+	project, err := st.CreateConversation(ctx, "project-narrative",
+		domain.ConversationScopeProject, testProject, previous.ID, now)
+	if err != nil {
+		t.Fatalf("seed project conversation: %v", err)
+	}
+	if err := st.UpsertActivity(ctx, project.ID, "", domain.ConversationActivity{
+		ID: "earlier-work", Kind: domain.ActivityKindSystem,
+		Status: domain.ActivityStatusCompleted, Summary: "earlier orchestrator work",
+	}, now); err != nil {
+		t.Fatalf("seed project history: %v", err)
+	}
+	previous.Metadata.ProviderConversationID = "predecessor-thread"
+	previous.IsTerminated = true
+	if err := st.UpdateSession(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+	inherited, err := st.ConversationBranch(ctx, project.ID, project.ActiveBranchID)
+	if err != nil || inherited.ProviderConversationID != "predecessor-thread" {
+		t.Fatalf("seeded branch = %+v, err=%v; want predecessor-thread", inherited, err)
+	}
+
+	svc := provisioningService(t, st)
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	var boundary *domain.ConversationBranch
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			boundary = result.ProviderBoundary
+			if boundary == nil {
+				return chatsvc.ControllerCommit{}, nil
+			}
+			if err := st.CreateAndActivateConversationBranch(ctx, id, *boundary, result.ControllerGeneration, now); err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			committed := result.Conversation
+			committed.ActiveBranchID = boundary.ID
+			return chatsvc.ControllerCommit{Conversation: committed}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
+	if boundary == nil {
+		t.Fatal("fresh provider thread was attached to the predecessor's branch without a new boundary")
+	}
+	if boundary.ProviderConversationID != "thread-1" {
+		t.Fatalf("boundary provider = %q, want the fresh thread-1", boundary.ProviderConversationID)
+	}
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain after controller start: %v", err)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Conversation.ID != project.ID {
+		t.Fatalf("orchestrator conversation = %s, want inherited %s", snapshot.Conversation.ID, project.ID)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
+		t.Fatalf("opening brief after start = %+v, want one running turn", snapshot.Turns)
+	}
+}
+
 func TestControllerPublishedWhileProvisioningCannotOvertakeQueuedPrompt(t *testing.T) {
 	st, provisioningSession := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	conv := newFakeConversation()
