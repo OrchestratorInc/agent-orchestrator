@@ -101,6 +101,121 @@ paths:
           description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares:
+    get:
+      operationId: listArtifactShares
+      tags: [Artifacts]
+      description: >-
+        Lists the signed-in user's public artifact share links, newest first,
+        with how many they may hold. Revoked links are listed with revokedAt:
+        they no longer serve but still use a slot, so used counts them. Available only when the development-only
+        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+      responses:
+        "200":
+          description: The user's share links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Publishes the request body, one file from a local session, as the
+        link of the document named by project, feature and name. A new
+        document gets a new public link at <project>-<feature>-<email> under
+        the share origin; a taken name gets a -2, -3, ... suffix. Publishing
+        a document that already has a link replaces the version that link
+        serves: the URL and slot stay, the earlier version is no longer
+        served, and the response is 200 with replaced true. A revoked link
+        is restored the same way.
+        Content-Length and X-AO-Artifact-SHA256 are required. Returns 409
+        artifact_share_limit_reached when a new document would exceed the
+        user's limit of links; revoked links count toward it.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: feature
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The document's existing link, now serving the new version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        "201":
+          description: The new share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: updateArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Replaces the file an existing link serves. The link keeps its URL and
+        does not count against the limit again. name must match the link's
+        file name, which is part of its document; another name returns 409
+        artifact_share_name_changed, and the renamed file is published as a
+        new link with POST.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The updated share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Revokes a link: it stops serving at once and its stored file is
+        deleted after a grace period. The link still uses its slot, so
+        revoking never makes room for a new document. Publishing the same
+        document again restores it. A link already revoked returns 404.
+      responses:
+        "204":
+          description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
     get:
       operationId: getGitHubUserConnection
@@ -2525,6 +2640,22 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    ArtifactShareName:
+      name: name
+      in: query
+      required: true
+      description: The file name, without a directory.
+      schema:
+        type: string
+        maxLength: 255
+    ArtifactShareSHA256:
+      name: X-AO-Artifact-SHA256
+      in: header
+      required: true
+      description: Lowercase hex SHA-256 of the body.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
     OrgId:
       name: orgId
       in: path
@@ -5353,6 +5484,73 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ArtifactShare:
+      type: object
+      additionalProperties: false
+      required: [id, slug, url, name, contentType, size, sha256, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          description: The link's subdomain label.
+        url:
+          type: string
+          description: The public link, for example http://<slug>.share.localhost:8081/.
+        name:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+          description: When the link was revoked. A revoked link serves nothing but still uses a slot.
+    ArtifactShareEnvelope:
+      type: object
+      additionalProperties: false
+      required: [share]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+    ArtifactSharePublishResult:
+      type: object
+      additionalProperties: false
+      required: [share, replaced]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+        replaced:
+          type: boolean
+          description: True when publishing replaced the version of the document's existing link.
+    ArtifactShareList:
+      type: object
+      additionalProperties: false
+      required: [shares, limit, used]
+      properties:
+        shares:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactShare"
+        limit:
+          type: integer
+          minimum: 1
+        used:
+          type: integer
+          minimum: 0
     WorkerArtifactFile:
       type: object
       additionalProperties: false

@@ -205,14 +205,8 @@ func (s *Server) workerPutArtifactBlob(w http.ResponseWriter, r *http.Request) {
 		s.logger.WarnContext(r.Context(), "extend artifact upload deadline", "error", err, "request_id", requestID(r))
 	}
 	body := http.MaxBytesReader(w, r.Body, r.ContentLength)
-	versionID, err := s.artifacts.Put(r.Context(), key, body, r.ContentLength, sum)
-	if errors.Is(err, artifactstore.ErrChecksumMismatch) {
-		writeError(w, r, http.StatusUnprocessableEntity, "checksum_mismatch", "The body does not match its SHA-256.")
-		return
-	}
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "store artifact blob", "error", err, "request_id", requestID(r))
-		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be stored.")
+	versionID, ok := s.putArtifactObject(w, r, key, body, r.ContentLength, sum)
+	if !ok {
 		return
 	}
 	if err := s.artifactRows.RecordArtifactUpload(r.Context(), claims.OrgID, claims.SessionID, key, versionID, r.ContentLength); err != nil {
@@ -293,6 +287,23 @@ func (s *Server) workerGetArtifactBlob(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, object.Body); err != nil {
 		s.logger.WarnContext(r.Context(), "stream artifact blob to worker", "error", err, "request_id", requestID(r))
 	}
+}
+
+// putArtifactObject streams body to key with S3 verifying sum and returns the
+// new object version, writing an error and returning false when the bucket
+// refuses it.
+func (s *Server) putArtifactObject(w http.ResponseWriter, r *http.Request, key string, body io.Reader, size int64, sum []byte) (string, bool) {
+	versionID, err := s.artifacts.Put(r.Context(), key, body, size, sum)
+	if errors.Is(err, artifactstore.ErrChecksumMismatch) {
+		writeError(w, r, http.StatusUnprocessableEntity, "checksum_mismatch", "The body does not match its SHA-256.")
+		return "", false
+	}
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "store artifact object", "error", err, "request_id", requestID(r))
+		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be stored.")
+		return "", false
+	}
+	return versionID, true
 }
 
 // workerCommitArtifacts verifies each uploaded object version and then
@@ -571,34 +582,56 @@ func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	etag := `"` + artifact.SHA256 + `"`
+	s.writeArtifactObject(w, r, artifactObject{
+		key:          artifact.S3Key,
+		versionID:    artifact.VersionID,
+		etag:         `"` + artifact.SHA256 + `"`,
+		contentType:  artifactstore.ContentType(artifact.Path),
+		cacheControl: "private, no-cache",
+	})
+}
+
+// artifactObject names one stored object version and how to serve it.
+type artifactObject struct {
+	key          string
+	versionID    string
+	etag         string
+	contentType  string
+	cacheControl string
+}
+
+// writeArtifactObject serves one object version inside the artifact sandbox
+// CSP. It answers If-None-Match from the object's ETag and HEAD from its
+// metadata without reading its body.
+func (s *Server) writeArtifactObject(w http.ResponseWriter, r *http.Request, object artifactObject) {
+	etag := object.etag
 	if r.Header.Get("If-None-Match") == etag {
-		setArtifactFileHeaders(w, etag)
+		setArtifactFileHeaders(w, etag, object.cacheControl)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	if r.Method == http.MethodHead {
-		head, err := s.artifacts.Head(r.Context(), artifact.S3Key, artifact.VersionID)
+		head, err := s.artifacts.Head(r.Context(), object.key, object.versionID)
 		if !s.artifactObjectReadable(w, r, err) {
 			return
 		}
-		setArtifactFileHeaders(w, etag)
-		w.Header().Set("Content-Type", artifactstore.ContentType(artifact.Path))
+		setArtifactFileHeaders(w, etag, object.cacheControl)
+		w.Header().Set("Content-Type", object.contentType)
 		w.Header().Set("Content-Length", strconv.FormatInt(head.Size, 10))
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	object, err := s.artifacts.Get(r.Context(), artifact.S3Key, artifact.VersionID)
+	stored, err := s.artifacts.Get(r.Context(), object.key, object.versionID)
 	if !s.artifactObjectReadable(w, r, err) {
 		return
 	}
-	defer object.Body.Close()
-	setArtifactFileHeaders(w, etag)
-	w.Header().Set("Content-Type", artifactstore.ContentType(artifact.Path))
-	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+	defer stored.Body.Close()
+	setArtifactFileHeaders(w, etag, object.cacheControl)
+	w.Header().Set("Content-Type", object.contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(stored.Size, 10))
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, object.Body); err != nil {
-		s.logger.WarnContext(r.Context(), "stream artifact blob", "error", err, "request_id", requestID(r))
+	if _, err := io.Copy(w, stored.Body); err != nil {
+		s.logger.WarnContext(r.Context(), "stream artifact object", "error", err, "request_id", requestID(r))
 	}
 }
 
@@ -610,7 +643,7 @@ func (s *Server) artifactObjectReadable(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	if err != nil {
-		s.logger.ErrorContext(r.Context(), "read artifact blob", "error", err, "request_id", requestID(r))
+		s.logger.ErrorContext(r.Context(), "read artifact object", "error", err, "request_id", requestID(r))
 		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be read.")
 		return false
 	}
@@ -634,11 +667,11 @@ func writeExpiredArtifactPage(w http.ResponseWriter) {
 }
 
 // setArtifactFileHeaders sets the headers of a served artifact file.
-func setArtifactFileHeaders(w http.ResponseWriter, etag string) {
+func setArtifactFileHeaders(w http.ResponseWriter, etag, cacheControl string) {
 	w.Header().Set("Content-Security-Policy", artifactFileCSP)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set("ETag", etag)
 }
 

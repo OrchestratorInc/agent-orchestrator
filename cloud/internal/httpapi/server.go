@@ -239,6 +239,10 @@ type Server struct {
 	artifacts         *artifactstore.Store
 	artifactRows      sessionArtifactStore
 	artifactAccessKey []byte
+	// shareRows and shareConfig serve artifact share links; both are nil
+	// when they are off.
+	shareRows   artifactShareStore
+	shareConfig *artifactShareConfig
 }
 
 type Options struct {
@@ -306,6 +310,10 @@ type Options struct {
 	// ArtifactAccessSecret is the secret artifact file links are signed with,
 	// required with Artifacts.
 	ArtifactAccessSecret []byte
+	// ArtifactShares turns on public share links for single local artifact
+	// files (AO_CLOUD_ARTIFACT_SHARES); it needs Artifacts. Nil leaves the
+	// share routes unregistered.
+	ArtifactShares *ArtifactShareOptions
 }
 
 // ProjectSnapshotter looks up and builds a project's prepared snapshot.
@@ -419,6 +427,16 @@ func New(options Options) *Server {
 		server.artifactRows = rows
 		server.artifactAccessKey = artifactAccessKeyFrom(options.ArtifactAccessSecret)
 	}
+	if rows, ok := options.Store.(artifactShareStore); ok && server.artifactsEnabled() {
+		shareConfig, err := parseArtifactShareOptions(options.ArtifactShares)
+		if err != nil {
+			logger.Error("artifact share links disabled", "error", err)
+		}
+		if err == nil && shareConfig != nil {
+			server.shareRows = rows
+			server.shareConfig = shareConfig
+		}
+	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
 	for _, build := range options.WorkerBuilds {
 		workerBinaries = append(workerBinaries, build.Binary, build.HelperBinary)
@@ -446,6 +464,9 @@ func New(options Options) *Server {
 	router := chi.NewRouter()
 	router.Use(server.requestID)
 	router.Use(server.requestLog)
+	if server.artifactSharesEnabled() {
+		router.Use(server.artifactShareHost)
+	}
 	router.Get("/healthz", server.health)
 	router.Get("/readyz", server.ready)
 	router.Get("/github/healthz", server.githubHealth)
@@ -490,6 +511,12 @@ func New(options Options) *Server {
 		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)
 		router.With(server.authenticate).Put("/me/hosts/{hostId}", server.putRemoteHost)
 		router.With(server.authenticate).Delete("/me/hosts/{hostId}", server.deleteRemoteHost)
+		if server.artifactSharesEnabled() {
+			router.With(server.authenticate).Get("/me/artifact-shares", server.listArtifactShares)
+			router.With(server.authenticate).Post("/me/artifact-shares", server.createArtifactShare)
+			router.With(server.authenticate).Put("/me/artifact-shares/{shareId}", server.updateArtifactShare)
+			router.With(server.authenticate).Delete("/me/artifact-shares/{shareId}", server.revokeArtifactShare)
+		}
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)
