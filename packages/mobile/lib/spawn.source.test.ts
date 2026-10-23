@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const spawn = readFileSync(fileURLToPath(new URL("../app/spawn.tsx", import.meta.url)), "utf8");
+const attachmentRow = readFileSync(fileURLToPath(new URL("./spawn-attachment-row.tsx", import.meta.url)), "utf8");
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 
 describe("spawn composer", () => {
@@ -18,6 +19,12 @@ describe("spawn composer", () => {
 		expect(spawn.indexOf('style={styles.messages}')).toBeLessThan(spawn.indexOf('height: keyboardHeight, marginTop: -space.sm'));
 		expect(spawn.indexOf('height: keyboardHeight, marginTop: -space.sm')).toBeLessThan(spawn.indexOf('<KeyboardStickyView'));
 		expect(spawn).toContain('promptHostFill: { height: undefined, flex: 1, minHeight: 0 }');
+	});
+
+	it("keeps the attachment row at its own height so the chips sit on the selectors", () => {
+		expect(spawn).toContain("<SpawnAttachmentRow");
+		expect(attachmentRow).toContain("style={styles.row} contentContainerStyle={styles.content}");
+		expect(attachmentRow).toContain("row: { flexGrow: 0, flexShrink: 0 }");
 	});
 
 	it("shows a prompt-specific error for the daemon's 16 KiB rejection", () => {

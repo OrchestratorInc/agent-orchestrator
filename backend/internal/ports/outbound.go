@@ -531,18 +531,14 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
-// WorkspaceTaskNamer finalizes an unlaunched task's branch and directory names.
-// Even on error, the returned info describes the current paths and branches.
+// WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
+// never moves, so the returned info differs only in branch names, and on error
+// it still describes the branches Git holds, which may differ per repository.
+// RevertTaskBranch exactly undoes a rename the caller could not record, with
+// the same result contract.
 type WorkspaceTaskNamer interface {
-	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
-	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
-}
-
-// WorkspaceTaskNamingRecovery keeps an interrupted rename recoverable until
-// the caller acknowledges that the resulting paths are durably stored.
-type WorkspaceTaskNamingRecovery interface {
-	RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (WorkspaceProjectInfo, bool, error)
-	CompleteTaskWorkspaceNaming(ctx context.Context, info WorkspaceProjectInfo) error
+	RenameTaskBranch(ctx context.Context, info WorkspaceProjectInfo, branch string) (WorkspaceProjectInfo, error)
+	RevertTaskBranch(ctx context.Context, renamed, original WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
 }
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.

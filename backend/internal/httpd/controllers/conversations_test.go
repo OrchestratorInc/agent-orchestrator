@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -799,6 +800,55 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSnapshotOutputTruncationFollowsSelectedSource(t *testing.T) {
+	aggregateOutput := strings.Repeat("a", 64*1024)
+	aggregate, err := json.Marshal(map[string]any{
+		"output":          aggregateOutput,
+		"outputSource":    "aggregate",
+		"outputTruncated": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		stream          string
+		streamTruncated bool
+		wantSource      string
+		wantTruncated   bool
+	}{
+		{"uncut stream replaces capped aggregate", strings.Repeat("s", 60*1024), false, "stream", false},
+		{"capped stream replaces capped aggregate", strings.Repeat("s", 64*1024), true, "stream", true},
+		{"no stream keeps capped aggregate", "", false, "aggregate", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID: domain.SessionID("p1-1"),
+				Mode:      domain.SessionModeChat,
+				Activities: []domain.ConversationActivity{{
+					ID: "act-1", Kind: domain.ActivityKindCommand,
+					Status: domain.ActivityStatusCompleted, Summary: "run tests",
+					Detail: aggregate, CommandOutput: tc.stream,
+					CommandOutputTruncated: tc.streamTruncated,
+					CreatedAt:              time.Now().UTC(),
+				}},
+			})
+			detail := body["activities"].([]any)[0].(map[string]any)["detail"].(map[string]any)
+			wantOutput := aggregateOutput
+			if tc.stream != "" {
+				wantOutput = tc.stream
+			}
+			if detail["output"] != wantOutput || detail["outputSource"] != tc.wantSource {
+				t.Fatalf("output did not come from %s", tc.wantSource)
+			}
+			truncated, present := detail["outputTruncated"]
+			if tc.wantTruncated && truncated != true || !tc.wantTruncated && present {
+				t.Errorf("outputTruncated = %#v (present=%v), want truncated=%v", truncated, present, tc.wantTruncated)
+			}
+		})
 	}
 }
 
