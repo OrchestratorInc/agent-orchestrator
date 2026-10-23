@@ -114,17 +114,17 @@ var (
 	errDaemonStopped = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it from Settings > Computer use agents.", nil)
 )
 
-// browserTool reports whether tool is one of Cua Driver's browser tools.
-// AO refuses them: they attach to a browser over CDP and
-// would fight `ao browser`, AO's own browser control, for the same pages.
-// run_steps and run_script cannot reach them, so blocking direct calls is
-// enough.
-func browserTool(tool string) bool {
-	return strings.HasPrefix(tool, "browser_") || tool == "get_browser_state" || tool == "page"
-}
+// errDisabled refuses calls while "Let agents use this computer" is off. A
+// chat session started while it was on keeps its tools listed, so turning it
+// off also cuts off sessions already running.
+var errDisabled = apierr.Forbidden("COMPUTER_USE_DISABLED", "Computer use is turned off. Ask the user to turn on \"Let agents use this computer\" in Settings > Computer use agents.")
 
-func browserToolBlocked(tool string) error {
-	return apierr.Forbidden("COMPUTER_USE_BROWSER_TOOL_DISABLED", fmt.Sprintf("%q is a Cua Driver browser tool, which AO turns off. Use `ao browser` for web pages.", tool))
+// toolNotOffered refuses a driver tool outside the ones AO offers agents. The
+// route is loopback-only but open to any local process, such as a terminal
+// agent with curl, so it runs no more than chat agents get: no browser tools,
+// scripts, whole-screen capture, or driver configuration.
+func toolNotOffered(tool string) error {
+	return apierr.Forbidden("COMPUTER_USE_TOOL_NOT_OFFERED", fmt.Sprintf("%q is not one of the computer-use tools AO offers: %s.", tool, strings.Join(agentToolNames, ", ")))
 }
 
 // Service runs Cua Driver for the settings page and the computer-use tools.
@@ -144,6 +144,23 @@ type Service struct {
 	sessionless map[string]bool
 	snapshots   snapshotWindows
 	agentTools  agentToolCache
+	// enabled reports "Let agents use this computer"; nil is off.
+	enabled func(context.Context) bool
+}
+
+// SetEnabled supplies the "Let agents use this computer" setting, which Call
+// checks on every call.
+func (s *Service) SetEnabled(enabled func(context.Context) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enabled = enabled
+}
+
+func (s *Service) computerUseEnabled(ctx context.Context) bool {
+	s.mu.Lock()
+	enabled := s.enabled
+	s.mu.Unlock()
+	return enabled != nil && enabled(ctx)
 }
 
 // New returns a Service that saves screenshots under dataDir/computer-use.
@@ -283,8 +300,11 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)
 	}
-	if browserTool(tool) {
-		return CallResult{}, browserToolBlocked(tool)
+	if !s.computerUseEnabled(ctx) {
+		return CallResult{}, errDisabled
+	}
+	if !offeredTool(tool) {
+		return CallResult{}, toolNotOffered(tool)
 	}
 	if err := checkActions(tool, request.Arguments); err != nil {
 		return CallResult{}, err

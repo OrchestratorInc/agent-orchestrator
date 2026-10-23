@@ -3,6 +3,7 @@ package computeruse
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -22,6 +23,12 @@ type AgentTool struct {
 // capture, scripts, and browsers are left out.
 var agentToolNames = []string{
 	"list_windows", "launch_app", "get_window_state", "click", "type_text", "press_key", "run_steps",
+}
+
+// offeredTool reports whether Call runs tool: only the tools agents are
+// offered. The step-only actions run inside the driver as run_steps steps.
+func offeredTool(tool string) bool {
+	return slices.Contains(agentToolNames, tool)
 }
 
 // stepToolNames are actions an agent reaches only as run_steps steps. Their

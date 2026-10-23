@@ -120,6 +120,11 @@ account rather than posting, sending, or buying as the wrong person.
 
 - `COMPUTER_USE_NOT_INSTALLED`: ask the user to install Cua Driver in
   Settings > Computer use agents.
+- `COMPUTER_USE_DISABLED`: the user turned off **Let agents use this
+  computer**. Stop using these tools; ask the user to turn it back on if the
+  task needs them.
+- `COMPUTER_USE_TOOL_NOT_OFFERED`: only the tools listed above run; reach
+  `hotkey`, `scroll`, `set_value`, and `drag` through `run_steps`.
 - `COMPUTER_USE_DAEMON_STOPPED`: Cua Driver's background service did not
   start; ask the user to start it in Settings > Computer use agents.
 - Missing macOS permissions: ask the user to click **Grant** next to macOS

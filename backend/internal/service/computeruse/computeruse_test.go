@@ -78,6 +78,7 @@ func newTestService(t *testing.T, driver *fakeDriver, goos string) *Service {
 	t.Helper()
 	s := New(driver, t.TempDir())
 	s.goos = goos
+	s.SetEnabled(func(context.Context) bool { return true })
 	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	return s
 }
@@ -182,8 +183,9 @@ func TestCallWritesScreenshotsToFiles(t *testing.T) {
 }
 
 // statefulDriver answers like Cua Driver's session model: a call without a
-// `session` runs in a fresh implicit session, and zoom needs a window read by
-// the same session. It refuses a `session` argument for sessionlessTool.
+// `session` runs in a fresh implicit session, and a pixel click needs a window
+// read by the same session. It refuses a `session` argument for
+// sessionlessTool.
 type statefulDriver struct {
 	read            map[string]bool
 	sessionlessTool string
@@ -208,7 +210,7 @@ func (d *statefulDriver) call(args []string) ([]byte, []byte, error) {
 			d.read[label] = true
 		}
 		return []byte(`{"elements":[]}`), nil, nil
-	case "zoom":
+	case "click":
 		if !named || !d.read[label] {
 			return []byte(`{"code":"screenshot_context_missing","reason":"window_never_read"}`), nil, errors.New("exit status 1")
 		}
@@ -218,31 +220,32 @@ func (d *statefulDriver) call(args []string) ([]byte, []byte, error) {
 
 func newStatefulService(t *testing.T) (*Service, *statefulDriver) {
 	t.Helper()
-	state := &statefulDriver{read: map[string]bool{}, sessionlessTool: "list_sessions"}
+	state := &statefulDriver{read: map[string]bool{}, sessionlessTool: "list_windows"}
 	driver := &fakeDriver{daemonUp: true, onCall: state.call}
 	return newTestService(t, driver, "darwin"), state
 }
 
 var snapshotArgs = map[string]any{"pid": 7, "window_id": 9, "include_screenshot": false}
 
-// Separate calls snapshot a window and then zoom into it, each in its own
+// Separate calls read a window and then pixel-click it, each in its own
 // driver process, so both must run in one driver session tied to the AO
 // session.
 func TestCallKeepsOneDriverSessionPerAOSession(t *testing.T) {
 	s, state := newStatefulService(t)
 	ctx := context.Background()
-	zoom := map[string]any{"pid": 7, "window_id": 9, "x1": 0, "y1": 0, "x2": 10, "y2": 10}
+	pixelClick := map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5}
 
 	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: snapshotArgs, SessionID: "worker-1"}); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if _, err := s.Call(ctx, CallRequest{Tool: "zoom", Arguments: zoom, SessionID: "worker-1"}); err != nil {
-		t.Fatalf("zoom after snapshot in the same AO session: %v", err)
+	if _, err := s.Call(ctx, CallRequest{Tool: "click", Arguments: pixelClick, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("pixel click after a read in the same AO session: %v", err)
 	}
-	if _, err := s.Call(ctx, CallRequest{Tool: "zoom", Arguments: zoom, SessionID: "worker-2"}); err == nil || !strings.Contains(err.Error(), "screenshot_context_missing") {
-		t.Fatalf("zoom from another AO session err = %v, want screenshot_context_missing", err)
+	if _, err := s.Call(ctx, CallRequest{Tool: "click", Arguments: pixelClick, SessionID: "worker-2"}); err == nil || !strings.Contains(err.Error(), "screenshot_context_missing") {
+		t.Fatalf("pixel click from another AO session err = %v, want screenshot_context_missing", err)
 	}
-	want := []any{"ao-worker-1", "ao-worker-1", "ao-worker-2"}
+	// The read, the click, AO's read after the click, then worker-2's refused click.
+	want := []any{"ao-worker-1", "ao-worker-1", "ao-worker-1", "ao-worker-2"}
 	if fmt.Sprint(state.sessions) != fmt.Sprint(want) {
 		t.Fatalf("driver sessions = %v, want %v", state.sessions, want)
 	}
@@ -274,7 +277,7 @@ func TestCallKeepsCallerDriverSession(t *testing.T) {
 func TestCallDropsSessionForToolsThatRefuseIt(t *testing.T) {
 	s, state := newStatefulService(t)
 	for range 2 {
-		if _, err := s.Call(context.Background(), CallRequest{Tool: "list_sessions", SessionID: "worker-1"}); err != nil {
+		if _, err := s.Call(context.Background(), CallRequest{Tool: "list_windows", SessionID: "worker-1"}); err != nil {
 			t.Fatalf("Call() error = %v", err)
 		}
 	}
@@ -304,8 +307,8 @@ func TestCallLeavesTreeOnlySnapshotsAlone(t *testing.T) {
 	}
 }
 
-// Tools without a file option (zoom) still print base64; it is decoded to a
-// file and never passed through.
+// A tool that prints an image as base64 instead of writing a file gets it
+// decoded to a file; the base64 is never passed through.
 func TestCallExternalizesInlineImages(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString(pngHeader)
 	driver := &fakeDriver{daemonUp: true}
@@ -313,7 +316,7 @@ func TestCallExternalizesInlineImages(t *testing.T) {
 		return []byte(fmt.Sprintf(`{"width":480,"screenshot_png_b64":%q,"content":[{"type":"image","data":%q,"mimeType":"image/png"},{"type":"text","text":"ok"}],"broken_b64":"%%%%"}`, encoded, encoded)), nil, nil
 	}
 	s := newTestService(t, driver, "linux")
-	result, err := s.Call(context.Background(), CallRequest{Tool: "zoom", Arguments: map[string]any{"pid": 1}})
+	result, err := s.Call(context.Background(), CallRequest{Tool: "list_windows"})
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -365,7 +368,7 @@ func TestCallStartsStoppedDaemonAndRetries(t *testing.T) {
 		return []byte(`{"apps":[]}`), nil, nil
 	}
 	s := newTestService(t, driver, "darwin")
-	if _, err := s.Call(context.Background(), CallRequest{Tool: "list_apps"}); err != nil {
+	if _, err := s.Call(context.Background(), CallRequest{Tool: "list_windows"}); err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
 	if driver.started != 1 || attempts != 2 {
@@ -379,7 +382,7 @@ func TestCallReportsDaemonStartFailure(t *testing.T) {
 		return nil, []byte("Cua Driver daemon is not running."), errors.New("exit status 1")
 	}
 	s := newTestService(t, driver, "linux")
-	_, err := s.Call(context.Background(), CallRequest{Tool: "list_apps"})
+	_, err := s.Call(context.Background(), CallRequest{Tool: "list_windows"})
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_DAEMON_START_FAILED" || !strings.Contains(apiErr.Message, "no desktop session") {
 		t.Fatalf("err = %v", err)
@@ -405,7 +408,7 @@ func TestCallValidatesInput(t *testing.T) {
 		"empty tool":       {},
 		"flag injection":   {Tool: "--help"},
 		"path tool":        {Tool: "../x"},
-		"session traverse": {Tool: "list_apps", SessionID: "../../etc"},
+		"session traverse": {Tool: "list_windows", SessionID: "../../etc"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := s.Call(context.Background(), request)
@@ -419,27 +422,49 @@ func TestCallValidatesInput(t *testing.T) {
 
 func TestCallWhenNotInstalled(t *testing.T) {
 	s := newTestService(t, &fakeDriver{missing: true}, "darwin")
-	_, err := s.Call(context.Background(), CallRequest{Tool: "list_apps"})
+	_, err := s.Call(context.Background(), CallRequest{Tool: "list_windows"})
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_NOT_INSTALLED" {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestBrowserToolsAreBlocked(t *testing.T) {
+// The call route runs only the tools agents are offered: not Cua Driver's
+// browser tools, scripts, whole-screen capture, or the step-only actions.
+func TestCallRefusesToolsAONotOffers(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	s := newTestService(t, driver, "darwin")
-	for _, tool := range []string{"browser_click", "browser_prepare", "get_browser_state", "page"} {
+	for _, tool := range []string{"browser_click", "get_browser_state", "page", "run_script", "get_desktop_state", "list_apps", "zoom", "hotkey", "kill_app"} {
 		t.Run(tool, func(t *testing.T) {
 			_, err := s.Call(context.Background(), CallRequest{Tool: tool})
 			var apiErr *apierr.Error
-			if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_BROWSER_TOOL_DISABLED" {
-				t.Fatalf("err = %v, want COMPUTER_USE_BROWSER_TOOL_DISABLED", err)
+			if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_TOOL_NOT_OFFERED" || apiErr.Kind != apierr.KindForbidden {
+				t.Fatalf("err = %v, want COMPUTER_USE_TOOL_NOT_OFFERED", err)
 			}
 		})
 	}
 	if len(driver.calls) != 0 {
-		t.Fatalf("driver ran %v for a blocked tool", driver.calls)
+		t.Fatalf("driver ran %v for a tool AO does not offer", driver.calls)
+	}
+}
+
+// Calls run only while "Let agents use this computer" is on; a service the
+// daemon never wired counts as off.
+func TestCallRefusesWhileComputerUseIsOff(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	s := newTestService(t, driver, "darwin")
+	unwired := New(driver, t.TempDir())
+	t.Cleanup(func() { _ = unwired.Close(context.Background()) })
+	s.SetEnabled(func(context.Context) bool { return false })
+	for name, service := range map[string]*Service{"off": s, "unwired": unwired} {
+		_, err := service.Call(context.Background(), CallRequest{Tool: "list_windows"})
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_DISABLED" || apiErr.Kind != apierr.KindForbidden {
+			t.Fatalf("%s: err = %v, want COMPUTER_USE_DISABLED", name, err)
+		}
+	}
+	if len(driver.calls) != 0 {
+		t.Fatalf("driver ran %v while computer use was off", driver.calls)
 	}
 }
 
@@ -500,7 +525,7 @@ func TestCallRefusesActionsWithoutATarget(t *testing.T) {
 	}{
 		"pixel click without window": {"click", map[string]any{"x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
 		"pixel click with pid only":  {"click", map[string]any{"pid": 7, "x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
-		"drag without window":        {"drag", map[string]any{"from_x": 1, "from_y": 1, "to_x": 9, "to_y": 9}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"drag without window":        {"run_steps", map[string]any{"steps": []any{map[string]any{"drag": map[string]any{"from_x": 1, "from_y": 1, "to_x": 9, "to_y": 9}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
 		"desktop scope":              {"click", map[string]any{"scope": "desktop", "x": 1, "y": 1}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
 		"desktop target":             {"press_key", map[string]any{"key": "return", "target": map[string]any{"kind": "desktop", "display_id": "primary"}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
 		"desktop scope with token":   {"type_text", map[string]any{"element_token": "s1:2", "text": "hi", "scope": "desktop"}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
@@ -534,8 +559,8 @@ func TestCallAllowsTargetedActions(t *testing.T) {
 		"pixel click via target":    {"click", map[string]any{"target": map[string]any{"kind": "window", "pid": 7, "window_id": 9}, "x": 1, "y": 1}},
 		"type into token":           {"type_text", map[string]any{"element_token": "s1:2", "text": "hi"}},
 		"type at field pixel":       {"type_text", map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5, "text": "hi"}},
-		"key to app":                {"hotkey", map[string]any{"pid": 7, "keys": []any{"cmd", "f"}}},
-		"overlay cursor":            {"move_cursor", map[string]any{"x": 1, "y": 1}},
+		"key to app":                {"press_key", map[string]any{"pid": 7, "key": "f", "modifiers": []any{"cmd"}}},
+		"overlay cursor":            {"run_steps", map[string]any{"steps": []any{map[string]any{"move_cursor": map[string]any{"x": 1, "y": 1}}}}},
 		"window read":               {"get_window_state", map[string]any{"pid": 7, "window_id": 9}},
 		"run_steps batch window":    {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"click": map[string]any{"x": 1, "y": 1}}}}},
 		"run_steps type by name":    {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "type_text", "args": map[string]any{"app": "WhatsApp", "role": "textfield", "name": "Search", "text": "Nihal"}}}}},
@@ -557,7 +582,7 @@ func TestCallExplainsDesktopScopeRefusal(t *testing.T) {
 		return []byte(`{"status":"refused","refusal":{"code":"desktop_scope_disabled","message":"pass scope=\"desktop\""}}`), nil, errors.New("exit status 1")
 	}
 	s := newTestService(t, driver, "darwin")
-	_, err := s.Call(context.Background(), CallRequest{Tool: "scroll", Arguments: map[string]any{"pid": 7, "direction": "down"}})
+	_, err := s.Call(context.Background(), CallRequest{Tool: "press_key", Arguments: map[string]any{"pid": 7, "window_id": 9, "key": "a"}})
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_CALL_FAILED" || !strings.Contains(apiErr.Message, "pass the pid and window_id") {
 		t.Fatalf("err = %v", err)
