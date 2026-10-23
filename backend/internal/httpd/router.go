@@ -57,6 +57,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	// Credential routes retain their exact renderer-only boundary even for
 	// authenticated LAN callers. Check before CORS can answer a preflight.
 	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
+	r.Use(mobileControlOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
@@ -143,7 +144,8 @@ func mountControl(r chi.Router, deps ControlDeps) {
 // on the LAN listener instead, by lanControlBlock, which 404s /api/v1/mobile on
 // the 0.0.0.0 socket the phone reaches — a transport-based check that cannot be
 // spoofed with a forged Host header. On the loopback listener these routes are
-// protected by the same CORS allowlist as every other app route.
+// protected by mobileControlOriginMiddleware: exact renderer origins or native
+// requests without browser metadata, independent of general preview CORS.
 func mountMobile(r chi.Router, c *controllers.MobileController) {
 	if c == nil {
 		return
