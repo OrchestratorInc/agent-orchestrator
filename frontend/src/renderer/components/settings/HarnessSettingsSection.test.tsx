@@ -796,7 +796,7 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("cursor");
 		expect(within(page).getByText("Unknown")).toBeInTheDocument();
 		expect(within(page).queryByText("Connected")).toBeNull();
-		await userEvent.click(await within(page).findByRole("button", { name: label, exact: true }));
+		await userEvent.click(await within(page).findByRole("button", { name: label }));
 		expect(await within(page).findByText("Native provider chooser")).toBeInTheDocument();
 		expect(within(page).getByTestId("harness-auth-terminal")).toBeInTheDocument();
 		expect(readiness.agents.find((agent) => agent.id === "cursor")!.authentication.state).toBe("unknown");

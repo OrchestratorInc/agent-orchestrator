@@ -37,6 +37,7 @@ func ProfileDir(dataDir string) string {
 	return filepath.Join(dataDir, adapterID, "profile")
 }
 
+// AuthStatus reports whether the selected provider accepted a native SDK probe.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
 	return status, err
