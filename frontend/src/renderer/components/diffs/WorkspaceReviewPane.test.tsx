@@ -263,9 +263,10 @@ describe("WorkspaceReviewPane", () => {
 	});
 
 	it.each([false, true])("keeps loaded text mounted while deferred files load (expand all: %s)", async (expandAll) => {
+		scrollToMock.mockReset();
 		const data = workspace([
-			{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
 			{ path: "package-lock.json", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+			{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
 		]);
 		let finish!: (value: unknown) => void;
 		postMock.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: "diff --git a/src/App.tsx b/src/App.tsx\n", truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } });
@@ -278,9 +279,12 @@ describe("WorkspaceReviewPane", () => {
 		expect(postMock.mock.calls[1]?.[1]?.body.paths).toEqual(["package-lock.json"]);
 		expect(existing).toBeInTheDocument();
 		expect(screen.getByTestId("review-patch")).toBe(existing);
+		expect(scrollToMock).not.toHaveBeenCalled();
 		await act(async () => finish({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: "diff --git a/package-lock.json b/package-lock.json\n", truncated: false, includedPaths: ["package-lock.json"], deferred: [] }] } }));
 		await waitFor(() => expect(screen.getAllByTestId("review-patch")).toHaveLength(2));
 		expect(existing).toBeInTheDocument();
+		if (expandAll) expect(scrollToMock).not.toHaveBeenCalled();
+		else await waitFor(() => expect(scrollToMock).toHaveBeenCalledExactlyOnceWith({ type: "item", id: `${reviewTarget(data).key}:package-lock.json`, align: "start" }));
 	});
 
 	it("opens fallback files with the header icon and status", async () => {

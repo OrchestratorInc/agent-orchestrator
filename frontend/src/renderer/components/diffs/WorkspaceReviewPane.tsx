@@ -468,6 +468,7 @@ export function WorkspaceReviewPane({
 		// Expand all. Keep that choice when the file is collapsed again.
 		if (collapsedPaths.has(path) && isDeferredByDefault(file)) {
 			setLoadedDeferredPaths((current) => current.has(path) ? current : new Set(current).add(path));
+			setPendingScrollPath(path);
 		}
 		setCollapsedPaths((current) => {
 			const next = new Set(current);
