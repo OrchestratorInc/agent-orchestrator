@@ -79,6 +79,7 @@ func TestPermissionPolicyAutoApprovesOnlyInBypassMode(t *testing.T) {
 		Options: []acpsdk.PermissionOption{
 			allowOption("deny_once", acpsdk.PermissionOptionKindRejectOnce),
 			allowOption("allow_once", acpsdk.PermissionOptionKindAllowOnce),
+			allowOption("allow_session", acpsdk.PermissionOptionKindAllowAlways),
 			allowOption("allow_always", acpsdk.PermissionOptionKindAllowAlways),
 		},
 	}
@@ -90,15 +91,19 @@ func TestPermissionPolicyAutoApprovesOnlyInBypassMode(t *testing.T) {
 		t.Fatalf("default policy handled the request with %q, want passthrough", id)
 	}
 
+	// Bypass answers allow_once even when persistent kinds are offered: Hermes
+	// caches those grants across a later switch to Default.
 	id, handled := permissionPolicy(ports.PermissionModeBypassPermissions, request)
-	if !handled || id != "allow_always" {
-		t.Fatalf("bypass policy = (%q, %v), want allow_always", id, handled)
+	if !handled || id != "allow_once" {
+		t.Fatalf("bypass policy = (%q, %v), want allow_once", id, handled)
 	}
 
-	request.Options = []acpsdk.PermissionOption{allowOption("allow_once", acpsdk.PermissionOptionKindAllowOnce)}
-	id, handled = permissionPolicy(ports.PermissionModeBypassPermissions, request)
-	if !handled || id != "allow_once" {
-		t.Fatalf("bypass fallback = (%q, %v), want allow_once", id, handled)
+	request.Options = []acpsdk.PermissionOption{
+		allowOption("allow_session", acpsdk.PermissionOptionKindAllowAlways),
+		allowOption("allow_always", acpsdk.PermissionOptionKindAllowAlways),
+	}
+	if _, handled = permissionPolicy(ports.PermissionModeBypassPermissions, request); handled {
+		t.Fatal("bypass policy granted a persistent kind, want passthrough")
 	}
 
 	request.Options = []acpsdk.PermissionOption{allowOption("deny_once", acpsdk.PermissionOptionKindRejectOnce)}

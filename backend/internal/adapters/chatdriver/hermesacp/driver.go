@@ -93,7 +93,14 @@ const (
 // permissionPolicy resolves permission requests that have an exact AO policy
 // mapping before the generic client parks them for a human. Only bypass
 // qualifies: in bypass mode AO answers every Hermes dangerous-command approval
-// with allow, because Hermes' ACP server has no server-side bypass switch.
+// with allow, because Hermes' ACP server has no server-side bypass switch. The
+// answer is always allow_once, even though Hermes also offers allow_session and
+// allow_always kinds: Hermes persists those grants in a session cache that
+// set_session_mode(default) does not clear (acp_adapter/permissions.py
+// _persist_choice, tools/approval.py is_approved), so a command approved during
+// bypass would keep running unattended after the user selects Default.
+// allow_once keeps every later request governed by whatever AO's policy
+// resolves at that time.
 func permissionPolicy(
 	mode ports.PermissionMode,
 	params acpsdk.RequestPermissionRequest,
@@ -101,9 +108,9 @@ func permissionPolicy(
 	if ports.NormalizePermissionMode(mode) != ports.PermissionModeBypassPermissions {
 		return "", false
 	}
-	if id, ok := permissionOption(params.Options, acpsdk.PermissionOptionKindAllowAlways); ok {
-		return id, true
-	}
+	// Hermes always offers allow_once first (acp_adapter/permissions.py
+	// _build_permission_options). Without it, park the request for a human
+	// rather than grant a persistence AO cannot revoke by switching modes.
 	return permissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce)
 }
 
