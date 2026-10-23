@@ -12,6 +12,8 @@ declare global {
 		readonly VITE_AO_GIT_COMMIT?: string;
 		readonly VITE_AO_GIT_WORKTREE?: string;
 		readonly VITE_AO_GIT_DIRTY?: string;
+		/** "1" shows the artifact Share button before ARTIFACT_SHARING_ENABLED is on. */
+		readonly VITE_AO_ARTIFACT_SHARES?: string;
 	}
 }
 
