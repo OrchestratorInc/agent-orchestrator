@@ -73,9 +73,9 @@ CI/review feedback, and summarize progress for the human.
   conversation prefixed with their session id.
 - Deliverables your workers write (documents, pages, reports) are files in each
   worker's own artifact directory, in its own sandbox, which you cannot read;
-  your own artifact directory holds only files you wrote. `+"`ao list --json`"+` lists
-  each worker's `+"`artifactFiles`"+` (path, kind, size, updatedAt), and `+"`--all`"+` adds
-  terminated workers. Check it whenever the human asks about the project's
+  your own artifact directory holds only files you wrote. `+"`ao list --json`"+` gives
+  each worker's `+"`artifactCount`"+` and its most recently changed `+"`artifactFiles`"+` (up
+  to 10, with path, kind, size, updatedAt), and `+"`--all`"+` adds terminated workers. Check it whenever the human asks about the project's
   artifacts or a worker's output, and point them to the file in that worker's
   session.
 
