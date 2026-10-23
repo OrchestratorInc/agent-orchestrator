@@ -49,10 +49,21 @@ const { ShellTopbar } = await import("./ShellTopbar");
 
 describe("ShellTopbar on Linux", () => {
 	beforeEach(() => {
+		locationMock.pathname = "/";
 		paramsMock.projectId = undefined;
 		paramsMock.sessionId = undefined;
 		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false });
 		useUiStore.setState({ isSidebarOpen: true });
+	});
+
+	it("identifies the global board as All sessions", () => {
+		locationMock.pathname = "/board";
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><ShellTopbar /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByTestId("board-topbar-label")).toHaveTextContent("All sessions");
 	});
 
 	it("pads the Board label past the collapse arrows when the sidebar is off-canvas", () => {

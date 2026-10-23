@@ -115,6 +115,7 @@ export function ShellTopbar({
 	const isSessionRoute = startingOrchestrator || Boolean(params.sessionId);
 	const isAutomationsRoute = location.pathname === "/automations";
 	const isArtifactsRoute = location.pathname === "/artifacts";
+	const isAllSessionsRoute = location.pathname === "/board" || location.pathname === "/board/";
 	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = startingOrchestrator || (session ? isOrchestratorSession(session) : false);
 	const isInspectorOpen = useUiStore((state) =>
@@ -127,7 +128,7 @@ export function ShellTopbar({
 	// route slug. "Board" is the root-board crumb only.
 	const projectId = session?.workspaceId ?? params.projectId;
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
-	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isArtifactsRoute && !isStandaloneBoardRoute;
+	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isArtifactsRoute && !isStandaloneBoardRoute && !isAllSessionsRoute;
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
 	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
@@ -198,6 +199,7 @@ export function ShellTopbar({
 						</span>
 					</div>
 				) : (isProjectBoardRoute && boardActionsInPanel) ||
+				  (isAllSessionsRoute && boardActionsInPanel) ||
 				  (isMac && isRootBoardRoute && boardActionsInPanel) ||
 				  (isStandaloneBoardRoute && boardActionsInPanel) ? null : (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="board-topbar-label">
@@ -206,7 +208,7 @@ export function ShellTopbar({
 						) : (
 							<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
 								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-								{t("shell.board")}
+								{t(isAllSessionsRoute ? "shell.allSessions" : "shell.board")}
 								{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
 							</span>
 						)}
