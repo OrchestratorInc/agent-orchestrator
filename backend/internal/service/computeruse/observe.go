@@ -124,7 +124,8 @@ func (s *Service) observeAfter(ctx context.Context, binary string, saved *savedI
 	}
 	screenshot := saved.nextPath(".png")
 	read["screenshot_out_file"] = screenshot
-	stdout, stderr, err := s.callWithDaemon(ctx, binary, "get_window_state", read)
+	// The session can end between the action and this read; revive it like Call.
+	stdout, stderr, err := s.callInSession(ctx, binary, "get_window_state", read)
 	if err != nil {
 		output["observation"] = map[string]any{"tool": "get_window_state", "ok": false, "error": commandFailure(err, stdout, stderr)}
 		return output

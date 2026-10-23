@@ -880,3 +880,37 @@ func TestInstalledLocatesTheDriverOnly(t *testing.T) {
 		})
 	}
 }
+
+// The driver session can end between an action and AO's read of its window;
+// the read revives it like Call does instead of reporting the session ended.
+func TestReadAfterActionRevivesAnEndedSession(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	ended := false
+	var tools []string
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		tools = append(tools, args[1])
+		switch {
+		case args[1] == "click":
+			ended = true // the session expires right after the action lands
+			return []byte(`{"summary":"clicked"}`), nil, nil
+		case args[1] == "start_session":
+			ended = false
+			return []byte(`{"active":true,"revived":true}`), nil, nil
+		case ended:
+			return nil, []byte("session has ended; tool call 'get_window_state' was rejected. Call start_session with session 'ao-worker-1' to start it again, or use a new session label.\n"), errors.New("exit status 1")
+		}
+		return []byte(`{"snapshot_id":"s2","pid":7,"window_id":9,"element_count":30}`), nil, nil
+	}
+	s := newTestService(t, driver, "darwin")
+	result, err := s.Call(context.Background(), CallRequest{Tool: "click", Arguments: map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5}, SessionID: "worker-1"})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	observation := result.Result.(map[string]any)["observation"].(map[string]any)
+	if observation["ok"] != true {
+		t.Fatalf("observation = %v, want the revived read", observation)
+	}
+	if fmt.Sprint(tools) != "[click get_window_state start_session get_window_state]" {
+		t.Fatalf("driver tools = %v", tools)
+	}
+}

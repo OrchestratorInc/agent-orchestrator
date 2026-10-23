@@ -354,12 +354,8 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		delete(arguments, "session")
 		stdout, stderr, runErr = s.callWithDaemon(ctx, binary, tool, arguments)
 	}
-	if label, named := arguments["session"].(string); named && runErr != nil && sessionEnded(stderr) {
-		// A driver session ends after a few idle minutes, and the driver then
-		// refuses every call naming it until start_session revives the name.
-		if _, _, err := s.callWithDaemon(ctx, binary, "start_session", map[string]any{"session": label}); err == nil {
-			stdout, stderr, runErr = s.callWithDaemon(ctx, binary, tool, arguments)
-		}
+	if runErr != nil {
+		stdout, stderr, runErr = s.reviveEndedSession(ctx, binary, tool, arguments, stdout, stderr, runErr)
 	}
 	if runErr != nil && tool == "run_steps" && batchReport(stdout) {
 		// A step failed after the batch ran: its per-step report and
@@ -399,6 +395,31 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	}
 	s.images.prune(scope)
 	return CallResult{Tool: tool, Result: result, Images: saved.images}, nil
+}
+
+// callInSession runs one driver call in its named driver session, reviving
+// the session once if it has ended.
+func (s *Service) callInSession(ctx context.Context, binary, tool string, arguments map[string]any) ([]byte, []byte, error) {
+	stdout, stderr, err := s.callWithDaemon(ctx, binary, tool, arguments)
+	if err != nil {
+		return s.reviveEndedSession(ctx, binary, tool, arguments, stdout, stderr, err)
+	}
+	return stdout, stderr, nil
+}
+
+// reviveEndedSession retries a failed call once when the driver refused it
+// because its named session ended: a driver session ends after a few idle
+// minutes, and the driver then refuses every call naming it until
+// start_session revives the name. Any other failure is returned as it was.
+func (s *Service) reviveEndedSession(ctx context.Context, binary, tool string, arguments map[string]any, stdout, stderr []byte, runErr error) ([]byte, []byte, error) {
+	label, named := arguments["session"].(string)
+	if !named || !sessionEnded(stderr) {
+		return stdout, stderr, runErr
+	}
+	if _, _, err := s.callWithDaemon(ctx, binary, "start_session", map[string]any{"session": label}); err != nil {
+		return stdout, stderr, runErr
+	}
+	return s.callWithDaemon(ctx, binary, tool, arguments)
 }
 
 // callWithDaemon runs one driver call, starting a stopped service once and
