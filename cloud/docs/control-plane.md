@@ -239,10 +239,15 @@ relative, without `.` or `..` segments, backslashes, drive letters, control or
 invisible format characters, Windows device names, or a leading `.versions` in
 any letter case, with the whole key at most 1024 bytes.
 
-Archiving a session keeps its artifacts, so a restored session gets them back.
-Cloud has no hard delete of a session today, so no job removes a session's
-committed versions; a lifecycle policy that removes archived sessions'
-artifacts is tracked in #7072.
+Archiving a session keeps its artifacts, so a restored session gets them back;
+a lifecycle policy that removes archived sessions' artifacts is tracked in
+#7072. Deleting a project, which has no restore, deletes its sessions'
+artifacts: in the same transaction every object version they own (committed,
+replaced, or still uploading) is queued for the sweeper to delete now, the
+artifact rows are removed, and the sessions' `output_type` keeps only their
+pull requests. The sweeper deletes the objects on its next pass, within five
+minutes. A commit for a session of a deleted project is refused, and deleting
+the project again finishes the cleanup.
 
 ## Agent browser relay
 
