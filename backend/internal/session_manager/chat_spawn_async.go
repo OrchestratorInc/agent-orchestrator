@@ -127,6 +127,13 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
+	if reusePublishedWorkspace {
+		if missing, _ := workspacePathMissing(in.record.Metadata.WorkspacePath); missing {
+			// A saved worktree that no longer exists (removed by hand, or left
+			// mid-move by an older build) is created again, with every step shown.
+			reusePublishedWorkspace, in.record.ProvisionSteps = false, nil
+		}
+	}
 	plan := provisionPlan(in, reusePublishedWorkspace)
 	progress := m.startProvisionProgress(ctx, id, plan)
 	if reusePublishedWorkspace {
@@ -258,8 +265,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
-	namingHandedOff = true
-	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
+	// The agent owns the checkout now; nothing below touches the workspace.
+	releaseWorkspaceGate()
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
@@ -274,6 +281,9 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "mark_ready", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepAgent)
+	// Only a start that succeeded gets a generated branch name.
+	namingHandedOff = true
+	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
 	m.logAsyncChatSpawnStage(id, "total", totalStarted)
 }
 
