@@ -86,6 +86,10 @@ func (d Driver) StartDaemon(ctx context.Context, binary string) error {
 		if err := d.runShort(ctx, binary, "autostart", "kick"); err == nil {
 			return nil
 		}
+		// The installer's logon task may run serve elevated; this fallback runs
+		// at the AO daemon's integrity level, so Windows (UIPI) blocks it from
+		// sending input to elevated windows such as admin consoles. Untested on
+		// a clean machine, and the status row does not tell the two apart.
 		return startDetached(binary, "serve")
 	default:
 		return startDetached(binary, "serve")
