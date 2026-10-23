@@ -137,6 +137,7 @@ func (i *Identity) InstallID() string {
 	return i.installID
 }
 
+// AnonymousID is the distinct ID used when no Cloud user is bound.
 func (i *Identity) AnonymousID() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
