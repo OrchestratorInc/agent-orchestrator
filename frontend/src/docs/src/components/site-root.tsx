@@ -1,8 +1,9 @@
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { DEFAULT_LOCALE, findCookieValue, LOCALE_COOKIE, SUPPORTED_LOCALES, type SupportedLocale } from "@/i18n/locales";
-import { localePath, type Translations } from "@/i18n/paths";
+import { DEFAULT_LOCALE, type SupportedLocale } from "@/i18n/locales";
+import { localePath } from "@/i18n/paths";
+import { savedLocaleScript } from "@/i18n/saved-locale-script";
 import { COMPANY } from "@/lib/constants";
 import { docsTree } from "@/lib/docs-tree";
 import { source } from "@/lib/source";
@@ -17,16 +18,6 @@ export const siteMetadata: Metadata = {
     icon: [{ url: `${COMPANY.MARKETING_URL}/favicon.svg`, type: "image/svg+xml" }],
   },
 };
-
-// Runs before first paint on English pages. When the saved language has a
-// translation of the page, goes there, keeping the query and section;
-// otherwise sets <html lang> from the
-// saved language, ahead of hydration, so assistive tech and the browser see
-// the right language. It inlines the same parser the interface uses to read
-// the cookie.
-function savedLocaleScript(translated: Translations): string {
-  return `try{var l=(${findCookieValue.toString()})(document.cookie,${JSON.stringify(LOCALE_COOKIE)},${JSON.stringify(SUPPORTED_LOCALES)});if(l){var p=location.pathname.replace(/\\/?$/,"/");var t=${JSON.stringify(translated)}[p];if(t&&t.indexOf(l)>-1)location.replace("/"+l+p+location.search+location.hash);else document.documentElement.lang=l}}catch(e){}`;
-}
 
 /**
  * The page shell. English pages are one tree whose interface language comes
