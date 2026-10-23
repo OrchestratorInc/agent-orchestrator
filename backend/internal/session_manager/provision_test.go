@@ -430,7 +430,7 @@ func TestResolveAgentConfigRediscoversUnusableSavedCatalog(t *testing.T) {
 				fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "bedrock-sonnet"}}},
 			}}
 			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
-				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: "sonnet"},
+				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: "sonnet", Effort: "high"}, EffortOverride: true,
 			}, domain.ProjectConfig{})
 			if !errors.Is(err, ErrUnsupportedModel) {
 				t.Fatalf("error = %v, want provider catalog to reject old model", err)
@@ -486,8 +486,8 @@ func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	if err != nil || resolved.Effort != "" {
 		t.Fatalf("explicit Claude provider default did not clear role tuning: %#v, %v", resolved, err)
 	}
-	if catalogCalls != 2 {
-		t.Fatalf("provider default did not validate the selected model: %d catalog calls", catalogCalls)
+	if catalogCalls != 1 {
+		t.Fatalf("provider default with no effort read the catalog: %d catalog calls, want 1", catalogCalls)
 	}
 }
 
@@ -553,40 +553,86 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 	}
 }
 
-func TestResolveClaudeModelWithoutEffortStillRequiresCatalog(t *testing.T) {
-	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
+// A Claude model with no effort request needs no catalog: the CLI validates its
+// own model, and a gateway or ANTHROPIC_DEFAULT_*_MODEL alias can name a model
+// the provider's catalog never lists. See #7024.
+func TestResolveClaudeModelWithoutEffortSkipsCatalog(t *testing.T) {
+	cfg := ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI, AgentConfig: ports.AgentConfig{Model: "haiku"},
+	}
+	for name, m := range map[string]*Manager{
+		"no catalog":       {},
+		"discovery failed": {modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}},
+		"model not listed": {modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{
+			Models: []ports.AgentModelInfo{{ID: "global.anthropic.claude-haiku-5-5"}},
+		}}},
+		"stale catalog": {modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{
+			Stale: true, Models: []ports.AgentModelInfo{{ID: "global.anthropic.claude-haiku-5-5"}},
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			catalogCalls := 0
+			if tc, ok := m.modelCatalog.(tuningCatalog); ok {
+				tc.calls = &catalogCalls
+				m.modelCatalog = tc
+			}
+			resolved, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{})
+			if err != nil || resolved.Model != "haiku" || resolved.Effort != "" {
+				t.Fatalf("resolved = %#v, %v; want the model passed through to the CLI", resolved, err)
+			}
+			if catalogCalls != 0 {
+				t.Fatalf("catalog reads = %d, want none", catalogCalls)
+			}
+		})
+	}
+}
 
-	_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+func TestResolveClaudeModelWithEffortStillRequiresCatalog(t *testing.T) {
+	cfg := ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI, EffortOverride: true,
+		AgentConfig: ports.AgentConfig{Model: "provider/old", Effort: "high"},
+	}
+	listed := func(stale bool, ids ...string) tuningCatalog {
+		models := make([]ports.AgentModelInfo, 0, len(ids))
+		for _, id := range ids {
+			models = append(models, ports.AgentModelInfo{ID: id, Efforts: []string{"high"}})
+		}
+		return tuningCatalog{catalog: ports.AgentModelCatalog{
+			CustomModelEntry: ports.CustomModelEntryDirect, Models: models, Stale: stale,
+		}}
+	}
+	for name, tc := range map[string]struct {
+		manager *Manager
+		want    error
+	}{
+		"no catalog":       {&Manager{}, ports.ErrModelCapabilitiesUnavailable},
+		"discovery failed": {&Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}, ports.ErrModelCapabilitiesUnavailable},
+		"unknown model":    {&Manager{modelCatalog: listed(false, "provider/current")}, ErrUnsupportedModel},
+		"stale catalog":    {&Manager{modelCatalog: listed(true, "provider/old")}, ports.ErrModelCapabilitiesUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := tc.manager.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// An effort inherited from the project or role drops when the model changes and
+// the catalog cannot vouch for it, as it does for other harnesses. It does not
+// fail the launch.
+func TestResolveClaudeInheritedEffortDropsWhenCatalogCannotValidate(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		AgentConfig: ports.AgentConfig{Model: "provider/model-vNext"},
 	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{
 		Model: "sonnet", Effort: "high",
 	}}})
-	if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
-		t.Fatalf("error = %v, want ErrModelCapabilitiesUnavailable", err)
-	}
-}
-
-func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testing.T) {
-	cfg := ports.SpawnConfig{
-		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
-		RequestedMode: domain.SessionModeTUI, AgentConfig: ports.AgentConfig{Model: "provider/old"},
-	}
-	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{
-		CustomModelEntry: ports.CustomModelEntryDirect,
-		Models:           []ports.AgentModelInfo{{ID: "provider/current"}},
-	}}}
-	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ErrUnsupportedModel) {
-		t.Fatalf("unknown model error = %v, want ErrUnsupportedModel", err)
-	}
-
-	m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{
-		CustomModelEntry: ports.CustomModelEntryDirect,
-		Models:           []ports.AgentModelInfo{{ID: "provider/old"}},
-		Stale:            true,
-	}}
-	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
-		t.Fatalf("stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	if err != nil || resolved.Model != "provider/model-vNext" || resolved.Effort != "" {
+		t.Fatalf("resolved = %#v, %v; want the new model with the inherited effort dropped", resolved, err)
 	}
 }
 
