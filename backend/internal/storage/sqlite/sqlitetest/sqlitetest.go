@@ -68,9 +68,13 @@ func MustOpenAt(t testing.TB, dataDir string) *sqlite.Store {
 	return store
 }
 
+// NewerSchemaVersion is the migration MustCreateNewerSchemaAt records: a
+// YYYYMMDDHHMMSSsss ID in the year 9999, above any migration this build embeds.
+const NewerSchemaVersion int64 = 99991231235959999
+
 // MustCreateNewerSchemaAt prepares dataDir with a fully migrated ao.db whose
-// goose ledger also records a migration far beyond any this build embeds, as if
-// a newer AO had migrated it. sqlite.Open refuses such a database.
+// goose ledger also records NewerSchemaVersion, as if a newer AO had migrated
+// it. sqlite.Open refuses such a database.
 func MustCreateNewerSchemaAt(t testing.TB, dataDir string) {
 	t.Helper()
 	store, err := Open(dataDir)
@@ -85,7 +89,7 @@ func MustCreateNewerSchemaAt(t testing.TB, dataDir string) {
 		t.Fatalf("open database to mark it newer: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (99999, 1)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, NewerSchemaVersion); err != nil {
 		t.Fatalf("record newer migration: %v", err)
 	}
 }

@@ -328,7 +328,10 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 // migrations), and anything merged out of order. The repairs below and
 // goose.WithAllowMissing already handle those, and refusing them would strand
 // installs that start today. The cost: a newer AO whose only extra migration is
-// numbered below this build's head goes undetected.
+// numbered below this build's head goes undetected. Migration IDs are UTC
+// creation timestamps, so that covers any migration created before this build's
+// newest one but merged after it, and "newer" also covers a dev build of an
+// unmerged branch whose migration was created after this build's newest one.
 func refuseNewerSchema(db *sql.DB, dbPath string) error {
 	var gooseTable int
 	if err := db.QueryRow(

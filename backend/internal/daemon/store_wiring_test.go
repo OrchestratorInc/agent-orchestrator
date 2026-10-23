@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func TestOpenStoreRefusesDatabaseMigratedByNewerAO(t *testing.T) {
 	}
 	// Run returns this error unchanged and the process prints it to stderr,
 	// which the desktop shows under "Show details".
-	if !strings.HasPrefix(err.Error(), "open store: ") || !strings.Contains(err.Error(), "migration 99999 applied") {
+	if !strings.HasPrefix(err.Error(), "open store: ") || !strings.Contains(err.Error(), fmt.Sprintf("migration %d applied", sqlitetest.NewerSchemaVersion)) {
 		t.Fatalf("openStore error = %q, want an %q-prefixed message naming the newer migration", err, "open store: ")
 	}
 }

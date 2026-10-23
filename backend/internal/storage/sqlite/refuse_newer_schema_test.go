@@ -118,9 +118,11 @@ func embeddedHead(t *testing.T) int64 {
 	return head
 }
 
-// embeddedGaps lists the version numbers below head that no embedded migration
-// file claims: burned, foreign-build and renumbered-branch versions that real
-// ledgers still record.
+// embeddedGaps lists versions below head that no embedded migration file
+// claims: every free number in the sequential 0NNN range (burned, foreign-build
+// and renumbered-branch versions that real ledgers still record), plus head-1,
+// an unmerged branch's timestamp migration created just before this build's
+// newest. Walking every number up to a timestamp head would never finish.
 func embeddedGaps(t *testing.T, head int64) []int64 {
 	t.Helper()
 	entries, err := migrationsFS.ReadDir("migrations")
@@ -135,11 +137,20 @@ func embeddedGaps(t *testing.T, head int64) []int64 {
 		}
 		present[version] = true
 	}
+	var lastSequential int64
+	for version := range present {
+		if version < 10000 {
+			lastSequential = max(lastSequential, version)
+		}
+	}
 	var gaps []int64
-	for version := int64(1); version < head; version++ {
+	for version := int64(1); version < lastSequential; version++ {
 		if !present[version] {
 			gaps = append(gaps, version)
 		}
+	}
+	if !present[head-1] {
+		gaps = append(gaps, head-1)
 	}
 	return gaps
 }
@@ -223,8 +234,9 @@ func TestOpenMigratesOlderDatabaseToTheEmbeddedHead(t *testing.T) {
 
 // Ledgers carry versions this build does not embed but that are not newer than
 // it: burned (22), written by a foreign build (45, 46, 50, 51), renumbered
-// branch migrations (55-65, 182-184). The repairs and WithAllowMissing handle
-// them, so refusing them would strand real installs.
+// branch migrations (55-65, 182-184), and another branch's timestamp migration
+// below the head. The repairs and WithAllowMissing handle them, so refusing
+// them would strand real installs.
 func TestOpenIgnoresUnknownVersionsBelowTheEmbeddedHead(t *testing.T) {
 	head := embeddedHead(t)
 	gaps := embeddedGaps(t, head)
