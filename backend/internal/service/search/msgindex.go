@@ -46,10 +46,9 @@ type messageIndex struct {
 
 	syncMu sync.Mutex
 
-	mu       sync.RWMutex
-	chunks   map[string]int // message id -> chunk docs it owns
-	cursor   messageCursor
-	caughtUp bool
+	mu     sync.RWMutex
+	chunks map[string]int // message id -> chunk docs it owns
+	cursor messageCursor
 }
 
 func openMessageIndex(dir string, m *mapping.IndexMappingImpl, store MessageStore) (*messageIndex, error) {
@@ -151,13 +150,8 @@ func (mi *messageIndex) syncOnce(ctx context.Context) error {
 		}
 	}
 	if dirty {
-		if err := mi.persist(chunks, cursor); err != nil {
-			return err
-		}
+		return mi.persist(chunks, cursor)
 	}
-	mi.mu.Lock()
-	mi.caughtUp = true
-	mi.mu.Unlock()
 	return nil
 }
 
@@ -228,10 +222,4 @@ func (mi *messageIndex) remove(ids []string) error {
 		return err
 	}
 	return mi.persist(chunks, cursor)
-}
-
-func (mi *messageIndex) ready() bool {
-	mi.mu.RLock()
-	defer mi.mu.RUnlock()
-	return mi.caughtUp
 }
