@@ -58,7 +58,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 // or replacing the global/project hooks, plugin registries or instructions.
 func (*Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	if env["MASTRA_APP_DATA_DIR"] == "" {
-		env["MASTRA_APP_DATA_DIR"] = filepath.Join(dataDir, adapterID, "profile")
+		env["MASTRA_APP_DATA_DIR"] = ProfileDir(dataDir)
 	}
 }
 
@@ -229,42 +229,6 @@ func ValidateNativeSettings(profile string, mode ports.PermissionMode) error {
 	return nil
 }
 
-// AuthStatus reports configuration, never authorization from a stored key.
-func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	}
-	profile := os.Getenv("MASTRA_APP_DATA_DIR")
-	if profile == "" {
-		dataDir := os.Getenv("AO_DATA_DIR")
-		if dataDir == "" {
-			dataDir = filepath.Join(userHome(), ".ao", "data")
-		}
-		profile = filepath.Join(dataDir, adapterID, "profile")
-	}
-	data, err := os.ReadFile(filepath.Join(profile, "settings.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return ports.AgentAuthStatusUnknown, nil
-	}
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	}
-	var settings struct {
-		Providers []struct {
-			APIKey string `json:"apiKey"`
-		} `json:"customProviders"`
-	}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return ports.AgentAuthStatusUnknown, errors.New("invalid native Mastra settings")
-	}
-	for _, provider := range settings.Providers {
-		if strings.TrimSpace(provider.APIKey) != "" {
-			return ports.AgentAuthStatusConfigured, nil
-		}
-	}
-	return ports.AgentAuthStatusUnknown, nil
-}
-
 // SessionInfo exposes real native IDs captured by managed lifecycle callbacks.
 func (*Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -273,3 +237,7 @@ func (*Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports
 	info, ok := agentbase.StandardSessionInfo(session)
 	return info, ok && nativeIDPattern.MatchString(info.AgentSessionID), nil
 }
+
+// SupportsTerminalVersionRefresh stays disabled until unattended Mastra refresh
+// has been qualified. Native restore proof alone does not qualify that flow.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return false }

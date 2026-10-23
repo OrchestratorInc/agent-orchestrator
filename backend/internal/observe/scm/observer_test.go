@@ -501,6 +501,46 @@ func TestPoll_ReconcilesBranchStatesWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestPoll_LogsStartAndCompletionTiming(t *testing.T) {
+	store := &fakeStore{
+		sessions: nil,
+		projects: map[string]domain.ProjectRecord{},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	var logs bytes.Buffer
+	obs := New(&fakeProvider{}, store, &fakeLifecycle{}, Config{
+		Tick:   time.Hour,
+		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logged := logs.String()
+	for _, field := range []string{"scm observer: poll started", "scm observer: poll completed", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in poll timing log:\n%s", field, logged)
+		}
+	}
+}
+
+func TestLogProviderRequest_WarnsForRequestLongerThanPollCadence(t *testing.T) {
+	var logs bytes.Buffer
+	obs := &Observer{
+		tick:   30 * time.Second,
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	obs.logProviderRequest("repo_pr_list_guard", "acme/widgets", time.Now().Add(-31*time.Second), nil)
+
+	logged := logs.String()
+	for _, field := range []string{"slow provider request completed", "stage=repo_pr_list_guard", "repository=acme/widgets", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in provider timing log:\n%s", field, logged)
+		}
+	}
+}
+
 func TestPoll_ResumesAfterCredentialsBecomeAvailable(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
@@ -850,6 +890,37 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 	if len(lc.observed) != 1 {
 		t.Fatalf("lifecycle observations = %d, want 1", len(lc.observed))
+	}
+}
+
+// A worker renamed after launch keeps owning branches under its temporary
+// name, which the agent may have made or remembered before the rename landed.
+func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, branch, temporary, source string
+		workspace                       bool
+	}{
+		{"single-repo sibling", "ao/fix-login/root", "ao/p-1/root", "ao/p-1/fix", false},
+		{"pushed temporary root", "ao/fix-login/root", "ao/p-1/root", "ao/p-1/root", false},
+		{"dev namespace sibling", "ao/dev/fix-login/root", "ao/dev/p-1/root", "ao/dev/p-1/fix", false},
+		{"workspace hyphen sibling", "ao/fix-login/root", "ao/p-1", "ao/p-1-fix", true},
+	} {
+		sr := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: tc.temporary}, branch: tc.branch, workspace: tc.workspace}
+		if got, ok := matchSession([]sessionRepo{sr}, tc.source); !ok || got.session.ID != "p-1" {
+			t.Errorf("%s: %q not attributed after rename", tc.name, tc.source)
+		}
+	}
+	// A later task named after the old temporary branch owns it outright.
+	renamed := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: "ao/p-1/root"}, branch: "ao/login/root"}
+	named := sessionRepo{session: domain.SessionRecord{ID: "p-9"}, branch: "ao/p-1/root"}
+	for _, source := range []string{"ao/p-1/root", "ao/p-1/fix"} {
+		if got, ok := matchSession([]sessionRepo{renamed, named}, source); !ok || got.session.ID != "p-9" {
+			t.Errorf("%q = %q, %v; want the task currently on it", source, got.session.ID, ok)
+		}
+	}
+	never := sessionRepo{session: domain.SessionRecord{ID: "p-1"}, branch: "ao/login/root"}
+	if _, ok := matchSession([]sessionRepo{never}, "ao/p-1/fix"); ok {
+		t.Error("a session that was never renamed claimed its ID namespace")
 	}
 }
 

@@ -62,3 +62,36 @@ func TestMastraFormer213LedgerRestoresCanonicalStaleBinarySchema(t *testing.T) {
 		t.Fatalf("second startup: %v", err)
 	}
 }
+
+func TestMastraMigrationRoundTripFromCurrentMain(t *testing.T) {
+	const baseline int64 = 20261022172135175
+	db := openMigratedDatabaseCopy(t, baseline)
+	var before string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(before, "'mastra-code'") {
+		t.Fatal("pending Mastra migration ran before current main baseline")
+	}
+	mustExec(t, db, `INSERT INTO projects(id,path,registered_at) VALUES ('mastra-updown','/tmp/mastra-updown',CURRENT_TIMESTAMP)`)
+	insert := `INSERT INTO sessions(id,project_id,num,harness,created_at,updated_at,activity_last_at) VALUES (?,'mastra-updown',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+	upTo(t, db, 20261023182047274)
+	mustExec(t, db, insert, "native", 1, "mastra-code")
+	mustExec(t, db, insert, "main-hermes", 2, "hermes")
+	if _, err := db.Exec(insert, "unknown", 3, "unknown-mastra"); err == nil {
+		t.Fatal("unknown harness bypassed CHECK")
+	}
+	mustExec(t, db, `UPDATE sessions SET harness='' WHERE harness='mastra-code'`)
+	downTo(t, db, baseline)
+	var after string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&after); err != nil || after != before {
+		t.Fatalf("down migration changed prior schema: %v", err)
+	}
+	if _, err := db.Exec(insert, "after-down", 4, "mastra-code"); err == nil {
+		t.Fatal("downgrade still allows Mastra")
+	}
+	var integrity string
+	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("integrity = %s, %v", integrity, err)
+	}
+}

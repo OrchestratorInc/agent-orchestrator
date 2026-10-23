@@ -162,30 +162,25 @@ func TestHistoryLockUsesPlatformLiveness(t *testing.T) {
 	}
 }
 
-func TestUnrelatedProviderEnvironmentDoesNotConfigureMastra(t *testing.T) {
-	p, cfg := prepared(t)
-	t.Setenv("AO_DATA_DIR", cfg.DataDir)
-	t.Setenv("MASTRA_APP_DATA_DIR", "")
-	for _, key := range []string{"DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "MASTRA_GATEWAY_API_KEY"} {
-		t.Setenv(key, "unrelated-tool-key")
-	}
-	status, err := p.AuthStatus(context.Background())
+func TestUnrelatedToolEnvironmentDoesNotConfigureMastra(t *testing.T) {
+	fixtureNativeAuth(t, "", "", "success")
+	t.Setenv("AO_UNRELATED_TOOL_API_KEY", "unrelated-tool-key")
+	status, err := New().AuthStatus(t.Context())
 	if err != nil || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("unconfigured profile = %s,%v", status, err)
+		t.Fatalf("unconfigured native provider = %s, %v", status, err)
 	}
-	state, err := readState(cfg.WorkspacePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(state.Profile, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeObject(filepath.Join(state.Profile, "settings.json"), map[string]any{"customProviders": []any{map[string]string{"apiKey": "mastra-key"}}}); err != nil {
-		t.Fatal(err)
-	}
-	status, err = p.AuthStatus(context.Background())
+	// Only the native registry's credential environment counts as configured;
+	// presence cannot authorize until a selected provider accepts a request.
+	t.Setenv("MINIMAX_API_KEY", "native-provider-key")
+	status, err = New().AuthStatus(t.Context())
 	if err != nil || status != ports.AgentAuthStatusConfigured {
-		t.Fatalf("configured profile = %s,%v", status, err)
+		t.Fatalf("native provider environment = %s, %v", status, err)
+	}
+	t.Setenv("MINIMAX_API_KEY", "")
+	t.Setenv("AO_TEST_MASTRA_CREDENTIAL", "custom")
+	status, err = New().AuthStatus(t.Context())
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("native custom provider = %s, %v", status, err)
 	}
 }
 

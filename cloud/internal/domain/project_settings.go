@@ -72,8 +72,9 @@ func ValidateProjectScriptCommands(kind string, commands []string) error {
 
 // ValidateProjectScriptsConfig checks the postCreate and preRemove keys of a
 // project config: each, when present, must be an array of commands (plain
-// strings or {command, repository} steps) that passes
-// ValidateProjectScriptCommands. Which repository a step names is checked
+// strings or {command, repository, timeoutMinutes} steps) that passes
+// ValidateProjectScriptCommands, each step's time limit from
+// MinScriptStepTimeoutMinutes to MaxScriptStepTimeoutMinutes minutes. Which repository a step names is checked
 // against the project's repositories by NormalizeProjectRepoSettings.
 func ValidateProjectScriptsConfig(config json.RawMessage) error {
 	var values map[string]json.RawMessage
@@ -106,6 +107,19 @@ func ParseProjectScriptSteps(kind string, raw json.RawMessage) ([]ProjectScriptS
 	if err := ValidateProjectScriptCommands(kind, commands); err != nil {
 		return nil, err
 	}
+	for index, step := range steps {
+		// An object-form command is stored as typed, so one that starts with a
+		// timeout marker line would read back with that line's limit, which
+		// may be out of range and then refuse every later settings save.
+		if step.object && scriptTimeoutPattern.MatchString(step.Command) {
+			return nil, fmt.Errorf("%s step %d: set the time limit with timeoutMinutes, not a %q line",
+				kind, index+1, strings.TrimSpace(scriptTimeoutMarker))
+		}
+		if step.TimeoutMinutes != 0 && !ValidScriptStepTimeoutMinutes(step.TimeoutMinutes) {
+			return nil, fmt.Errorf("%s step %d: the time limit must be a whole number of minutes from %d to %d",
+				kind, index+1, MinScriptStepTimeoutMinutes, MaxScriptStepTimeoutMinutes)
+		}
+	}
 	if err := validateStoredScriptSteps(kind, steps); err != nil {
 		return nil, err
 	}
@@ -114,7 +128,8 @@ func ParseProjectScriptSteps(kind string, raw json.RawMessage) ([]ProjectScriptS
 
 // ProjectScripts reads a project's Setup and Cleanup commands from its config
 // for a worker launch, as the shell commands the worker runs from the main
-// repository's checkout (see ProjectScriptStep.ShellCommand). mainURL is the
+// repository's checkout, each led by its time limit's marker when it sets one
+// (see ProjectScriptStep.TimedShellCommand and SplitScriptStepTimeout). mainURL is the
 // project's main repository URL. Like the role rules, a value of the wrong
 // shape is ignored rather than making the session unbootable.
 func ProjectScripts(config json.RawMessage, mainURL string) (postCreate, preRemove []string) {
@@ -133,7 +148,7 @@ func ProjectScripts(config json.RawMessage, mainURL string) (postCreate, preRemo
 		kept := make([]string, 0, len(steps))
 		for _, step := range steps {
 			if strings.TrimSpace(step.Command) != "" {
-				kept = append(kept, step.ShellCommand(mainURL))
+				kept = append(kept, step.TimedShellCommand(mainURL))
 			}
 		}
 		if len(kept) == 0 {

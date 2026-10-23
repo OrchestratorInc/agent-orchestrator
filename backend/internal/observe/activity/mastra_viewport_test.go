@@ -10,12 +10,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-type renderedRuntime struct {
+type mastraRenderedRuntime struct {
 	fakeRuntime
 	viewport string
 }
 
-func (r *renderedRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+func (r *mastraRenderedRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	return r.viewport, r.err
 }
 
@@ -25,7 +25,7 @@ func TestMastraActivityUsesCurrentViewportNeverOldRing(t *testing.T) {
 		raw := &fakeRuntime{output: "Tool Approval Required\n│ • Working"}
 		var runtime outputReader = raw
 		if available {
-			runtime = &renderedRuntime{fakeRuntime: *raw, viewport: "╭────────╮\n│ ›      │\n╰────────╯\n▐build▌model▌"}
+			runtime = &mastraRenderedRuntime{fakeRuntime: *raw, viewport: "╭────────╮\n│ ›      │\n╰────────╯\n▐build▌model▌"}
 		}
 		sink := &fakeSink{}
 		o := New(fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessMastraCode)}}, sink, runtime, fakeAgents{domain.HarnessMastraCode: mastracode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})

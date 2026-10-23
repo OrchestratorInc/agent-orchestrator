@@ -30,6 +30,16 @@ func hasLocalProviderCatalog(agentID string) bool {
 	return false
 }
 
+// listsRunnableModels reports an agent whose model command lists only the
+// models it can run now, while its provider cache names every model it knows.
+func listsRunnableModels(agentID string) bool {
+	switch agentID {
+	case "opencode", "kilocode", "mimo-code":
+		return true
+	}
+	return false
+}
+
 func localProviderCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string) ports.AgentModelCatalog {
 	var result ports.AgentModelCatalog
 	switch agentID {
@@ -57,6 +67,11 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 		}
 		if agentID == "pi" {
 			result.Models = append(result.Models, piInstalledModels(ctx, binary, workingDir, env)...)
+		} else {
+			// Kimchi's chat has no thinking control.
+			for i := range result.Models {
+				result.Models[i].Efforts = nil
+			}
 		}
 	case "prime-agent":
 		// Prime Agent keeps no provider cache; its installed pi-ai fork lists
@@ -173,9 +188,27 @@ func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelIn
 		}
 		// These native catalogs store unqualified model IDs, including org/model.
 		models = append(models, ports.AgentModelInfo{ID: modelProvider + "/" + id, Label: label, Provider: modelProvider,
-			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record)})
+			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record)})
 	}
 	return models
+}
+
+// piThinkingLevels are a reasoning Pi model's thinking levels as effort choices,
+// so a switch to Pi can pick one before Pi runs. thinkingLevelMap sets a level
+// the model lacks to null; only levels pi-acp's bundled runtime takes are
+// offered. Records without the map (OpenCode's cache) name none.
+func piThinkingLevels(record map[string]any) []string {
+	levels, mapped := record["thinkingLevelMap"].(map[string]any)
+	if reasoning, _ := record["reasoning"].(bool); !reasoning || !mapped {
+		return nil
+	}
+	var efforts []string
+	for _, level := range []string{"minimal", "low", "medium", "high", "xhigh"} {
+		if value, named := levels[level]; !named || value != nil {
+			efforts = append(efforts, level)
+		}
+	}
+	return efforts
 }
 
 func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalog {
@@ -275,6 +308,11 @@ func providerCatalogFingerprint(agentID string, env map[string]string) string {
 	case "omp":
 		path := filepath.Join(piCatalogDir(agentID, env), "models.db")
 		paths = []string{path, path + "-wal"}
+	}
+	if agentID == "pi" || agentID == "kimchi" {
+		// Pi and Kimchi rewrite these files with the same contents on every
+		// --list-models, so a modification time would invalidate every discovery.
+		return ";" + fingerprintConfigPaths(paths)
 	}
 	var stamp strings.Builder
 	for _, path := range paths {

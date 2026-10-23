@@ -231,6 +231,7 @@ type meOfferingBody struct {
 		Default   string   `json:"default"`
 	} `json:"sandboxProviders"`
 	Organizations []organizationResponse `json:"organizations"`
+	ChatHarnesses []string               `json:"chatHarnesses"`
 }
 
 func getMe(t *testing.T, s *Server, principal domain.Principal) meOfferingBody {
@@ -247,6 +248,17 @@ func getMe(t *testing.T, s *Server, principal domain.Principal) meOfferingBody {
 		t.Fatalf("decode /me: %v", err)
 	}
 	return body
+}
+
+// /me lists the harnesses that can start in Chat, as the local daemon's
+// settings list chatHarnesses, so the composer decides Chat or terminal the
+// same way for a cloud project.
+func TestMeListsChatHarnesses(t *testing.T) {
+	store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
+	body := getMe(t, newOfferingServer(store), teamPrincipal())
+	if !slices.Equal(body.ChatHarnesses, domain.ChatHarnesses()) || !chatControllerSupported("claude-code") || chatControllerSupported("aider") {
+		t.Fatalf("chatHarnesses = %v", body.ChatHarnesses)
+	}
 }
 
 // Every organization is offered Coder; a gated provider only with its
@@ -284,6 +296,22 @@ func TestMeOfferingKinds(t *testing.T) {
 				t.Fatalf("organizations = %+v, want a per-organization offering", body.Organizations)
 			}
 		})
+	}
+}
+
+// /me tells the desktop whether an ao-worker Coder session checks out in the
+// project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER), on the
+// top-level and the per-organization offering, so its copy follows the flag.
+func TestMeOfferingCarriesTheWorkerWorkingFolderFlag(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
+		server := newOfferingServer(store)
+		server.provisioning.Coder.WorkerWorkingFolder = enabled
+		body := getMe(t, server, teamPrincipal("coder"))
+		if body.Offering.CoderWorkerWorkingFolder != enabled || len(body.Organizations) != 1 ||
+			body.Organizations[0].Offering == nil || body.Organizations[0].Offering.CoderWorkerWorkingFolder != enabled {
+			t.Fatalf("flag %v: offering = %+v, organizations = %+v", enabled, body.Offering, body.Organizations)
+		}
 	}
 }
 

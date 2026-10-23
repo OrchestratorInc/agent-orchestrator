@@ -19,7 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
-		{"mastra-code", "Configure Mastra Code", "", "Configure a native provider key or Mastra customProviders in AO_DATA_DIR/mastra-code/profile/settings.json. AO does not import other vendors' logins. Stored keys indicate configuration, not authorization.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode", "", ActionSetup, nil},
+		{"mastra-code", "Log in to Mastra Code", "mastracode", "Choose an OAuth account or Add an API key in Mastra's native provider chooser. After adding a key, open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode", "", ActionLogin, []string{"mastracode", "login"}},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},
@@ -56,6 +56,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
+		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)
@@ -72,7 +73,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		// with no command to drive. DeepSeek Harness has no login subcommand either,
 		// but its web profile serves the Models page that writes the credential, so
 		// its setup is a terminal plan.
-		case "aider", "unreal-agent", "mastra-code", "memcode":
+		case "aider", "unreal-agent", "memcode":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {

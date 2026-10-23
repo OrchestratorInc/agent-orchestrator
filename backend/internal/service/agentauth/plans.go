@@ -16,7 +16,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
-	documentationPlan("mastra-code", "Configure Mastra Code", "Configure a native provider key or Mastra customProviders in AO_DATA_DIR/mastra-code/profile/settings.json. AO does not import other vendors' logins. Stored keys indicate configuration, not authorization.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode"),
+	plan("mastra-code", ActionLogin, "Log in to Mastra Code", []string{"mastracode", "login"}, "Choose an OAuth account or Add an API key in Mastra's native provider chooser. After adding a key, open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),
@@ -59,6 +59,7 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
+	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

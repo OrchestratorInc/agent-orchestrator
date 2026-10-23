@@ -10,11 +10,8 @@ type InputValue = string | number | boolean | string[];
 type PropertyEntry = [string, Record<string, unknown>];
 
 /**
- * A pending question docks above the composer rather than landing in the
- * transcript: it is something to answer now, not something to read back. The
- * chrome is the queued-message dock's, so the two things that can sit on the
- * composer read as one surface, and the footer is the approval card's, because
- * both are a decision the turn is waiting on.
+ * Pending questions dock above the composer. After resolution, their prompt and
+ * submitted answers remain readable in the transcript through ElicitationHistory.
  */
 export function ElicitationDock({
 	activity,
@@ -64,6 +61,80 @@ export function ElicitationDock({
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+export function ElicitationHistory({ activity }: { activity: ConversationActivity }) {
+	const response = activity.inputResponse;
+	const answered = (activity.status === "resolved" || activity.status === "completed") && response?.action === "accept";
+	const outcome = activity.status === "failed" ? "Question expired"
+		: activity.status === "cancelled" || response?.action === "cancel" ? "Cancelled"
+			: response?.action === "decline" ? "Skipped"
+				: answered ? "Answered" : "Question closed";
+	const schema = activity.detail?.schema;
+	const properties = Object.entries(schema?.properties ?? {});
+	const groups = claudeQuestionGroups(properties);
+	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
+	const content = answered ? response.content : undefined;
+
+	return (
+		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
+			<p className="font-medium text-muted-foreground">{outcome}</p>
+			{groups ? groups.map((group) => {
+				const question = group[0];
+				if (!question) return null;
+				return (
+					<div key={question[0]} className="space-y-1">
+						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
+							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
+						</p>
+						{answered ? <HistoryAnswers properties={group} content={content} /> : null}
+					</div>
+				);
+			}) : (
+				<div className="space-y-1">
+					<p className="whitespace-pre-wrap break-words font-medium text-foreground">{message}</p>
+					{schema?.description ? <p className="whitespace-pre-wrap break-words">{schema.description}</p> : null}
+					{answered && properties.length > 0 ? <HistoryAnswers properties={properties} content={content} /> : null}
+				</div>
+			)}
+			{activity.detail?.inputMode === "url" && activity.detail.url ? (
+				<p className="break-all text-muted-foreground">{activity.detail.url}</p>
+			) : null}
+		</section>
+	);
+}
+
+function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; content?: Record<string, unknown> }) {
+	const answers = properties.filter(([name]) => {
+		const value = content?.[name];
+		return value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0);
+	});
+	if (answers.length === 0) {
+		return <p className="text-muted-foreground">{content ? "No answer provided" : "Answer unavailable"}</p>;
+	}
+	return (
+		<dl className="space-y-1">
+			{answers.map(([name, property]) => {
+				const value = content?.[name];
+				const options = enumOptions(property);
+				function label(value: unknown): string {
+					if (typeof value === "boolean") return value ? "Yes" : "No";
+					if (typeof value === "number") return String(value);
+					if (typeof value !== "string") return "Answer unavailable";
+					const option = options.find((option) => option.value === value);
+					return option ? [option.label, option.description].filter(Boolean).join(" — ") : value;
+				}
+				return (
+					<div key={name} className="min-w-0">
+						<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
+						<dd className="whitespace-pre-wrap break-words text-foreground">
+							{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
+						</dd>
+					</div>
+				);
+			})}
+		</dl>
 	);
 }
 
@@ -188,11 +259,8 @@ function FormRequest({
 	// Claude puts a single prompt in message and each prompt of a multi-question
 	// form in its field description. The field title is only a short topic label.
 	const question = questionGroups ? visibleProperties[0] : undefined;
-	const prompt = question?.[1].description;
 	const title = question
-		? (typeof prompt === "string" && prompt.trim() ? prompt : undefined) ??
-			(questionGroups?.length === 1 ? activity.detail?.message : undefined) ??
-			propertyLabel(question)
+		? questionPrompt(question, questionGroups?.length === 1 ? activity.detail?.message : undefined)
 		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
@@ -484,6 +552,11 @@ function FormField({
 			) : null}
 		</label>
 	);
+}
+
+function questionPrompt(question: PropertyEntry, message?: string): string {
+	const description = question[1].description;
+	return (typeof description === "string" && description.trim() ? description : undefined) ?? message ?? propertyLabel(question);
 }
 
 function propertyLabel([name, property]: PropertyEntry): string {

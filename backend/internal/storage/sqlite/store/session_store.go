@@ -166,18 +166,48 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
-// SetSessionNamedWorkspace publishes naming facts before an agent can launch.
-func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+// SetSessionTaskBranch records a background task branch rename on the session
+// and its repository rows together. repoBranches maps each repository row to
+// the branch its checkout holds, which after a failed undo can differ.
+func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
-		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
-		WorkspaceRepoPath: workspaceRepoPath, UpdatedAt: now,
+	var rows int64
+	err := s.inTx(ctx, fmt.Sprintf("record task branch for %s", id), func(q *gen.Queries) error {
+		var err error
+		rows, err = q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+			ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
+		})
+		for repo, repoBranch := range repoBranches {
+			if err != nil || rows == 0 {
+				return err
+			}
+			err = q.SetSessionWorktreeBranch(ctx, gen.SetSessionWorktreeBranchParams{SessionID: id, RepoName: repo, Branch: repoBranch})
+		}
+		return err
 	})
-	if err != nil {
-		return false, fmt.Errorf("record named workspace for %s: %w", id, err)
+	return err == nil && rows > 0, err
+}
+
+// SetSessionBranchNaming marks whether a task's generated branch name is still
+// on the way.
+func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetSessionBranchNaming(ctx, gen.SetSessionBranchNamingParams{ID: id, BranchNaming: naming}); err != nil {
+		return fmt.Errorf("record branch naming for %s: %w", id, err)
 	}
-	return rows > 0, nil
+	return nil
+}
+
+// ClearSessionBranchNaming ends every branch naming a restart interrupted.
+func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.ClearSessionBranchNaming(ctx); err != nil {
+		return fmt.Errorf("clear interrupted branch naming: %w", err)
+	}
+	return nil
 }
 
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
@@ -884,6 +914,29 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 	return ids, nil
 }
 
+// ListTurnFailureCandidates returns the harness's live terminal sessions that
+// are in a turn and have a native transcript path, reading only the columns
+// the failed-turn observer needs.
+func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
+	rows, err := s.qr.ListTurnFailureCandidates(ctx, harness)
+	if err != nil {
+		return nil, fmt.Errorf("list turn failure candidates: %w", err)
+	}
+	out := make([]domain.TurnFailureCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.TurnFailureCandidate{
+			ID:                   r.ID,
+			Harness:              r.Harness,
+			Activity:             domain.Activity{State: r.ActivityState, LastActivityAt: r.ActivityLastAt},
+			LatestUserPromptAt:   nullTimeToTime(r.LatestUserPromptAt),
+			Revision:             r.Revision,
+			RuntimeLaunchID:      r.RuntimeLaunchID,
+			NativeTranscriptPath: r.NativeTranscriptPath,
+		})
+	}
+	return out, nil
+}
+
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {
 	out := make([]domain.SessionRecord, 0, len(rows))
 	for _, r := range rows {
@@ -977,6 +1030,8 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ProvisionError:    row.ProvisionError,
 		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
 		BranchState:       decodeBranchState(row.BranchState),
+		BranchNaming:      row.BranchNaming,
+		TemporaryBranch:   row.TemporaryBranch,
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
 }
@@ -1121,13 +1176,13 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		ReviewerHarness:                  rec.ReviewerHarness,
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),
 		AutoReviewEnabled:                rec.AutoReviewEnabled,
-		DisplayName:                      rec.DisplayName,
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
 		IsTerminated:                     rec.IsTerminated,
 		IsPinned:                         rec.IsPinned,
 		PinnedAt:                         timePtrToNullTime(rec.PinnedAt),
+		TemporaryBranch:                  rec.Metadata.Branch,
 		Branch:                           rec.Metadata.Branch,
 		WorkspacePath:                    rec.Metadata.WorkspacePath,
 		WorkspaceRepoPath:                rec.Metadata.WorkspaceRepoPath,
@@ -1257,8 +1312,8 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// monotonic reading survive into the column. Rows written from a local-zone
 	// clock ("… +0700 +07 m=+995.1") then stop comparing as timestamps against
 	// UTC rows, and activity_last_at is compared directly in SQL — the
-	// agent-switch source-stop predicate is one such comparison, and a mismatched
-	// row silently matches zero rows there. Normalize every writer's value here
+	// activity predicates are one such comparison, and a mismatched row silently
+	// matches zero rows there. Normalize every writer's value here
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a

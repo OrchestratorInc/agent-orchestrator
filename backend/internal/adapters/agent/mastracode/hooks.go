@@ -80,7 +80,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	profile := cfg.Env["MASTRA_APP_DATA_DIR"]
 	if profile == "" {
-		profile = filepath.Join(cfg.DataDir, adapterID, "profile")
+		profile = ProfileDir(cfg.DataDir)
 	}
 	if !filepath.IsAbs(profile) {
 		return errors.New("mastra-code requires an absolute native profile")
