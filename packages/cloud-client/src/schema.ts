@@ -82,7 +82,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. */
+        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST. */
         put: operations["updateArtifactShare"];
         post?: never;
         /** @description Revokes a link: it stops serving at once and its stored file is deleted after a grace period. The link still uses its slot, so revoking never makes room for a new document. Publishing the same document again restores it. A link already revoked returns 404. */

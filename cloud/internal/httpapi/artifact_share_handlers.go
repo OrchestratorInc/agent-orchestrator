@@ -220,7 +220,9 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 
 // updateArtifactShare replaces the file an existing link serves. The link
 // keeps its URL and does not count against the limit again; the sweeper
-// deletes the replaced version after a grace period.
+// deletes the replaced version after a grace period. The file name must match
+// the link's, since it is part of the link's document: a renamed file is
+// published as a new link.
 func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	principal := principalFrom(r)
@@ -238,6 +240,10 @@ func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	if upload.name != current.Name {
+		writeShareNameChanged(w, r)
+		return
+	}
 	versionID, ok := s.putShareObject(w, r, principal.UserID, current.S3Key, upload)
 	if !ok {
 		return
@@ -253,6 +259,10 @@ func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.discardShareUpload(r.Context(), principal.UserID, current.S3Key, versionID)
+		if errors.Is(err, postgres.ErrArtifactShareNameChanged) {
+			writeShareNameChanged(w, r)
+			return
+		}
 		s.writeStoreError(w, r, err)
 		return
 	}
@@ -356,6 +366,11 @@ func (s *Server) discardShareUpload(ctx context.Context, userID, key, versionID 
 	if err := s.shareRows.DiscardArtifactShareUpload(ctx, userID, key, versionID); err != nil {
 		s.logger.WarnContext(ctx, "discard artifact share upload", "error", err, "key", key)
 	}
+}
+
+func writeShareNameChanged(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusConflict, "artifact_share_name_changed",
+		"A share link keeps its file name. Publish the renamed file as a new link.")
 }
 
 func (s *Server) writeShareLimit(w http.ResponseWriter, r *http.Request) {

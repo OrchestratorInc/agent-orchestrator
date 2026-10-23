@@ -197,6 +197,9 @@ func (m *memoryShareRows) UpdateArtifactShare(_ context.Context, share domain.Ar
 	if !ok || current.UserID != share.UserID || current.RevokedAt != nil {
 		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
+	if share.Name != current.Name {
+		return domain.ArtifactShare{}, postgres.ErrArtifactShareNameChanged
+	}
 	if err := m.claimUploadLocked(current.S3Key, share.VersionID); err != nil {
 		return domain.ArtifactShare{}, err
 	}
@@ -204,7 +207,7 @@ func (m *memoryShareRows) UpdateArtifactShare(_ context.Context, share domain.Ar
 		m.queueLocked(current.S3Key, current.VersionID, "replaced", false)
 	}
 	m.clock = m.clock.Add(time.Second)
-	current.Name, current.ContentType, current.Size = share.Name, share.ContentType, share.Size
+	current.ContentType, current.Size = share.ContentType, share.Size
 	current.SHA256, current.VersionID, current.UpdatedAt = share.SHA256, share.VersionID, m.clock
 	m.shares[share.ID] = current
 	return current, nil
@@ -681,29 +684,58 @@ func TestArtifactShareReplacedVersionOutlivesRepublish(t *testing.T) {
 	}
 }
 
-// Republishing identical bytes under another file type changes the ETag, so
-// a cached copy is not revalidated with the old Content-Type.
-func TestArtifactShareETagChangesWithContentType(t *testing.T) {
+// A link's file name is part of its document, so PUT cannot rename it: the
+// renamed file is a new document, and the old name still names this link.
+func TestArtifactSharePutRejectsAnotherFileName(t *testing.T) {
 	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 3})
-	html := []byte("<h1>same bytes</h1>")
-	share := h.mustPublish(artifactTokenA, "report.txt", "proj", "feat", html)
-	first := h.visit(share.URL, nil)
-	if first.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
-		t.Fatalf("first type = %q", first.Header().Get("Content-Type"))
+	old := h.mustPublish(artifactTokenA, "old.html", "p", "f", []byte("old"))
+	putsBefore := h.fake.Puts()
+
+	rec := h.republish(artifactTokenA, old.ID, "new.html", []byte("new"))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "artifact_share_name_changed") {
+		t.Fatalf("PUT with another name: %d %s", rec.Code, rec.Body.String())
 	}
-	oldETag := first.Header().Get("ETag")
-	if rec := h.republish(artifactTokenA, share.ID, "report.html", html); rec.Code != http.StatusOK {
-		t.Fatalf("republish: %d", rec.Code)
+	if h.fake.Puts() != putsBefore {
+		t.Fatal("a refused rename reached S3")
 	}
-	revalidated := h.visit(share.URL, map[string]string{"If-None-Match": oldETag})
-	if revalidated.Code != http.StatusOK || revalidated.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-		t.Fatalf("revalidation with the old ETag: %d %q", revalidated.Code, revalidated.Header().Get("Content-Type"))
+	if page := h.visit(old.URL, nil); page.Body.String() != "old" {
+		t.Fatalf("link serves %q after a refused rename", page.Body.String())
 	}
-	if revalidated.Header().Get("ETag") == oldETag {
-		t.Fatal("ETag did not change with the Content-Type")
+
+	// new.html is its own document: a new link, which takes a slot.
+	renamed := h.mustPublish(artifactTokenA, "new.html", "p", "f", []byte("new"))
+	if renamed.ID == old.ID || renamed.Name != "new.html" {
+		t.Fatalf("publishing new.html = %+v, want a new link", renamed)
 	}
-	if rec := h.visit(share.URL, map[string]string{"If-None-Match": revalidated.Header().Get("ETag")}); rec.Code != http.StatusNotModified {
-		t.Fatalf("revalidation with the current ETag: %d", rec.Code)
+	// old.html still names the original link, which keeps serving that file.
+	again := h.publish(artifactTokenA, "old.html", "p", "f", []byte("old v2"))
+	body := decodeBody[struct {
+		Share    artifactShareResponse `json:"share"`
+		Replaced bool                  `json:"replaced"`
+	}](t, again)
+	if again.Code != http.StatusOK || !body.Replaced || body.Share.ID != old.ID || body.Share.Name != "old.html" {
+		t.Fatalf("publishing old.html again = %d %+v", again.Code, body)
+	}
+	if page := h.visit(renamed.URL, nil); page.Body.String() != "new" {
+		t.Fatalf("new.html link serves %q", page.Body.String())
+	}
+
+	// The same name is still accepted.
+	if rec := h.republish(artifactTokenA, old.ID, "old.html", []byte("old v3")); rec.Code != http.StatusOK {
+		t.Fatalf("PUT with the same name: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The share ETag covers the Content-Type as well as the bytes.
+func TestShareETagChangesWithContentType(t *testing.T) {
+	share := domain.ArtifactShare{SHA256: strings.Repeat("a", 64), ContentType: "text/plain; charset=utf-8"}
+	html := share
+	html.ContentType = "text/html; charset=utf-8"
+	if shareETag(share) == shareETag(html) {
+		t.Fatal("identical bytes with another Content-Type kept the same ETag")
+	}
+	if !strings.HasPrefix(shareETag(share), `"`+share.SHA256+"-") {
+		t.Fatalf("ETag = %s", shareETag(share))
 	}
 }
 

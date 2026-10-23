@@ -194,32 +194,37 @@ func (s *Store) PublishArtifactShare(
 
 // UpdateArtifactShare points one of the user's share links at a new object
 // version recorded by RecordArtifactShareUpload, and queues the version it
-// replaced for the sweeper. A link the user does not own is ErrNotFound.
+// replaced for the sweeper. The file name must stay the same, because it is
+// part of the link's document key; another name is
+// ErrArtifactShareNameChanged. A link the user does not own is ErrNotFound.
 func (s *Store) UpdateArtifactShare(ctx context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error) {
 	var updated domain.ArtifactShare
 	err := s.withUser(ctx, share.UserID, func(tx pgx.Tx) error {
-		var s3Key, previousVersion string
+		var name, s3Key, previousVersion string
 		var previousSize int64
 		if err := tx.QueryRow(ctx,
-			`SELECT s3_key, version_id, size FROM ao_artifact_shares
+			`SELECT name, s3_key, version_id, size FROM ao_artifact_shares
 			WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL FOR UPDATE`,
 			share.ID, share.UserID,
-		).Scan(&s3Key, &previousVersion, &previousSize); err != nil {
+		).Scan(&name, &s3Key, &previousVersion, &previousSize); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("lock artifact share: %w", err)
+		}
+		if share.Name != name {
+			return ErrArtifactShareNameChanged
 		}
 		if err := claimShareUploadTx(ctx, tx, share.UserID, s3Key, share.VersionID); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx,
 			`UPDATE ao_artifact_shares
-			SET name = $3, content_type = $4, size = $5, sha256 = $6,
-				version_id = $7, updated_at = now()
+			SET content_type = $3, size = $4, sha256 = $5,
+				version_id = $6, updated_at = now()
 			WHERE id = $1 AND user_id = $2
 			RETURNING `+artifactShareColumns,
-			share.ID, share.UserID, share.Name, share.ContentType, share.Size,
+			share.ID, share.UserID, share.ContentType, share.Size,
 			share.SHA256, share.VersionID,
 		)
 		if err != nil {

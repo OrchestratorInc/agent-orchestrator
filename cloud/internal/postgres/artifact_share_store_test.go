@@ -154,6 +154,11 @@ func TestArtifactShareOwnershipUpdateAndDelete(t *testing.T) {
 	if err := store.RecordArtifactShareUpload(ctx, fixture.userID, share.S3Key, "v2", 99); err != nil {
 		t.Fatal(err)
 	}
+	renamed := next
+	renamed.Name = "renamed.html"
+	if _, err := store.UpdateArtifactShare(ctx, renamed); !errors.Is(err, ErrArtifactShareNameChanged) {
+		t.Fatalf("update with another name err = %v, want ErrArtifactShareNameChanged", err)
+	}
 	updated, err := store.UpdateArtifactShare(ctx, next)
 	if err != nil {
 		t.Fatal(err)

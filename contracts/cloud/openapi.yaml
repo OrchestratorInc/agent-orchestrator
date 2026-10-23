@@ -180,7 +180,10 @@ paths:
       tags: [Artifacts]
       description: >-
         Replaces the file an existing link serves. The link keeps its URL and
-        does not count against the limit again.
+        does not count against the limit again. name must match the link's
+        file name, which is part of its document; another name returns 409
+        artifact_share_name_changed, and the renamed file is published as a
+        new link with POST.
       parameters:
         - $ref: "#/components/parameters/ArtifactShareName"
         - $ref: "#/components/parameters/ArtifactShareSHA256"
