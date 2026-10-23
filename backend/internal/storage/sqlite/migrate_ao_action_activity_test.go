@@ -39,10 +39,27 @@ func TestMigrationAllowsAOActionAndKeepsActivitySchema(t *testing.T) {
 		t.Fatalf("triggers changed:\n%s\n%s", beforeTriggers, got)
 	}
 
+	mustExec(t, db, `INSERT INTO projects (id, path, registered_at)
+		VALUES ('action-project', '/tmp/action-project', CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+		VALUES ('action-session', 'action-project', 1, 'codex', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO conversations (id, scope, project_id, session_id, current_session_id, created_at, updated_at)
+		VALUES ('action-conversation', 'session', 'action-project', 'action-session', 'action-session', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO conversation_activities (id, conversation_id, sequence, kind, status, summary, created_at, updated_at)
+		VALUES ('action-activity', 'action-conversation', 1, 'ao_action', 'completed', 'Spawned a session', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+
 	downTo(t, db, 215)
-	var restored string
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&restored); err != nil || restored != beforeTable {
-		t.Fatalf("down migration schema = %q err=%v, want original", restored, err)
+	var afterDown string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&afterDown); err != nil || afterDown != afterTable {
+		t.Fatalf("down migration schema = %q err=%v, want widened constraint retained", afterDown, err)
+	}
+	var kind string
+	if err := db.QueryRow(`SELECT kind FROM conversation_activities WHERE id = 'action-activity'`).Scan(&kind); err != nil || kind != "ao_action" {
+		t.Fatalf("action after rollback = %q, %v; want ao_action", kind, err)
+	}
+	var integrity string
+	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("integrity after rollback = %q, %v; want ok", integrity, err)
 	}
 }
 

@@ -21,13 +21,7 @@ PRAGMA writable_schema = RESET;
 
 -- +goose Down
 -- +goose StatementBegin
-PRAGMA writable_schema = ON;
--- +goose StatementEnd
--- +goose StatementBegin
-UPDATE sqlite_master
-SET sql = replace(sql, '''user_input'', ''ao_action''))', '''user_input''))')
-WHERE type = 'table' AND name = 'conversation_activities';
--- +goose StatementEnd
--- +goose StatementBegin
-PRAGMA writable_schema = RESET;
+-- Existing ao_action rows cannot satisfy the previous CHECK. Keep the widened
+-- constraint on downgrade, as the earlier activity kind migrations do.
+SELECT 1;
 -- +goose StatementEnd
