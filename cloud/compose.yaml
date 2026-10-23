@@ -90,6 +90,12 @@ services:
       AO_CLOUD_ARTIFACT_ENDPOINT: http://minio:9000
       AWS_ACCESS_KEY_ID: ao_cloud_local_minio
       AWS_SECRET_ACCESS_KEY: ao_cloud_local_minio_secret
+      # Public links to single files published from local sessions, off by
+      # default and development-only. They need AO_CLOUD_ARTIFACTS=1. A link
+      # is http://<slug>.share.localhost:<port>/, which resolves to loopback.
+      AO_CLOUD_ARTIFACT_SHARES: "${AO_CLOUD_ARTIFACT_SHARES:-0}"
+      AO_CLOUD_ARTIFACT_SHARE_ORIGIN: "${AO_CLOUD_ARTIFACT_SHARE_ORIGIN:-http://share.localhost:${AO_CLOUD_PORT:-8081}}"
+      AO_CLOUD_ARTIFACT_SHARE_LIMIT: "${AO_CLOUD_ARTIFACT_SHARE_LIMIT:-3}"
       AO_CLOUD_PROVIDER_SECRET_KEY: "${AO_CLOUD_PROVIDER_SECRET_KEY:?AO_CLOUD_PROVIDER_SECRET_KEY is required}"
       AO_CLOUD_PUBLIC_URL: "${AO_CLOUD_PUBLIC_URL:-http://control-plane:8080}"
       AO_CLOUD_WORKER_SIGNING_KEY: "${AO_CLOUD_WORKER_SIGNING_KEY:?AO_CLOUD_WORKER_SIGNING_KEY is required}"

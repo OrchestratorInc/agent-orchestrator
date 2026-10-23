@@ -140,6 +140,16 @@ type Config struct {
 	// folder is honored either way; a release that predates it ignores it, so
 	// turn it on only once the rollback target honors it.
 	CoderWorkerWorkingFolder bool
+	// ArtifactSharesEnabled serves public links to single files users publish
+	// from local sessions (AO_CLOUD_ARTIFACT_SHARES). Development only; it
+	// needs ArtifactsEnabled.
+	ArtifactSharesEnabled bool
+	// ArtifactShareOrigin is the origin every link is a subdomain of
+	// (AO_CLOUD_ARTIFACT_SHARE_ORIGIN), such as http://share.localhost:8080.
+	ArtifactShareOrigin string
+	// ArtifactShareLimit is how many active links a user may hold
+	// (AO_CLOUD_ARTIFACT_SHARE_LIMIT, default 3).
+	ArtifactShareLimit int
 
 	NodeOpsBaseURL       string
 	NodeOpsAPIKey        string
@@ -335,6 +345,10 @@ func Load() (Config, error) {
 
 		CoderReadableWorkspaceNames: coderReadableNames,
 		CoderWorkerWorkingFolder:    coderWorkerWorkingFolder,
+		ArtifactSharesEnabled:       boolEnv("AO_CLOUD_ARTIFACT_SHARES", false),
+		ArtifactShareOrigin: strings.TrimRight(
+			strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_SHARE_ORIGIN")), "/",
+		),
 		SandboxProvider: strings.ToLower(
 			envOrDefault("AO_CLOUD_SANDBOX_PROVIDER", defaultSandboxProvider(hosted)),
 		),
@@ -681,6 +695,17 @@ func Load() (Config, error) {
 	if err := cfg.validateArtifacts(); err != nil {
 		return Config{}, err
 	}
+	cfg.ArtifactShareLimit = 3
+	if value := strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_SHARE_LIMIT")); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 1 {
+			return Config{}, errors.New("AO_CLOUD_ARTIFACT_SHARE_LIMIT must be a positive integer")
+		}
+		cfg.ArtifactShareLimit = limit
+	}
+	if err := cfg.validateArtifactShares(); err != nil {
+		return Config{}, err
+	}
 	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
 		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
@@ -824,6 +849,26 @@ func (c Config) validateArtifacts() error {
 		if c.Hosted() && endpoint.Scheme != "https" {
 			return errors.New("AO_CLOUD_ARTIFACT_ENDPOINT must use HTTPS in hosted environments")
 		}
+	}
+	return nil
+}
+
+// validateArtifactShares checks the share link settings when
+// AO_CLOUD_ARTIFACT_SHARES is on. Share links are development-only for now.
+func (c Config) validateArtifactShares() error {
+	if !c.ArtifactSharesEnabled {
+		return nil
+	}
+	if c.Hosted() {
+		return errors.New("AO_CLOUD_ARTIFACT_SHARES is development-only and cannot be enabled in hosted environments")
+	}
+	if !c.ArtifactsEnabled {
+		return errors.New("AO_CLOUD_ARTIFACT_SHARES requires AO_CLOUD_ARTIFACTS")
+	}
+	origin, err := url.Parse(c.ArtifactShareOrigin)
+	if err != nil || origin.Hostname() == "" || origin.User != nil || origin.Path != "" ||
+		origin.RawQuery != "" || (origin.Scheme != "http" && origin.Scheme != "https") {
+		return errors.New("AO_CLOUD_ARTIFACT_SHARES requires AO_CLOUD_ARTIFACT_SHARE_ORIGIN, an http or https origin such as http://share.localhost:8080")
 	}
 	return nil
 }
