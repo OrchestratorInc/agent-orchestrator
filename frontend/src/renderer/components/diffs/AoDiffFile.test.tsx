@@ -69,7 +69,7 @@ describe("AoDiffFile", () => {
 		);
 
 		expect(screen.getByRole("button", { name: "Add feedback" }).parentElement).toHaveAttribute("data-gutter-enabled", "true");
-		expect(screen.getByRole("button", { name: "Add feedback" }).parentElement).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
+		expect(screen.getByRole("button", { name: "Add feedback" }).parentElement).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--ao-file-canvas, var(--color-bg-primary))"));
 		screen.getByRole("button", { name: "Add feedback" }).click();
 		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({
 			line: 2,

@@ -122,7 +122,7 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	const detail = query.data;
 	const markdown = artifact.kind === "markdown" || isMarkdownPreviewPath(artifact.path);
 	return (
-		<div className="board-scrollbar h-full min-h-0 select-text overflow-auto overscroll-contain">
+		<div className={cn("board-scrollbar h-full min-h-0 select-text overflow-auto overscroll-contain", !markdown && !isSvgPath(artifact.path) && "ao-document-surface")}>
 			{markdown ? (
 				<MarkdownFileView artifactOrigin={new URL(artifact.rawUrl ?? contentUrl).origin} content={detail.content} filePath={artifact.path} sessionId={artifact.sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 			) : (

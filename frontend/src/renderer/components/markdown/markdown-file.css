@@ -1,11 +1,3 @@
-.ao-markdown-surface {
-	--markdown-canvas: light-dark(
-		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 20%, white),
-		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 75%, black)
-	);
-	background-color: var(--markdown-canvas);
-}
-
 /* Keep the Markdown structure, with colors inherited from the active AO theme. */
 .markdown-body.ao-markdown {
 	--fontStack-sansSerif: var(--font-family-base);
@@ -17,7 +9,7 @@
 	--fgColor-danger: var(--color-danger);
 	--fgColor-done: var(--color-purple);
 	--fgColor-success: var(--color-success);
-	--bgColor-default: var(--markdown-canvas);
+	--bgColor-default: var(--document-canvas);
 	--bgColor-muted: var(--solid-muted, var(--muted));
 	--bgColor-neutral-muted: var(--solid-muted, var(--muted));
 	--borderColor-default: var(--color-border);
