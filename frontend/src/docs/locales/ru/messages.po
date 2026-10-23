@@ -10,8 +10,8 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "Документация {name}"
 
-msgid "{title} | Agent Orchestrator Docs"
-msgstr "{title} | Документация Agent Orchestrator"
+msgid "{title} | Orchestrator.inc Docs"
+msgstr "{title} | Документация Orchestrator.inc"
 
 msgctxt "sidebar section"
 msgid "Agents"

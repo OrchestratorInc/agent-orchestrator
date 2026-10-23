@@ -2,11 +2,13 @@ import { execFileSync } from "node:child_process";
 
 const CONTENT_DIR = "content";
 
-let commitDates: Map<string, Date> | undefined;
+type Dates = { published: Date; modified: Date };
 
-/** The newest commit date of every file under `content/`, from a single `git log`. */
-function loadCommitDates(): Map<string, Date> {
-  const dates = new Map<string, Date>();
+let fileDates: Map<string, Dates> | undefined;
+
+/** The oldest and newest commit dates of every file under `content/`, from a single `git log`. */
+function loadCommitDates(): Map<string, Dates> {
+  const dates = new Map<string, Dates>();
   try {
     const log = execFileSync("git", ["log", "--relative", "--name-only", "--format=%x00%cI", "--", CONTENT_DIR], {
       encoding: "utf8",
@@ -16,8 +18,12 @@ function loadCommitDates(): Map<string, Date> {
     for (const entry of log.split("\0").slice(1)) {
       const [date = "", ...files] = entry.split("\n");
       for (const file of files) {
-        // Commits are listed newest first, so the first date seen for a file is its last change.
-        if (file && !dates.has(file)) dates.set(file, new Date(date));
+        if (!file) continue;
+        // Commits are listed newest first, so the first date seen for a file
+        // is its last change and the last date seen is when it was added.
+        const known = dates.get(file);
+        if (known) known.published = new Date(date);
+        else dates.set(file, { published: new Date(date), modified: new Date(date) });
       }
     }
   } catch {
@@ -32,6 +38,12 @@ function loadCommitDates(): Map<string, Date> {
  * history for the file, so local builds and shallow clones still work.
  */
 export function lastModified(contentPath: string): Date {
-  commitDates ??= loadCommitDates();
-  return commitDates.get(`${CONTENT_DIR}/${contentPath}`) ?? new Date();
+  return commitDates(contentPath).modified;
+}
+
+/** When an article's source file was added and last changed, with the same fallback. */
+export function commitDates(contentPath: string): Dates {
+  fileDates ??= loadCommitDates();
+  const now = new Date();
+  return fileDates.get(`${CONTENT_DIR}/${contentPath}`) ?? { published: now, modified: now };
 }

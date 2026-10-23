@@ -2,6 +2,7 @@ import { getBreadcrumbItems } from "fumadocs-core/breadcrumb";
 import type { SupportedLocale } from "@/i18n/locales";
 import { localePath, withTrailingSlash } from "@/i18n/paths";
 import { COMPANY } from "./constants";
+import { commitDates } from "./last-modified";
 import { docsTree } from "./docs-tree";
 
 /** The `og:locale` of each language, in the `language_TERRITORY` form link previews expect. */
@@ -40,31 +41,21 @@ export function absoluteUrl(path: string): string {
   return `${COMPANY.DOCS_URL}${path}`;
 }
 
-// The name search engines and link previews show, with the names the
-// product is also searched by.
-export const BRAND = "Orchestrator.inc";
-const ALTERNATE_NAMES = ["Agent Orchestrator", "AO"];
-
 /** The site name, e.g. in `og:site_name`. */
-export const SITE_NAME = `${BRAND} Docs`;
+export const SITE_NAME = `${COMPANY.NAME} Docs`;
 
-const organization = {
-  "@type": "Organization",
-  "@id": `${COMPANY.MARKETING_URL}/#organization`,
-  name: BRAND,
-  alternateName: ALTERNATE_NAMES,
-  url: COMPANY.MARKETING_URL,
-  logo: `${COMPANY.MARKETING_URL}/ao-logo.svg`,
-  sameAs: [COMPANY.GITHUB_URL],
-};
+// The main site describes the company under this ID; the docs only point at it,
+// so there is one description of the company to keep current.
+const organization = { "@id": `${COMPANY.MARKETING_URL}/#organization` };
 
 const website = {
   "@type": "WebSite",
   "@id": `${COMPANY.DOCS_URL}/#website`,
   name: SITE_NAME,
-  alternateName: ALTERNATE_NAMES.map((name) => `${name} Docs`),
+  // The names the docs are also searched by.
+  alternateName: ["Agent Orchestrator Docs", "AO Docs"],
   url: absoluteUrl("/"),
-  publisher: { "@id": organization["@id"] },
+  publisher: organization,
 };
 
 type Article = {
@@ -73,6 +64,8 @@ type Article = {
   slugs: string[];
   url: string;
   locale: SupportedLocale;
+  /** The article's source file inside `content/`, for its dates. */
+  path: string;
 };
 
 /**
@@ -98,12 +91,13 @@ function breadcrumbs({ title, url, locale }: Article) {
 }
 
 /**
- * The JSON-LD of an article: a `TechArticle` with its breadcrumbs, or on the
- * docs home, with the organization and site instead.
+ * The JSON-LD of an article: a `TechArticle` in the docs site, with its
+ * breadcrumbs everywhere but the docs home.
  */
 export function articleStructuredData(article: Article) {
   const url = absoluteUrl(withTrailingSlash(article.url));
   const isHome = article.slugs.length === 0;
+  const { published, modified } = commitDates(article.path);
   return {
     "@context": "https://schema.org",
     "@graph": [
@@ -115,10 +109,14 @@ export function articleStructuredData(article: Article) {
         url,
         inLanguage: article.locale,
         image: absoluteUrl(ogImagePath(article.slugs)),
-        publisher: isHome ? { "@id": organization["@id"] } : organization,
+        datePublished: published.toISOString(),
+        dateModified: modified.toISOString(),
+        author: organization,
+        publisher: organization,
         isPartOf: { "@id": website["@id"] },
       },
-      ...(isHome ? [organization, website] : [breadcrumbs(article)]),
+      website,
+      ...(isHome ? [] : [breadcrumbs(article)]),
     ],
   };
 }

@@ -18,15 +18,15 @@ export function EnglishArticleNotice() {
 
 /**
  * Keeps the tab title in the interface language. The prerendered title is
- * `${source} | Agent Orchestrator Docs`; `title` is the name to show instead,
+ * `${source} | Orchestrator.inc Docs`; `title` is the name to show instead,
  * already translated (defaults to `source`).
  */
 export function LocalizedTitle({ source, title = source }: { source: string; title?: string }) {
   const { i18n } = useLingui();
   const written = useRef<string | null>(null);
   useEffect(() => {
-    const english = `${source} | Agent Orchestrator Docs`;
-    const localized = i18n._(msg`${title} | Agent Orchestrator Docs`);
+    const english = `${source} | Orchestrator.inc Docs`;
+    const localized = i18n._(msg`${title} | Orchestrator.inc Docs`);
     // Only replace this page's own title (English, or our earlier
     // translation), never another page's that a navigation just wrote.
     const apply = () => {

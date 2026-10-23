@@ -9,8 +9,9 @@ import { CATALOGS } from "@/i18n/catalogs";
 import { DEFAULT_LOCALE, type SupportedLocale } from "@/i18n/locales";
 import { localePath } from "@/i18n/paths";
 import { visibleProductName } from "@/lib/branding";
+import { COMPANY } from "@/lib/constants";
 import { markdownPath, sourceUrl } from "@/lib/llms";
-import { articleStructuredData, BRAND, OG_IMAGE_SIZE, OG_LOCALES, ogImagePath } from "@/lib/seo";
+import { articleStructuredData, OG_IMAGE_SIZE, OG_LOCALES, ogImagePath } from "@/lib/seo";
 import { source } from "@/lib/source";
 import { articleLocales, articlePath, localizeHref } from "@/lib/translations";
 import { Card, getMDXComponents } from "./mdx";
@@ -58,7 +59,7 @@ export function articleRoute(locale: SupportedLocale) {
             })}
           />
         </DocsBody>
-        <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale })} />
+        <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale, path: page.path })} />
       </DocsPage>
     );
   }
@@ -74,7 +75,7 @@ export function articleRoute(locale: SupportedLocale) {
     const locales = articleLocales(page.slugs);
     const i18n = setupI18n({ locale, messages: { [locale]: CATALOGS[locale] } });
     const title = page.data.title;
-    const name = BRAND;
+    const name = COMPANY.NAME;
     const url = localePath(englishPath, locale);
     const preview = {
       title,
@@ -83,7 +84,7 @@ export function articleRoute(locale: SupportedLocale) {
     };
 
     return {
-      title: i18n._(msg`${title} | Agent Orchestrator Docs`),
+      title: i18n._(msg`${title} | Orchestrator.inc Docs`),
       description: page.data.description,
       openGraph: {
         type: "article",
