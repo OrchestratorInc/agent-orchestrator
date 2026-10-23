@@ -12,6 +12,7 @@ translatedFrom: 7460247266d0
 
 正式なインストール方法はデスクトップアプリです。デスクトップアプリはローカルのデーモンを管理し、グローバルな `ao` コマンドを必要とせず、起動後と実行中に更新を確認します。
 
+<span id="optional-macos-install-with-homebrew" />
 ## macOS で Homebrew を使ってインストールする（任意）
 
 推奨するインストール方法は、上のデスクトップ版のダウンロードです。macOS では、既存の Homebrew cask からインストールすることもできます。
@@ -27,6 +28,7 @@ brew update
 brew upgrade --cask agentwrapper/tap/agent-orchestrator
 ```
 
+<span id="prerequisites" />
 ## 前提条件
 
 | ツール | 必要になる場面 | 理由 |
@@ -39,11 +41,13 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 Orchestrator は、コンピューターにすでにインストールされ、サインイン済みのコーディングエージェントを使います。**Settings → Harness** では、対応エージェントのセットアップと準備状況のチェックができます。エージェントによっては、Orchestrator の外でインストールやサインインが必要です。Unreal Agent は例外で、Chat 専用の組み込みエージェントです。対応プラットフォームと権限には独自の制限があります。[エージェント一覧](/plugins/agents)を参照してください。
 
 <span id="set-up-ao" />
+<span id="set-up-orchestrator" />
 ## Orchestrator をセットアップする
 
 <Steps>
 <Step>
 
+<span id="install-and-open-the-desktop-app" />
 ### デスクトップアプリをインストールして開く
 
 上からお使いのプラットフォーム用のダウンロードを選んでインストールし、**Orchestrator** を開きます。アプリはローカルの Go デーモンを自動で起動し、監視します。
@@ -51,6 +55,7 @@ Orchestrator は、コンピューターにすでにインストールされ、�
 </Step>
 <Step>
 
+<span id="authenticate-github" />
 ### GitHub で認証する
 
 GitHub のリポジトリを使う場合は、必要に応じて [GitHub CLI をインストール](https://cli.github.com/)し、サインインします。
@@ -69,6 +74,7 @@ GitLab の場合は、GitLab のトークンまたは `glab` でサインイン�
 
 <span id="install-and-sign-in-to-an-agent" />
 
+<span id="install-and-sign-in-to-an-external-agent" />
 ### 外部エージェントをインストールしてサインインする
 
 外部からインストールするハーネスは、インストール後に Orchestrator の外で一度実行し、サインインを済ませてください。Orchestrator は、セッションを作成するときに使えるハーネスを検出します。組み込みの Unreal Agent を使う場合は、この手順を飛ばし、対応する macOS または Linux で Chat セッションを作るときに選んでください。
@@ -78,6 +84,7 @@ Chat に対応しているかどうかは、ハーネスとそのインストー
 </Step>
 <Step>
 
+<span id="add-a-project" />
 ### プロジェクトを追加する
 
 デスクトップアプリで **Add project** を選び、既存のローカル Git リポジトリを選択します。Orchestrator は、元のチェックアウトを移動せずにリポジトリを登録します。ワーカーセッションごとに、分離されたワークツリーが作られます。
@@ -87,6 +94,7 @@ Chat に対応しているかどうかは、ハーネスとそのインストー
 
 リポジトリが不要な作業には、プロジェクトに属さないスタンドアロンのタスクを始めることもできます。任意の CLI では `ao spawn --standalone --agent codex --name notes --prompt "Draft release notes"` のように実行します。スタンドアロンのワーカーは PR を担当できず、Git やプロジェクトのフラグも使えません。
 
+<span id="legacy-npm-cli" />
 ## 旧来の npm CLI
 
 <details className="ao-legacy-cli-details">
@@ -113,10 +121,12 @@ ao start
 </details>
 
 <span id="where-ao-stores-data" />
+<span id="where-orchestrator-stores-data" />
 ## Orchestrator のデータの保存場所
 
 Orchestrator のアプリケーションの状態は、既定ですべて `~/.ao` に保存されます。デーモンのデータベース、実行ファイル（run file）、管理対象のワークツリー、Electron のブラウザデータ、モバイルのペアリング設定も含まれます。高度な構成では、`AO_DATA_DIR` と `AO_RUN_FILE` でデーモンのパスを変更できます。
 
+<span id="common-installation-problems" />
 ## インストール時によくある問題
 
 <Accordions>
@@ -143,6 +153,7 @@ Orchestrator のアプリケーションの状態は、既定ですべて `~/.ao
 	</Accordion>
 </Accordions>
 
+<span id="next" />
 ## 次のステップ
 
 <Cards>

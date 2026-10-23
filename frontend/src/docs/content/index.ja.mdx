@@ -13,6 +13,7 @@ Orchestrator は、AI コーディングエージェントを監督するため�
 </Callout>
 
 <span id="what-ao-helps-you-do" />
+<span id="what-orchestrator-helps-you-do" />
 ## Orchestrator でできること
 
 - 複数のコーディングエージェントを、ファイル、ブランチ、プルリクエストが混ざらないように並行して実行する。
@@ -26,6 +27,7 @@ Orchestrator は、AI コーディングエージェントを監督するため�
 
 Orchestrator が最も力を発揮するのは、各ワーカーに明確でレビューしやすい成果があるときです。たとえば、範囲の絞られたバグ修正、機能追加、リファクタリング、テスト、ドキュメントの更新、レビュー後の対応などです。
 
+<span id="the-basic-loop" />
 ## 基本の流れ
 
 ```text
@@ -34,6 +36,7 @@ add project -> start session -> isolated worktree -> pull request -> CI/review -
 
 セッションは、デスクトップアプリまたは任意の CLI から作成します。Orchestrator は選択したエージェントのインターフェースを起動し、保存されたアクティビティとプルリクエストのデータを組み合わせて、セッションの状態を表示します。
 
+<span id="chat-and-terminal-ui" />
 ## Chat と Terminal UI
 
 各セッションで一度に有効になるエージェントのインターフェースは 1 つです。
@@ -45,6 +48,7 @@ add project -> start session -> isolated worktree -> pull request -> CI/review -
 
 Chat に対応しているかどうかは、ハーネスとそのインストール済みバージョンによって異なります。[エージェントの機能一覧](/plugins/agents#chat-versus-terminal-ui)を参照してください。対応するセッションは、セッションやワークツリーを変えずにインターフェースを切り替えられます。どの切り替えができるかは UI に表示されます。
 
+<span id="where-local-data-lives" />
 ## ローカルデータの保存場所
 
 <span id="local-by-design" />
@@ -57,12 +61,14 @@ Connect Mobile は、接続パスワードで保護された、オプトイン�
 
 クラウドセッションは、アカウントのアクセス要件がある別のサービスです。設定方法は [Cloud ガイド](/guides/cloud)を参照してください。
 
+<span id="supported-agents" />
 ## 対応エージェント
 
 Orchestrator は、Claude Code、Codex、Cursor、Aider、OpenCode、Droid、Kimi Code、GitHub Copilot などのコーディングエージェントに対応しています。ワーカー、Chat、レビュー担当の各役割への対応状況はエージェントによって異なります。詳しくは[エージェント一覧](/plugins/agents)を確認してください。Cloud で使える[プロバイダー](/guides/cloud#before-you-start)はこれより少なくなります。
 
 GitHub と GitLab は、ソース管理の監視と Issue の取り込みに使えます。取り込みはオプトインで、Issue トラッカーに対しては読み取り専用です。Linear と、旧来の Node プラグインパッケージには対応していません。
 
+<span id="where-to-go-next" />
 ## 次に読むページ
 
 <Cards>

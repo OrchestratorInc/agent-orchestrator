@@ -5,13 +5,17 @@
 //   translatedFrom: <first 12 hex characters of the English file's SHA-256>
 //
 // Fails when a translation has no English article, no `translatedFrom`, or its
-// language has no route. Warns when the English article changed since the
-// translation, so the translation can be brought up to date.
+// language has no route, or when it lacks a section link the English article
+// has. Translated headings get different ids, so each one keeps the English id
+// as `<span id="..." />` and existing links still reach the section. Warns
+// when the English article changed since the translation, so the translation
+// can be brought up to date.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const contentDir = join(root, "content");
 
 const localesSource = readFileSync(join(root, "src/i18n/locales.ts"), "utf8");
@@ -25,6 +29,33 @@ function* walk(dir) {
     if (entry.isDirectory()) yield* walk(path);
     else yield path;
   }
+}
+
+// The ids the docs give headings: the heading text in lower case, without
+// punctuation, with spaces as hyphens.
+function headingIds(text) {
+  const ids = [];
+  let fence = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    const heading = !fence && line.match(/^#{2,4}\s+(.*?)\s*$/)?.[1];
+    if (!heading) continue;
+    ids.push(
+      heading
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/[`*_]{1,2}(?=\S)|(?<=\S)[`*_]{1,2}/g, "")
+        .toLowerCase()
+        .trim()
+        .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+        .replace(/ /g, "-"),
+    );
+  }
+  return ids;
+}
+
+/** Every id a link can point at: heading ids and explicit `id="..."` anchors. */
+function anchors(text) {
+  return new Set([...headingIds(text), ...[...text.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1])]);
 }
 
 function sourceHash(text) {
@@ -47,8 +78,15 @@ for (const file of walk(contentDir)) {
     errors.push(`${name}: no English article at ${relative(root, englishFile)}`);
     continue;
   }
-  const recorded = readFileSync(file, "utf8").match(/^---\n[\s\S]*?^translatedFrom:\s*(\S+)\s*$[\s\S]*?^---$/m)?.[1];
-  const current = sourceHash(readFileSync(englishFile, "utf8"));
+  const translated = readFileSync(file, "utf8");
+  const english = readFileSync(englishFile, "utf8");
+  const available = anchors(translated);
+  for (const id of anchors(english)) {
+    if (!available.has(id)) errors.push(`${name}: add <span id="${id}" /> before the matching section`);
+  }
+
+  const recorded = translated.match(/^---\n[\s\S]*?^translatedFrom:\s*(\S+)\s*$[\s\S]*?^---$/m)?.[1];
+  const current = sourceHash(english);
   if (!recorded) {
     errors.push(`${name}: add "translatedFrom: ${current}" to the frontmatter`);
   } else if (recorded !== current) {

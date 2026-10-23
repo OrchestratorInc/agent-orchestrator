@@ -3,7 +3,7 @@
 import { setupI18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
 import { RootProvider } from "fumadocs-ui/provider/next";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { CATALOGS } from "@/i18n/catalogs";
 import {
@@ -18,6 +18,15 @@ import {
 import { localePath, splitLocalePath, type Translations, withTrailingSlash } from "@/i18n/paths";
 import { frameworkTranslations } from "@/i18n/ui-messages";
 import { DocsSearchDialog } from "./search-dialog";
+
+/**
+ * The URL of `path` with the current query and section, so a reader moved to
+ * another language keeps both. Each language has its own root layout, so the
+ * move is a full page load, and the browser then scrolls to the section.
+ */
+function withLocationSuffix(path: string): string {
+  return `${path}${window.location.search}${window.location.hash}`;
+}
 
 const LOCALE_ITEMS = SUPPORTED_LOCALES.map((locale) => ({ locale, name: LOCALE_LABELS[locale] }));
 const ONE_YEAR = 60 * 60 * 24 * 365;
@@ -40,7 +49,6 @@ export function Providers({
   translations?: Translations;
   children: ReactNode;
 }) {
-  const router = useRouter();
   const pathname = usePathname();
   // Null until the cookie is read. Renders in English meanwhile, so the
   // first render matches the prerendered HTML.
@@ -62,8 +70,8 @@ export function Providers({
   useEffect(() => {
     if (urlLocale || !saved || saved === DEFAULT_LOCALE) return;
     const path = withTrailingSlash(pathname);
-    if (translations[path]?.includes(saved)) router.replace(localePath(path, saved));
-  }, [urlLocale, saved, pathname, translations, router]);
+    if (translations[path]?.includes(saved)) window.location.replace(withLocationSuffix(localePath(path, saved)));
+  }, [urlLocale, saved, pathname, translations]);
 
   const i18n = useMemo(
     () => setupI18n({ locale, messages: { [locale]: CATALOGS[locale] } }),
@@ -77,15 +85,15 @@ export function Providers({
       document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
       const { path } = splitLocalePath(pathname);
       if (next !== DEFAULT_LOCALE && translations[path]?.includes(next)) {
-        router.push(localePath(path, next));
+        window.location.assign(withLocationSuffix(localePath(path, next)));
       } else if (urlLocale) {
         // No translation in that language, so go to the English article.
-        router.push(path);
+        window.location.assign(withLocationSuffix(path));
       } else {
         setSaved(next);
       }
     },
-    [pathname, translations, urlLocale, router],
+    [pathname, translations, urlLocale],
   );
 
   return (

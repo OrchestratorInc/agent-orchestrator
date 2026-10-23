@@ -10,6 +10,7 @@ translatedFrom: ec341474c9bc
 	安装 Orchestrator；如果你使用 GitHub 项目，请用 `gh` 登录。如果你选择外部编程代理，请安装它并完成登录。Orchestrator 把这些工具称为 harness。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。请参阅[安装](/installation)。
 </Callout>
 
+<span id="pick-a-safe-first-task" />
 ## 选择一个稳妥的首个任务
 
 选择一个你可以创建分支和拉取请求的仓库。好的首个任务有明确的完成标准：
@@ -19,11 +20,13 @@ translatedFrom: ec341474c9bc
 - 更新一篇简短的文档页面。
 - 进行一次范围小、验收标准明确的重构。
 
+<span id="run-the-first-session" />
 ## 运行第一个会话
 
 <Steps>
 <Step>
 
+<span id="add-the-repository" />
 ### 添加仓库
 
 打开 Orchestrator，选择 **Add project**，然后选择本地仓库。桌面应用会登记该仓库，并保持原来的检出目录不变。
@@ -31,6 +34,7 @@ translatedFrom: ec341474c9bc
 </Step>
 <Step>
 
+<span id="create-a-worker" />
 ### 创建 worker
 
 在项目中新建一个任务，输入简短的名称和具体的提示词。选择一个可用的编程代理。外部代理在安装后才会出现；Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat。Orchestrator 在 Settings 的 **Harness** 下列出代理。
@@ -45,6 +49,7 @@ translatedFrom: ec341474c9bc
 </Step>
 <Step>
 
+<span id="follow-the-session" />
 ### 跟进会话
 
 在侧边栏或看板中选择该会话。主窗格显示它的 Chat 对话或实时终端。检查器显示会话详情、拉取请求状态、审查、已更改的文件和浏览器预览。
@@ -54,6 +59,7 @@ Orchestrator 会把活跃、空闲、等待输入、受阻或已退出等活动�
 </Step>
 <Step>
 
+<span id="give-feedback" />
 ### 提供反馈
 
 使用 Chat 输入框或会话的消息控件发送后续指令。修改意见要具体：
@@ -67,6 +73,7 @@ Keep this change limited to the API route. Do not refactor the shared client.
 </Step>
 <Step>
 
+<span id="review-the-pull-request" />
 ### 审查拉取请求
 
 在 worker 创建或认领拉取请求后，Orchestrator 会显示 CI、审查者、未解决的审查评论和可合并状态的简要概览。你可以运行审查代理、把要求的修改发回给 worker、解决评论，或在合适时进行合并。
@@ -76,6 +83,7 @@ Orchestrator 绝不会强制删除有未提交更改的工作树。当无法安�
 </Step>
 </Steps>
 
+<span id="try-a-browser-preview" />
 ## 试用浏览器预览
 
 对于 Web 任务，在会话中启动应用，然后用可选的 CLI 选择它的 URL：
@@ -86,12 +94,14 @@ ao preview http://127.0.0.1:5173
 
 如果仓库包含 `.ao/launch.json`，`ao preview start` 可以启动已配置的开发服务器。Browser 标签页随后会显示所选的目标。Orchestrator 不会仅仅因为存在 worker 就去猜测预览目标。
 
+<span id="try-switching-interfaces" />
 ## 试用界面切换
 
 受支持的会话会显示 **Switch to chat UI** 或 **Switch to terminal UI**。是否显示取决于代理以及它是否正在工作。Orchestrator 会保持同一个会话和工作树，一次替换一个控制器。
 
 如果出现 **Finish work, then switch**，它会等待已接受的工作完成。**Stop now and switch** 会中断工作。有些终端会话需要 **Terminate and then switch**。请仔细阅读对话框，因为草稿、附件或排队中的轮次可能需要重新发送。关于对话历史的详细说明，请参阅[仪表板：切换界面](/dashboard#switch-interfaces)。
 
+<span id="optional-cli" />
 ## 可选的 CLI
 
 CLI 是连接应用所管理的守护进程的轻量客户端。它适合脚本和以终端为主的工作流，但日常使用桌面应用时并不需要。
@@ -106,6 +116,7 @@ ao send --session <session-id> --message "Run the focused tests before you finis
 
 <span id="next" />
 
+<span id="next-steps" />
 ## 下一步
 
 <Cards>
