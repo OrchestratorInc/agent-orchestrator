@@ -174,6 +174,8 @@ describe("ReauthBanner", () => {
 			accountsMock.session = { claude: "team" };
 			accountsMock.accounts = [team];
 			accountsMock.actions.signInAgain.mockResolvedValue({ operationId: "op1", provider: "claude" });
+			// The sign-in is still open when the test unmounts, which cancels it.
+			accountsMock.actions.cancelLogin.mockResolvedValue(undefined);
 			render(<ReauthBanner sessionId="s1" hostId="host-a" createMux={() => ({}) as never} account={failed} harness="claude-code" />);
 			expect(accountsMock.hostOf).toHaveBeenCalledWith("session", "host-a");
 			expect(accountsMock.hostOf).toHaveBeenCalledWith("accounts", "host-a");
