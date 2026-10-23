@@ -1279,24 +1279,30 @@ func (c *client) connect(
 	return resp, nil
 }
 
-// bootstrapAttempts bounds how often a worker retries its first request when
-// the network drops it (about 3.75s of backoff in all). Without it, one dropped
-// connection at startup strands the session until the control plane's startup
-// deadline replaces the sandbox.
-const bootstrapAttempts = 5
+// bootstrapRetryBudget bounds how long a worker keeps retrying its first
+// request when the network drops it or the control plane fails it. Without it,
+// one dropped connection or a slow control plane at startup strands the session
+// until the startup ceiling. It stays inside the control plane's
+// postgres.WorkerBootstrapRetryWindow, the time a redeemed ticket can be
+// redeemed again, measured from the first attempt that reached it.
+var (
+	bootstrapRetryBudget   = 8 * time.Minute
+	bootstrapRetryMaxDelay = 15 * time.Second
+)
 
-// bootstrapWithRetry retries only transport failures. An HTTP error status is
-// returned at once: the ticket is single-use, so a request the control plane
-// already answered must not be replayed. A transport failure after the ticket
-// was spent is answered on retry with a clean rejection, no worse than failing.
+// bootstrapWithRetry retries transport failures and server errors (5xx). The
+// control plane answers a retry of a ticket whose response was lost with the
+// same epoch, until a worker checks in on it. Any other HTTP error is the
+// control plane's answer and is returned at once; an older control plane
+// rejects a retried spent ticket that way, no worse than failing.
 func (c *client) bootstrapWithRetry(
 	ctx context.Context, logger *slog.Logger, bootstrapToken string,
 ) (worker.BootstrapResponse, error) {
+	deadline := time.Now().Add(bootstrapRetryBudget)
 	delay := 250 * time.Millisecond
 	for attempt := 1; ; attempt++ {
 		resp, err := c.bootstrap(ctx, bootstrapToken)
-		var transport *url.Error
-		if err == nil || !errors.As(err, &transport) || attempt == bootstrapAttempts {
+		if err == nil || !retryableBootstrapError(err) || time.Now().Add(delay).After(deadline) {
 			return resp, err
 		}
 		logger.Warn("worker bootstrap request failed; retrying", "attempt", attempt, "error", err)
@@ -1305,8 +1311,26 @@ func (c *client) bootstrapWithRetry(
 			return resp, err
 		case <-time.After(delay):
 		}
-		delay *= 2
+		delay = min(delay*2, bootstrapRetryMaxDelay)
 	}
+}
+
+func retryableBootstrapError(err error) bool {
+	var transport *url.Error
+	var status *httpStatusError
+	return errors.As(err, &transport) || (errors.As(err, &status) && status.code >= 500)
+}
+
+// httpStatusError is a control plane response outside 2xx that has no more
+// specific error.
+type httpStatusError struct {
+	path string
+	code int
+	body string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s returned %d: %s", e.path, e.code, e.body)
 }
 
 func (c *client) loadPersistedToken() string {
@@ -1868,7 +1892,7 @@ func (c *client) doMethod(
 			bytes.Contains(snippet, []byte("CHECKOUT_NOT_AUTHORIZED")) {
 			return errCheckoutForbidden
 		}
-		return fmt.Errorf("%s returned %d: %s", path, response.StatusCode, strings.TrimSpace(string(snippet)))
+		return &httpStatusError{path: path, code: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if out == nil {
 		return nil
