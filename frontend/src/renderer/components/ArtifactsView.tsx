@@ -60,6 +60,7 @@ export function ArtifactsView() {
 		[groups, query, projectId, scratchpadName],
 	);
 	const hasArtifacts = artifactCount(groups) > 0;
+	const showProjectSections = visibleGroups.length > 1;
 	const cards = useMemo(
 		() => visibleGroups
 			.flatMap((group) => group.rows.map((row) => ({
@@ -179,11 +180,11 @@ export function ArtifactsView() {
 											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName />
 										))}
 									</ArtifactSection> : null}
-									<ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
+									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
 											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName />
 										))}
-									</ArtifactSection>
+									</ArtifactSection> : null}
 									{visibleGroups.map((group) => {
 										const projectName = group.isScratchpad ? t("standalone.workspaceName") : group.name;
 										return (
@@ -193,6 +194,7 @@ export function ArtifactsView() {
 												name={projectName}
 												icon={group.isScratchpad ? File : group.cloud ? Cloud : Folder}
 												view={view}
+												collapsible={showProjectSections}
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
 											>
 												{group.rows.map((row) => (
@@ -214,21 +216,22 @@ export function ArtifactsView() {
 	);
 }
 
-function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, view }: {
+function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, view, collapsible = true }: {
 	sectionId: string;
 	name: string;
 	icon: typeof Folder;
 	updatedAt?: string;
 	children: ReactNode;
 	view: ArtifactViewMode;
+	collapsible?: boolean;
 }) {
 	const { t } = useTranslation();
-	const expanded = useArtifactsViewStore((state) => !state.collapsedSections.includes(sectionId));
+	const expanded = useArtifactsViewStore((state) => !collapsible || !state.collapsedSections.includes(sectionId));
 	const toggleSection = useArtifactsViewStore((state) => state.toggleSection);
 	const gridId = useId();
 	return (
 		<section aria-label={name} className={expanded ? "mb-3" : undefined}>
-			<header>
+			{collapsible ? <header>
 				<h2>
 					<button
 						type="button"
@@ -250,7 +253,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 						<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground", !expanded && "-rotate-90")} />
 					</button>
 				</h2>
-			</header>
+			</header> : null}
 			<ul id={gridId} aria-label={name} hidden={!expanded} className={expanded ? (view === "gallery" ? ARTIFACT_GRID_CLASS : "grid gap-2") : "hidden"}>
 				{children}
 			</ul>
