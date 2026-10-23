@@ -6,6 +6,7 @@ import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, reval
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
 import { LOCAL_HOST } from "../../lib/hosts";
+import { TaskModelSelection } from "../TaskModelControls";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
@@ -14,7 +15,7 @@ import { cn } from "../../lib/utils";
 
 export function AgentModelField({
 	role,
-	label: labelOverride,
+	variant = "settings",
 	agentId,
 	projectId,
 	hostId,
@@ -32,7 +33,7 @@ export function AgentModelField({
 	independentMode = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
-	label?: string;
+	variant?: "settings" | "task";
 	agentId: string;
 	projectId: string;
 	hostId?: string;
@@ -71,11 +72,25 @@ export function AgentModelField({
 		}
 	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
 	const isMode = !independentMode && catalog?.selectionMode === "mode";
-	const label = labelOverride ?? t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
+	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
 	const warning =
 		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
 		catalog?.warning ??
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
+
+	if (variant === "task") {
+		return <>
+			<TaskModelSelection id="automation-model" fetching={query.isFetching} agentId={agentId} agentLabel={agentId} projectId={projectId}
+				catalog={catalog ? { ...catalog, models: offeredModels } : undefined}
+				value={model} mode={mode} effort={effort}
+				disabled={agentId === "" || (query.isFetching && !catalog)}
+				onModelChange={onModelChange} onModeChange={onModeChange} onEffortChange={onEffortChange}
+				onValidityChange={onValidityChange}
+				onRefresh={async () => { const refreshed = await refreshAgentModels(agentId, projectId, hostId); queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed); }}
+			/>
+			{warning ? <p className="text-xs text-warning">{warning}</p> : null}
+		</>;
+	}
 
 	if (isMode) {
 		const defaultMode = followCatalogDefaults ? offeredModels.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";

@@ -132,6 +132,9 @@ describe("AutomationsView", () => {
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
 		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
+		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveClass("composer-chip");
+		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveClass("composer-chip");
+		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
 		await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ model: "capable", effort: "low" }));
@@ -145,11 +148,11 @@ describe("AutomationsView", () => {
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 		const picker = await within(dialog).findByRole("button", { name: "Model" });
 		expect(picker).toHaveTextContent("Capable");
-		expect(picker).toHaveTextContent("High");
+		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveTextContent("High");
 		await user.click(picker);
 		await user.click(screen.getByRole("menuitem", { name: "Plain" }));
 		expect(picker).toHaveTextContent("Plain");
-		expect(picker).not.toHaveTextContent("High");
+		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ model: "plain", effort: "" }) });
 	});
