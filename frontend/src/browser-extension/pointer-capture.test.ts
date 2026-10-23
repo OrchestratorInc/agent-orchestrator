@@ -33,6 +33,16 @@ describe("isolated mouse capture cleanup", () => {
 		expect(release).toHaveBeenCalledWith(47);
 	});
 
+	it("tracks a held mouse entering a frame and ignores unpressed movement", () => {
+		const listen = vi.spyOn(window, "addEventListener").mockImplementation(() => undefined);
+		mouseCapture("track");
+		const observe = listen.mock.calls.find(([name]) => name === "pointermove")![1] as (event: Partial<PointerEvent>) => void;
+		observe({ isTrusted: true, pointerType: "mouse", pointerId: 47, buttons: 0 });
+		expect(mouseCapture("release")).toBe("idle");
+		observe({ isTrusted: true, pointerType: "mouse", pointerId: 47, buttons: 1 });
+		expect(mouseCapture("release")).toBe(true);
+	});
+
 	it("refuses an unprepared document", () => {
 		expect(mouseCapture("release")).toBe(false);
 	});

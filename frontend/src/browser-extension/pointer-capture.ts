@@ -12,9 +12,12 @@ export function mouseCapture(action: "track" | "release"): boolean | "idle" {
 		if (!world.aoMouseCapture) {
 			const state: { pointerId?: number } = {};
 			world.aoMouseCapture = state;
-			window.addEventListener("pointerdown", (event) => {
-				if (event.isTrusted && event.pointerType === "mouse") state.pointerId = event.pointerId;
-			}, true);
+			const observe = (event: PointerEvent) => {
+				if (event.isTrusted && event.pointerType === "mouse" && event.buttons !== 0) state.pointerId = event.pointerId;
+			};
+			window.addEventListener("pointerdown", observe, true);
+			// A held drag may enter a different frame, which can then capture it.
+			window.addEventListener("pointermove", observe, true);
 		}
 		world.aoMouseCapture.pointerId = undefined;
 		return true;
