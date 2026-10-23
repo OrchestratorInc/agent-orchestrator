@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, Check, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -297,6 +297,7 @@ function FormRequest({
 	const schema = activity.detail?.schema;
 	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
 	const questionGroups = useMemo(() => claudeQuestionGroups(properties), [properties]);
+	const otherAnswers = useMemo(() => otherAnswerFields(properties), [properties]);
 	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
 	const [values, setValues] = useState<Record<string, InputValue>>(() => initialValues(properties));
 	const [missing, setMissing] = useState<Set<string>>(new Set());
@@ -306,6 +307,19 @@ function FormRequest({
 	const hasPreviousQuestion = questionGroups !== undefined && activeQuestion > 0;
 	const hasNextQuestion = questionGroups !== undefined && activeQuestion < questionGroups.length - 1;
 	const headerId = useId();
+	const formRef = useRef<HTMLFormElement>(null);
+	const shownQuestion = useRef(activeQuestion);
+
+	// Changing question unmounts the focused choice (and Back, on the first
+	// question), which drops focus out of the card. Put it on the new question so
+	// the next number key and Enter still reach it.
+	useEffect(() => {
+		if (shownQuestion.current === activeQuestion) return;
+		shownQuestion.current = activeQuestion;
+		const form = formRef.current;
+		if (!form || form.contains(document.activeElement)) return;
+		(form.querySelector<HTMLInputElement>("input:checked") ?? form.querySelector<HTMLInputElement>("input"))?.focus();
+	}, [activeQuestion]);
 
 	// Claude puts a single prompt in message and each prompt of a multi-question
 	// form in its field description. The field title is only a short topic label.
@@ -344,9 +358,15 @@ function FormRequest({
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
+		// A marked Other answer stands in for its question's choice; the daemon
+		// accepts it in the question's place on the same marker.
 		const absent = new Set(
 			visibleProperties
-				.filter(([name]) => required.has(name) && isEmpty(values[name]) && isEmpty(values[`${name}_custom`]))
+				.filter(([name]) => {
+					if (!required.has(name) || !isEmpty(values[name])) return false;
+					const other = otherAnswers.get(name);
+					return other === undefined || isBlank(values[other]);
+				})
 				.map(([name]) => name),
 		);
 		setMissing(absent);
@@ -359,7 +379,7 @@ function FormRequest({
 	}
 
 	return (
-		<form onSubmit={submit} onKeyDown={pickByNumber}>
+		<form ref={formRef} onSubmit={submit} onKeyDown={pickByNumber}>
 			<DockHeader
 				id={headerId}
 				title={title}
@@ -389,14 +409,15 @@ function FormRequest({
 							labelledBy={questionGroups && index === 0 ? headerId : undefined}
 							rows={Boolean(questionGroups)}
 							onChange={(value) => {
-								// A choice and an "Other" answer are alternatives: picking one
-								// clears the other so it is always clear which one is sent.
-								const question = name.endsWith("_custom") ? name.slice(0, -"_custom".length) : undefined;
-								const sibling = question ?? (questionGroups ? `${name}_custom` : undefined);
+								// A choice and its marked "Other" answer are alternatives: picking
+								// one clears the other so it is always clear which one is sent.
+								// Unmarked fields are independent, whatever their names.
+								const question = [...otherAnswers].find(([, other]) => other === name)?.[0];
+								const sibling = question ?? otherAnswers.get(name);
 								setValues((current) => {
 									const next: Record<string, InputValue> = { ...current, [name]: value };
 									const singleChoice = sibling && !Array.isArray(current[question ?? name]) && !Array.isArray(value);
-									if (singleChoice && !isEmpty(value) && sibling in current) delete next[sibling];
+									if (singleChoice && !isBlank(value) && sibling in current) delete next[sibling];
 									return next;
 								});
 								setMissing((current) => {
@@ -661,7 +682,9 @@ function FormField({
 	if (rows) {
 		return (
 			<>
-				<div className="mx-2 mt-0.5 flex min-w-0 items-center gap-3 rounded-lg px-2 py-1">
+				{/* The field itself is borderless here and global CSS strips rings from
+				    the focused element, so the row carries focus like a choice row does. */}
+				<div className="mx-2 mt-0.5 flex min-w-0 items-center gap-3 rounded-lg px-2 py-1 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40">
 					<span aria-hidden="true" className="grid size-[18px] shrink-0 place-items-center rounded-[5px] border text-[10px] font-medium leading-none tabular-nums transition-colors border-border-strong text-muted-foreground">
 						0
 					</span>
@@ -751,6 +774,25 @@ function claudeQuestionGroups(properties: PropertyEntry[]): PropertyEntry[][] | 
 	return ordered;
 }
 
+/**
+ * Marks the free-text "Other" field an AskUserQuestion bridge (claude-agent-acp)
+ * adds after each question. The daemon recognises the same marker
+ * (`askUserQuestionCustomAnswerMetaKey` in chatdriver/acp).
+ */
+const CUSTOM_ANSWER_META_KEY = "_askUserQuestionCustomAnswer";
+
+/** Each marked question mapped to the field that answers it in free text. */
+function otherAnswerFields(properties: PropertyEntry[]): Map<string, string> {
+	const names = new Set(properties.map(([name]) => name));
+	const fields = new Map<string, string>();
+	for (const [name, property] of properties) {
+		const marker = isRecord(property._meta) ? property._meta[CUSTOM_ANSWER_META_KEY] : undefined;
+		if (!isRecord(marker) || marker.isCustomAnswer !== true || typeof marker.questionId !== "string") continue;
+		if (marker.questionId !== name && names.has(marker.questionId)) fields.set(marker.questionId, name);
+	}
+	return fields;
+}
+
 function initialValues(properties: PropertyEntry[]): Record<string, InputValue> {
 	const values: Record<string, InputValue> = {};
 	for (const [name, property] of properties) {
@@ -782,6 +824,11 @@ function toggleValue(values: string[], value: string): string[] {
 
 function isEmpty(value: InputValue | undefined): boolean {
 	return value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+/** Empty, or text that is only whitespace, which the adapter ignores as an Other answer. */
+function isBlank(value: InputValue | undefined): boolean {
+	return typeof value === "string" ? value.trim() === "" : isEmpty(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

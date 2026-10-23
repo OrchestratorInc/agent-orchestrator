@@ -424,15 +424,24 @@ func validateInputResponse(request ports.ChatInputRequest, response ports.ChatIn
 }
 
 func validateFormContent(schema, content map[string]any) error {
+	properties, _ := schema["properties"].(map[string]any)
+	customAnswers := formCustomAnswers(properties)
 	for _, name := range formRequired(schema["required"]) {
 		if name == "" {
 			continue
 		}
-		if _, present := content[name]; !present {
-			return fmt.Errorf("required input %q is missing", name)
+		if _, present := content[name]; present {
+			continue
 		}
+		// A typed "Other" answer stands in for the choice it replaces; the adapter
+		// records it as the question's answer.
+		if custom, ok := customAnswers[name]; ok {
+			if text, _ := content[custom].(string); strings.TrimSpace(text) != "" {
+				continue
+			}
+		}
+		return fmt.Errorf("required input %q is missing", name)
 	}
-	properties, _ := schema["properties"].(map[string]any)
 	for name, value := range content {
 		rawProperty, known := properties[name]
 		if !known {
@@ -488,6 +497,34 @@ func validateFormValue(value any, property map[string]any) error {
 		return fmt.Errorf("uses unsupported type %q", typeName)
 	}
 	return nil
+}
+
+// askUserQuestionCustomAnswerMetaKey marks the free-text "Other" field an
+// AskUserQuestion bridge (claude-agent-acp) adds after each question, naming the
+// question it answers. Only this marker makes a field an alternative answer, so a
+// generic form's required fields stay strictly required.
+const askUserQuestionCustomAnswerMetaKey = "_askUserQuestionCustomAnswer"
+
+// formCustomAnswers maps each marked question to the field that answers it in free text.
+func formCustomAnswers(properties map[string]any) map[string]string {
+	var out map[string]string
+	for name, raw := range properties {
+		property, _ := raw.(map[string]any)
+		meta, _ := property["_meta"].(map[string]any)
+		marker, _ := meta[askUserQuestionCustomAnswerMetaKey].(map[string]any)
+		question, _ := marker["questionId"].(string)
+		if marker["isCustomAnswer"] != true || question == "" || question == name {
+			continue
+		}
+		if _, known := properties[question]; !known {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[question] = name
+	}
+	return out
 }
 
 func formRequired(value any) []string {

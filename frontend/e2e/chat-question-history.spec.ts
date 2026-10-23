@@ -20,7 +20,7 @@ test("question replies remain readable after another question and a reload @T0",
 			inputMode: "form", message: prompt,
 			schema: { type: "object", properties: {
 				question_0: { type: "string", title: "Delete", oneOf: [{ const: "safe", title: "fix/login", description: "Merged with no local changes" }] },
-				question_0_custom: { type: "string", title: "Other" },
+				question_0_custom: { type: "string", title: "Other", _meta: { _askUserQuestionCustomAnswer: { questionId: "question_0", isCustomAnswer: true } } },
 			} },
 		},
 	};
@@ -57,6 +57,19 @@ test("question replies remain readable after another question and a reload @T0",
 	await expect(page.getByRole("log", { name: "Conversation" })).toBeVisible({ timeout: 15_000 });
 	const dock = page.getByTestId("elicitation-composer-dock");
 	await expect(dock.getByText(prompt)).toBeVisible();
+	// The borderless Other field shows focus on its row, by Tab and by its 0 key.
+	const other = dock.getByRole("textbox", { name: "Other" });
+	const otherRowShadow = () => other.locator("xpath=../..").evaluate((row) => getComputedStyle(row).boxShadow);
+	await expect.poll(otherRowShadow).toBe("none");
+	await dock.getByRole("radio", { name: /fix\/login/ }).focus();
+	await page.keyboard.press("Tab");
+	await expect(other).toBeFocused();
+	await expect.poll(otherRowShadow).not.toBe("none");
+	await dock.getByRole("radio", { name: /fix\/login/ }).focus();
+	await expect.poll(otherRowShadow).toBe("none");
+	await page.keyboard.press("0");
+	await expect(other).toBeFocused();
+	await expect.poll(otherRowShadow).not.toBe("none");
 	await dock.getByRole("radio", { name: /fix\/login/ }).check();
 	// A choice and an Other answer are alternatives: typing replaces the pick.
 	await dock.getByRole("textbox", { name: "Other" }).fill(feedback);
