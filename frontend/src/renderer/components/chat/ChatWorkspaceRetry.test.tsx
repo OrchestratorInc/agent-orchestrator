@@ -193,6 +193,33 @@ describe("ChatWorkspace retry", () => {
 		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
 	});
 
+	it.each([1, 2])("keeps one retry for a failed turn after %i steers", async (steerCount) => {
+		const snapshot = failedSnapshot();
+		const createdAt = snapshot.turns[0]!.requestedAt;
+		snapshot.items = [...snapshot.items];
+		for (let index = 0; index < steerCount; index += 1) {
+			snapshot.items.push({
+				kind: "activity",
+				id: `steer-${index}`,
+				turnId: "turn-1",
+				sequence: ++snapshot.latestSequence,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: "Only run the unit tests",
+				detail: { event: "steer", text: "Only run the unit tests", origin: "human" },
+				createdAt,
+			});
+		}
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: onRetryTurn }} />);
+
+		const retries = screen.getAllByRole("button", { name: "Retry this turn" });
+		expect(retries).toHaveLength(1);
+		await userEvent.click(retries[0]!);
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
 	it("draws no retry control for a turn that succeeded", () => {
 		// The idle fixture has only completed turns, so retry must be absent.
 		const completed = {
