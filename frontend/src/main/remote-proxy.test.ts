@@ -1772,9 +1772,9 @@ describe("remote mobile control browser boundary", () => {
 		expect(trusted.status).toBe(200);
 		expect(seen[0].auth).toBe("Bearer pw");
 		expect(fetchSites[0]).toBeUndefined();
-		// The guard is scoped to controls; protected media still has its old transport.
-		const media = await fetch(`${proxy.base}/api/v1/sessions/s1/workspace/file/blob`, { headers: { "sec-fetch-site": "cross-site" } });
+		// Protected media retains main's trusted-renderer browser boundary.
+		const media = await fetch(`${proxy.base}/api/v1/sessions/s1/workspace/file/blob`, { headers: { Origin: "app://renderer", "sec-fetch-site": "cross-site" } });
 		expect(media.status).toBe(200);
-		expect(fetchSites[1]).toBe("cross-site");
+		expect(fetchSites[1]).toBeUndefined();
 	});
 });

@@ -8,7 +8,7 @@ import (
 )
 
 // Mobile controls create remote access and disclose pairing credentials. They
-// must not inherit the general API's localhost/preview-origin CORS exception.
+// require exact renderer origins even when other APIs allow paired mobile clients.
 // Run this before CORS so rejected preflights cannot acquire a browser grant.
 func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
