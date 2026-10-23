@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
-import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, isWaitingForIdleJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
+import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
 import { useLiveBrowserViewportRect, type ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { useWorkspaceTopbarBottom } from "../hooks/useWorkspaceTopbarBottom";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
@@ -15,7 +15,6 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { MiddleTruncatedText } from "./MiddleTruncatedText";
-import { HarnessSessionsDialog, IdleUpdateStatus } from "./settings/harness/HarnessSessionsDialog";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -55,8 +54,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const [startingAll, setStartingAll] = useState(false);
 	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
 	// Sessions a click-time check found that must end first.
-	const [inUse, setInUse] = useState<Partial<Record<AgentId, HarnessInUse>>>({});
-	const [sessionsView, setSessionsView] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
 	const [updateAllSummary, setUpdateAllSummary] = useState<string | null>(null);
 	const startedJobs = useRef(new Set<AgentId>());
 	// The advisory each update started here acted on, so its failure can still
@@ -108,11 +105,13 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		startingRef.current.add(agentId);
 		setStarting((current) => new Set([...current, agentId]));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
-		setInUse((current) => ({ ...current, [agentId]: undefined }));
 		try {
 			const result = await startHarnessUpdate({ agentId, methodId });
 			if (result.inUse) {
-				setInUse((current) => ({ ...current, [agentId]: result.inUse }));
+				// The notice only updates; a refusal is explained, never a session list.
+				const refusal = result.inUse.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) })
+					: t("settings.harness.inUseBlocked", { count: result.inUse.count, agent: agentLabel(agentId) });
+				setErrors((current) => ({ ...current, [agentId]: refusal }));
 				return result.inUse;
 			}
 			// The click-time check may have moved the target to a newer release.
@@ -276,14 +275,10 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				// A job this notice started that failed stays explained here.
 				const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
-				// The click-time check outranks the cached advisory once it has answered.
-				const sessions = inUse[agentId] ?? advisoryInUse(advisory);
 				// A start error means this attempt made no job; any retained job is an older one.
 				const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
 				const requestAction = () => {
 					if (!needsLogin && method) {
-						// A harness that was only starting is retried, never shown as sessions.
-						if (sessions && !sessions.starting) { setSessionsView({ agentId, inUse: sessions }); return; }
 						void startUpdate(agentId, advisory, method.id);
 						return;
 					}
@@ -298,9 +293,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-caption"><MiddleTruncatedText className="whitespace-nowrap font-mono text-settings-label" text={versionLabel(advisory.currentVersion!)} /><ArrowRight className="size-3 shrink-0 text-settings-muted" role="img" aria-label={t("settings.harness.availableVersion")} /><MiddleTruncatedText className="whitespace-nowrap font-mono font-medium text-settings-accent" text={versionLabel(advisory.latestVersion!)} /></p>
-					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
+					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t("settings.harness.updating")}</Button>
 						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
-							: sessions ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
 							: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
 						: ready && !needsLogin && plan?.documentationUrl ? <Tooltip>
 							<TooltipTrigger asChild><Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
@@ -313,27 +307,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						<p role="alert" className="break-words text-caption text-error">{error}</p>
 						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 					</div> : null}
-					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
-					{!error && !busy && inUse[agentId] ? <p role="status" className="mt-1 break-words text-caption text-settings-muted">
-						{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}
-					</p> : null}
 				</article>;
 			})}
 			{updateAllSummary && !startingAll ? <p role="status" className="rounded-xl border border-border bg-card px-2.5 py-2 text-caption text-settings-muted shadow-md">{updateAllSummary}</p> : null}
 		</div>
 		</div>
-		<HarnessSessionsDialog
-			agentId={sessionsView?.agentId ?? null}
-			inUse={sessionsView?.inUse}
-			onOpenChange={(open) => {
-				if (open || !sessionsView) return;
-				// The click-time answer is a snapshot: once its sessions are seen, the
-				// next click checks again instead of reopening the same list.
-				const { agentId } = sessionsView;
-				setInUse((current) => ({ ...current, [agentId]: undefined }));
-				setSessionsView(null);
-			}}
-		/>
 	</NoticeFrame>, document.body);
 }
 
