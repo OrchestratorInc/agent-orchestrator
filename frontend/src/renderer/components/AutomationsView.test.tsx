@@ -199,7 +199,7 @@ describe("AutomationsView", () => {
 			await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		} else {
 			await user.click(await within(dialog).findByRole("button", { name: "Model" }));
-			await user.click(screen.getByRole("menuitemradio", { name: "Rush" }));
+			await user.click(screen.getByRole("menuitem", { name: "Rush" }));
 		}
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: mocks.defaultWorker, [field]: field === "effort" ? "low" : "rush" }) });
