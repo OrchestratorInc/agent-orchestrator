@@ -867,6 +867,9 @@ export function CloudSessionChatSurface({
 		};
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
+		// The owner's window shares the worker's model with the session, so the
+		// others see, and their turns run with, the model the owner sees.
+		if (live?.canConfigure) shareSettings.mutate(next);
 		// The native model and effort are saved; the approval mode stays the one
 		// the user picked in this session, if any.
 		try { writeCloudTurnSettings(settingsKey, { ...next, approvalMode: readCloudTurnSettings(settingsKey).approvalMode }); } catch { /* keep the mounted choice */ }
