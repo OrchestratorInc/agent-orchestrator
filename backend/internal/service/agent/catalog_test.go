@@ -2794,6 +2794,8 @@ func TestStartupPrefetchIgnoresRetiredSettingsCatalog(t *testing.T) {
 	}
 	if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "fx", ""); !ok {
 		t.Fatal("missing shared catalog")
+	}
+}
 
 func TestModelsAppliesModelGateWithoutCachingItsResult(t *testing.T) {
 	cache := &fakeModelCache{}
