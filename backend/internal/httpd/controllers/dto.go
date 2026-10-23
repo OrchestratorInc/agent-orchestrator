@@ -263,6 +263,9 @@ type ListSessionsQuery struct {
 	Active           *bool  `query:"active,omitempty" description:"When true, return non-terminated sessions; when false, return terminated sessions."`
 	OrchestratorOnly *bool  `query:"orchestratorOnly,omitempty" description:"When true, return only orchestrator sessions."`
 	Fresh            *bool  `query:"fresh,omitempty" description:"When true, return only fresh non-terminated sessions."`
+	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator" description:"Session kind filter. worker keeps every session that is not an orchestrator."`
+	Limit            int    `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned."`
+	Cursor           string `query:"cursor,omitempty" description:"Opaque cursor returned by the previous page. Requires limit."`
 }
 
 // CleanupSessionsQuery is the query string accepted by POST /api/v1/sessions/cleanup.
@@ -499,6 +502,20 @@ type SessionArtifactView struct {
 // ListSessionsResponse is the body of GET /api/v1/sessions.
 type ListSessionsResponse struct {
 	Sessions []SessionView `json:"sessions"`
+	// NextCursor resumes a paged list (limit set) after its last session.
+	// Absent on the last page.
+	NextCursor string `json:"nextCursor,omitempty"`
+	// Archived is present when active=true: how many terminated sessions the
+	// same project and kind filters would have matched, so a client can show
+	// the archive's size without downloading it.
+	Archived *SessionArchiveSummary `json:"archived,omitempty"`
+}
+
+// SessionArchiveSummary sizes the archive behind an active-only session list.
+type SessionArchiveSummary struct {
+	Total int `json:"total"`
+	// ByProject counts per project id. Standalone sessions count under "".
+	ByProject map[string]int `json:"byProject"`
 }
 
 // SpawnSessionRequest is the body of POST /api/v1/sessions.

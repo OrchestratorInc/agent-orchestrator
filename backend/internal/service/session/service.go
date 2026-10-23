@@ -65,6 +65,14 @@ type ListFilter struct {
 	Active           *bool
 	OrchestratorOnly bool
 	Fresh            bool
+	// Kind keeps one kind of session. KindWorker matches every session that is
+	// not an orchestrator, so rows written before kinds existed still list.
+	Kind domain.SessionKind
+	// Limit pages the list: at most Limit sessions, pinned first and then most
+	// recently updated, resuming after Cursor. Zero lists every match in store
+	// order, as before paging.
+	Limit  int
+	Cursor string
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -1217,21 +1225,58 @@ func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID)
 
 // List returns sessions as enriched display models after applying API filters.
 func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session, error) {
-	recoveryRevision := s.statusRecoveryRevision()
-	recs, err := s.listRecords(ctx, filter.ProjectID)
+	page, err := s.ListPage(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]domain.SessionRecord, 0, len(recs))
-	ids := make([]domain.SessionID, 0, len(recs))
+	return page.Sessions, nil
+}
+
+// ListPage lists the sessions matching filter, one page at a time when
+// filter.Limit is set, and reports the archive an active-only list left out.
+// The page is chosen from the stored rows before any read-model facts are
+// loaded, so a page of an archive of thousands costs a page's worth of reads.
+func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, error) {
+	recoveryRevision := s.statusRecoveryRevision()
+	if filter.Limit < 0 || filter.Limit > MaxListLimit {
+		return ListPage{}, apierr.Invalid("INVALID_SESSION_LIMIT", fmt.Sprintf("Session list limit must be between 1 and %d", MaxListLimit), nil)
+	}
+	var after *listPageKey
+	if filter.Cursor != "" {
+		if filter.Limit == 0 {
+			return ListPage{}, invalidSessionCursor()
+		}
+		key, err := decodeSessionCursor(filter.Cursor)
+		if err != nil {
+			return ListPage{}, err
+		}
+		after = &key
+	}
+	recs, err := s.listRecords(ctx, filter.ProjectID)
+	if err != nil {
+		return ListPage{}, err
+	}
+	matched, archive := selectSessionRecords(recs, filter)
+	page := ListPage{Archived: archive}
+	if filter.Limit > 0 {
+		matched, page.NextCursor = pageSessionRecords(matched, after, filter.Limit)
+	}
+	page.Sessions, err = s.sessionsFromRecords(ctx, matched, recoveryRevision)
+	if err != nil {
+		return ListPage{}, err
+	}
+	return page, nil
+}
+
+// sessionsFromRecords builds the read model for already-selected rows, batching
+// every per-session fact read so the cost does not grow with the row count.
+func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.SessionRecord, recoveryRevision uint64) ([]domain.Session, error) {
+	ids := make([]domain.SessionID, 0, len(filtered))
 	var archived []domain.SessionID
-	for _, rec := range recs {
-		if matchesSessionFilter(rec, filter) {
-			filtered = append(filtered, rec)
-			ids = append(ids, rec.ID)
-			if rec.IsTerminated {
-				archived = append(archived, rec.ID)
-			}
+	for _, rec := range filtered {
+		ids = append(ids, rec.ID)
+		if rec.IsTerminated {
+			archived = append(archived, rec.ID)
 		}
 	}
 	prsBySession, err := s.store.ListPRFactsForSessions(ctx, ids)
@@ -1297,6 +1342,16 @@ func matchesSessionFilter(rec domain.SessionRecord, filter ListFilter) bool {
 	}
 	if filter.Active != nil && rec.IsTerminated == *filter.Active {
 		return false
+	}
+	switch filter.Kind {
+	case domain.KindOrchestrator:
+		if rec.Kind != domain.KindOrchestrator {
+			return false
+		}
+	case domain.KindWorker:
+		if rec.Kind == domain.KindOrchestrator {
+			return false
+		}
 	}
 	if filter.OrchestratorOnly && rec.Kind != domain.KindOrchestrator {
 		return false
