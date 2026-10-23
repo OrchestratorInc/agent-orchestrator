@@ -221,6 +221,43 @@ func TestFreshInstallOnlyBeforeFirstExportedEvent(t *testing.T) {
 	}
 }
 
+func TestInstallIDCreationRecoversEmptyFileAndConcurrentReaders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, installIDFile)
+	if err := os.WriteFile(path, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want, err := loadOrCreateInstallID(dir)
+	if err != nil || !strings.HasPrefix(want, "ins_") {
+		t.Fatalf("recovered install id = %q, %v", want, err)
+	}
+	if stored, err := readTrimmed(path); err != nil || stored != want {
+		t.Fatalf("stored install id = %q, %v, want %q", stored, err, want)
+	}
+
+	concurrentDir := t.TempDir()
+	type result struct {
+		id  string
+		err error
+	}
+	results := make(chan result, 16)
+	for range cap(results) {
+		go func() {
+			id, err := loadOrCreateInstallID(concurrentDir)
+			results <- result{id, err}
+		}()
+	}
+	for range cap(results) {
+		got := <-results
+		if got.err != nil || !strings.HasPrefix(got.id, "ins_") {
+			t.Fatalf("concurrent install id = %q, %v", got.id, got.err)
+		}
+		if disk, err := readTrimmed(filepath.Join(concurrentDir, installIDFile)); err != nil || disk != got.id {
+			t.Fatalf("published install id = %q, %v, caller saw %q", disk, err, got.id)
+		}
+	}
+}
+
 func TestInstalledEventIsReservedOnceEvenWithoutAnExport(t *testing.T) {
 	dir := t.TempDir()
 	first, err := NewIdentity(dir)

@@ -720,37 +720,43 @@ func versionChannel(appVersion string) string {
 
 func loadOrCreateInstallID(dataDir string) (string, error) {
 	path := filepath.Join(dataDir, installIDFile)
-	if b, err := os.ReadFile(path); err == nil {
-		if id := strings.TrimSpace(string(b)); id != "" {
+	for range 5 {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			if id := strings.TrimSpace(string(b)); id != "" {
+				return id, nil
+			}
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return "", fmt.Errorf("remove empty telemetry install id: %w", err)
+			}
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read telemetry install id: %w", err)
+		}
+
+		id := "ins_" + uuid.NewString()
+		tmp, err := os.CreateTemp(dataDir, ".telemetry_install_id_*")
+		if err != nil {
+			return "", fmt.Errorf("create telemetry install id: %w", err)
+		}
+		if _, err := tmp.WriteString(id + "\n"); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return "", fmt.Errorf("write telemetry install id: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmp.Name())
+			return "", fmt.Errorf("close telemetry install id: %w", err)
+		}
+		err = os.Link(tmp.Name(), path)
+		_ = os.Remove(tmp.Name())
+		if err == nil {
 			return id, nil
 		}
-		return "", fmt.Errorf("empty telemetry install id")
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("read telemetry install id: %w", err)
-	}
-	id := "ins_" + uuid.NewString()
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if os.IsExist(err) {
-		b, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return "", fmt.Errorf("read existing telemetry install id: %w", readErr)
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("publish telemetry install id: %w", err)
 		}
-		if strings.TrimSpace(string(b)) == "" {
-			return "", fmt.Errorf("empty telemetry install id")
-		}
-		return strings.TrimSpace(string(b)), nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("write telemetry install id: %w", err)
-	}
-	if _, err := f.WriteString(id + "\n"); err != nil {
-		_ = f.Close()
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	return id, nil
+	return "", fmt.Errorf("telemetry install id creation did not settle")
 }
 
 // writeFileAtomic swaps data in through a temp file in the same directory, so a

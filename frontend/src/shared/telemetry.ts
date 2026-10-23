@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -63,23 +63,31 @@ export function defaultDataDir(
 
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {
 	const file = path.join(dataDir, "telemetry_install_id");
-	try {
-		const existing = (await readFile(file, "utf8")).trim();
-		if (existing) return existing;
-		throw new Error("empty telemetry install id");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		// Create the id on first use.
-	}
 	await mkdir(dataDir, { recursive: true });
-	const distinctId = `ins_${randomUUID()}`;
-	try {
-		await writeFile(file, `${distinctId}\n`, { mode: 0o600, flag: "wx" });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") return loadOrCreateTelemetryInstallId(dataDir);
-		throw error;
+	for (let attempt = 0; attempt < 5; attempt++) {
+		try {
+			const existing = (await readFile(file, "utf8")).trim();
+			if (existing) return existing;
+			await unlink(file);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+
+		const distinctId = `ins_${randomUUID()}`;
+		const temporary = path.join(dataDir, `.telemetry_install_id_${randomUUID()}`);
+		try {
+			await writeFile(temporary, `${distinctId}\n`, { mode: 0o600, flag: "wx" });
+			await link(temporary, file);
+			return distinctId;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		} finally {
+			await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			});
+		}
 	}
-	return distinctId;
+	throw new Error("telemetry install id creation did not settle");
 }
 
 /**

@@ -39,6 +39,22 @@ test("loadOrCreateTelemetryInstallId persists a stable install id", async () => 
 	expect(stored).toBe(first);
 });
 
+test("loadOrCreateTelemetryInstallId heals an empty file and publishes one id to concurrent callers", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	const file = path.join(dir, "telemetry_install_id");
+	await writeFile(file, " \n");
+	const recovered = await loadOrCreateTelemetryInstallId(dir);
+	expect(recovered).toMatch(/^ins_/);
+	expect((await readFile(file, "utf8")).trim()).toBe(recovered);
+
+	const concurrentDir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(concurrentDir);
+	const ids = await Promise.all(Array.from({ length: 16 }, () => loadOrCreateTelemetryInstallId(concurrentDir)));
+	expect(new Set(ids).size).toBe(1);
+	expect((await readFile(path.join(concurrentDir, "telemetry_install_id"), "utf8")).trim()).toBe(ids[0]);
+});
+
 test("buildTelemetryBootstrap returns null when no home dir is available", async () => {
 	await expect(buildTelemetryBootstrap({}, "1.2.3", "linux", "", true, enabledPolicy)).resolves.toBeNull();
 });
