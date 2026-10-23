@@ -56,7 +56,8 @@ describe("fresh verification", () => {
 		expect(post).toHaveBeenCalledTimes(1);
 		await vi.advanceTimersByTimeAsync(1000);
 		const result = await pending;
-		expect(post.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/{agent}/verify", "/api/v1/agents/{agent}/probe"]);
+		expect(post).toHaveBeenNthCalledWith(1, "/api/v1/agents/{agent}/verify", { params: { path: { agent: "codex" } } });
+		expect(post).toHaveBeenNthCalledWith(2, "/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
 		expect(troubleshootingVerified(result)).toBe(true);
 	});
 
