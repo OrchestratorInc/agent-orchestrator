@@ -965,6 +965,7 @@
 	"mobile.copyPassword": "Copiar contraseña",
 	"mobile.disable": "Desactivar conexión móvil",
 	"mobile.keepAwake.label": "Mantener este Mac activo",
+	"mobile.keepAwake.combinedHelp": "Mantén la conexión desde tu teléfono cuando estés fuera, incluso con la tapa cerrada.",
 	"mobile.keepAwake.help": "Sigue accesible desde tu teléfono mientras no estás.",
 	"mobile.keepAwake.laptopNote": "Cerrar la tapa sigue poniendo el MacBook en reposo, salvo que esté conectado a la corriente y a una pantalla externa.",
 	"mobile.keepAwake.lidLabel": "Mantener activo con la tapa cerrada",

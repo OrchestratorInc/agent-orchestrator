@@ -954,6 +954,7 @@
 	"mobile.copyPassword": "Copy password",
 	"mobile.disable": "Turn off mobile connection",
 	"mobile.keepAwake.label": "Keep this Mac awake",
+	"mobile.keepAwake.combinedHelp": "Stay reachable from your phone while you're away, even with the lid closed.",
 	"mobile.keepAwake.help": "Stay reachable from your phone while you're away.",
 	"mobile.keepAwake.laptopNote": "Closing the lid still puts a MacBook to sleep unless it's plugged in with an external display.",
 	"mobile.keepAwake.lidLabel": "Keep awake with lid closed",
