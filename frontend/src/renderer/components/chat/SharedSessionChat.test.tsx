@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	sendSessionMessage: vi.fn(),
 	steerTurn: vi.fn(),
 	listChatModels: vi.fn(),
+	resumeSession: vi.fn(),
 	acquireComposer: vi.fn(),
 	renewComposer: vi.fn(),
 	releaseComposer: vi.fn(),
@@ -59,11 +60,11 @@ function liveState(
 	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver, you, chatSettings, canConfigure };
 }
 
-function renderSurface() {
+function renderSurface(shown: WorkspaceSession = session) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<CloudSessionChatSurface session={session} />
+			<CloudSessionChatSurface session={shown} />
 		</QueryClientProvider>,
 	);
 }
@@ -81,6 +82,7 @@ describe("shared session chat", () => {
 		mocks.live = undefined;
 		mocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		mocks.listChatModels.mockResolvedValue({ models: [] });
+		mocks.resumeSession.mockResolvedValue(undefined);
 		mocks.sendSessionMessage.mockResolvedValue({ event: {} });
 	});
 
@@ -165,6 +167,23 @@ describe("shared session chat", () => {
 		expect(props.settingsLocked).toBe(false);
 		props.onChooseSettings({ model: "opus", reasoningEffort: "high" }, "model");
 		await waitFor(() => expect(mocks.setSessionChatSettings).toHaveBeenLastCalledWith("org-1", session.id, { model: "opus", reasoningEffort: "high" }));
+	});
+
+	it("shares the worker's model with the session when it replaces the owner's choice", async () => {
+		mocks.setSessionChatSettings.mockResolvedValue({ chatSettings: {} });
+		mocks.listChatModels.mockResolvedValue({ models: [{ id: "gpt-5.5" }], model: "gpt-5.5", reasoningEffort: "high" });
+		mocks.live = liveState({}, [me, alice], true, "user-me", {}, true);
+		renderSurface({ ...session, runtimeConnected: true });
+		await waitFor(() => expect(mocks.setSessionChatSettings).toHaveBeenLastCalledWith("org-1", session.id, { model: "gpt-5.5", reasoningEffort: "high" }));
+	});
+
+	it("never shares the worker's model from a guest's window", async () => {
+		mocks.listChatModels.mockResolvedValue({ models: [{ id: "gpt-5.5" }], model: "gpt-5.5", reasoningEffort: "high" });
+		mocks.live = liveState({}, [me, alice], false, "user-me", { model: "opus" }, false);
+		renderSurface({ ...session, runtimeConnected: true });
+		await waitFor(() => expect(mocks.listChatModels).toHaveBeenCalled());
+		await waitFor(() => expect((mocks.chatProps.mock.lastCall?.[0] as { snapshot: { settings?: { model?: string } } }).snapshot.settings?.model).toBe("opus"));
+		expect(mocks.setSessionChatSettings).not.toHaveBeenCalled();
 	});
 
 	it("locks the chat box for a read-only participant", async () => {
