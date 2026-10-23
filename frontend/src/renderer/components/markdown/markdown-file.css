@@ -9,7 +9,7 @@
 }
 
 .ao-markdown-surface {
-	--markdown-canvas: var(--solid-bg-primary, var(--color-bg-primary));
+	--markdown-canvas: var(--solid-muted, var(--muted));
 	background-color: var(--markdown-canvas);
 }
 
