@@ -15,6 +15,7 @@ import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
 	type WorkspaceSession,
+	type WorkspaceSummary,
 	isOrchestratorSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -63,7 +64,18 @@ type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
 	hostId?: string;
+	remoteWorkspaces?: WorkspaceSummary[];
+	remoteLoading?: boolean;
+	failedHostIds?: string[];
+	onRetryRemoteHosts?: () => void;
 };
+
+const boardSessionKey = (session: WorkspaceSession) => refKey({ host: session.hostId ?? LOCAL_HOST, id: session.id });
+
+function sessionIsConnected(session: WorkspaceSession, connectedHosts: string[], boardHost?: string): boolean {
+	const host = session.hostId ?? boardHost;
+	return !host || connectedHosts.includes(host);
+}
 
 
 // Live merged sessions remain in-flow. A terminated runtime is archived even
@@ -81,12 +93,13 @@ const isMac = isMacPlatform();
 const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
+export function SessionsBoard({ projectId, hostId, remoteWorkspaces = [], remoteLoading = false, failedHostIds = [], onRetryRemoteHosts }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const shell = useShellMaybe();
-	const connected = useConnectedHosts().includes(hostId ?? "");
+	const connectedHosts = useConnectedHosts();
+	const connected = connectedHosts.includes(hostId ?? "");
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
@@ -101,10 +114,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const all = localWorkspaceQuery.data ?? [];
 	const workspaces = hostId
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
-		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
+		: projectId ? all.filter((candidate) => candidate.id === projectId) : [...all, ...remoteWorkspaces];
 	const workspace = projectId ? workspaces[0] : undefined;
-	// Board chrome stays route-oriented; project context remains in the sidebar.
-	const boardLabel = t("shell.board");
+	const boardLabel = t(projectId ? "shell.board" : "shell.allSessions");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
@@ -141,7 +153,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		hasWorkerSessions: liveSessions.length > 0,
 	});
 	const showStartup = !hostId && presentation.showStartup;
-	const showWelcome = !hostId && presentation.showWelcome;
+	const showWelcome = !hostId && presentation.showWelcome && !remoteLoading && failedHostIds.length === 0;
 	const showProjectEmpty = hostId
 		? connected && remoteProjectQuery.isSuccess && Boolean(workspace) && liveSessions.length === 0
 		: presentation.showProjectEmpty;
@@ -159,7 +171,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const chipToneOf = useMemo(() => {
 		const now = Date.now();
 		const facts = sessions
-			.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session))
+			.filter((session) => !session.hostId && session.isTerminated !== true && !isOrchestratorSession(session))
 			.map((session) => toSessionFacts(session, memoryBySession?.get(session.id), now));
 		const largest = largestSession(facts);
 		return (session: WorkspaceSession): ChipTone =>
@@ -172,15 +184,16 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	activeScopeRef.current = scopeKey;
 
 	const openSession = useCallback((session: WorkspaceSession) => {
-		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
-		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
+		const sessionHost = session.hostId ?? hostId;
+		if (session.kind === "worker") recordManualWorkerOpen(session.id, sessionHost);
+		void navigate(sessionNavigateTarget(session.workspaceId, session.id, sessionHost));
 	}, [navigate, hostId]);
 	const openSessionArtifact = useCallback((session: WorkspaceSession, path: string) => {
-		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, hostId, "artifact");
+		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, session.hostId ?? hostId, "artifact");
 		openSession(session);
 	}, [openSession, hostId]);
 	const openSessionArtifacts = useCallback((session: WorkspaceSession) => {
-		const uiKey = sessionUiKey(session.id, hostId);
+		const uiKey = sessionUiKey(session.id, session.hostId ?? hostId);
 		useUiStore.getState().initializeInspectorSession(uiKey, Boolean(session.previewUrl), true);
 		useUiStore.getState().setInspectorView(uiKey, "artifacts");
 		useUiStore.getState().setInspectorOpen(uiKey, true);
@@ -239,9 +252,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			{/* macOS: shell topbar is hidden on board routes, so the project/"Board"
 			    crumb + New task / Orchestrator / bell live in this in-panel row.
 			    Win/Linux keep the crumb and actions in the framed ShellTopbar.
-			    Welcome skips the row — a dangling "Board" above the import
-			    chooser was review feedback on #2432. */}
-			{!showWelcome && boardActionsInPanel && (boardLabel || actions) ? (
+			    The global board keeps its identity above the import chooser. */}
+			{boardActionsInPanel && (boardLabel || actions) ? (
 				<div
 					className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-1"
 					style={dragStyle}
@@ -267,6 +279,19 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			{hostId && !connected ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("remote.hostOffline")}</p> : null}
 			{hostId && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}
+			{!projectId && localWorkspaceQuery.isError ? (
+				<div className="flex items-center gap-3 px-4 py-3" role="alert">
+					<p className="text-xs text-destructive">{t("shell.couldNotLoadSessions")}</p>
+					<TopbarButton disabled={localWorkspaceQuery.isFetching} onClick={() => void localWorkspaceQuery.refetch()}>{t("shell.retry")}</TopbarButton>
+				</div>
+			) : null}
+			{!projectId && failedHostIds.map((failedHostId) => (
+				<div className="flex items-center gap-3 px-4 py-3" key={failedHostId} role="alert">
+					<p className="text-xs text-destructive">{labelForHost(failedHostId) ?? failedHostId}: {t("shell.couldNotLoadSessions")}</p>
+					<TopbarButton onClick={onRetryRemoteHosts}>{t("shell.retry")}</TopbarButton>
+				</div>
+			))}
+			{remoteLoading ? <p className="px-4 py-3 text-xs text-muted-foreground" role="status">{t("shell.loadingSessions")}</p> : null}
 			{hostId && projectId && connected && workspace && !orchestrator && !hasConfiguredOrchestratorAgent(workspace) ? (
 				<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 					<span className="min-w-0 flex-1">{t("remote.configureOrchestratorFirst", { label: labelForHost(hostId) ?? hostId, defaultValue: "Choose an orchestrator agent on {{label}} to start one." })}</span>
@@ -309,8 +334,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					</span>
 				</div>
 			) : null}
-				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
-					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
+				{!hostId && projectId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
+					<div className="flex flex-col items-center gap-3 py-10" role="alert">
+						<p className="text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
+					</div>
 				) : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
@@ -320,15 +347,17 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						columns={columns}
 						key={scopeKey}
 						labels={boardLabels}
+						sessionKey={boardSessionKey}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
-								memory={memoryBySession?.get(session.id)}
-								memoryTone={chipToneOf(session)}
+								memory={!session.hostId ? memoryBySession?.get(session.id) : undefined}
+								memoryTone={!session.hostId ? chipToneOf(session) : undefined}
 								onOpen={() => openSession(session)}
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
 								onOpenArtifacts={() => openSessionArtifacts(session)}
-								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
+								onTerminate={sessionIsConnected(session, connectedHosts, hostId) ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
+								showWorkspace={!projectId}
 							/>
 						)}
 						sessions={boardSessions}
@@ -341,8 +370,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					activeScopeRef={activeScopeRef}
 					hostId={hostId}
 					scopeKey={scopeKey}
-					connected={!hostId || connected}
+					connectedHosts={connectedHosts}
 					sessions={archived}
+					showWorkspace={!projectId}
 				/>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
@@ -359,27 +389,29 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	activeScopeRef,
 	hostId,
 	scopeKey,
-	connected,
+	connectedHosts,
 	sessions,
+	showWorkspace,
 }: {
 	activeScopeRef: React.MutableRefObject<string>;
 	hostId?: string;
 	scopeKey: string;
-	connected: boolean;
+	connectedHosts: string[];
 	sessions: WorkspaceSession[];
+	showWorkspace: boolean;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const diagnostics = useDiagnosticsEnabled();
 	const restoreSessionById = useRestoreSession();
-	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
+	const [restoringSessionKey, setRestoringSessionKey] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
 	const [restoreUnavailableSession, setRestoreUnavailableSession] = useState<WorkspaceSession | undefined>();
 	const restoreGenerationRef = useRef(0);
 
 	useEffect(() => {
-		setRestoringSessionId(undefined);
+		setRestoringSessionKey(undefined);
 		setRestoreErrors({});
 		setRestoreUnavailableSession(undefined);
 		restoreGenerationRef.current += 1;
@@ -398,33 +430,35 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 
 	const restoreArchivedSession = async (event: MouseEvent<HTMLButtonElement>, session: WorkspaceSession) => {
 		event.stopPropagation();
-		if (restoringSessionId) return;
+		if (restoringSessionKey) return;
+		const sessionHost = session.hostId ?? hostId;
+		const sessionKey = boardSessionKey(session);
 		const restoreScopeKey = scopeKey;
 		const generation = restoreGenerationRef.current;
 		const isStillActiveProject = () =>
 			generation === restoreGenerationRef.current &&
 			activeScopeRef.current === restoreScopeKey;
-		setRestoringSessionId(session.id);
+		setRestoringSessionKey(sessionKey);
 		setRestoreErrors((current) => {
 			const next = { ...current };
-			delete next[session.id];
+			delete next[sessionKey];
 			return next;
 		});
 		try {
-			const result = await restoreSessionById(session.id, hostId);
+			const result = await restoreSessionById(session.id, sessionHost);
 			if (!isStillActiveProject()) return;
 			if (result.status === "success") {
-				void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
+				void navigate(sessionNavigateTarget(session.workspaceId, session.id, sessionHost));
 				return;
 			}
 			if (result.status === "not_resumable") {
 				setRestoreUnavailableSession(session);
 				return;
 			}
-			setRestoreErrors((current) => ({ ...current, [session.id]: result.message }));
+			setRestoreErrors((current) => ({ ...current, [sessionKey]: result.message }));
 		} finally {
 			if (isStillActiveProject()) {
-				setRestoringSessionId(undefined);
+				setRestoringSessionKey(undefined);
 			}
 		}
 	};
@@ -438,13 +472,15 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					archivedSessions: t("shell.archivedSessions"),
 				}}
 				trailing={diagnostics && !hostId ? <AppMemoryIndicator /> : undefined}
+				sessionKey={boardSessionKey}
 				renderSessionCard={(session) => (
 					<ArchivedSessionCardAdapter
-						isRestoreDisabled={!connected || restoringSessionId !== undefined}
-						isRestoring={restoringSessionId === session.id}
+						isRestoreDisabled={!sessionIsConnected(session, connectedHosts, hostId) || restoringSessionKey !== undefined}
+						isRestoring={restoringSessionKey === boardSessionKey(session)}
 						restoreAction={(event) => void restoreArchivedSession(event, session)}
-						restoreError={restoreErrors[session.id]}
+						restoreError={restoreErrors[boardSessionKey(session)]}
 						session={session}
+						showWorkspace={showWorkspace}
 					/>
 				)}
 				resetKey={scopeKey}
@@ -454,12 +490,12 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 				<RestoreUnavailableDialog
 					open={true}
 					session={restoreUnavailableSession}
-					hostId={hostId}
+					hostId={restoreUnavailableSession.hostId ?? hostId}
 					onOpenChange={(open) => {
 						if (!open) setRestoreUnavailableSession(undefined);
 					}}
 					onRecreated={async () => {
-						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(restoreUnavailableSession.hostId ?? hostId) });
 					}}
 				/>
 			) : null}

@@ -26,6 +26,7 @@ import {
 	FolderOpen,
 	LogIn,
 	LogOut,
+	LayoutDashboard,
 	MoreVertical,
 	PanelLeft,
 	Pencil,
@@ -519,6 +520,7 @@ function useSelection() {
 		select: (state) => state.location.pathname,
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
+	const goAllSessions = useCallback(() => void navigate({ to: "/board" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
@@ -544,6 +546,7 @@ function useSelection() {
 	);
 	return useMemo(() => ({
 		isHome: pathname === "/",
+		isAllSessions: pathname === "/board" || pathname === "/board/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
 		activeRemoteHostId: params.hostId,
@@ -552,6 +555,7 @@ function useSelection() {
 		activeProjectId: params.hostId ? undefined : params.projectId,
 		activeSessionId: params.hostId ? undefined : params.sessionId,
 		goHome,
+		goAllSessions,
 		goAutomations,
 		goArtifacts,
 		goStandaloneBoard,
@@ -562,7 +566,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goAllSessions, goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -894,6 +898,7 @@ export function Sidebar({
 		handleProjectDragEnd();
 	}, [handleProjectDragEnd, projectIds]);
 
+	const hasBoardSessions = [...workspaces, ...remoteWorkspaces].some((workspace) => workerSessions(workspace.sessions).length > 0);
 	const pinnedSessions = useMemo(
 		() => [...workspaces, ...remoteWorkspaces]
 			.flatMap((w) => workerSessions(w.sessions))
@@ -1016,6 +1021,15 @@ export function Sidebar({
 					</SidebarGroup>
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					{hasBoardSessions ? <SidebarMenuItem>
+						<SidebarTopNavRow
+							active={selection.isAllSessions}
+							icon={<LayoutDashboard aria-hidden="true" />}
+							label={t("shell.allSessions")}
+							onClick={selection.goAllSessions}
+							tooltip={isCollapsed ? t("shell.allSessions") : undefined}
+						/>
+					</SidebarMenuItem> : null}
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isAutomations}
