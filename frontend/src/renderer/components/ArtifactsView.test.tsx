@@ -209,8 +209,10 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("region", { name: "Recent" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "List view" }));
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
 		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 	});
 

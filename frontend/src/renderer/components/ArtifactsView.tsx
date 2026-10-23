@@ -159,7 +159,7 @@ export function ArtifactsView() {
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
-						<div className="pr-4 pb-4 pl-(--space-4_5)">
+						<div className={cn("pr-4 pb-4 pl-(--space-4_5)", visibleGroups.length === 1 && "pt-4")}>
 							{workspaceQuery.isLoading ? (
 								<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>
 							) : workspaceQuery.error ? (
@@ -198,7 +198,7 @@ export function ArtifactsView() {
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
 											>
 												{group.rows.map((row) => (
-													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} />
+													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} />
 												))}
 											</ArtifactSection>
 										);
