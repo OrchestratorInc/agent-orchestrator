@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { components } from "../../../../api/schema";
 import { apiClient } from "../../../lib/api-client";
@@ -150,4 +150,53 @@ it.each(["stop", "exit"])("allows a replacement helper with a new request after 
 	previousTerminal?.("exited");
 	expect(screen.getByRole("button", { name: "Stop helper" })).toBeEnabled();
 	expect(screen.queryByRole("button", { name: "Troubleshoot with agent" })).not.toBeInTheDocument();
+});
+
+it("shows which check is running and keeps old results from appearing unresolved during the check", async () => {
+	const checks = mockChecks();
+	const snapshot = troubleshooting.troubleshootingSnapshot(agentReadiness("codex"), "0.13.0", "win32");
+	let finish: (value: typeof snapshot) => void = () => {};
+	checks.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+	setup();
+	fireEvent.click(screen.getByRole("button", { name: "Collect fresh diagnostics" }));
+	await screen.findByText("Checking installation and sign-in…");
+	expect(screen.getByRole("button", { name: "Collect fresh diagnostics" })).toBeDisabled();
+	expect(screen.queryByText(/Verification is unresolved/)).not.toBeInTheDocument();
+	finish(snapshot);
+	await screen.findByText(/Initial checks collected/);
+	expect(screen.queryByText("Checking installation and sign-in…")).not.toBeInTheDocument();
+});
+
+it("uses the installation symptom for a harness AO cannot find", async () => {
+	mockChecks();
+	const post = mockSessionPost();
+	setup([agentReadiness("claude-code"), agentReadiness("codex", "Codex", { installation: "not_installed" })]);
+	expect(screen.getByRole("combobox", { name: "What are you experiencing?" })).toHaveValue("installation");
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByTestId("helper-terminal");
+	expect(post.mock.calls[0][1]?.body?.prompt).toContain("I installed this harness");
+	expect(within(screen.getByTestId("helper-controls")).getByRole("button", { name: "Verify again" })).toBeVisible();
+});
+
+it("requires confirmation before replacing an edited issue draft", async () => {
+	mockChecks();
+	setup();
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Prepare issue draft" }));
+	const draft = screen.getByRole("textbox", { name: "Review and edit issue draft" });
+	expect(draft).toHaveFocus();
+	fireEvent.change(draft, { target: { value: "My carefully edited report" } });
+	fireEvent.change(screen.getByRole("combobox", { name: "What are you experiencing?" }), { target: { value: "other" } });
+	expect(draft).toHaveValue("My carefully edited report");
+	fireEvent.click(screen.getByRole("button", { name: "Replace draft with latest checks" }));
+	const dialog = screen.getByRole("dialog", { name: "Replace your edited draft?" });
+	expect(draft).toHaveValue("My carefully edited report");
+	fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(draft).toHaveValue("My carefully edited report");
+	fireEvent.click(screen.getByRole("button", { name: "Replace draft with latest checks" }));
+	fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Replace draft with latest checks" }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(draft).not.toHaveValue("My carefully edited report");
 });

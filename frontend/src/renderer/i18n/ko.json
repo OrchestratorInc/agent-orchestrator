@@ -3437,5 +3437,19 @@
 	"settings.harness.troubleshoot.reviewDraft": "이슈 초안 검토 및 편집",
 	"settings.harness.troubleshoot.draftHelp": "재현 단계를 추가하고 개인 정보가 없는지 검토한 다음 이 초안을 버그 보고서에 복사하세요. 자동으로 제출되는 내용은 없습니다. 초안을 교체하면 편집 내용이 사라집니다.",
 	"settings.harness.troubleshoot.copyDraft": "이슈 초안 복사",
-	"settings.harness.troubleshoot.copied": "클립보드에 복사됨"
+	"settings.harness.troubleshoot.copied": "클립보드에 복사됨",
+	"settings.harness.troubleshoot.stepCheck": "설정 점검",
+	"settings.harness.troubleshoot.stepHelper": "조사 및 검증",
+	"settings.harness.troubleshoot.stepReport": "아직 문제가 있나요?",
+	"settings.harness.troubleshoot.checksFirst": "진단 정보를 수집한 후 도우미를 선택하거나 문제 해결 프롬프트를 복사할 수 있습니다.",
+	"settings.harness.troubleshoot.sharingSummary": "민감한 정보를 제외한 진단만 선택한 에이전트 제공업체로 전송됩니다.",
+	"settings.harness.troubleshoot.sharingDetails": "데이터 및 권한",
+	"settings.harness.troubleshoot.checkingProgress": "설치 및 로그인 확인 중…",
+	"settings.harness.troubleshoot.startingProgress": "도우미 시작 중…",
+	"settings.harness.troubleshoot.stoppingProgress": "도우미 중지 중…",
+	"settings.harness.troubleshoot.reviewPrompt": "원래 프롬프트 검토",
+	"settings.harness.troubleshoot.authNotRequired": "필요 없음",
+	"settings.harness.troubleshoot.replaceDraftTitle": "편집한 초안을 교체할까요?",
+	"settings.harness.troubleshoot.replaceDraftDescription": "교체하면 편집 내용이 사라집니다. 보관하려면 먼저 초안을 복사하세요.",
+	"settings.harness.troubleshoot.sessionDetails": "이 도우미 정보"
 }
