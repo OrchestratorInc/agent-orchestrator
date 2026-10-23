@@ -25,6 +25,19 @@ func latestMigration(t *testing.T) int64 {
 	return version
 }
 
+// migrationsBack returns the embedded migration n steps below the head. A
+// version cannot be computed by subtraction: timestamp IDs are not consecutive,
+// and latest-1 names no migration (the snapshot name would not match).
+func migrationsBack(t *testing.T, n int) int64 {
+	t.Helper()
+	versions, err := embeddedMigrationVersions()
+	if err != nil {
+		t.Fatalf("embedded migration versions: %v", err)
+	}
+	slices.Sort(versions)
+	return versions[len(versions)-1-n]
+}
+
 // snapshotFileFor spells out the on-disk name on purpose: it is what a person
 // looks for when recovering, so a rename must fail a test.
 func snapshotFileFor(dir string, from, to int64) string {
@@ -134,7 +147,7 @@ func plainCopy(src, dst string) error {
 
 func TestOpenSnapshotsBeforeApplyingPendingMigrations(t *testing.T) {
 	latest := latestMigration(t)
-	from := latest - 2
+	from := migrationsBack(t, 2)
 	dir := t.TempDir()
 	seed := oldDatabase(t, dir, from, "before-upgrade")
 	if err := seed.Close(); err != nil {
@@ -255,7 +268,7 @@ func TestOpenSnapshotsBeforeRenumberRepairs(t *testing.T) {
 func TestOpenKeepsStartingWhenTheSnapshotCannotBeWritten(t *testing.T) {
 	latest := latestMigration(t)
 	dir := t.TempDir()
-	seed := oldDatabase(t, dir, latest-1, "p")
+	seed := oldDatabase(t, dir, migrationsBack(t, 1), "p")
 	if err := seed.Close(); err != nil {
 		t.Fatalf("close seed: %v", err)
 	}
@@ -280,7 +293,7 @@ func TestOpenKeepsStartingWhenTheSnapshotCannotBeWritten(t *testing.T) {
 // were committed but still sit in the WAL must be in the snapshot.
 func TestSnapshotHoldsRowsCommittedToTheWAL(t *testing.T) {
 	dir := t.TempDir()
-	db := oldDatabase(t, dir, latestMigration(t)-1, "only-in-the-wal")
+	db := oldDatabase(t, dir, migrationsBack(t, 1), "only-in-the-wal")
 	if info, err := os.Stat(filepath.Join(dir, "ao.db-wal")); err != nil || info.Size() == 0 {
 		t.Fatalf("test setup: want frames in ao.db-wal, got %v (%v)", info, err)
 	}
@@ -289,16 +302,15 @@ func TestSnapshotHoldsRowsCommittedToTheWAL(t *testing.T) {
 		t.Fatalf("takeSnapshot: %v", err)
 	}
 
-	snapshot := snapshotFileFor(dir, latestMigration(t)-1, latestMigration(t))
+	snapshot := snapshotFileFor(dir, migrationsBack(t, 1), latestMigration(t))
 	if got := projectIDs(t, snapshot); !slices.Equal(got, []string{"only-in-the-wal"}) {
 		t.Fatalf("snapshot projects = %v, want the row that was only in the WAL", got)
 	}
 }
 
 func TestSnapshotSkipsWhenTheCheckpointCannotComplete(t *testing.T) {
-	latest := latestMigration(t)
 	dir := t.TempDir()
-	db := oldDatabase(t, dir, latest-1, "p1")
+	db := oldDatabase(t, dir, migrationsBack(t, 1), "p1")
 
 	// A second connection pins a read snapshot, so the writer cannot fold the
 	// frames written after it back into ao.db and reset the WAL.
@@ -330,7 +342,7 @@ func TestSnapshotSkipsWhenTheCheckpointCannotComplete(t *testing.T) {
 
 func TestSnapshotKeepsOnlyTheNewest(t *testing.T) {
 	latest := latestMigration(t)
-	from := latest - 1
+	from := migrationsBack(t, 1)
 	dir := t.TempDir()
 	db := oldDatabase(t, dir, from, "p")
 	backups := filepath.Join(dir, "backups")
@@ -365,7 +377,7 @@ func TestSnapshotKeepsOnlyTheNewest(t *testing.T) {
 
 func TestSnapshotRefreshesTheSnapshotOfTheSameUpgrade(t *testing.T) {
 	latest := latestMigration(t)
-	from := latest - 1
+	from := migrationsBack(t, 1)
 	dir := t.TempDir()
 	db := oldDatabase(t, dir, from, "a")
 	if err := takeSnapshot(context.Background(), dir, db, cloneFile, plentyOfSpace); err != nil {
@@ -388,23 +400,24 @@ func TestSnapshotRefreshesTheSnapshotOfTheSameUpgrade(t *testing.T) {
 // that half-migrated database.
 func TestSnapshotKeepsTheOriginalWhenTheSameUpgradeIsRetried(t *testing.T) {
 	latest := latestMigration(t)
+	from := migrationsBack(t, 2)
 	dir := t.TempDir()
-	db := oldDatabase(t, dir, latest-2, "pristine")
+	db := oldDatabase(t, dir, from, "pristine")
 	if err := takeSnapshot(context.Background(), dir, db, cloneFile, plentyOfSpace); err != nil {
 		t.Fatalf("first takeSnapshot: %v", err)
 	}
 
-	upTo(t, db, latest-1) // the first migration lands; the last one fails
+	upTo(t, db, migrationsBack(t, 1)) // the first migration lands; the last one fails
 	addProject(t, db, "after-the-first-migration")
 	if err := takeSnapshot(context.Background(), dir, db, cloneFile, plentyOfSpace); err != nil {
 		t.Fatalf("retry takeSnapshot: %v", err)
 	}
 
-	original := filepath.Base(snapshotFileFor(dir, latest-2, latest))
+	original := filepath.Base(snapshotFileFor(dir, from, latest))
 	if got := backupNames(t, dir); !slices.Equal(got, []string{original}) {
 		t.Fatalf("backups = %v, want only the original %s", got, original)
 	}
-	if got := projectIDs(t, snapshotFileFor(dir, latest-2, latest)); !slices.Equal(got, []string{"pristine"}) {
+	if got := projectIDs(t, snapshotFileFor(dir, from, latest)); !slices.Equal(got, []string{"pristine"}) {
 		t.Errorf("original snapshot projects = %v, want only the pre-upgrade rows", got)
 	}
 }
@@ -415,7 +428,7 @@ func TestSnapshotKeepsTheOriginalWhenTheSameUpgradeIsRetried(t *testing.T) {
 func TestSnapshotIsRetakenForAHoleAfterTheUpgradeFinished(t *testing.T) {
 	latest := latestMigration(t)
 	dir := t.TempDir()
-	db := oldDatabase(t, dir, latest-1, "before-the-upgrade")
+	db := oldDatabase(t, dir, migrationsBack(t, 1), "before-the-upgrade")
 	if err := takeSnapshot(context.Background(), dir, db, cloneFile, plentyOfSpace); err != nil {
 		t.Fatalf("first takeSnapshot: %v", err)
 	}
@@ -444,7 +457,7 @@ func TestSnapshotIsRetakenForAHoleAfterTheUpgradeFinished(t *testing.T) {
 func TestSnapshotCopyKeepsAReaderSoNoOtherCheckpointCanTearIt(t *testing.T) {
 	latest := latestMigration(t)
 	dir := t.TempDir()
-	db := oldDatabase(t, dir, latest-1, "before")
+	db := oldDatabase(t, dir, migrationsBack(t, 1), "before")
 	dbFile := filepath.Join(dir, "ao.db")
 	other, err := sql.Open("sqlite", databaseURI(dir)+pragmas)
 	if err != nil {
@@ -487,7 +500,7 @@ func TestSnapshotCopyKeepsAReaderSoNoOtherCheckpointCanTearIt(t *testing.T) {
 	if !checkpointBlocked || !fileUntouched {
 		t.Errorf("while the snapshot was copied: other checkpoint blocked = %v, ao.db unchanged = %v; want both true", checkpointBlocked, fileUntouched)
 	}
-	if got := projectIDs(t, snapshotFileFor(dir, latest-1, latest)); !slices.Equal(got, []string{"before"}) {
+	if got := projectIDs(t, snapshotFileFor(dir, migrationsBack(t, 1), latest)); !slices.Equal(got, []string{"before"}) {
 		t.Errorf("snapshot projects = %v, want the state before the concurrent write", got)
 	}
 	// The reader is gone afterwards: the same checkpoint now goes through (so the
@@ -506,7 +519,7 @@ func TestSnapshotCopyKeepsAReaderSoNoOtherCheckpointCanTearIt(t *testing.T) {
 
 func TestSnapshotPrefersTheCloneOverTheSpaceCheck(t *testing.T) {
 	dir := t.TempDir()
-	db := oldDatabase(t, dir, latestMigration(t)-1, "p")
+	db := oldDatabase(t, dir, migrationsBack(t, 1), "p")
 	cloned := false
 	clone := func(src, dst string) error {
 		cloned = true
@@ -527,7 +540,7 @@ func TestSnapshotPrefersTheCloneOverTheSpaceCheck(t *testing.T) {
 
 func TestSnapshotFullCopyNeedsDatabaseSizePlusTenPercentPlusHeadroom(t *testing.T) {
 	latest := latestMigration(t)
-	from := latest - 1
+	from := migrationsBack(t, 1)
 	dir := t.TempDir()
 	db := oldDatabase(t, dir, from, "p")
 	mustExec(t, db, `PRAGMA wal_checkpoint(TRUNCATE)`)
@@ -624,11 +637,11 @@ func TestPendingMigrations(t *testing.T) {
 			return db
 		}, 0, false},
 		{"ledger without a single applied migration", func(t *testing.T) *sql.DB {
-			db := openMigratedDatabaseCopy(t, latest-1)
+			db := openMigratedDatabaseCopy(t, migrationsBack(t, 1))
 			mustExec(t, db, `DELETE FROM goose_db_version WHERE version_id <> 0`)
 			return db
 		}, 0, false},
-		{"behind", func(t *testing.T) *sql.DB { return openMigratedDatabaseCopy(t, latest-2) }, latest - 2, true},
+		{"behind", func(t *testing.T) *sql.DB { return openMigratedDatabaseCopy(t, migrationsBack(t, 2)) }, migrationsBack(t, 2), true},
 		{"current", func(t *testing.T) *sql.DB { return openMigratedDatabaseCopy(t, latest) }, latest, false},
 		{"hole below the head", func(t *testing.T) *sql.DB {
 			db := openMigratedDatabaseCopy(t, latest)

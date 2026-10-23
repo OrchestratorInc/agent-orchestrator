@@ -168,10 +168,10 @@ func writeSnapshot(
 // whole database. While a reader is open, no other process can checkpoint new
 // WAL frames into ao.db (SQLite will not backfill past an active reader), so ao.db
 // does not change under a copy. It only holds back checkpoints: other processes
-// can still write. The data-dir lock makes a second writer impossible; this
-// covers the period before it. A checkpoint that was already mid-backfill when
-// the reader started could still overlap the copy, a window of the time between
-// the TRUNCATE above and this call. The single writer connection is busy until
+// can still write. The data-dir lock makes a second AO writer impossible; this
+// covers file systems that cannot take it. A checkpoint that was already
+// mid-backfill when the reader started could still overlap the copy, a window
+// of the time between the TRUNCATE above and this call. The single writer connection is busy until
 // release, so the caller must not use db meanwhile.
 func pinReader(ctx context.Context, db *sql.DB) (release func(), err error) {
 	tx, err := db.BeginTx(ctx, nil)
