@@ -91,6 +91,17 @@ const IN_PROGRESS_DISPLAY_STATUSES = new Set<string>([
 	"Reviewing",
 ]);
 
+// Display statuses whose PR is done for good. A live worker still reads
+// `status: working` under them (the agent can keep running after its PR
+// merges), but the delivery loop has nothing left to turn, so the loader stays
+// off. "Mergeable" and "Approved" are absent: the agent may still be working
+// on a PR that has not landed.
+const SETTLED_DISPLAY_STATUSES = new Set<string>([
+	"Merged",
+	"Closed without merge",
+	"Terminated",
+]);
+
 export type BoardReviewerPresentation = {
 	id: string;
 	avatarUrl?: string;
@@ -275,7 +286,9 @@ export function SessionCardView({
 	const statusClassName =
 		session.displayStatus === "Closed without merge"
 			? "text-status-exited"
-			: session.status === "mergeable" || session.displayStatus === "Mergeable"
+			: session.displayStatus === "Merged"
+				? "text-status-merged"
+				: session.status === "mergeable" || session.displayStatus === "Mergeable"
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
@@ -305,7 +318,7 @@ export function SessionCardView({
 		// "Draft" describes the PR, not work AO is turning, so it gets no loader
 		// even while the worker is live.
 		session.displayStatus !== "Draft" &&
-		(session.status === "working" ||
+		((session.status === "working" && !SETTLED_DISPLAY_STATUSES.has(session.displayStatus ?? "")) ||
 			// The label reads `displayStatus`, so the loader must too. `status`
 			// aggregates the session's WORST open PR while `displayStatus` describes
 			// its BEST one, so keying the loader off `status` spun a settled
