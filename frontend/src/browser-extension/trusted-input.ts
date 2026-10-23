@@ -18,6 +18,7 @@
 import type { ChromeApi, DebuggeeTarget } from "./chrome-api";
 import { humanPath, type Point } from "./human-path";
 import { keyEvents } from "./keys";
+import { mouseCapture } from "./pointer-capture";
 import { BridgeError } from "./protocol";
 
 const PROTOCOL_VERSION = "1.3";
@@ -132,12 +133,24 @@ export class TrustedInput {
 		});
 		waiters.add(opened);
 		const held = new HeldInput();
+		const captures = (action: "track" | "release") => this.chrome.scripting.executeScript({
+			target: { tabId, allFrames: true }, func: mouseCapture, args: [action], world: "ISOLATED",
+		});
 		try {
+			if (events.some(([method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed")) {
+				throwIfAborted(signal);
+				await captures("track");
+			}
 			for (const [method, params] of events) {
 				// Human-paced pointer movement: a short, jittered gap between moves.
 				if (paceMs > 0 && params.type === "mouseMoved") await abortableSleep(paceMs + Math.random() * paceMs, signal).catch(() => undefined);
 				if (signal?.aborted) {
-					await held.release(send);
+					await held.release(send, async () => {
+						const results = await captures("release");
+						if (!results.some((result) => result.result === true) || results.some((result) => result.result !== true && result.result !== "idle")) {
+							throw new Error("Cannot verify mouse capture cleanup");
+						}
+					}).catch(() => undefined);
 					throw canceled();
 				}
 				const outcome = await Promise.race([send(method, params), dialogOpened]);
@@ -286,13 +299,15 @@ class HeldInput {
 		}
 	}
 
-	async release(send: Send): Promise<void> {
+	async release(send: Send, releaseCapture: () => Promise<void>): Promise<void> {
 		if (this.mouse) {
+			await releaseCapture();
 			// Releasing on the pressed target completes a click (and can submit a
 			// form). Move outside the viewport first, then release there. If the
-			// move fails, the release still uses the outside coordinates.
+			// move fails, the release still uses the outside coordinates. Capture
+			// has already been cleared; buttons:0 prevents re-capture on movement.
 			const outside = { x: -1, y: -1, button: this.mouse.button };
-			await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...outside, buttons: 1 }).catch(() => undefined);
+			await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...outside, buttons: 0 }).catch(() => undefined);
 			await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...outside, buttons: 0, clickCount: 1 }).catch(() => undefined);
 			this.mouse = undefined;
 		}

@@ -13,6 +13,12 @@ function fakeDebugger() {
 	const gateOn = (key: string) => new Promise<void>((resolve) => gates.set(key, resolve));
 	let blocked: { key: string; wait: Promise<void> } | undefined;
 	const chrome = {
+		scripting: {
+			executeScript: async ({ args }: { args: string[] }) => {
+				calls.push({ method: "capture", params: { action: args[0] } });
+				return [{ result: true }];
+			},
+		},
 		debugger: {
 			attach: async () => void attaches++,
 			detach: async () => void detaches++,
@@ -74,6 +80,28 @@ describe("TrustedInput cancellation", () => {
 		expect(fake.inputTypes()).toEqual(["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]);
 		const released = fake.calls.find((call) => call.params.type === "mouseReleased");
 		expect(released?.params).toMatchObject({ x: -1, y: -1, button: "left", buttons: 0 });
+		const capture = fake.calls.findIndex((call) => call.method === "capture" && call.params.action === "release");
+		const releaseIndex = fake.calls.findIndex((call) => call.params.type === "mouseReleased");
+		expect(capture).toBeGreaterThan(-1);
+		expect(capture).toBeLessThan(releaseIndex);
+	});
+
+	it("does not release onto a target if capture cleanup cannot be verified", async () => {
+		const fake = fakeDebugger();
+		fake.chrome.scripting.executeScript = async (injection) => {
+			if ("args" in injection && injection.args[0] === "release") throw new Error("Frame unavailable");
+			return [{ result: true }];
+		};
+		const input = new TrustedInput(fake.chrome);
+		const controller = new AbortController();
+		const release = fake.block("Input.dispatchMouseEvent", "mousePressed");
+		const click = input.click(1, { x: 10, y: 20 }, { signal: controller.signal });
+		await tick();
+		controller.abort();
+		release();
+		await expect(click).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+		expect(fake.inputTypes()).toEqual(["mouseMoved", "mousePressed"]);
+		expect(fake.counts().detaches).toBe(1);
 	});
 
 	it("never attaches when cancelled while waiting for the tab", async () => {

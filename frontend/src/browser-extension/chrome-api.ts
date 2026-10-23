@@ -94,7 +94,11 @@ export type ChromeApi = {
 		onRemoved: Listener<[number]>;
 	};
 	scripting: {
-		executeScript(injection: { target: { tabId: number; frameIds?: number[]; allFrames?: boolean }; files: string[] }): Promise<unknown[]>;
+		executeScript(injection: { target: { tabId: number; frameIds?: number[]; allFrames?: boolean }; } & ({ files: string[] } | {
+			func: (action: "track" | "release") => boolean | "idle";
+			args: ["track" | "release"];
+			world: "ISOLATED";
+		})): Promise<{ result?: unknown }[]>;
 	};
 	debugger: {
 		attach(target: DebuggeeTarget, version: string): Promise<void>;

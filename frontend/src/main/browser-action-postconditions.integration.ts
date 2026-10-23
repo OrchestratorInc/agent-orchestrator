@@ -36,9 +36,14 @@ async function testCancelledTrustedClick(): Promise<void> {
 			}
 		</script>`)}`);
 		const debuggerApi = window.webContents.debugger;
-		const controller = new AbortController();
+		let controller = new AbortController();
 		let cancelOnPress = false;
 		const chrome = {
+			scripting: {
+				executeScript: async ({ func, args }: { func: (action: "track" | "release") => boolean | "idle"; args: ["track" | "release"] }) => [{
+					result: await window.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: `(${func.toString()})(${JSON.stringify(args[0])})` }]),
+				}],
+			},
 			debugger: {
 				attach: async () => debuggerApi.attach("1.3"),
 				detach: async () => debuggerApi.detach(),
@@ -60,6 +65,30 @@ async function testCancelledTrustedClick(): Promise<void> {
 		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
 			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
 		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown"]);
+		// Pointer capture routes releases back to the button even outside its box.
+		await window.webContents.executeJavaScript(`
+			document.querySelector("button").addEventListener("pointerdown", event => {
+				event.target.setPointerCapture(event.pointerId);
+			});
+			window.events = [];
+		`);
+		controller = new AbortController();
+		cancelOnPress = false;
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.webContents.executeJavaScript("window.events = []");
+		cancelOnPress = true;
+		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		const capturedEvents = await window.webContents.executeJavaScript("window.events") as string[];
+		assert.equal(capturedEvents.includes("click"), false, "cancelled captured pointer must not click");
+		assert.equal(capturedEvents.includes("submit"), false, "cancelled captured pointer must not submit");
+		// Cleanup must not leave the browser's mouse button stuck down.
+		controller = new AbortController();
+		cancelOnPress = false;
+		await window.webContents.executeJavaScript("window.events = []");
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
 		process.stdout.write("cancelled trusted click does not activate its target in Chromium\n");
 	} finally {
 		window.destroy();
@@ -120,6 +149,7 @@ async function run(): Promise<void> {
 	const fixtureURL = `http://127.0.0.1:${address.port}/fixture`;
 
 	const window = new BrowserWindow({ show: true, width: 800, height: 600 });
+	await testCancelledTrustedClick();
 	// Initialize the owning window before attaching a WebContentsView. On
 	// Windows and Xvfb, a never-navigated BrowserWindow can leave the child
 	// renderer unscheduled even though the native view is marked visible.
@@ -453,7 +483,6 @@ async function run(): Promise<void> {
 		assert.equal((await host.execute("integration-session", "tabs") as BrowserTabsState).tabs.length, 1);
 		process.stdout.write("browser popup handle, cross-origin messaging, shared browser profile and self-close integration passed\n");
 
-		await testCancelledTrustedClick();
 		process.stdout.write("browser action postcondition integration passed\n");
 	} finally {
 		// Tear down native views synchronously before exiting. Electron can leave a
