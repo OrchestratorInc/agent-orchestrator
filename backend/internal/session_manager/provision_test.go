@@ -586,6 +586,23 @@ func TestResolveClaudeModelWithoutEffortSkipsCatalog(t *testing.T) {
 			}
 		})
 	}
+
+	// A model set in the project or role config, not on the spawn, is treated
+	// the same way.
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
+	for name, project := range map[string]domain.ProjectConfig{
+		"project default": {AgentConfig: domain.AgentConfig{Model: "haiku"}},
+		"role default":    {Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "haiku"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+			}, project)
+			if err != nil || resolved.Model != "haiku" {
+				t.Fatalf("resolved = %#v, %v; want the configured model passed through", resolved, err)
+			}
+		})
+	}
 }
 
 func TestResolveClaudeModelWithEffortStillRequiresCatalog(t *testing.T) {
