@@ -100,6 +100,13 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("update-helper");
 	});
 
+	it("bundles both menu bar wake icon resolutions", () => {
+		expect(extraResourcesForPlatform("darwin")).toEqual(expect.arrayContaining([
+			"assets/trayAwakeIconTemplate.png",
+			"assets/trayAwakeIconTemplate@2x.png",
+		]));
+	});
+
 	it("bundles the wake coordinator only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("wake-helper");
 		expect(extraResourcesForPlatform("linux")).not.toContain("wake-helper");

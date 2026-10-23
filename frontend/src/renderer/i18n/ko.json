@@ -1,4 +1,6 @@
 {
+	"tray.awakeActive": "잠자기 방지: 이 Mac을 깨어 있게 유지하는 중",
+	"tray.awakeUnknown": "잠자기 방지: 상태를 확인할 수 없음",
 	"awake.stopReason.low_battery": "배터리가 설정된 안전 한계에 도달하여 중지되었습니다. Mac을 충전한 다음 Stay Awake를 껐다가 다시 켜서 재시작하세요.",
 	"awake.stopReason.critical_heat": "Mac을 식혀야 하므로 중지되었습니다. 식은 후 Stay Awake를 껐다가 다시 켜서 재시작하세요.",
 	"awake.stopReason.battery_unknown": "배터리 상태를 읽을 수 없어 중지되었습니다. Stay Awake를 껐다가 다시 켜서 재시도하세요.",

@@ -2,6 +2,8 @@
 import type { AppLocale } from "../shared/ui-locale";
 
 export const TRAY_MESSAGE_KEYS = [
+	"tray.awakeActive",
+	"tray.awakeUnknown",
 	"tray.untitledSession",
 	"tray.attentionTooltip_one",
 	"tray.attentionTooltip_other",
@@ -17,6 +19,8 @@ export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
 
 export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 	"en": {
+		"tray.awakeActive": "Stay Awake: keeping this Mac awake",
+		"tray.awakeUnknown": "Stay Awake: status unavailable",
 		"tray.untitledSession": "Untitled session",
 		"tray.attentionTooltip_one": "{{count}} session needs attention",
 		"tray.attentionTooltip_other": "{{count}} sessions need attention",
@@ -28,6 +32,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "Needs you"
 	},
 	"zh-CN": {
+		"tray.awakeActive": "保持唤醒：正在使此 Mac 保持唤醒",
+		"tray.awakeUnknown": "保持唤醒：状态不可用",
 		"tray.untitledSession": "未命名会话",
 		"tray.attentionTooltip_one": "{{count}} 个会话需要关注",
 		"tray.attentionTooltip_other": "{{count}} 个会话需要关注",
@@ -39,6 +45,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "需要你处理"
 	},
 	"ja": {
+		"tray.awakeActive": "スリープ防止：この Mac を起動状態に維持しています",
+		"tray.awakeUnknown": "スリープ防止：状態を取得できません",
 		"tray.untitledSession": "無題のセッション",
 		"tray.attentionTooltip_one": "{{count}} 件のセッションに対応が必要です",
 		"tray.attentionTooltip_other": "{{count}} 件のセッションに対応が必要です",
@@ -50,6 +58,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "対応が必要"
 	},
 	"ko": {
+		"tray.awakeActive": "잠자기 방지: 이 Mac을 깨어 있게 유지하는 중",
+		"tray.awakeUnknown": "잠자기 방지: 상태를 확인할 수 없음",
 		"tray.untitledSession": "제목 없는 세션",
 		"tray.attentionTooltip_one": "{{count}}개 세션에 확인이 필요합니다",
 		"tray.attentionTooltip_other": "{{count}}개 세션에 확인이 필요합니다",
@@ -61,6 +71,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "조치 필요"
 	},
 	"es": {
+		"tray.awakeActive": "Mantener despierto: este Mac se mantiene activo",
+		"tray.awakeUnknown": "Mantener despierto: estado no disponible",
 		"tray.untitledSession": "Sesión sin título",
 		"tray.attentionTooltip_one": "{{count}} sesión requiere atención",
 		"tray.attentionTooltip_other": "{{count}} sesiones requieren atención",
@@ -72,6 +84,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "Te necesita"
 	},
 	"fr": {
+		"tray.awakeActive": "Maintien en éveil : ce Mac reste éveillé",
+		"tray.awakeUnknown": "Maintien en éveil : état indisponible",
 		"tray.untitledSession": "Session sans titre",
 		"tray.attentionTooltip_one": "{{count}} session nécessite votre attention",
 		"tray.attentionTooltip_other": "{{count}} sessions nécessitent votre attention",
@@ -83,6 +97,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "Action requise"
 	},
 	"de": {
+		"tray.awakeActive": "Wach bleiben: Dieser Mac wird wach gehalten",
+		"tray.awakeUnknown": "Wach bleiben: Status nicht verfügbar",
 		"tray.untitledSession": "Unbenannte Sitzung",
 		"tray.attentionTooltip_one": "{{count}} Sitzung benötigt Aufmerksamkeit",
 		"tray.attentionTooltip_other": "{{count}} Sitzungen benötigen Aufmerksamkeit",
@@ -94,6 +110,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"zone.action": "Ihre Aktion nötig"
 	},
 	"pt-BR": {
+		"tray.awakeActive": "Manter acordado: este Mac está sendo mantido acordado",
+		"tray.awakeUnknown": "Manter acordado: status indisponível",
 		"tray.untitledSession": "Sessão sem título",
 		"tray.attentionTooltip_one": "{{count}} sessão precisa de atenção",
 		"tray.attentionTooltip_other": "{{count}} sessões precisam de atenção",
