@@ -339,6 +339,19 @@ func (s *Store) RedeemProjectShareLink(
 	if err != nil {
 		return domain.SharedProject{}, fmt.Errorf("look up share link: %w", err)
 	}
+	// Someone already in the organization (the link's creator included)
+	// needs no grant: the link only says where to go.
+	member, err := orgMemberTx(ctx, tx, principal, orgID)
+	if err != nil {
+		return domain.SharedProject{}, err
+	}
+	if member {
+		shared, err := memberSharedProjectTx(ctx, tx, orgID, link.ProjectID, link.SessionID)
+		if err != nil {
+			return domain.SharedProject{}, err
+		}
+		return shared, tx.Commit(ctx)
+	}
 	if link.CreatedByUserID == principal.UserID {
 		return domain.SharedProject{}, ErrForbidden
 	}
@@ -390,6 +403,37 @@ func (s *Store) RedeemProjectShareLink(
 	if err := tx.Commit(ctx); err != nil {
 		return domain.SharedProject{}, fmt.Errorf("commit redeem project share link: %w", err)
 	}
+	return shared, nil
+}
+
+// memberSharedProjectTx describes where a share link leads for someone who
+// already belongs to its organization: the project and session, no grant.
+func memberSharedProjectTx(ctx context.Context, tx pgx.Tx, orgID, projectID, sessionID string) (domain.SharedProject, error) {
+	shared := domain.SharedProject{Member: true, SessionID: sessionID}
+	var githubRepoID *int64
+	var config []byte
+	err := tx.QueryRow(ctx,
+		`SELECT project.id, project.org_id, project.display_name, project.repository_url, project.default_branch,
+			project.github_repository_id, project.config, project.created_at, project.updated_at,
+			COALESCE(session_row.display_name, '')
+		FROM ao_projects project
+		LEFT JOIN ao_sessions session_row
+			ON session_row.org_id = project.org_id AND session_row.id = NULLIF($3, '')::uuid
+		WHERE project.org_id = $1 AND project.id = $2 AND project.archived_at IS NULL`,
+		orgID, projectID, sessionID,
+	).Scan(
+		&shared.Project.ID, &shared.Project.OrgID, &shared.Project.DisplayName, &shared.Project.RepositoryURL,
+		&shared.Project.DefaultBranch, &githubRepoID, &config, &shared.Project.CreatedAt, &shared.Project.UpdatedAt,
+		&shared.SessionName,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SharedProject{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.SharedProject{}, err
+	}
+	shared.Project.GitHubRepositoryID = githubRepoID
+	shared.Project.Config = config
 	return shared, nil
 }
 
@@ -569,28 +613,11 @@ func effectiveDeniedCommands(sessionDenied, grantDenied []string) []string {
 }
 
 // withSessionAccess authorizes members and active share-grant holders.
-func (s *Store) withSessionAccess(
-	ctx context.Context,
-	principal domain.Principal,
-	orgID, sessionID string,
-	fn func(tx pgx.Tx, access sessionAccess) error,
-) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(
-		ctx,
-		`SELECT set_config('ao.user_id', $1, true), set_config('ao.org_id', $2, true)`,
-		principal.UserID, orgID,
-	); err != nil {
-		return err
-	}
-
+// orgMemberTx reports whether principal is an active member of the
+// organization, under the same identity rules every tenant request uses.
+func orgMemberTx(ctx context.Context, tx pgx.Tx, principal domain.Principal, orgID string) (bool, error) {
 	var isMember bool
-	if err := tx.QueryRow(
+	err := tx.QueryRow(
 		ctx,
 		`SELECT EXISTS (
 			SELECT 1
@@ -616,7 +643,32 @@ func (s *Store) withSessionAccess(
 			  )
 		)`,
 		orgID, principal.UserID, principal.Provider, principal.ExternalOrgID,
-	).Scan(&isMember); err != nil {
+	).Scan(&isMember)
+	return isMember, err
+}
+
+func (s *Store) withSessionAccess(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	fn func(tx pgx.Tx, access sessionAccess) error,
+) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(
+		ctx,
+		`SELECT set_config('ao.user_id', $1, true), set_config('ao.org_id', $2, true)`,
+		principal.UserID, orgID,
+	); err != nil {
+		return err
+	}
+
+	isMember, err := orgMemberTx(ctx, tx, principal, orgID)
+	if err != nil {
 		return err
 	}
 
