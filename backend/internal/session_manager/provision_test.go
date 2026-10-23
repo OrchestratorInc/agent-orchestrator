@@ -975,3 +975,41 @@ func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeHarnessSpawnPermissionDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		harness                      domain.AgentHarness
+		project, role, request, want domain.PermissionMode
+	}{
+		{"native unset", domain.HarnessCodeBuddy, "", "", "", domain.PermissionModeDefault},
+		{"explicit project auto", domain.HarnessCodeBuddy, domain.PermissionModeAuto, "", "", domain.PermissionModeAuto},
+		{"explicit project bypass", domain.HarnessCodeBuddy, domain.PermissionModeBypassPermissions, "", "", domain.PermissionModeBypassPermissions},
+		{"explicit role auto", domain.HarnessCodeBuddy, "", domain.PermissionModeAuto, "", domain.PermissionModeAuto},
+		{"explicit role bypass", domain.HarnessCodeBuddy, "", domain.PermissionModeBypassPermissions, "", domain.PermissionModeBypassPermissions},
+		{"explicit request auto", domain.HarnessCodeBuddy, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto},
+		{"explicit request bypass", domain.HarnessCodeBuddy, "", "", domain.PermissionModeBypassPermissions, domain.PermissionModeBypassPermissions},
+		{"request native default wins", domain.HarnessCodeBuddy, domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, domain.PermissionModeDefault, domain.PermissionModeDefault},
+		{"codex unchanged", domain.HarnessCodex, "", "", "", domain.PermissionModeAuto},
+		{"claude unchanged", domain.HarnessClaudeCode, "", "", "", domain.PermissionModeAuto},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := domain.ProjectConfig{
+				AgentConfig: domain.AgentConfig{Permissions: tc.project},
+				Worker:      domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: tc.role}},
+			}
+			cfg := ports.SpawnConfig{
+				Harness: tc.harness, Kind: domain.KindWorker,
+				AgentConfig: ports.AgentConfig{Permissions: tc.request},
+			}
+			resolved := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project), cfg.AgentConfig)
+			if resolved.Permissions != tc.want {
+				t.Fatalf("resolved permissions = %q, want %q", resolved.Permissions, tc.want)
+			}
+			record := seedRecord(cfg, project, time.Unix(0, 0))
+			if record.Metadata.Permissions != tc.want {
+				t.Fatalf("persisted permissions = %q, want %q", record.Metadata.Permissions, tc.want)
+			}
+		})
+	}
+}
