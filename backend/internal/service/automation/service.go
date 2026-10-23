@@ -228,6 +228,10 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		if *input.Harness != "" && !input.Harness.IsKnown() {
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
 		}
+		if rec.Harness != *input.Harness {
+			// Model capabilities belong to the harness; explicit replacements below survive.
+			rec.Model, rec.Mode, rec.Effort = "", "", ""
+		}
 		rec.Harness = *input.Harness
 	}
 	if input.Model != nil {

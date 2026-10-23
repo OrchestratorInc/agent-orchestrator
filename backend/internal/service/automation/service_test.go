@@ -414,3 +414,41 @@ func TestAutomationModelSettingsUpdateAndClear(t *testing.T) {
 		t.Fatalf("cleared = %#v", updated)
 	}
 }
+
+func TestUpdateHarnessResetsOnlyOmittedTuning(t *testing.T) {
+	amp, claude, codex, projectDefault := domain.HarnessAmp, domain.HarnessClaudeCode, domain.HarnessCodex, domain.AgentHarness("")
+	model, mode, effort := "claude-sonnet-4-5", "smart", "low"
+	tests := []struct {
+		name                            string
+		input                           UpdateInput
+		wantHarness                     domain.AgentHarness
+		wantModel, wantMode, wantEffort string
+	}{
+		{name: "switch to Amp", input: UpdateInput{Harness: &amp}, wantHarness: amp},
+		{name: "switch to Claude", input: UpdateInput{Harness: &claude}, wantHarness: claude},
+		{name: "switch to project default", input: UpdateInput{Harness: &projectDefault}},
+		{name: "same harness preserves tuning", input: UpdateInput{Harness: &codex}, wantHarness: codex, wantModel: "gpt-5", wantMode: "old-mode", wantEffort: "high"},
+		{name: "omitted harness preserves tuning", input: UpdateInput{}, wantHarness: codex, wantModel: "gpt-5", wantMode: "old-mode", wantEffort: "high"},
+		{name: "explicit model replaces old model", input: UpdateInput{Harness: &claude, Model: &model}, wantHarness: claude, wantModel: model},
+		{name: "explicit mode replaces old mode", input: UpdateInput{Harness: &amp, Mode: &mode}, wantHarness: amp, wantMode: mode},
+		{name: "explicit effort replaces old effort", input: UpdateInput{Harness: &claude, Effort: &effort}, wantHarness: claude, wantEffort: effort},
+		{name: "explicit model and effort preserved", input: UpdateInput{Harness: &claude, Model: &model, Effort: &effort}, wantHarness: claude, wantModel: model, wantEffort: effort},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc := New(Deps{Store: newFakeStore()})
+			created, err := svc.Create(ctx, CreateInput{ProjectID: "scheduled", DisplayName: "Review", Prompt: "Review", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Model: "gpt-5", Mode: "old-mode", Effort: "high", RRule: "FREQ=DAILY", Timezone: "UTC"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, err := svc.Update(ctx, created.ID, tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.Harness != tt.wantHarness || updated.Model != tt.wantModel || updated.Mode != tt.wantMode || updated.Effort != tt.wantEffort {
+				t.Fatalf("updated tuning = (%q, %q, %q, %q), want (%q, %q, %q, %q)", updated.Harness, updated.Model, updated.Mode, updated.Effort, tt.wantHarness, tt.wantModel, tt.wantMode, tt.wantEffort)
+			}
+		})
+	}
+}
