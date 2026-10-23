@@ -5,17 +5,21 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
+
+// claudeHasNativeCredential is replaced in tests so they never read the
+// developer's real Claude login or keychain.
+var claudeHasNativeCredential = claudecode.HasNativeCredential
 
 // newClaudeLoginCommand is an internal, trusted terminal entry point that
 // exposes every login mode supported by Claude Code without accepting raw
@@ -59,7 +63,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	case "3":
 		args = append(args, "--sso")
 	case "4":
-		return c.saveClaudeSetupToken(in, out, style)
+		return c.saveClaudeSetupToken(ctx, in, out, style)
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
@@ -70,7 +74,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	return err
 }
 
-func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style codexLoginStyle) error {
+func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader, out io.Writer, style codexLoginStyle) error {
 	if _, err := fmt.Fprintf(out, "\nRun claude setup-token in another terminal, then paste its token here.\n%s: ", style.bold("Setup token")); err != nil {
 		return err
 	}
@@ -90,18 +94,23 @@ func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style
 	if err != nil {
 		return fmt.Errorf("resolve AO data directory: %w", err)
 	}
-	dir := filepath.Join(cfg.DataDir, "harnesses", "claude-code")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create Claude credential directory: %w", err)
+	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
+		return err
 	}
-	path := filepath.Join(dir, "oauth-token")
-	if err := os.WriteFile(path, secret, 0o600); err != nil {
-		return fmt.Errorf("save Claude setup token: %w", err)
+	if _, err := fmt.Fprintln(out, style.success("Claude setup token saved for local sessions.")); err != nil {
+		return err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("protect Claude setup token: %w", err)
+	// Name the file so a data directory other than the daemon's is visible.
+	if _, err := fmt.Fprintln(out, style.dim("Saved to "+claudecode.LocalOAuthTokenPath(cfg.DataDir))); err != nil {
+		return err
 	}
-	_, err = fmt.Fprintln(out, style.success("Claude setup token saved for local sessions."))
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if !claudeHasNativeCredential(checkCtx, nil) {
+		return nil
+	}
+	// AO never injects the token over a native login, so say it is unused.
+	_, err = fmt.Fprintln(out, style.bold("Claude Code is already signed in on this computer, so sessions keep using that login. Sign out of Claude Code (claude auth logout) to use this token instead."))
 	return err
 }
 

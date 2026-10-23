@@ -606,15 +606,9 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if launcher, ok := item.Agent.(interface {
-		AuthStatusWithRuntimeEnv(context.Context, map[string]string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
-		AugmentRuntimeEnv(map[string]string, string)
-	}); ok && c.dataDir != "" {
+	if runtimeChecker, ok := item.Agent.(ports.AgentRuntimeAuthChecker); ok && c.dataDir != "" {
 		// Verify the same credential fallback used by local session launch.
-		// In particular, Claude's AO setup-token is not a native CLI login.
-		env := make(map[string]string)
-		launcher.AugmentRuntimeEnv(env, c.dataDir)
-		status, account, diagnostics, err = launcher.AuthStatusWithRuntimeEnv(ctx, env)
+		status, account, diagnostics, err = runtimeChecker.AuthStatusForRuntime(ctx, c.dataDir)
 	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
 	} else {

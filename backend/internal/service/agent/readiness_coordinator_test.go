@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1274,58 +1272,39 @@ func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 
 type readinessClaudeTokenAgent struct {
 	*claudecode.Plugin
-	t         *testing.T
-	wantToken string
-	status    ports.AgentAuthStatus
+	t       *testing.T
+	dataDir string
+	status  ports.AgentAuthStatus
 }
 
 func (a *readinessClaudeTokenAgent) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
-	a.t.Error("readiness used an auth probe without the runtime credential environment")
+	a.t.Error("readiness used an auth probe without the runtime credential fallback")
 	return ports.AgentAuthStatusUnauthorized, nil
 }
 
-func (a *readinessClaudeTokenAgent) AuthStatusWithRuntimeEnv(_ context.Context, env map[string]string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
-	if env["CLAUDE_CODE_OAUTH_TOKEN"] != a.wantToken {
-		a.t.Error("readiness did not preserve the expected token fallback and native credential precedence")
+func (a *readinessClaudeTokenAgent) AuthStatusForRuntime(_ context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	if dataDir != a.dataDir {
+		a.t.Errorf("runtime auth data directory = %q, want %q", dataDir, a.dataDir)
 	}
 	return a.status, domain.AgentAccountIdentity{}, []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("setup token probe", "token_probe_completed")}, nil
 }
 
-func TestReadinessUsesSavedClaudeTokenWithoutShadowingNativeCredentials(t *testing.T) {
+// The adapter owns the setup-token fallback and native-credential precedence
+// (see claudecode's local credential tests); readiness only has to route the
+// check through it with the daemon's data directory.
+func TestReadinessChecksAuthenticationWithRuntimeCredentials(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		nativeKey string
-		status    ports.AgentAuthStatus
-		want      domain.AgentAuthenticationState
+		name   string
+		status ports.AgentAuthStatus
+		want   domain.AgentAuthenticationState
 	}{
-		{"accepted setup token", "", ports.AgentAuthStatusAuthorized, domain.AgentAuthenticationAuthorized},
-		{"rejected setup token", "", ports.AgentAuthStatusUnauthorized, domain.AgentAuthenticationUnauthorized},
-		{"unverified setup token", "", ports.AgentAuthStatusConfigured, domain.AgentAuthenticationConfigured},
-		{"native credential wins", "native-key", ports.AgentAuthStatusAuthorized, domain.AgentAuthenticationAuthorized},
+		{"accepted setup token", ports.AgentAuthStatusAuthorized, domain.AgentAuthenticationAuthorized},
+		{"rejected setup token", ports.AgentAuthStatusUnauthorized, domain.AgentAuthenticationUnauthorized},
+		{"unverified setup token", ports.AgentAuthStatusConfigured, domain.AgentAuthenticationConfigured},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home, dataDir := t.TempDir(), t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
-			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
-			t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
-			t.Setenv("ANTHROPIC_API_KEY", tc.nativeKey)
-			t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
-			// Prevent a macOS keychain helper from finding real user credentials.
-			t.Setenv("PATH", "")
-			const token = "sk-ant-oat01-readiness-token"
-			dir := filepath.Join(dataDir, "harnesses", "claude-code")
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, "oauth-token"), []byte(token), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			wantToken := token
-			if tc.nativeKey != "" {
-				wantToken = ""
-			}
-			agent := &readinessClaudeTokenAgent{Plugin: claudecode.New(), t: t, wantToken: wantToken, status: tc.status}
+			const dataDir = "/daemon/data"
+			agent := &readinessClaudeTokenAgent{Plugin: claudecode.New(), t: t, dataDir: dataDir, status: tc.status}
 			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{DataDir: dataDir})
 			observation, failed := coordinator.checkAuthentication(readinessHarness("claude-code", "Claude Code", agent), domain.AgentReadinessPurposeDisplay)
 			if failed || observation.State != tc.want {

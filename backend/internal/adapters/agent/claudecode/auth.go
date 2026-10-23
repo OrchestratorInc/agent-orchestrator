@@ -109,12 +109,16 @@ func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[s
 // account `claude auth status` names, when the CLI answered for the provider
 // the agent actually uses, and each check without running an extra probe.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
-	return p.AuthStatusWithRuntimeEnv(ctx, nil)
+	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", nil, false)
+	return status, report.account(), steps, err
 }
 
-// AuthStatusWithRuntimeEnv verifies readiness with AO's runtime credential
-// fallback while retaining the account identity, diagnostics, and verdict cache.
-func (p *Plugin) AuthStatusWithRuntimeEnv(ctx context.Context, env map[string]string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+// AuthStatusForRuntime is AuthStatusWithDiagnostics with the setup-token
+// fallback AugmentRuntimeEnv applies at launch. AO's saved token is not a native
+// CLI login, so without it a token-only machine reads as signed out.
+func (p *Plugin) AuthStatusForRuntime(ctx context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	env := make(map[string]string)
+	p.AugmentRuntimeEnv(env, dataDir)
 	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", env, false)
 	return status, report.account(), steps, err
 }
