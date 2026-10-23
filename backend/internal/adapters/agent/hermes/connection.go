@@ -121,10 +121,12 @@ func verifyAuthentication(ctx context.Context, status ports.AgentAuthStatus, ide
 		if route, selected, ok := selectedConnection(home); ok {
 			status, step := verifyConnection(ctx, route, nil)
 			ports.RecordAuthEvidence(ctx, selected)
-			return status, selected, append(steps, step), ctx.Err()
+			// Credentials are already established. Verification interruption is
+			// inconclusive and is carried by the provider diagnostic.
+			return status, selected, append(steps, step), nil
 		}
 	}
 	step := domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
 	step.Provider = identity.Provider
-	return status, identity, append(steps, step), ctx.Err()
+	return status, identity, append(steps, step), nil
 }

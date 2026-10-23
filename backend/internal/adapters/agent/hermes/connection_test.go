@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -65,6 +66,58 @@ func TestHermesLeavesAmbiguousRoutesUnverified(t *testing.T) {
 				t.Fatal("ambiguous route considered verified")
 			}
 		})
+	}
+}
+
+func TestHermesInterruptedVerificationPreservesConfiguredCredentials(t *testing.T) {
+	for _, provider := range []string{"zai", "unsupported"} {
+		for _, code := range []string{"probe_timeout", "probe_cancelled"} {
+			t.Run(provider+"/"+code, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HERMES_HOME", home)
+				t.Setenv("HERMES_MANAGED_DIR", filepath.Join(home, "missing"))
+				for name, content := range map[string]string{
+					"config.yaml": "model:\n  provider: " + provider + "\n  default: glm-5.3\n  base_url: https://api.z.ai/api/coding/paas/v4\n",
+					".env":        "GLM_API_KEY=selected-key\n",
+				} {
+					if err := os.WriteFile(filepath.Join(home, name), []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if code == "probe_timeout" {
+					var deadlineCancel context.CancelFunc
+					ctx, deadlineCancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+					defer deadlineCancel()
+				} else {
+					cancel()
+				}
+				old := verifyConnection
+				t.Cleanup(func() { verifyConnection = old })
+				calls := 0
+				verifyConnection = func(ctx context.Context, _ authprobe.Connection, _ *http.Client) (ports.AgentAuthStatus, domain.AgentAuthDiagnostic) {
+					calls++
+					if provider != "zai" || ctx.Err() == nil {
+						t.Fatal("expected interrupted verification of the supported route")
+					}
+					return ports.AgentAuthStatusConfigured, domain.NewAgentAuthDiagnostic("provider_validation", code)
+				}
+				identity := domain.AgentAccountIdentity{Provider: provider}
+				initial := domain.NewAgentAuthDiagnostic("credential_detection", "credentials_present")
+				status, gotIdentity, steps, err := verifyAuthentication(ctx, ports.AgentAuthStatusConfigured, identity, []domain.AgentAuthDiagnostic{initial})
+				wantCode, wantCalls := "provider_unsupported", 0
+				if provider == "zai" {
+					wantCode, wantCalls = code, 1
+				}
+				if err != nil || status != ports.AgentAuthStatusConfigured || gotIdentity.Provider != provider || calls != wantCalls {
+					t.Fatalf("status=%s identity=%+v calls=%d err=%v", status, gotIdentity, calls, err)
+				}
+				if len(steps) != 2 || steps[0] != initial || steps[1].Code != wantCode {
+					t.Fatalf("diagnostics=%+v, want retained detection and %s", steps, wantCode)
+				}
+			})
+		}
 	}
 }
 
