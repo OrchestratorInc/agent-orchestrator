@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Copiar caminho",
+	"chat.path.revealInFinder": "Mostrar no Finder",
+	"chat.path.revealInFileManager": "Mostrar no gerenciador de arquivos",
+	"chat.path.openWith": "Abrir com {{editor}}",
+	"chat.path.actionFailed": "Não foi possível concluir a ação do caminho",
 	"awake.stopReason.low_battery": "Interrompido porque a bateria atingiu o limite de segurança configurado. Carregue o Mac e desative e ative novamente o Stay Awake para reiniciar.",
 	"awake.stopReason.critical_heat": "Interrompido porque o Mac precisa esfriar. Depois que esfriar, desative e ative novamente o Stay Awake para reiniciar.",
 	"awake.stopReason.battery_unknown": "Interrompido porque não foi possível ler o estado da bateria. Desative e ative novamente o Stay Awake para tentar de novo.",
@@ -894,7 +899,7 @@
 	"inspector.openInSystemBrowser": "Abrir no navegador do sistema",
 	"link.copy": "Copiar link",
 	"link.openInAOBrowser": "Abrir no navegador do AO",
-	"link.openInFiles": "Abrir em Arquivos",
+	"link.openInAO": "Abrir no AO",
 	"link.openInExternalBrowser": "Abrir no navegador externo",
 	"inspector.openInlineComments": "{{count}} comentários inline abertos",
 	"inspector.requestRereviewPR": "Solicitar nova revisão do PR",

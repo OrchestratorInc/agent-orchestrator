@@ -1,5 +1,7 @@
 // @vitest-environment node
 import path from "node:path";
+import os from "node:os";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createEditorHandoff, type EditorHandoffDeps } from "./editor-handoff";
 
@@ -301,7 +303,34 @@ describe("editor handoff", () => {
 		}
 		expect(JSON.stringify(state)).not.toContain(".app");
 		await handoff.getState("ao-2");
-		expect(readIcon).toHaveBeenCalledTimes(3);
+		expect(readIcon).toHaveBeenCalledTimes(4);
+	});
+
+	it.each([
+		["cursor", "Cursor"], ["vscode", "Visual Studio Code"], ["zed", "Zed"], ["antigravity", "Antigravity IDE"],
+	])("derives %s branding from its discovered app without an editor icon mapping", async (id, appName) => {
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		const readIcon = vi.fn().mockResolvedValue(iconDataUrl);
+		const input = deps({ readIcon, isDirectory: (value) => value === `/Applications/${appName}.app` });
+		const state = await createEditorHandoff(input).getState("ao-1");
+		expect(readIcon).toHaveBeenCalledWith(`/Applications/${appName}.app`);
+		expect(state.targets.find((target) => target.id === id)).toMatchObject({ iconDataUrl });
+		expect(JSON.stringify(state)).not.toContain(".app");
+	});
+
+	it("uses the actual app bundle when a CLI symlink points to a relocated editor", async () => {
+		const readIcon = vi.fn().mockResolvedValue("data:image/png;base64,dGVzdA==");
+		const input = deps({ readIcon, realPath: vi.fn(async (value) => value === "/bin/code" ? "/opt/Custom Editor.app/Contents/Resources/app/bin/code" : value) });
+		await createEditorHandoff(input).getState("ao-1");
+		expect(readIcon).toHaveBeenCalledWith("/opt/Custom Editor.app");
+		expect(readIcon).not.toHaveBeenCalledWith("/bin/code");
+	});
+
+	it("gets native executable icons on platforms without app bundles", async () => {
+		const readIcon = vi.fn().mockResolvedValue("data:image/png;base64,dGVzdA==");
+		const state = await createEditorHandoff(deps({ platform: "linux", isDirectory: () => false, readIcon })).getState("ao-1");
+		expect(readIcon).toHaveBeenCalledWith("/bin/code");
+		expect(state.targets.find((target) => target.id === "vscode")).toHaveProperty("iconDataUrl");
 	});
 
 	it("keeps targets usable when native icon lookup fails and retries the lookup", async () => {
@@ -658,5 +687,130 @@ describe("editor handoff (win32 fallback discovery)", () => {
 
 		installed.add(cursorBin);
 		expect((await handoff.getState("ao-1")).targets.some(({ id }) => id === "cursor")).toBe(true);
+	});
+});
+
+describe("chat path actions", () => {
+	it.skipIf(process.platform === "win32")("resolves symlinks before parent components for absolute and relative native paths", async () => {
+		const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-path-actions-")));
+		const workspace = path.join(root, "workspace");
+		const outside = path.join(root, "outside");
+		try {
+			await mkdir(workspace);
+			await mkdir(path.join(outside, "dir"), { recursive: true });
+			await writeFile(path.join(workspace, "file.ts"), "workspace");
+			await writeFile(path.join(outside, "file.ts"), "outside");
+			await symlink(path.join(outside, "dir"), path.join(workspace, "link"));
+			await mkdir(path.join(workspace, "nested", "deeper"), { recursive: true });
+			await symlink(path.join(workspace, "nested", "deeper"), path.join(workspace, "deep-link"));
+			for (const action of ["reveal", "open"] as const) {
+				for (const reference of [`${workspace}/link/../file.ts`, "~/link/../file.ts"]) {
+					const input = deps({ homeDir: workspace, resolveWorkspace: async () => workspace, realPath: realpath });
+					await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action, editorId: "vscode" });
+					if (action === "reveal") expect(input.revealPath).toHaveBeenCalledExactlyOnceWith(path.join(outside, "file.ts"));
+					else expect(input.launch).toHaveBeenCalledExactlyOnceWith("/bin/code", ["--new-window", path.join(outside, "file.ts")], outside);
+				}
+				const input = deps({ resolveWorkspace: async () => workspace, realPath: realpath });
+				await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "link/../file.ts", action, editorId: "vscode" })).rejects.toThrow("outside");
+				expect(input.revealPath).not.toHaveBeenCalled();
+				expect(input.launch).not.toHaveBeenCalled();
+				// Lexically this escapes, but following the link first stays inside.
+				const inside = deps({ resolveWorkspace: async () => workspace, realPath: realpath });
+				await createEditorHandoff(inside).pathAction({ sessionId: "ao-1", path: "deep-link/../../file.ts", action, editorId: "vscode" });
+				if (action === "reveal") expect(inside.revealPath).toHaveBeenCalledExactlyOnceWith(path.join(workspace, "file.ts"));
+				else expect(inside.launch).toHaveBeenCalledExactlyOnceWith("/bin/code", ["--new-window", path.join(workspace, "file.ts")], workspace);
+			}
+			const input = deps({ homeDir: workspace, resolveWorkspace: async () => workspace, realPath: realpath, copyText: vi.fn() });
+			const handoff = createEditorHandoff(input);
+			await expect(handoff.pathAction({ sessionId: "ao-1", path: "link/../file.ts", action: "copy" })).rejects.toThrow("outside");
+			expect(input.copyText).not.toHaveBeenCalled();
+			await handoff.pathAction({ sessionId: "ao-1", path: "~/link/../file.ts", action: "copy" });
+			expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/link/../file.ts`);
+			await handoff.pathAction({ sessionId: "ao-1", path: "deep-link/../../file.ts", action: "copy" });
+			expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/deep-link/../../file.ts`);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		["src/link/../file.ts", "C:\\worktrees\\ao-1\\src\\link\\..\\file.ts"],
+		["D:/src/link/../file.ts", "D:\\src\\link\\..\\file.ts"],
+		["/src/link/../file.ts", "C:\\src\\link\\..\\file.ts"],
+	])("preserves Windows components and root semantics when copying %s", async (reference, expected) => {
+		const input = winDeps({ resolveWorkspace: async () => "C:\\worktrees\\ao-1", copyText: vi.fn() });
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action: "copy" });
+		expect(input.copyText).toHaveBeenCalledExactlyOnceWith(expected);
+	});
+
+	it("copies an absolute workspace path without requiring the file to exist", async () => {
+		const input = deps({ copyText: vi.fn(), realPath: vi.fn().mockRejectedValue(new Error("missing")) });
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/new file.ts", action: "copy" });
+		expect(input.copyText).toHaveBeenCalledExactlyOnceWith("/worktrees/ao-1/src/new file.ts");
+		expect(input.realPath).toHaveBeenCalledWith("/worktrees/ao-1/src/new file.ts");
+	});
+
+	it.each(["/other-project/src/a.ts", "~/notes/a.ts"])("reveals the actual absolute path %s without matching its tail", async (reference) => {
+		const input = deps();
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action: "reveal" });
+		expect(input.revealPath).toHaveBeenCalledExactlyOnceWith(reference.replace("~", "/Users/tester"));
+		expect(input.launch).not.toHaveBeenCalled();
+	});
+
+	it.each(["cursor", "vscode"] as const)("opens one file in %s, keeping spaces and shell syntax as path data", async (editorId) => {
+		const input = deps();
+		const target = "/worktrees/ao-1/src/it's $(touch nope).ts";
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: target, action: "open", editorId });
+		expect(input.launch).toHaveBeenCalledExactlyOnceWith(
+			editorId === "cursor" ? "/usr/bin/open" : "/bin/code",
+			editorId === "cursor" ? ["-n", "-a", "Cursor", "--args", "--new-window", target] : ["--new-window", target],
+			"/worktrees/ao-1/src",
+		);
+		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
+	it("opens a folder in an editor with the folder as its working directory", async () => {
+		const target = "/worktrees/ao-1/src";
+		const input = deps({ isDirectory: (value) => value === target });
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src", action: "open", editorId: "vscode" });
+		expect(input.launch).toHaveBeenCalledWith("/bin/code", ["--new-window", target], target);
+	});
+
+	it.each(["javascript:alert(1)", "https://example.com/a.ts", "C:/remote/a.ts", "//server/share", "\\\\server\\share", "../outside.ts", "bad\0path"])("rejects invalid or escaping relative references: %s", async (reference) => {
+		const input = deps();
+		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action: "reveal" })).rejects.toThrow();
+		expect(input.revealPath).not.toHaveBeenCalled();
+		expect(input.launch).not.toHaveBeenCalled();
+	});
+
+	it("rejects relative symlinks escaping the workspace", async () => {
+		const input = deps({ realPath: vi.fn(async (value) => value.endsWith("link.ts") ? "/outside/secret.ts" : value) });
+		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "link.ts", action: "reveal" })).rejects.toThrow("outside");
+		expect(input.revealPath).not.toHaveBeenCalled();
+	});
+
+	it("reports missing paths and missing editors without launching anything", async () => {
+		const input = deps({ realPath: vi.fn().mockRejectedValue(new Error("ENOENT")) });
+		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "missing.ts", action: "reveal" })).rejects.toThrow("no longer exists");
+		await expect(createEditorHandoff(deps()).pathAction({ sessionId: "ao-1", path: "src/a.ts", action: "open", editorId: "zed" })).rejects.toThrow("not installed");
+		expect(input.launch).not.toHaveBeenCalled();
+	});
+
+	it("does not launch if the local session cannot resolve", async () => {
+		const input = deps({ resolveWorkspace: vi.fn().mockRejectedValue(new Error("Session unavailable")) });
+		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "/tmp/a.ts", action: "reveal" })).rejects.toThrow("Session unavailable");
+		expect(input.revealPath).not.toHaveBeenCalled();
+	});
+
+	it("opens a Windows file rather than its parent in Neovim", async () => {
+		const input = winDeps({
+			env: { PATH: "C:\\bin", PATHEXT: ".EXE", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+			resolveWorkspace: vi.fn().mockResolvedValue("C:\\worktrees\\ao-1"),
+			isExecutable: installedExecutables("C:\\bin\\nvim.exe"),
+		});
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/a b.ts", action: "open", editorId: "neovim" });
+		expect(input.launch).toHaveBeenCalledWith("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/v:off", "/k", '""C:\\bin\\nvim.exe" "C:\\worktrees\\ao-1\\src\\a b.ts""'], "C:\\worktrees\\ao-1\\src");
+		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/%TEMP%.ts", action: "open", editorId: "neovim" })).rejects.toThrow("safely");
+		expect(input.launch).toHaveBeenCalledTimes(1);
 	});
 });

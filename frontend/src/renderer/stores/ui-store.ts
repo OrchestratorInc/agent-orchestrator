@@ -97,8 +97,8 @@ export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: num
 export type GlobalToast = {
 	title: string;
 	body?: string;
-	tone?: "info" | "error";
-	placement?: "bottom-right" | "top-center";
+	tone?: "info" | "error" | "success";
+	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
 	durationMs?: number;
 	dedupeKey?: string;
@@ -634,8 +634,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
-			const tone = options?.tone ?? (style === "error" || style === "info" ? style : "info");
-			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" ? style : "bottom-right");
+			const tone = options?.tone ?? (style === "error" || style === "info" || style === "success" ? style : "info");
+			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" || style === "bottom-center" ? style : "bottom-right");
 			const toast = { title, body, tone, placement, nonce, ...options };
 			const globalToasts = toast.dedupeKey
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)

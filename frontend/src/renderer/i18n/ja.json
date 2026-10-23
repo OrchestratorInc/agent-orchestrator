@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "パスをコピー",
+	"chat.path.revealInFinder": "Finderで表示",
+	"chat.path.revealInFileManager": "ファイルマネージャーで表示",
+	"chat.path.openWith": "{{editor}}で開く",
+	"chat.path.actionFailed": "パスの操作を完了できませんでした",
 	"awake.stopReason.low_battery": "バッテリー残量が設定された安全基準に達したため停止しました。Mac を充電してから、Stay Awake をオフにして再度オンにしてください。",
 	"awake.stopReason.critical_heat": "Mac の冷却が必要なため停止しました。冷却後、Stay Awake をオフにして再度オンにしてください。",
 	"awake.stopReason.battery_unknown": "バッテリーの状態を読み取れなかったため停止しました。Stay Awake をオフにして再度オンにすると再試行できます。",
@@ -886,7 +891,7 @@
 	"inspector.openInSystemBrowser": "システムブラウザで開く",
 	"link.copy": "リンクをコピー",
 	"link.openInAOBrowser": "AO ブラウザで開く",
-	"link.openInFiles": "ファイルで開く",
+	"link.openInAO": "AOで開く",
 	"link.openInExternalBrowser": "外部ブラウザで開く",
 	"inspector.openInlineComments": "未解決のインラインコメント {{count}} 件",
 	"inspector.requestRereviewPR": "PR の再レビューを依頼",

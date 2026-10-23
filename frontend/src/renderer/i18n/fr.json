@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Copier le chemin",
+	"chat.path.revealInFinder": "Afficher dans le Finder",
+	"chat.path.revealInFileManager": "Afficher dans le gestionnaire de fichiers",
+	"chat.path.openWith": "Ouvrir avec {{editor}}",
+	"chat.path.actionFailed": "Impossible d’effectuer l’action sur le chemin",
 	"awake.stopReason.low_battery": "Arrêté car la batterie a atteint le seuil de sécurité configuré. Rechargez votre Mac, puis désactivez et réactivez Stay Awake pour le relancer.",
 	"awake.stopReason.critical_heat": "Arrêté car le Mac doit refroidir. Une fois refroidi, désactivez et réactivez Stay Awake pour le relancer.",
 	"awake.stopReason.battery_unknown": "Arrêté car l’état de la batterie n’a pas pu être lu. Désactivez et réactivez Stay Awake pour réessayer.",
@@ -894,7 +899,7 @@
 	"inspector.openInSystemBrowser": "Ouvrir dans le navigateur système",
 	"link.copy": "Copier le lien",
 	"link.openInAOBrowser": "Ouvrir dans le navigateur AO",
-	"link.openInFiles": "Ouvrir dans Fichiers",
+	"link.openInAO": "Ouvrir dans AO",
 	"link.openInExternalBrowser": "Ouvrir dans le navigateur externe",
 	"inspector.openInlineComments": "{{count}} commentaires inline ouverts",
 	"inspector.requestRereviewPR": "Demander une nouvelle revue du PR",

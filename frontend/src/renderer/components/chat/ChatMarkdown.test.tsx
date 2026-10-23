@@ -9,6 +9,7 @@ import { ChatImageSourceProvider } from "./chat-image-source";
 
 const sessionPreview = vi.hoisted(() => vi.fn());
 vi.mock("../SessionLinkPreviewCard", () => ({
+	ArtifactLinkPreviewCard: () => <div data-testid="artifact-link-preview" />,
 	SessionLinkPreviewCard: (props: unknown) => {
 		sessionPreview(props);
 		return <div data-testid="session-link-preview" />;
@@ -301,6 +302,8 @@ describe("ChatMarkdown", () => {
 		fireEvent.click(report);
 		fireEvent.click(report, { metaKey: true });
 		fireEvent.contextMenu(report);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy path"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
 		await userEvent.click(screen.getByRole("link", { name: "issue" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://example.com/i/1");
 		expect(openExternal).not.toHaveBeenCalled();
@@ -384,7 +387,7 @@ describe("ChatMarkdown", () => {
 		const link = screen.getByRole("link", { name: "final report" });
 
 		fireEvent.contextMenu(link);
-		await user.click(await screen.findByRole("menuitem", { name: "Open in Files" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Open in AO" }));
 
 		expect(onFileOpen).toHaveBeenCalledWith("reports/final.html");
 		expect(onLinkOpen).not.toHaveBeenCalled();
@@ -422,6 +425,20 @@ describe("ChatMarkdown", () => {
 		expect(link).toHaveAttribute("href", href);
 		await userEvent.setup().click(link);
 		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
+	});
+
+	it("offers path actions on an absolute artifact reference while preserving its artifact link", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const open = vi.fn();
+		renderWithSessionLinkHandler("`/tmp/ao/artifacts/worker-1/plan.md`", open);
+		const link = screen.getByRole("link");
+		await userEvent.click(link);
+		expect(open).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/plan.md");
+		fireEvent.contextMenu(link);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith("/tmp/ao/artifacts/worker-1/plan.md");
+		copy.mockRestore();
 	});
 
 	it("leaves inline code naming an unlisted artifact as plain code", () => {

@@ -142,6 +142,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				sideChats: { capture: async () => undefined },
 				editorHandoff: {
+					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
@@ -1030,6 +1031,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				sideChats: { capture: async () => undefined },
 				editorHandoff: {
+					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [

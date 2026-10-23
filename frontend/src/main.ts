@@ -52,6 +52,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
+import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
@@ -1283,7 +1284,11 @@ const editorHandoff = createEditorHandoff({
 	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
 	discoverTerminalApps: discoverMacTerminalApps,
-	readIcon: async (appPath) => (await app.getFileIcon(appPath, { size: "normal" })).toDataURL(),
+	readIcon: (appPath) => readNativeAppIcon(appPath, {
+		platform: process.platform,
+		cacheDir: path.join(app.getPath("userData"), "native-app-icons"),
+		fileIcon: async (filePath) => (await app.getFileIcon(filePath, { size: "normal" })).toDataURL(),
+	}),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -2505,6 +2510,11 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	}
 	if (typeof cancelClose !== "boolean") throw new Error("Invalid close cancellation.");
 	return captureSideChatState(closedSideId, cancelClose);
+});
+
+ipcMain.handle("editorHandoff:pathAction", (event, input) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.pathAction(input && typeof input === "object" ? input : {});
 });
 
 ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
