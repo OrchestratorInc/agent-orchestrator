@@ -2998,20 +2998,26 @@ export function Timeline({
 		});
 	}, [minimapEnabled, uiSessionId]);
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
-	const retryableTurns = useMemo(
-		() =>
-			new Map(
-				snapshot.turns
-					.filter(
-						(turn) =>
-							turn.state === "failed" &&
-							Boolean(turn.providerTurnId) &&
-							!consumedRetrySources.has(turn.id),
-					)
-					.map((turn) => [turn.id, turn]),
-			),
-		[snapshot.turns, consumedRetrySources],
-	);
+	const retryableTurns = useMemo(() => {
+		// A steer can split one logical turn into several visual groups. Its prompt
+		// still makes the final failed group retryable, even when it is in an earlier one.
+		const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
+			item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
+				? [item.turnId]
+				: [],
+		));
+		return new Map(
+			snapshot.turns
+				.filter(
+					(turn) =>
+						turn.state === "failed" &&
+						Boolean(turn.providerTurnId) &&
+						!consumedRetrySources.has(turn.id) &&
+						(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
+				)
+				.map((turn) => [turn.id, turn]),
+		);
+	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -3988,7 +3994,7 @@ export function Timeline({
 							retryControl &&
 							retryableTurn &&
 							group.turnId !== composerRecoveryTurnId &&
-							(groupHasHumanPrompt(group) || Boolean(retryableTurn.usageLimit && retryableTurn.hasHumanPrompt))
+								group.outcome?.state === "failed"
 								? {
 										onRetry: () => {
 											void Promise.resolve(retryTurn(group.turnId as string)).catch(
@@ -4318,11 +4324,16 @@ const TurnGroup = memo(function TurnGroup({
 			),
 		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
 	);
-	const copyableMessageId = group.live || group.outcome
-		? [...group.items]
-				.reverse()
-				.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id
-		: undefined;
+	const lastAssistantId = [...group.items]
+		.reverse()
+		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
+	// A running turn offers copy only while its newest item is the reply itself, so the
+	// action does not flash under prose the agent is about to follow with more work.
+	const copyableMessageId = group.outcome
+		? lastAssistantId
+		: group.live && group.items.at(-1)?.id === lastAssistantId
+			? lastAssistantId
+			: undefined;
 	let finalAssistantRunIndex = -1;
 	if (group.outcome) {
 		for (let index = runs.length - 1; index >= 0; index -= 1) {
@@ -4343,8 +4354,12 @@ const TurnGroup = memo(function TurnGroup({
 		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
 	);
 	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
-	// Questions, errors, and system warnings stay readable after the turn settles.
-	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
+	// Questions, errors, and system warnings stay readable after the turn settles, and
+	// so does anything the user said mid-turn: folding a steer away would leave the
+	// reply under the Worked row answering a message the reader can no longer see.
+	const noticeRuns = group.outcome
+		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run))
+		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
 	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
@@ -5091,7 +5106,64 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups;
+	return groups.flatMap(splitAtSteers);
+}
+
+/**
+ * A steer is the user speaking, so it opens a new visual turn even though the
+ * provider keeps running the same one: everything before it settles into its own
+ * "Worked for" row, and the steer starts a fresh Working row and reply. Only the
+ * last segment carries the live state, outcome, diff and plan of the real turn.
+ */
+function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
+	const starts = group.items.flatMap((item, index) =>
+		index > 0 && item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId ? [index] : [],
+	);
+	if (starts.length === 0) return [group];
+	const bounds = [0, ...starts, group.items.length];
+	const segmentStarts = bounds.slice(0, -1).map((from, index) =>
+		index === 0 ? Date.parse(group.liveStartedAt ?? "") : Date.parse(group.items[from]!.createdAt),
+	);
+	const lastIndex = starts.length;
+	return starts.concat(group.items.length).map((_end, index) => {
+		const items = group.items.slice(bounds[index], bounds[index + 1]);
+		const first = items[0]!;
+		const key = index === 0 ? group.key : `${group.key}:steer:${first.id}`;
+		const startedAt = segmentStarts[index]!;
+		if (index === lastIndex) {
+			const priorMs = Number.isFinite(startedAt) ? startedAt - segmentStarts[0]! : 0;
+			return {
+				...group,
+				key,
+				anchor: first.sequence,
+				items,
+				liveStartedAt: Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : group.liveStartedAt,
+				outcome: group.outcome
+					? {
+						...group.outcome,
+						durationMs:
+							group.outcome.durationMs === undefined || !Number.isFinite(priorMs)
+								? group.outcome.durationMs
+								: Math.max(1_000, group.outcome.durationMs - priorMs),
+					}
+					: undefined,
+			};
+		}
+		const endedAt = segmentStarts[index + 1]!;
+		return {
+			key,
+			turnId: group.turnId,
+			anchor: first.sequence,
+			items,
+			outcome: {
+				state: "completed" as const,
+				durationMs:
+					Number.isFinite(startedAt) && Number.isFinite(endedAt)
+						? Math.max(1_000, endedAt - startedAt)
+						: undefined,
+			},
+		};
+	});
 }
 
 function isHumanRun(item: ConversationItem | undefined): boolean {

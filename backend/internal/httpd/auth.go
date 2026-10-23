@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -267,6 +268,10 @@ func isIdentityProbe(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == identityProbePath
 }
 
+// muxAuthenticatedBearerKey records request authentication, never a caller header
+// or preview cookie. Only the authenticated listener sets it after validation.
+type muxAuthenticatedBearerKey struct{}
+
 func authMiddleware(state *authState, lock *lockout, connected *mobileConnectReporter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -299,6 +304,9 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				lock.reset(src)
 				connected.report(remoteSrc)
 				maybeSetPreviewAuthCookie(w, r, tok)
+				if bearerToken(r) != "" {
+					r = r.WithContext(context.WithValue(r.Context(), muxAuthenticatedBearerKey{}, true))
+				}
 				next.ServeHTTP(w, r)
 				return
 			}

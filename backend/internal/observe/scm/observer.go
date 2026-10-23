@@ -1266,30 +1266,39 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 		if sr.branch == "" {
 			continue
 		}
-		if sr.branch == sourceBranch {
-			consider(sr, len(sourceBranch)+1)
-		}
-		for _, prefix := range sessionBranchPrefixes(sr.branch) {
-			if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
-				consider(sr, len(prefix))
+		// A renamed task keeps owning its temporary branch, which the agent may
+		// have built on. It ranks below any session's current branch, so a later
+		// task given that name still wins its own PRs.
+		for temporary, owned := range []string{sr.branch, sr.session.TemporaryBranch} {
+			if owned == "" {
+				continue
 			}
-		}
-		if workspaceHyphenBranch(sr) && strings.HasPrefix(sourceBranch, sr.branch+"-") && len(sourceBranch) > len(sr.branch)+1 {
-			consider(sr, len(sr.branch))
+			rank := func(length int) int { return 2*length + 1 - temporary }
+			if owned == sourceBranch {
+				consider(sr, rank(len(sourceBranch)+1))
+			}
+			for _, prefix := range sessionBranchPrefixes(owned) {
+				if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
+					consider(sr, rank(len(prefix)))
+				}
+			}
+			if workspaceHyphenBranch(sr, owned) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
+				consider(sr, rank(len(owned)))
+			}
 		}
 	}
 	return best, bestLen >= 0 && !ambiguous
 }
 
-func workspaceHyphenBranch(sr sessionRepo) bool {
+func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
 	base := "ao/" + string(sr.session.ID)
-	if sr.branch == base {
+	if branch == base {
 		return true
 	}
-	suffix, ok := strings.CutPrefix(sr.branch, base+"-")
+	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
 	}

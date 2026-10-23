@@ -973,7 +973,12 @@ export function AssistantMessage({
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
+	// Copy is ready the moment the text has fully arrived: it copies the stored markdown,
+	// so it need not wait for the typewriter to catch up or for the turn to settle.
+	// Rollback acts on the turn, so it waits for both.
+	const copyReady = showCopy && !message.streaming;
+	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
+	const showActions = copyReady || rollbackReady;
 	return (
 		<div
 			className="group/message relative"
@@ -988,7 +993,7 @@ export function AssistantMessage({
 				// fragment the provider emitted while working. Copy, rollback, and
 				// duration stay visible; only the wall-clock time reveals on hover.
 				<div className="mt-1 flex h-7 items-center gap-0.5">
-					{showCopy ? (
+					{copyReady ? (
 						<div className="-ml-1.5 size-7 shrink-0">
 							{/* The stored markdown, not a re-serialization of what was rendered:
 							   pasting it into an editor has to give back what the agent wrote. */}
@@ -1000,7 +1005,7 @@ export function AssistantMessage({
 							/>
 						</div>
 					) : null}
-					{onRollback ? (
+					{rollbackReady ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<button
@@ -2613,7 +2618,7 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
+				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 					{body ? (
 						<p>
 							<ProseWithInlineImages
@@ -2643,7 +2648,7 @@ export function SteerMessage({
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered into the running turn
+				Steered
 			</span>
 		</div>
 	);

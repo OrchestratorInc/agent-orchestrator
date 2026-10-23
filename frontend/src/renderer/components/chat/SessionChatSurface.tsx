@@ -380,12 +380,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models: controllerModels } = useConversationModels(
+	const { models: controllerModels, loaded: controllerModelsLoaded } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
-	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId);
+	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),

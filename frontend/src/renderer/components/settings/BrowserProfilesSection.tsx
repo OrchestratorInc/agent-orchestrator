@@ -1,6 +1,7 @@
 import { Eraser, Import, MoreHorizontal, Pencil, Plus, Star, Trash2, UserRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { BrowserProfileUsage } from "../../../shared/browser-profiles";
 import type { AoBridge } from "../../../preload";
 import { aoBridge } from "../../lib/bridge";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -18,6 +19,12 @@ import { BrowserImportDialog } from "./BrowserImportDialog";
 
 type ProfileBridge = AoBridge["browserProfiles"];
 type Profile = Awaited<ReturnType<ProfileBridge["list"]>>["profiles"][number];
+function profileError(reason: unknown, fallback: string): string {
+	// Electron wraps thrown main-process exceptions in raw IPC diagnostics.
+	return reason instanceof Error && !/Error invoking remote method|\b(?:BrowserProfileStoreError|Error):/.test(reason.message)
+		? reason.message : fallback;
+}
+
 type DestructiveAction = { kind: "clear" | "delete"; profile: Profile };
 
 export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean }) {
@@ -32,6 +39,10 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const [pendingAction, setPendingAction] = useState<DestructiveAction | null>(null);
 	const [actionBusy, setActionBusy] = useState(false);
 	const [actionError, setActionError] = useState("");
+	const [usage, setUsage] = useState<BrowserProfileUsage[]>([]);
+	const [usageLoading, setUsageLoading] = useState(false);
+	const [usageError, setUsageError] = useState("");
+	const [usageRevision, setUsageRevision] = useState(0);
 	const [importOpen, setImportOpen] = useState(false);
 
 	const refresh = async () => {
@@ -43,7 +54,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			setDefaultProfileIdState(result.defaultProfileId ?? null);
 			setError(result.error?.message ?? "");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.loadFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.loadFailed")));
 		} finally {
 			setLoading(false);
 		}
@@ -56,6 +67,29 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [bridge]);
 
+	useEffect(() => {
+		if (!bridge || pendingAction?.kind !== "delete" || actionBusy) return;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout>;
+		const check = async () => {
+			try {
+				const result = await bridge.usage(pendingAction.profile.id);
+				if (cancelled) return;
+				setUsage(result.sessions);
+				setUsageError(result.error ?? "");
+			} catch {
+				if (!cancelled) setUsageError(t("settings.browserProfiles.usageFailed"));
+			} finally {
+				if (!cancelled) {
+					setUsageLoading(false);
+					timer = setTimeout(() => void check(), 1500);
+				}
+			}
+		};
+		void check();
+		return () => { cancelled = true; clearTimeout(timer); };
+	}, [bridge, pendingAction, actionBusy, usageRevision, t]);
+
 	const toggleDefault = async (profile: Profile) => {
 		if (!bridge) return;
 		const nextId = defaultProfileId === profile.id ? null : profile.id;
@@ -64,7 +98,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			setDefaultProfileIdState(nextId);
 			setError("");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.saveDefaultFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.saveDefaultFailed")));
 		}
 	};
 
@@ -76,7 +110,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			setName("");
 			setError("");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.saveFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.saveFailed")));
 		}
 	};
 
@@ -89,39 +123,40 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			setProfiles((current) => current.map((entry) => (entry.id === profile.id ? updated : entry)));
 			setError("");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.saveFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.saveFailed")));
 		}
 	};
 
 	const requestAction = (kind: DestructiveAction["kind"], profile: Profile) => {
 		setActionError("");
+		setUsage([]);
+		setUsageError("");
+		setUsageLoading(kind === "delete");
 		setPendingAction({ kind, profile });
 	};
 
 	const confirmAction = async () => {
-		if (!bridge || !pendingAction) return;
+		if (!bridge || !pendingAction || actionBusy || (pendingAction.kind === "delete" && (usageLoading || usageError || usage.some((session) => session.blocker)))) return;
 		setActionBusy(true);
 		setActionError("");
 		try {
 			if (pendingAction.kind === "clear") {
 				await bridge.clear(pendingAction.profile.id);
 			} else {
-				await bridge.delete(pendingAction.profile.id);
+				const result = await bridge.delete(pendingAction.profile.id, usage.map((session) => session.viewId));
+				if (result.error) throw new Error(result.error);
 				setProfiles((current) => current.filter((profile) => profile.id !== pendingAction.profile.id));
 				setDefaultProfileIdState((current) => (current === pendingAction.profile.id ? null : current));
 			}
 			setError("");
 			setPendingAction(null);
 		} catch (reason) {
-			setActionError(
-				reason instanceof Error
-					? reason.message
-					: t(
-							pendingAction.kind === "clear"
-								? "settings.browserProfiles.clearFailed"
-								: "settings.browserProfiles.deleteFailed",
-						),
-			);
+			setActionError(profileError(reason, t(pendingAction.kind === "clear"
+				? "settings.browserProfiles.clearFailed" : "settings.browserProfiles.deleteFailed")));
+			if (pendingAction.kind === "delete") {
+				setUsageLoading(true);
+				setUsageRevision((current) => current + 1);
+			}
 		} finally {
 			setActionBusy(false);
 		}
@@ -229,12 +264,30 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 					: ""}
 				confirmLabel={pendingAction?.kind === "clear"
 					? t("settings.browserProfiles.clearConfirm")
-					: t("settings.browserProfiles.deleteConfirm")}
+					: t(usage.length ? "settings.browserProfiles.deleteAndSwitch" : "settings.browserProfiles.deleteConfirm")}
+				confirmDisabled={pendingAction?.kind === "delete" && (usageLoading || Boolean(usageError) || usage.some((session) => session.blocker !== null))}
 				destructive
 				busy={actionBusy}
-				error={actionError || null}
+				error={actionError || usageError || null}
 				onConfirm={() => void confirmAction()}
-			/>
+			>
+				{pendingAction?.kind === "delete" ? (
+					<div className="space-y-3 text-sm text-settings-muted" aria-live="polite">
+						{usageLoading ? <p>{t("settings.browserProfiles.checkingUsage")}</p> : null}
+						{usage.length > 0 ? <>
+							<p>{t("settings.browserProfiles.deleteSwitchDescription")}</p>
+							<ul className="max-h-40 space-y-2 overflow-y-auto" aria-label={t("settings.browserProfiles.affectedSessions")}>
+								{usage.map((session) => <li key={session.viewId}>
+									<span className="break-all font-medium text-settings-label">{session.sessionId}</span>
+									<span className="block">{t(session.blocker === "agent-active"
+										? "settings.browserProfiles.agentBlocker" : session.blocker === "switching"
+											? "settings.browserProfiles.switchBlocker" : "settings.browserProfiles.idleSession")}</span>
+								</li>)}
+							</ul>
+						</> : null}
+					</div>
+				) : null}
+			</ConfirmDialog>
 			<BrowserImportDialog
 				onImported={() => void refresh()}
 				onOpenChange={setImportOpen}

@@ -137,6 +137,16 @@ function rendersNothing(item: ConversationItem): boolean {
 }
 
 /**
+ * The one reply that draws the typing cursor: the newest item, while it is
+ * still streaming. ACP providers settle a turn's text blocks only when the turn
+ * ends, so earlier blocks stay marked streaming after a tool call follows them.
+ */
+export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
+	const last = items.at(-1);
+	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
+}
+
+/**
  * Split one turn's items for the Working / Worked presentation, matching desktop.
  * A running turn keeps its work inline under a live "Working" row; once the turn
  * settles the work folds behind "Worked for", leaving the final reply and any
@@ -214,6 +224,47 @@ function humanMessageTitle(text: string): string {
 	const { body, attachments } = stagedAttachmentParts(text);
 	if (attachments.length === 0) return text;
 	return body.trim() || (attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`);
+}
+
+/**
+ * Human prompts the daemon can branch before and resend edited, mirroring the
+ * desktop's gate: an idle controller, a settled turn, and either the binding's
+ * first prompt, a native fork point, or replayable history. `reconstructed`
+ * names prompts whose earlier context would be replayed rather than forked.
+ */
+export function editableHumanTurns(snapshot: ConversationSnapshot): { editable: Set<string>; reconstructed: Set<string> } {
+	const editable = new Set<string>();
+	const reconstructed = new Set<string>();
+	if (snapshot.controller.state !== "ready") return { editable, reconstructed };
+	const settled = new Set(snapshot.turns
+		.filter((turn) => turn.state === "completed" || turn.state === "interrupted" || turn.state === "failed")
+		.map((turn) => turn.id));
+	const prompts = snapshot.items.filter((item): item is ConversationMessage =>
+		item.kind === "message" && item.role === "user" && item.origin === "human" && Boolean(item.turnId));
+	const firstTurnId = prompts.find((item) => item.editAvailable)?.turnId;
+	const forkAfter = snapshot.nativeForkAvailableAfterSequence ?? 0;
+	const canFork = snapshot.capabilities?.includes("fork") === true;
+	const canReplay = snapshot.capabilities?.includes("prompt_replay") === true && snapshot.capabilities.includes("embedded_context");
+	for (const item of prompts) {
+		const turnId = item.turnId as string;
+		if (!item.editAvailable || !settled.has(turnId)) continue;
+		const first = !snapshot.hasMoreBefore && turnId === firstTurnId;
+		const nativeFork = canFork && forkAfter > 0 && item.sequence > forkAfter;
+		if (!first && !nativeFork && !canReplay) continue;
+		editable.add(turnId);
+		if (!first && !nativeFork) reconstructed.add(turnId);
+	}
+	return { editable, reconstructed };
+}
+
+/** Whether two editable-turn results name the same turns, so a caller can keep the older identity. */
+export function sameEditableTurns(
+	a: ReturnType<typeof editableHumanTurns> | undefined,
+	b: ReturnType<typeof editableHumanTurns> | undefined,
+): boolean {
+	if (!a || !b) return a === b;
+	const same = (x: ReadonlySet<string>, y: ReadonlySet<string>) => x.size === y.size && [...x].every((id) => y.has(id));
+	return same(a.editable, b.editable) && same(a.reconstructed, b.reconstructed);
 }
 
 export function canRollbackTurn(snapshot: ConversationSnapshot, turn: ConversationTurn): boolean {
