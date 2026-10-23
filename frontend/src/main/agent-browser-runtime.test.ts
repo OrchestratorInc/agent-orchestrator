@@ -139,6 +139,81 @@ describe("agent-browser runtime lifecycle", () => {
 		await rm(dataDir, { recursive: true, force: true });
 	}
 
+	it("resolves AO tab identity separately from native tab numbering and verifies the selected target", async () => {
+		const { dataDir, runtime, processRunner } = await fixture({
+			processRunner: async (_binary, rawArgs) => {
+				const args = rawArgs as string[];
+				const data = args[1] === "list"
+					? { tabs: [{ tabId: "t2", targetId: "t3" }] }
+					: { tabId: "t2", targetId: "t4" };
+				return { stdout: JSON.stringify({ success: true, data }), stderr: "", exitCode: 0 };
+			},
+		});
+		try {
+			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+				message: "Browser automation did not target AO tab t3",
+			});
+			expect(processRunner.mock.calls.some(([, args]) => JSON.stringify(args) === JSON.stringify(["tab", "t2", "--json"]))).toBe(true);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it.each([
+		undefined,
+		[],
+		[{ tabId: "t2", targetId: "t4" }],
+		[{ tabId: "--help", targetId: "t3" }],
+		[{ tabId: "t2", targetId: "t3" }, { tabId: "t3", targetId: "t3" }],
+	])("rejects unavailable or malformed native tab mappings before dispatch: %j", async (tabs) => {
+		const { dataDir, runtime, processRunner } = await fixture({
+			processRunner: async () => ({ stdout: JSON.stringify({ success: true, data: { tabs } }), stderr: "", exitCode: 0 }),
+		});
+		try {
+			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			expect(processRunner.mock.calls.some(([, args]) => (args as string[])[0] === "tab" && (args as string[])[1] !== "list")).toBe(false);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it("closes only the requested AO target without using native numeric IDs", async () => {
+		const { dataDir, runtime, bridge, processRunner } = await fixture();
+		const closeTarget = vi.fn();
+		const closeProvider = {
+			...provider,
+			listTargets: () => ["t1", "t3", "t4"].map((id) => ({ id, url: "about:blank", title: id, debugger: {} as never })),
+			closeTarget,
+		};
+		try {
+			await runtime.run("session-1", ["snapshot"], closeProvider);
+			processRunner.mockClear();
+			bridge.reconcileTargets.mockClear();
+			expect(await runtime.runAction("session-1", "tab-close", { tabId: "t3" }, closeProvider)).toMatchObject({
+				tabId: "t3", targetId: "t3", closed: true,
+			});
+			expect(closeTarget).toHaveBeenCalledOnce();
+			expect(closeTarget).toHaveBeenCalledWith("t3");
+			expect(bridge.reconcileTargets).toHaveBeenCalledOnce();
+			expect(processRunner).not.toHaveBeenCalled();
+			await expect(runtime.runAction("session-1", "tab-close", { tabId: "t2" }, closeProvider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			await expect(runtime.runAction("session-1", "tab-close", { tabId: "t4" }, closeProvider, AbortSignal.abort())).rejects.toMatchObject({
+				code: "AGENT_BROWSER_CANCELLED",
+			});
+			expect(closeTarget).toHaveBeenCalledTimes(1);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
 	it("serializes concurrent initialization and removes the owned run root", async () => {
 		const { dataDir, bridge, runtime } = await fixture();
 		try {
@@ -732,6 +807,42 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 					tabs: [{ tabId: "t1", targetId: "t1", active: true }],
 				});
 			}
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it("selects and closes AO targets when a vanished popup leaves a gap in target IDs", async () => {
+		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
+		const sessionId = "native-target-id-gap";
+		// AO's ephemeral t2 disappeared before native discovery. Native IDs will
+		// be t1,t2,t3 for these physical AO targets t1,t3,t4.
+		for (const tabId of ["t3", "t4"]) {
+			const url = `http://localhost:5173/${tabId}`;
+			targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
+		}
+		try {
+			expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+				tabs: [
+					{ tabId: "t1", targetId: "t1" },
+					{ tabId: "t2", targetId: "t3" },
+					{ tabId: "t3", targetId: "t4" },
+				],
+			});
+			expect(await runtime.runAction(sessionId, "tab-select", { tabId: "t3" }, provider)).toMatchObject({
+				tabId: "t3", targetId: "t3",
+			});
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/t3",
+			});
+			expect(await runtime.runAction(sessionId, "tab-close", { tabId: "t3" }, provider)).toMatchObject({
+				tabId: "t3", targetId: "t3", closed: true,
+			});
+			expect(targets.map((target) => target.id)).toEqual(["t1", "t4"]);
+			await runtime.runAction(sessionId, "tab-select", { tabId: "t4" }, provider);
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/t4",
+			});
 		} finally {
 			await runtime.dispose();
 		}

@@ -2302,6 +2302,30 @@ describe("browser:act", () => {
 });
 
 describe("ensureNativeActiveTab automation-runtime resync", () => {
+	it("resynchronizes after a failed explicit selection changes the native target", async () => {
+		const { activeTargets, host, invoke, runtime } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await invoke("browser:openTab", { viewId });
+		const runAction = runtime.runAction as unknown as ReturnType<typeof vi.fn>;
+		const originalRunAction = runAction.getMockImplementation()! as (...args: unknown[]) => Promise<unknown>;
+		const pageTargets: string[] = [];
+		runAction.mockImplementation(async (sessionId: string, action: string, args: Record<string, unknown>, provider: unknown) => {
+			if (action === "tab-select" && args.tabId === "t1") {
+				activeTargets.set(sessionId, "t1");
+				throw Object.assign(new Error("Returned target identity did not match"), { code: "AGENT_BROWSER_COMMAND_FAILED" });
+			}
+			if (action === "get") pageTargets.push(activeTargets.get(sessionId) ?? "");
+			return originalRunAction(sessionId, action, args, provider);
+		});
+
+		await expect(host.execute("sess-1", "tab-select", { tabId: "t1" })).rejects.toMatchObject({
+			code: "BROWSER_TARGET_MISMATCH",
+		});
+		expect(activeTargets.get("sess-1")).toBe("t1");
+		await host.execute("sess-1", "get", { property: "url" });
+		expect(pageTargets).toEqual(["t2"]);
+	});
+
 	// Regression, reported against the reopen-closed-tabs PR with a real repro
 	// log: the runtime's own tab registry drifted from session.tabs, and
 	// ensureNativeActiveTab's convergence loop just retried the identical
