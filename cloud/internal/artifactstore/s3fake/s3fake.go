@@ -35,12 +35,13 @@ type version struct {
 type Server struct {
 	server *httptest.Server
 
-	mu       sync.Mutex
-	objects  map[string][]version
-	markers  map[string]int
-	puts     int
-	gets     int
-	failPuts bool
+	mu          sync.Mutex
+	objects     map[string][]version
+	markers     map[string]int
+	puts        int
+	gets        int
+	failPuts    bool
+	failDeletes bool
 }
 
 // New starts a fake S3 server and stops it when the test ends. It also points
@@ -97,6 +98,13 @@ func (f *Server) Remove(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.objects, key)
+}
+
+// FailDeletes makes every DeleteObject return 500 while fail is true.
+func (f *Server) FailDeletes(fail bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failDeletes = fail
 }
 
 // FailPuts makes every PutObject return 500 while fail is true.
@@ -199,6 +207,13 @@ func (f *Server) get(w http.ResponseWriter, r *http.Request, key, versionID stri
 
 func (f *Server) delete(w http.ResponseWriter, key, versionID string) {
 	f.mu.Lock()
+	if f.failDeletes {
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code></Error>`))
+		return
+	}
 	if versionID == "" {
 		f.markers[key]++
 		f.mu.Unlock()

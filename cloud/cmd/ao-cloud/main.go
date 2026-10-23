@@ -515,6 +515,11 @@ func run(logger *slog.Logger) error {
 		logger.Info("cloud artifacts enabled", "bucket", cfg.ArtifactBucket, "region", cfg.ArtifactRegion)
 		go artifactstore.RunSweeper(ctx, store, artifacts, artifactstore.DefaultSweepInterval, logger)
 	}
+	var artifactShares *httpapi.ArtifactShareOptions
+	if cfg.ArtifactSharesEnabled {
+		artifactShares = &httpapi.ArtifactShareOptions{Origin: cfg.ArtifactShareOrigin, Limit: cfg.ArtifactShareLimit}
+		logger.Info("artifact share links enabled", "origin", cfg.ArtifactShareOrigin, "limit", cfg.ArtifactShareLimit)
+	}
 	apiOptions := httpapi.Options{
 		Store:                     store,
 		CoderTemplates:            coderTemplates,
@@ -554,6 +559,7 @@ func run(logger *slog.Logger) error {
 		SupportToken:         cfg.SupportToken,
 		Artifacts:            artifacts,
 		ArtifactAccessSecret: cfg.ProviderSecretKey,
+		ArtifactShares:       artifactShares,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {
