@@ -108,6 +108,8 @@ check "a guest cannot make links for Alice's project" test "$(status_of "$guest_
 redeemed="$(redeem "$bob" "$editor_token")"
 check "Bob redeemed the editor link into this session" test "$(body_of "$redeemed" | jq -r .shared.sessionId)" = "$session"
 check "Carol redeemed the viewer link" test "$(status_of "$(redeem "$carol" "$viewer_token")")" = 200
+own="$(redeem "$alice" "$editor_token")"
+check "Alice opening her own link goes to the session" test "$(body_of "$own" | jq -r '"\(.shared.member) \(.shared.sessionId)"')" = "true $session"
 check "a made-up token is refused" test "$(status_of "$(redeem "$carol" not-a-token)")" != 200
 check "Bob sees the shared session" test "$(body_of "$(call GET "/orgs/$org/shared/projects/$project/sessions" "$bob")" | jq -r '.sessions[0].id')" = "$session"
 
@@ -135,6 +137,12 @@ check "Alice's stream lists Alice and Bob" wait_live alice '([.viewers[].name] |
 check "Alice may take over" wait_live alice '.canTakeOver == true'
 check "Bob, a guest, may not" wait_live bob '.canTakeOver == false'
 check "the composer starts free" wait_live alice '.composer.holder == null'
+
+chat_settings() { call PUT "/orgs/$org/sessions/$session/chat-settings" "$1" "$(jq -nc --arg model "$2" '{model: $model, reasoningEffort: "high"}')"; }
+check "Alice, the creator, sets the session's model" test "$(body_of "$(chat_settings "$alice" opus)" | jq -r .chatSettings.model)" = opus
+check "Bob, a guest, cannot change it" test "$(status_of "$(chat_settings "$bob" haiku)")" = 403
+check "Bob's stream shows Alice's model, not his to change" wait_live bob '.chatSettings.model == "opus" and .chatSettings.reasoningEffort == "high" and .canConfigure == false'
+check "Alice's stream lets her change it" wait_live alice '.canConfigure == true'
 
 acquire="$(composer "$bob" acquire)"
 bob_epoch="$(body_of "$acquire" | jq -r .composer.epoch)"
@@ -165,7 +173,9 @@ check "Bob's old grant is fenced off" test "$(body_of "$(send "$bob" stale "$bob
 alice_epoch="$(last_live bob | jq -r .composer.epoch)"
 check "Alice sends with the grant handed to her" test "$(status_of "$(send "$alice" "from alice" "$alice_epoch")")" = 202
 check "after Alice's send the composer is free" wait_live bob '.composer.holder == null'
-check "with the composer free, a send without a grant works" test "$(status_of "$(send "$bob" "no grant needed")")" = 202
+free_send="$(call POST "/orgs/$org/sessions/$session/messages" "$bob" "$(jq -nc '{text: "no grant needed", model: "haiku"}')")"
+check "with the composer free, a send without a grant works" test "$(status_of "$free_send")" = 202
+check "Bob's turn runs with Alice's model, not the one he asked for" test "$(body_of "$free_send" | jq -r .event.payload.model)" = opus
 
 taken="$(composer "$bob" acquire)"
 taken_epoch="$(body_of "$taken" | jq -r .composer.epoch)"

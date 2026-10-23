@@ -471,6 +471,11 @@ export interface ChatWorkspaceProps {
 	composerLockedPlaceholder?: string;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
+	/**
+	 * Shows the turn settings (model, effort, mode) read-only, as for someone
+	 * in a shared session whose owner sets them.
+	 */
+	settingsLocked?: boolean;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -752,6 +757,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
 	onRememberPermissions,
@@ -1477,9 +1483,9 @@ function ChatWorkspaceContent({
 					approvalModes={approvalModes}
 					approvalModeLimits={approvalModeLimits}
 					reroute={stableModelReroute}
-					onChange={newWorkDisabled ? undefined : onChooseSettings}
+					onChange={newWorkDisabled || settingsLocked ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
-					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
+					onChangeConfigOption={newWorkDisabled || settingsLocked ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
@@ -1492,12 +1498,13 @@ function ChatWorkspaceContent({
 							)) ||
 							settingsLoading ||
 							session?.provisionState === "provisioning" ||
-							controllerTransitioning || configOptionPending || newWorkDisabled
+							controllerTransitioning || configOptionPending || newWorkDisabled || settingsLocked
 						}
 				/>
 			) : null,
 		[
 			settingsReady,
+			settingsLocked,
 			settingsLoading,
 			lastModel,
 			configOptionError,

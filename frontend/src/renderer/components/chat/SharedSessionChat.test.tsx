@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClientEvent, CloudCpSessionLive, CloudCpSessionViewer } from "../../lib/cloud-cp";
 import type { ComposerLeaseState } from "../../hooks/useComposerLease";
 import type { WorkspaceSession } from "../../types/workspace";
-import { CloudSessionChatSurface, toSnapshot } from "./CloudSessionChatSurface";
+import { CloudSessionChatSurface, fromSessionChatSettings, toSessionChatSettings, toSnapshot } from "./CloudSessionChatSurface";
 import { RemoteDraft, SharedComposerNotice } from "./SharedComposerNotice";
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	requestComposerTurn: vi.fn(),
 	leaveComposerQueue: vi.fn(),
 	takeOverComposer: vi.fn(),
+	setSessionChatSettings: vi.fn(),
 	chatProps: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
@@ -51,8 +52,11 @@ const session = {
 const me = { userId: "user-me", name: "Me", role: "member" as const };
 const alice = { userId: "user-alice", name: "Alice", role: "editor" as const };
 
-function liveState(composer: Partial<CloudCpSessionLive["composer"]> = {}, viewers: CloudCpSessionViewer[] = [me, alice], canTakeOver = false, you = "user-me"): CloudCpSessionLive {
-	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver, you };
+function liveState(
+	composer: Partial<CloudCpSessionLive["composer"]> = {}, viewers: CloudCpSessionViewer[] = [me, alice], canTakeOver = false, you = "user-me",
+	chatSettings: CloudCpSessionLive["chatSettings"] = {}, canConfigure = canTakeOver,
+): CloudCpSessionLive {
+	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver, you, chatSettings, canConfigure };
 }
 
 function renderSurface() {
@@ -139,6 +143,30 @@ describe("shared session chat", () => {
 		expect(lastProps().composerLockedPlaceholder).toBeUndefined();
 	});
 
+	it("shows a guest the owner's model and settings, read-only", async () => {
+		mocks.live = liveState({}, [me, alice], false, "user-me", { model: "opus", reasoningEffort: "high", mode: "read-only" }, false);
+		localStorage.setItem(`cloud-chat-settings:org-1:${session.id}:codex`, JSON.stringify({ model: "guest-pick" }));
+		renderSurface();
+		await waitFor(() => expect(lastProps()).toBeDefined());
+		const props = mocks.chatProps.mock.lastCall?.[0] as { settingsLocked?: boolean; snapshot: { settings?: { model?: string; reasoningEffort?: string; executionMode?: string } }; onChooseSettings: (next: object, picked?: string) => void };
+		expect(props.settingsLocked).toBe(true);
+		expect(props.snapshot.settings).toMatchObject({ model: "opus", reasoningEffort: "high", executionMode: "plan" });
+		props.onChooseSettings({ model: "haiku" }, "model");
+		expect(mocks.setSessionChatSettings).not.toHaveBeenCalled();
+	});
+
+	it("makes the owner's choice the session's, on opening it and on every change", async () => {
+		localStorage.setItem(`cloud-chat-settings:org-1:${session.id}:codex`, JSON.stringify({ model: "sonnet", reasoningEffort: "medium" }));
+		mocks.setSessionChatSettings.mockResolvedValue({ chatSettings: {} });
+		mocks.live = liveState({}, [me, alice], true, "user-me", {}, true);
+		renderSurface();
+		await waitFor(() => expect(mocks.setSessionChatSettings).toHaveBeenCalledWith("org-1", session.id, { model: "sonnet", reasoningEffort: "medium" }));
+		const props = mocks.chatProps.mock.lastCall?.[0] as { settingsLocked?: boolean; onChooseSettings: (next: object, picked?: string) => void };
+		expect(props.settingsLocked).toBe(false);
+		props.onChooseSettings({ model: "opus", reasoningEffort: "high" }, "model");
+		await waitFor(() => expect(mocks.setSessionChatSettings).toHaveBeenLastCalledWith("org-1", session.id, { model: "opus", reasoningEffort: "high" }));
+	});
+
 	it("locks the chat box for a read-only participant", async () => {
 		mocks.live = liveState({}, [{ ...me, role: "viewer" }, alice]);
 		renderSurface();
@@ -212,5 +240,15 @@ describe("RemoteDraft", () => {
 		const state = lease({ locked: true, holder: { userId: "user-alice", name: "Alice" }, remoteDraft: { holder: { userId: "user-alice", name: "Alice" }, text: "deploy it", cursor: 9 } });
 		render(<SharedComposerNotice live={liveState({ holder: { userId: "user-alice", name: "Alice" }, epoch: 3 })} lease={state} userId="user-me" />);
 		expect(screen.getByRole("region", { name: "Alice's draft" }).textContent).toBe("deploy itAlice");
+	});
+});
+
+describe("session chat settings mapping", () => {
+	it("round-trips the composer's settings, plan mode as a read-only turn", () => {
+		const settings = { model: "opus", reasoningEffort: "high", approvalMode: "auto" as const, executionMode: "plan" as const };
+		expect(toSessionChatSettings(settings)).toEqual({ model: "opus", reasoningEffort: "high", approvalMode: "auto", mode: "read-only" });
+		expect(fromSessionChatSettings(toSessionChatSettings(settings))).toEqual(settings);
+		expect(toSessionChatSettings({ executionMode: "agent" })).toEqual({});
+		expect(fromSessionChatSettings(undefined)).toEqual({});
 	});
 });
