@@ -165,6 +165,22 @@ func (s *Store) CommitSessionArtifacts(
 		if err := requireSessionTx(ctx, tx, orgID, sessionID, true); err != nil {
 			return err
 		}
+		// A deleted project's sessions take no new artifacts.
+		var projectDeleted bool
+		if err := tx.QueryRow(
+			ctx,
+			`SELECT project.archived_at IS NOT NULL
+			FROM ao_sessions session
+			JOIN ao_projects project
+			  ON project.org_id = session.org_id AND project.id = session.project_id
+			WHERE session.org_id = $1 AND session.id = $2`,
+			orgID, sessionID,
+		).Scan(&projectDeleted); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("check artifact project: %w", err)
+		}
+		if projectDeleted {
+			return ErrNotFound
+		}
 		var current bool
 		if err := tx.QueryRow(
 			ctx,
@@ -371,6 +387,67 @@ func (s *Store) DeleteSessionArtifact(
 		return nil
 	})
 	return version, err
+}
+
+// deleteProjectArtifactsTx removes the committed artifacts of every session in
+// a project and queues all of their object versions, committed, replaced or
+// still uploading, for the sweeper to delete now. The project's sessions keep
+// their pull requests in their output type.
+func deleteProjectArtifactsTx(ctx context.Context, tx pgx.Tx, orgID, projectID string) error {
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO ao_artifact_object_versions (
+			org_id, session_id, s3_key, version_id, reason, size, collect_after
+		)
+		SELECT artifact.org_id, artifact.session_id, artifact.s3_key,
+			artifact.version_id, 'replaced', artifact.size, now()
+		FROM ao_session_artifacts artifact
+		JOIN ao_sessions session
+		  ON session.org_id = artifact.org_id AND session.id = artifact.session_id
+		WHERE session.org_id = $1 AND session.project_id = $2
+		ON CONFLICT (s3_key, version_id) DO UPDATE SET collect_after = now()`,
+		orgID, projectID,
+	); err != nil {
+		return fmt.Errorf("queue project artifact versions: %w", err)
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE ao_artifact_object_versions version
+		SET collect_after = now()
+		FROM ao_sessions session
+		WHERE session.org_id = $1 AND session.project_id = $2
+		  AND version.org_id = session.org_id AND version.session_id = session.id
+		  AND version.collect_after > now()
+		  AND version.collecting_until IS NULL`,
+		orgID, projectID,
+	); err != nil {
+		return fmt.Errorf("collect project artifact versions now: %w", err)
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`DELETE FROM ao_session_artifacts artifact
+		USING ao_sessions session
+		WHERE session.org_id = $1 AND session.project_id = $2
+		  AND artifact.org_id = session.org_id AND artifact.session_id = session.id`,
+		orgID, projectID,
+	); err != nil {
+		return fmt.Errorf("delete project artifacts: %w", err)
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE ao_sessions session
+		SET output_type = CASE WHEN EXISTS (
+			SELECT 1 FROM ao_pull_requests pr
+			WHERE pr.org_id = session.org_id AND pr.session_id = session.id
+		) THEN $3 ELSE $4 END
+		WHERE session.org_id = $1 AND session.project_id = $2
+		  AND session.output_type IN ($5, $6)`,
+		orgID, projectID, domain.SessionOutputPR, domain.SessionOutputNone,
+		domain.SessionOutputArtifact, domain.SessionOutputPRAndArtifact,
+	); err != nil {
+		return fmt.Errorf("update project session output types: %w", err)
+	}
+	return nil
 }
 
 type sessionArtifactTotals struct {

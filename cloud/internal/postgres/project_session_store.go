@@ -166,6 +166,11 @@ func (s *Store) ArchiveProject(
 		} else if err != nil {
 			return err
 		}
+		// A deleted project's artifacts go with it; this also finishes the
+		// cleanup for a project deleted before artifacts were removed.
+		if err := deleteProjectArtifactsTx(ctx, tx, orgID, projectID); err != nil {
+			return err
+		}
 		if archived {
 			return nil
 		}
