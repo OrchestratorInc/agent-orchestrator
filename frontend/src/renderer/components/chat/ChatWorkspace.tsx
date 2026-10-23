@@ -4375,6 +4375,7 @@ const TurnGroup = memo(function TurnGroup({
 				activities={run.items.filter(
 					(item): item is ConversationActivity => item.kind === "activity",
 				)}
+				live={group.live}
 			/>
 		) : (
 			<TimelineItem
