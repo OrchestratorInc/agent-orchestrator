@@ -133,6 +133,9 @@ func (t *cuaText) window(state map[string]any) {
 	if reason := cuaString(state["degraded_reason"]); reason != "" {
 		t.line("degraded: " + reason)
 	}
+	if warning := cuaString(state["render_warning"]); warning != "" {
+		t.line("warning: " + warning)
+	}
 	if diff := cuaString(state["tree_diff"]); diff != "" {
 		t.line("")
 		t.line(diff)

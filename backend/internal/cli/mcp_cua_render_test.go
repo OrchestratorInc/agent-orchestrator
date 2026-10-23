@@ -103,3 +103,12 @@ func TestRenderCuaLeavesOtherToolsToJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderCuaWindowWarnsWhenUnrendered(t *testing.T) {
+	response := decodeCuaResponse(t, `{"tool":"get_window_state","result":{"window_id":9,"pid":7,"element_count":1,"snapshot_id":"s1",
+		"render_warning":"This window may not have rendered."},"images":[]}`)
+	text, _ := renderCuaCall(response)
+	if !strings.Contains(text, "window_id=9 pid=7 elements=1 snapshot_id=s1\nwarning: This window may not have rendered.\n") {
+		t.Fatalf("text =\n%s", text)
+	}
+}

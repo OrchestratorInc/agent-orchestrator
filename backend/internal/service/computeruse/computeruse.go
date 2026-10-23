@@ -364,6 +364,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		saved.adopt(screenshot)
 	}
 	s.rememberReads(arguments["session"], result)
+	flagUnrendered(result)
 	if observedTools[tool] {
 		result = s.observeAfter(ctx, binary, saved, arguments, result)
 	}

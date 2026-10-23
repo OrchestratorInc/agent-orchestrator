@@ -3,6 +3,10 @@ package computeruse
 import (
 	"context"
 	"encoding/json"
+	"image"
+	_ "image/jpeg" // screenshots the driver saves as JPEG
+	_ "image/png"  // and as PNG
+	"os"
 	"strings"
 )
 
@@ -133,6 +137,7 @@ func (s *Service) observeAfter(ctx context.Context, binary string, saved *savedI
 	saved.adopt(screenshot)
 	if fields, ok := state.(map[string]any); ok {
 		s.rememberSnapshot(session, fields)
+		flagUnrenderedRead(fields)
 	}
 	output["observation"] = map[string]any{"tool": "get_window_state", "ok": true, "state": state}
 	return output
@@ -200,4 +205,71 @@ func (s *Service) lastTokenWindow(arguments map[string]any) (window, bool) {
 		}
 	}
 	return window{}, false
+}
+
+// renderWarning is added to a window read that looks unpainted.
+const renderWarning = "This window may not have rendered: its tree or screenshot is nearly empty. Apps stop painting windows hidden behind others, Chromium-based browsers and apps especially. Do not retry; ask the user to bring the window to the front and leave it visible, then read it again."
+
+// minRenderedElements is the smallest tree a painted window has: a window
+// frame and at most one other element is the tree of an unpainted one.
+const minRenderedElements = 3
+
+// blankShare is the share of sampled screenshot pixels in one color above
+// which the screenshot counts as blank.
+const blankShare = 0.98
+
+// flagUnrendered adds render_warning to the window reads in a call's result:
+// a get_window_state result, or run_steps' observation. The driver reports
+// such a read as ok, and an agent otherwise retries it, a screenshot each time.
+func flagUnrendered(result any) {
+	state, _ := result.(map[string]any)
+	flagUnrenderedRead(state)
+	observation, _ := state["observation"].(map[string]any)
+	observed, _ := observation["state"].(map[string]any)
+	flagUnrenderedRead(observed)
+}
+
+func flagUnrenderedRead(state map[string]any) {
+	if state == nil || state["snapshot_id"] == nil && state["screenshot_file_path"] == nil {
+		return
+	}
+	elements, counted := state["element_count"].(float64)
+	sparse := counted && elements < minRenderedElements
+	path, _ := state["screenshot_file_path"].(string)
+	if sparse || (path != "" && blankScreenshot(path)) {
+		state["render_warning"] = renderWarning
+	}
+}
+
+// blankScreenshot reports whether nearly every sampled pixel of a screenshot
+// has one color. An unreadable file is not called blank.
+func blankScreenshot(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	picture, _, err := image.Decode(file)
+	if err != nil {
+		return false
+	}
+	bounds := picture.Bounds()
+	if bounds.Dx() == 0 || bounds.Dy() == 0 {
+		return true
+	}
+	const grid = 48
+	counts := map[uint32]int{}
+	most := 0
+	for row := 0; row < grid; row++ {
+		for column := 0; column < grid; column++ {
+			x := bounds.Min.X + column*bounds.Dx()/grid
+			y := bounds.Min.Y + row*bounds.Dy()/grid
+			r, g, b, _ := picture.At(x, y).RGBA()
+			// 4 bits a channel: compression noise and anti-aliasing stay one color.
+			key := r>>12<<8 | g>>12<<4 | b>>12
+			counts[key]++
+			most = max(most, counts[key])
+		}
+	}
+	return float64(most) >= blankShare*grid*grid
 }
