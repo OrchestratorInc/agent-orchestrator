@@ -159,7 +159,8 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("region", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("region", { name: "Recent" })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
-		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+		expect(screen.getByRole("heading", { level: 2, name: "Scratchpad" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Scratchpad" })).not.toBeInTheDocument();
 		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "no such thing");
 		await user.click(screen.getByRole("button", { name: "Clear filters" }));
 		expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toHaveValue("");
@@ -201,19 +202,21 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByText("pricing.md")).not.toBeInTheDocument();
 	});
 
-	it("shows a single project once without collapsible headers in either view", async () => {
+	it("shows a single project once with a static heading in either view", async () => {
 		const user = userEvent.setup();
 		mocks.workspaces = [withArtifacts[0]];
 		useArtifactsViewStore.setState({ collapsedSections: ["project:ao"] });
 		renderView();
 		expect(screen.queryByRole("region", { name: "Recent" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+		expect(screen.getByRole("heading", { level: 2, name: "agent-orchestrator" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
 		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "List view" }));
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
 		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
-		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+		expect(screen.getByRole("heading", { level: 2, name: "agent-orchestrator" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
