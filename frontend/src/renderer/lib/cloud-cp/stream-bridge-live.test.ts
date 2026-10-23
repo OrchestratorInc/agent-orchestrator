@@ -22,6 +22,7 @@ const frame: CloudCpSessionLive = {
 	viewers: [{ userId: "u1", name: "Alice", role: "member" }],
 	composer: { holder: null, epoch: 0, waitlist: [] },
 	canTakeOver: true,
+	you: "u1",
 };
 
 describe("subscribeSessionLiveBridged", () => {

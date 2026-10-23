@@ -259,7 +259,7 @@ func TestLiveFrameCarriesTheComposer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"type":"session.live","viewers":[],"composer":{"holder":{"userId":"user-1","name":"Alice"},"epoch":3,"waitlist":[],"draft":null},"canTakeOver":false}`
+	want := `{"type":"session.live","viewers":[],"composer":{"holder":{"userId":"user-1","name":"Alice"},"epoch":3,"waitlist":[],"draft":null},"canTakeOver":false,"you":""}`
 	if string(payload) != want {
 		t.Fatalf("frame = %s\nwant    %s", payload, want)
 	}

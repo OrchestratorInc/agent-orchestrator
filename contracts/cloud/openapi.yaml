@@ -6390,10 +6390,14 @@ components:
       type: object
       additionalProperties: false
       description: Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log.
-      required: [type, viewers, composer, canTakeOver]
+      required: [type, viewers, composer, canTakeOver, you]
       properties:
         type:
           const: session.live
+        you:
+          type: string
+          format: uuid
+          description: The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
         canTakeOver:
           type: boolean
           description: Whether the person reading this stream may take the composer lease from its holder (composerTakeOver).

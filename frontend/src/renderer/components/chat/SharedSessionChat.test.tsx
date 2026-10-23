@@ -51,8 +51,8 @@ const session = {
 const me = { userId: "user-me", name: "Me", role: "member" as const };
 const alice = { userId: "user-alice", name: "Alice", role: "editor" as const };
 
-function liveState(composer: Partial<CloudCpSessionLive["composer"]> = {}, viewers: CloudCpSessionViewer[] = [me, alice], canTakeOver = false): CloudCpSessionLive {
-	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver };
+function liveState(composer: Partial<CloudCpSessionLive["composer"]> = {}, viewers: CloudCpSessionViewer[] = [me, alice], canTakeOver = false, you = "user-me"): CloudCpSessionLive {
+	return { type: "session.live", viewers, composer: { holder: null, epoch: 0, waitlist: [], ...composer }, canTakeOver, you };
 }
 
 function renderSurface() {
@@ -118,6 +118,25 @@ describe("shared session chat", () => {
 		mocks.live = liveState({ holder: { userId: "user-alice", name: "Alice" }, epoch: 3 });
 		renderSurface();
 		await waitFor(() => expect(lastProps()?.composerLockedPlaceholder).toBe("Alice is writing to the agent"));
+	});
+
+	it("trusts the server's word on who this person is over the account the app remembers", async () => {
+		// The app remembers user-me, but the stream is signed in as Alice:
+		// Alice's own prompt is not labelled, and her lease does not lock her out.
+		mocks.listChatEvents.mockResolvedValue({
+			events: [
+				{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "mine", authorUserId: "user-alice", authorName: "Alice" }, createdAt: "2026-10-22T00:00:00Z" },
+				{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "theirs", authorUserId: "user-me", authorName: "Me" }, createdAt: "2026-10-22T00:00:01Z" },
+			],
+			hasMore: false, nextAfter: 2,
+		});
+		mocks.live = liveState({ holder: { userId: "user-alice", name: "Alice" }, epoch: 5 }, [me, alice], false, "user-alice");
+		renderSurface();
+		await waitFor(() => {
+			const items = (mocks.chatProps.mock.lastCall?.[0] as { snapshot: { items: Array<{ text?: string; authorName?: string }> } }).snapshot.items;
+			expect(items.map((item) => item.authorName)).toEqual([undefined, "Me"]);
+		});
+		expect(lastProps().composerLockedPlaceholder).toBeUndefined();
 	});
 
 	it("locks the chat box for a read-only participant", async () => {

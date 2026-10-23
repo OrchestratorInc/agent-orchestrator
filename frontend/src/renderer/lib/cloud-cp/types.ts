@@ -1556,6 +1556,8 @@ export interface CloudCpSessionLive {
 	composer: CloudCpComposerLease;
 	/** Whether the person reading the stream may take the lease from its holder. */
 	canTakeOver: boolean;
+	/** The user the stream is authenticated as: the identity the server acts on. */
+	you: string;
 }
 
 export type CloudCpShareRole = "viewer" | "editor";

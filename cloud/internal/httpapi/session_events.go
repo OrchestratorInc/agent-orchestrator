@@ -84,6 +84,9 @@ type sessionLiveResponse struct {
 	Viewers     []sessionViewerResponse `json:"viewers"`
 	Composer    composerLiveResponse    `json:"composer"`
 	CanTakeOver bool                    `json:"canTakeOver"`
+	// You is the user this stream is authenticated as, so a client compares
+	// against the identity the server acts on, not one it remembers.
+	You string `json:"you"`
 }
 
 func toSessionLiveResponse(state domain.SessionLiveState) sessionLiveResponse {
@@ -202,7 +205,9 @@ func (f *liveFeed) write(w http.ResponseWriter) bool {
 		f.server.logger.Warn("read session live state", "error", err, "request_id", requestID(f.request))
 		return true
 	}
-	payload, err := json.Marshal(toSessionLiveResponse(state))
+	frame := toSessionLiveResponse(state)
+	frame.You = principalFrom(f.request).UserID
+	payload, err := json.Marshal(frame)
 	if err != nil || bytes.Equal(payload, f.last) {
 		return true
 	}

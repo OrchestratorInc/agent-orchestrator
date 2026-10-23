@@ -3377,6 +3377,11 @@ export interface components {
         SessionLiveState: {
             /** @constant */
             type: "session.live";
+            /**
+             * Format: uuid
+             * @description The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
+             */
+            you: string;
             /** @description Whether the person reading this stream may take the composer lease from its holder (composerTakeOver). */
             canTakeOver: boolean;
             /** @description Everyone with the session open right now, once each, in the order they joined. */
