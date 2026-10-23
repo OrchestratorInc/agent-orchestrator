@@ -1,5 +1,5 @@
 import { CloudCpError } from "./cloud-cp";
-import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, CloudCpSessionResponse } from "./cloud-cp";
+import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, CloudCpMutationOptions, CloudCpSessionResponse } from "./cloud-cp";
 import type { Settings } from "../hooks/useSettings";
 import { reportCloudSessionCreateRequested } from "./cloud-telemetry";
 
@@ -32,6 +32,7 @@ export async function createCloudSession(
 	client: Pick<CloudCpClient, "createSession">,
 	orgId: string,
 	body: CloudCpCreateSessionRequest,
+	options?: CloudCpMutationOptions,
 ): Promise<CloudCpSessionResponse> {
 	try {
 		reportCloudSessionCreateRequested(body);
@@ -39,12 +40,12 @@ export async function createCloudSession(
 		// Telemetry must never break the create.
 	}
 	const { interfaceMode, defaultInterfaceMode, ...withoutInterface } = body;
-	if (interfaceMode === undefined && defaultInterfaceMode === undefined) return client.createSession(orgId, body);
+	if (interfaceMode === undefined && defaultInterfaceMode === undefined) return client.createSession(orgId, body, options);
 	try {
-		return await client.createSession(orgId, body);
+		return await client.createSession(orgId, body, options);
 	} catch (error) {
 		if (!isUnknownInterfaceFieldRefusal(error)) throw error;
-		return client.createSession(orgId, withoutInterface);
+		return client.createSession(orgId, withoutInterface, options);
 	}
 }
 
