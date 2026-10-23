@@ -63,9 +63,13 @@ diffs, model switching, and resume are derived from the ACP protocol itself:
   model picker (`configured` custom-model semantics)
 - AO's permission modes map onto Hermes' ACP session modes: `accept-edits` →
   `accept_edits`, `auto` and `bypass permissions` → `dont_ask`
+- Hermes' `default` session mode governs only its file-edit tool: AO's Default
+  asks before file edits, but ordinary shell commands still run without
+  asking, because Hermes' ACP server raises dangerous-command approvals only
+  in the modes above and has no stricter server-side switch
 - in `bypass permissions`, AO additionally answers Hermes' dangerous-command
-  approval requests with allow, because the ACP server has no server-side
-  bypass switch
+  approval requests with a one-time allow, because the ACP server has no
+  server-side bypass switch
 
 ## Restore
 
