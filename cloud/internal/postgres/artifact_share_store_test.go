@@ -316,3 +316,63 @@ func TestArtifactSharePublishingOneDocumentConcurrentlyMakesOneLink(t *testing.T
 		t.Fatalf("a new document at the limit allowed = %v, %v", allowed, err)
 	}
 }
+
+// A POST replacing a document's version must see a PUT that committed while
+// it waited, so the version that PUT installed is queued too and never lost.
+func TestArtifactSharePublishSeesAConcurrentPut(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	const documentKey = "race-document"
+
+	a := recordedShare(t, store, fixture.userID, "report.html")
+	share, _, err := store.PublishArtifactShare(ctx, a, "proj-feat-a", documentKey, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The "PUT": lock the link's row, install version B and queue A, as
+	// UpdateArtifactShare does, and hold the transaction open.
+	put, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer put.Rollback(ctx)
+	if _, err := put.Exec(ctx, `SELECT 1 FROM ao_artifact_shares WHERE id = $1 FOR UPDATE`, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := put.Exec(ctx, `UPDATE ao_artifact_shares SET version_id = 'v-b' WHERE id = $1`, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := put.Exec(ctx,
+		`INSERT INTO ao_artifact_object_versions (user_id, s3_key, version_id, reason, size, collect_after)
+		VALUES ($1, $2, $3, 'replaced', 1, now() + interval '1 hour')`,
+		fixture.userID, share.S3Key, share.VersionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// The POST of the same document starts while the PUT holds the row.
+	c := recordedShare(t, store, fixture.userID, "report.html")
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := store.PublishArtifactShare(ctx, c, "proj-feat-a", documentKey, 3)
+		done <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := put.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	queued := queuedShareVersions(t, admin, share.S3Key)
+	if queued[share.VersionID] != "replaced" || queued["v-b"] != "replaced" {
+		t.Fatalf("queue = %v, want both the original version and the PUT's v-b queued", queued)
+	}
+	served, err := store.ArtifactShareBySlug(ctx, share.Slug)
+	if err != nil || served.VersionID != c.VersionID {
+		t.Fatalf("served = %+v, %v; want the POST's version", served, err)
+	}
+}

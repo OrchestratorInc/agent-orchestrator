@@ -124,9 +124,11 @@ func (s *Store) PublishArtifactShare(
 		var existingID, previousKey, previousVersion string
 		var previousSize int64
 		var wasRevoked bool
+		// FOR UPDATE: the advisory lock serializes publishes only, so this also
+		// waits for a PUT or revoke on the row and reads the version it left.
 		err := tx.QueryRow(ctx,
 			`SELECT id::text, s3_key, version_id, size, revoked_at IS NOT NULL FROM ao_artifact_shares
-			WHERE user_id = $1 AND document_key = $2`,
+			WHERE user_id = $1 AND document_key = $2 FOR UPDATE`,
 			share.UserID, documentKey,
 		).Scan(&existingID, &previousKey, &previousVersion, &previousSize, &wasRevoked)
 		switch {
