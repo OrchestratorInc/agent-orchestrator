@@ -1,37 +1,49 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link2 } from "lucide-react";
+import { Check, Copy, Link2 } from "lucide-react";
+import type { CloudAccount } from "../../shared/cloud-account";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
-import { ArtifactShareAuthError, ArtifactShareLimitError, ArtifactShareUnavailableError, publishArtifactShare } from "../lib/artifact-share";
+import {
+	ArtifactShareAuthError,
+	ArtifactShareLimitError,
+	ArtifactShareUnavailableError,
+	publishArtifactShare,
+	type ArtifactShareLink,
+} from "../lib/artifact-share";
 import { aoBridge } from "../lib/bridge";
 import { isCloudSignInConfigured, useCloudSession } from "../lib/cloud-session";
 import { IS_DEV } from "../lib/is-dev";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useUiStore } from "../stores/ui-store";
-import type { CloudAccount } from "../../shared/cloud-account";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 /** Share links are development-only until the control plane offers them in hosted environments. */
 export function artifactSharingAvailable(session: WorkspaceSession, hostId?: string): boolean {
 	return IS_DEV && isCloudSignInConfigured() && !hostId && !session.cloud;
 }
 
-export type ArtifactShareState = "idle" | "signingIn" | "sharing";
+/**
+ * What the share panel shows: the sign-in prompt, sign-in in progress, the
+ * link being created, the link, the link limit, or a failure.
+ */
+export type ArtifactSharePhase = "signedOut" | "signingIn" | "creating" | "ready" | "limit" | "failed";
 
 /** Identifies one signed-in cloud session; a new sign-in or account changes it. */
 function cloudSessionKey(account: CloudAccount | null): string {
 	return account ? `${account.user.id}|${account.storedAt}` : "";
 }
 
+const COPIED_MS = 2_000;
+
 /**
- * Shares one local artifact as a public link. A signed-out user, or one whose
- * session the control plane refuses, is sent to cloud sign-in once; the share
- * continues only when a new session arrives, and closing the sign-in dialog
- * cancels it. On success the link is copied and announced; at the link limit
- * the upgrade dialog opens.
+ * Shares one local artifact as a public link. Opening the share panel creates
+ * the link for a signed-in user. A signed-out user, or one whose session the
+ * control plane refuses, is told to sign in first; the link is created once
+ * sign-in brings a new session.
  */
 export function useArtifactShare(session: WorkspaceSession, artifact: SessionArtifact) {
 	const { t } = useTranslation();
@@ -40,30 +52,26 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const localSignInOpen = useLocalSignInDialogStore((s) => s.open);
-	const [state, setState] = useState<ArtifactShareState>("idle");
+	const [open, setOpen] = useState(false);
+	const [phase, setPhase] = useState<ArtifactSharePhase>("signedOut");
+	const [link, setLink] = useState<ArtifactShareLink | null>(null);
 	const [error, setError] = useState("");
-	const [limitOpen, setLimitOpen] = useState(false);
+	const [copied, setCopied] = useState(false);
 	const inFlight = useRef(false);
-	// The session that was current when this share sent the user to sign in.
+	// The session that was current when the user chose to sign in.
 	const signInFrom = useRef<string | null>(null);
 	const currentSessionKey = cloudSessionKey(cloudSession);
 	const sessionKeyRef = useRef(currentSessionKey);
 	sessionKeyRef.current = currentSessionKey;
 
-	const startSignIn = useCallback(() => {
-		signInFrom.current = sessionKeyRef.current;
-		setState("signingIn");
-		if (localAuthAvailable) openLocalSignIn();
-		else signIn();
-	}, [localAuthAvailable, openLocalSignIn, signIn]);
-
-	const publish = useCallback(async () => {
+	const create = useCallback(async () => {
 		if (inFlight.current) return;
 		inFlight.current = true;
-		setState("sharing");
+		setPhase("creating");
 		setError("");
+		setCopied(false);
 		try {
-			const link = await publishArtifactShare({
+			const created = await publishArtifactShare({
 				baseUrl,
 				sessionId: session.id,
 				path: artifact.path,
@@ -72,108 +80,165 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 				project: session.workspaceName,
 				feature: session.title,
 			}, t("artifacts.share.error"));
-			await aoBridge.clipboard.writeText(link.url);
-			useUiStore.getState().showGlobalToast(
-				t(link.replaced ? "artifacts.share.updated" : "artifacts.share.copied"),
-				link.url,
-				{ tone: "info", dedupeKey: `artifact-share:${link.id}` },
-			);
-			setState("idle");
+			setLink(created);
+			setPhase("ready");
 		} catch (failure) {
 			if (failure instanceof ArtifactShareAuthError) {
-				startSignIn();
-				return;
+				setPhase("signedOut");
+			} else if (failure instanceof ArtifactShareLimitError) {
+				setPhase("limit");
+			} else {
+				setError(failure instanceof ArtifactShareUnavailableError
+					? t("artifacts.share.unavailable")
+					: failure instanceof Error ? failure.message : String(failure));
+				setPhase("failed");
 			}
-			setState("idle");
-			if (failure instanceof ArtifactShareLimitError) {
-				setLimitOpen(true);
-				return;
-			}
-			if (failure instanceof ArtifactShareUnavailableError) {
-				setError(t("artifacts.share.unavailable"));
-				return;
-			}
-			setError(failure instanceof Error ? failure.message : String(failure));
 		} finally {
 			inFlight.current = false;
 		}
-	}, [artifact.name, artifact.path, artifact.rawUrl, baseUrl, session.id, session.title, session.workspaceName, startSignIn, t]);
+	}, [artifact.name, artifact.path, artifact.rawUrl, baseUrl, session.id, session.title, session.workspaceName, t]);
 
-	const share = () => {
-		setError("");
-		if (status === "authenticated") {
-			void publish();
-			return;
-		}
-		startSignIn();
+	const onOpenChange = (next: boolean) => {
+		setOpen(next);
+		if (!next || phase === "signingIn" || phase === "creating") return;
+		if (status === "authenticated") void create();
+		else setPhase("signedOut");
 	};
 
-	// The share continues once sign-in brings a new session. The session that
+	const startSignIn = () => {
+		signInFrom.current = sessionKeyRef.current;
+		setPhase("signingIn");
+		if (localAuthAvailable) {
+			// The sign-in dialog takes focus; the panel reopens with the link.
+			setOpen(false);
+			openLocalSignIn();
+		} else {
+			signIn();
+		}
+	};
+
+	// The link is created once sign-in brings a new session. The session that
 	// sent the user to sign in never retries on its own, so a session the
-	// control plane refuses cannot reopen sign-in in a loop.
+	// control plane refuses cannot loop.
 	useEffect(() => {
 		if (signInFrom.current === null || status !== "authenticated" || !baseUrl) return;
 		if (currentSessionKey === signInFrom.current) return;
 		signInFrom.current = null;
-		void publish();
-	}, [baseUrl, currentSessionKey, publish, status]);
+		setOpen(true);
+		void create();
+	}, [baseUrl, create, currentSessionKey, status]);
 
-	// Closing the local sign-in dialog without signing in cancels the share.
+	// Closing the local sign-in dialog without signing in returns to the prompt.
 	const localSignInWasOpen = useRef(false);
 	useEffect(() => {
 		const closed = localSignInWasOpen.current && !localSignInOpen;
 		localSignInWasOpen.current = localSignInOpen;
 		if (!closed || signInFrom.current === null || sessionKeyRef.current !== signInFrom.current) return;
 		signInFrom.current = null;
-		setState("idle");
-		setError(t("artifacts.share.signInRequired"));
-	}, [localSignInOpen, t]);
+		setPhase("signedOut");
+		setOpen(true);
+	}, [localSignInOpen]);
+
+	useEffect(() => {
+		if (!copied) return;
+		const timer = setTimeout(() => setCopied(false), COPIED_MS);
+		return () => clearTimeout(timer);
+	}, [copied]);
+
+	const copy = async () => {
+		if (!link) return;
+		try {
+			await aoBridge.clipboard.writeText(link.url);
+			setCopied(true);
+		} catch (failure) {
+			setError(failure instanceof Error ? failure.message : String(failure));
+			setPhase("failed");
+		}
+	};
 
 	const openUpgrade = () => {
-		setLimitOpen(false);
+		setOpen(false);
 		useUiStore.getState().openGlobalSettings("billing");
 	};
 
-	const limitDialog = (
-		<ConfirmDialog
-			cancelLabel={t("artifacts.share.notNow")}
-			confirmLabel={t("artifacts.share.upgrade")}
-			description={t("artifacts.share.limitDescription")}
-			onConfirm={openUpgrade}
-			onOpenChange={setLimitOpen}
-			open={limitOpen}
-			title={t("artifacts.share.limitTitle")}
-		/>
-	);
-
-	const clearError = useCallback(() => setError(""), []);
-	return { share, state, error, clearError, limitDialog };
+	return { open, onOpenChange, phase, link, error, copied, copy, retry: () => void create(), startSignIn, openUpgrade };
 }
 
-const SHARE_ERROR_CLEAR_MS = 5_000;
-
-/** The artifact viewer header's Share button: publishes the open artifact and copies its link. */
+/** The artifact viewer header's Share button and its share panel. */
 export function ArtifactShareButton({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	const { share, state, error, clearError, limitDialog } = useArtifactShare(session, artifact);
-	useEffect(() => {
-		if (!error) return;
-		const timer = setTimeout(clearError, SHARE_ERROR_CLEAR_MS);
-		return () => clearTimeout(timer);
-	}, [clearError, error]);
-	const sharing = state === "sharing";
+	const share = useArtifactShare(session, artifact);
+	const title = t("artifacts.share.title", { name: artifact.name });
 	return (
-		<>
-			{error ? (
-				<span className="min-w-0 truncate px-1 text-caption text-destructive" role="alert" title={error}>
-					{error}
-				</span>
-			) : null}
-			<Button aria-busy={sharing} className="shrink-0 gap-1" disabled={sharing} onClick={share} size="sm" type="button" variant="secondary">
-				<Link2 aria-hidden="true" className="size-icon-sm" />
-				{t(sharing ? "artifacts.share.sharing" : "artifacts.share.action")}
-			</Button>
-			{limitDialog}
-		</>
+		<Popover onOpenChange={share.onOpenChange} open={share.open}>
+			<PopoverTrigger asChild>
+				<Button className="shrink-0 gap-1" size="sm" type="button" variant="secondary">
+					<Link2 aria-hidden="true" className="size-icon-sm" />
+					{t("artifacts.share.action")}
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent align="end" aria-label={title} className="flex w-80 flex-col gap-3 p-3" role="dialog">
+				<p className="truncate text-sm font-medium text-foreground" title={artifact.name}>{title}</p>
+				<ArtifactSharePanelBody share={share} />
+			</PopoverContent>
+		</Popover>
 	);
+}
+
+function ArtifactSharePanelBody({ share }: { share: ReturnType<typeof useArtifactShare> }) {
+	const { t } = useTranslation();
+	switch (share.phase) {
+		case "signedOut":
+			return (
+				<>
+					<p className="text-control leading-5 text-muted-foreground">{t("artifacts.share.signInDescription")}</p>
+					<Button className="self-end" onClick={share.startSignIn} size="sm" type="button" variant="primary">
+						{t("artifacts.share.signIn")}
+					</Button>
+				</>
+			);
+		case "signingIn":
+			return <p className="text-control leading-5 text-muted-foreground" role="status">{t("artifacts.share.signingIn")}</p>;
+		case "creating":
+			return <p className="text-control leading-5 text-muted-foreground" role="status">{t("artifacts.share.creating")}</p>;
+		case "ready":
+			return share.link ? (
+				<>
+					<div className="flex items-center gap-2">
+						<Input
+							aria-label={t("artifacts.share.linkLabel")}
+							className="h-control-md min-w-0 flex-1 font-mono text-xs"
+							onFocus={(event) => event.currentTarget.select()}
+							readOnly
+							value={share.link.url}
+						/>
+						<Button className="shrink-0 gap-1" onClick={() => void share.copy()} size="sm" type="button" variant="primary">
+							{share.copied ? <Check aria-hidden="true" className="size-icon-sm" /> : <Copy aria-hidden="true" className="size-icon-sm" />}
+							{t(share.copied ? "artifacts.share.copiedButton" : "artifacts.share.copy")}
+						</Button>
+					</div>
+					<p className="text-caption leading-4 text-muted-foreground">
+						{t(share.link.replaced ? "artifacts.share.updatedHint" : "artifacts.share.publicHint")}
+					</p>
+				</>
+			) : null;
+		case "limit":
+			return (
+				<>
+					<p className="text-control leading-5 text-muted-foreground">{t("artifacts.share.limitDescription")}</p>
+					<Button className="self-end" onClick={share.openUpgrade} size="sm" type="button" variant="primary">
+						{t("artifacts.share.upgrade")}
+					</Button>
+				</>
+			);
+		case "failed":
+			return (
+				<>
+					<p className="text-control leading-5 text-error" role="alert">{share.error}</p>
+					<Button className="self-end" onClick={share.retry} size="sm" type="button" variant="secondary">
+						{t("artifacts.share.retry")}
+					</Button>
+				</>
+			);
+	}
 }
