@@ -1605,6 +1605,8 @@ export interface CloudCpSharedProject {
 		redeemedAt: string;
 	};
 	project: CloudCpProject;
+	/** The person already belongs to the project's organization: no grant was made. */
+	member?: boolean;
 	sessionId?: string;
 	sessionName?: string;
 	sharedByName?: string;

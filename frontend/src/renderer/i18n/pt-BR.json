@@ -3595,5 +3595,7 @@
 	"shareLink.signInFirst": "Entre no AO Cloud para abrir sessões compartilhadas.",
 	"command.openSharedLink": "Abrir uma sessão compartilhada",
 	"chat.shared.terminalRefused": "Outra pessoa está escrevendo para o agente. Peça a vez no chat para digitar.",
-	"chat.shared.draftOf": "Rascunho de {{name}}"
+	"chat.shared.draftOf": "Rascunho de {{name}}",
+	"shareLink.expired": "Este link expirou ou foi revogado. Peça um novo.",
+	"shareLink.notForYou": "Este link é para outras pessoas. Peça a quem enviou que o compartilhe com sua conta."
 }
