@@ -726,9 +726,7 @@ func loadOrCreateInstallID(dataDir string) (string, error) {
 			if id := strings.TrimSpace(string(b)); id != "" {
 				return id, nil
 			}
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				return "", fmt.Errorf("remove empty telemetry install id: %w", err)
-			}
+			return recoverEmptyInstallID(dataDir, path)
 		} else if !os.IsNotExist(err) {
 			return "", fmt.Errorf("read telemetry install id: %w", err)
 		}
@@ -757,6 +755,51 @@ func loadOrCreateInstallID(dataDir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("telemetry install id creation did not settle")
+}
+
+// recoverEmptyInstallID serializes repair of a legacy empty file with the
+// renderer. A second process must re-read after taking the lock, or it could
+// delete an ID that the first process just published.
+func recoverEmptyInstallID(dataDir, path string) (string, error) {
+	lockPath := path + ".recovery"
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		err := os.Mkdir(lockPath, 0o700)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("lock telemetry install id recovery: %w", err)
+		}
+		info, err := os.Stat(lockPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect telemetry install id recovery: %w", err)
+		}
+		if time.Since(info.ModTime()) > 10*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out waiting for telemetry install id recovery")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer func() { _ = os.Remove(lockPath) }()
+	b, err := os.ReadFile(path)
+	if err == nil {
+		if id := strings.TrimSpace(string(b)); id != "" {
+			return id, nil
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("remove empty telemetry install id: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read telemetry install id during recovery: %w", err)
+	}
+	return loadOrCreateInstallID(dataDir)
 }
 
 // writeFileAtomic swaps data in through a temp file in the same directory, so a

@@ -235,25 +235,32 @@ func TestInstallIDCreationRecoversEmptyFileAndConcurrentReaders(t *testing.T) {
 		t.Fatalf("stored install id = %q, %v, want %q", stored, err, want)
 	}
 
-	concurrentDir := t.TempDir()
 	type result struct {
 		id  string
 		err error
 	}
-	results := make(chan result, 16)
-	for range cap(results) {
-		go func() {
-			id, err := loadOrCreateInstallID(concurrentDir)
-			results <- result{id, err}
-		}()
-	}
-	for range cap(results) {
-		got := <-results
-		if got.err != nil || !strings.HasPrefix(got.id, "ins_") {
-			t.Fatalf("concurrent install id = %q, %v", got.id, got.err)
+	for _, legacyEmpty := range []bool{false, true} {
+		concurrentDir := t.TempDir()
+		if legacyEmpty {
+			if err := os.WriteFile(filepath.Join(concurrentDir, installIDFile), []byte("\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if disk, err := readTrimmed(filepath.Join(concurrentDir, installIDFile)); err != nil || disk != got.id {
-			t.Fatalf("published install id = %q, %v, caller saw %q", disk, err, got.id)
+		results := make(chan result, 16)
+		for range cap(results) {
+			go func() {
+				id, err := loadOrCreateInstallID(concurrentDir)
+				results <- result{id, err}
+			}()
+		}
+		for range cap(results) {
+			got := <-results
+			if got.err != nil || !strings.HasPrefix(got.id, "ins_") {
+				t.Fatalf("concurrent install id = %q, %v", got.id, got.err)
+			}
+			if disk, err := readTrimmed(filepath.Join(concurrentDir, installIDFile)); err != nil || disk != got.id {
+				t.Fatalf("published install id = %q, %v, caller saw %q", disk, err, got.id)
+			}
 		}
 	}
 }

@@ -1,4 +1,4 @@
-import { access, link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, link, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -68,7 +68,7 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
 		try {
 			const existing = (await readFile(file, "utf8")).trim();
 			if (existing) return existing;
-			await unlink(file);
+			return recoverEmptyTelemetryInstallId(dataDir, file);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
@@ -86,6 +86,46 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
 		}
 	}
 	throw new Error("telemetry install id creation did not settle");
+}
+
+// Both the daemon and Electron use this lock before repairing a legacy empty
+// file. Re-read under the lock so a second repair cannot erase the first ID.
+async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Promise<string> {
+	const lock = `${file}.recovery`;
+	const deadline = Date.now() + 20_000;
+	for (;;) {
+		try {
+			await mkdir(lock, { mode: 0o700 });
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			let age: number;
+			try {
+				age = Date.now() - (await stat(lock)).mtimeMs;
+			} catch (statError) {
+				if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw statError;
+			}
+			if (age > 10_000) {
+				await rmdir(lock).catch(() => {});
+				continue;
+			}
+			if (Date.now() > deadline) throw new Error("timed out waiting for telemetry install id recovery");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+	}
+	try {
+		try {
+			const existing = (await readFile(file, "utf8")).trim();
+			if (existing) return existing;
+			await unlink(file);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		return loadOrCreateTelemetryInstallId(dataDir);
+	} finally {
+		await rmdir(lock).catch(() => {});
+	}
 }
 
 /**
